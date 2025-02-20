@@ -2,7 +2,7 @@ TypeEasy
 
 TypeEasy es un prototipo de un lenguaje tipado, lenguaje HECHO con C, PARA LOGRAR ESTO Bison y Flex son herramientas utilizadas para crear compiladores e intérpretes. Se utilizan juntas para generar analizadores sintácticos y léxicos. La idea es se mejor que Polar y no depender de Python.
 
-Para modificar el código te.: 
+Para modificar el código .te: 
 
 1. Abrir con el terminal la carpeta src
 2. Ejecutar estos comandos uno por uno
