@@ -1,0 +1,9 @@
+{
+    "C_Cpp.errorSquiggles": "disabled",
+    "files.associations": {
+        "*.y": "c",
+        "*.l": "c",
+        "*.te": "dart",
+        "random": "c"
+    }
+}

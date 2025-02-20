@@ -1,0 +1,19 @@
+
+string cadena = "ESTE ES UN STRING DE LOS DIOSES.."
+
+float suma = 100 + 100
+float pi = 3
+float operacion = pi * 5 + 8 + 2 * 8
+
+var tope = 3
+var contador = 1
+var index = 0
+
+for (index ; tope ; contador) {
+    print index
+}
+
+print cadena
+print pi
+print operacion
+print suma
