@@ -2,7 +2,7 @@
 
 
 #include <fcntl.h>
-#include <unistd.h>
+
 #include <string.h>
 #include "variables.h"
 #include <stdbool.h>
@@ -34,6 +34,9 @@ int variable_count = 0;
 int row_count = 0;
 
 #define BUFFER_SIZE 1024 * 1024 // 1 MB de buffer
+
+
+
 
 // Estructura para representar una fila de datos CSV
 typedef struct {
@@ -425,9 +428,37 @@ int get_variable_index(const char* name) {
     return -1;
 }
 
+void set_variable_int_for_loop(int index, int value) {
+    //printf("Debug: Intentando asignar %d a variables[%d]\n", value, index);
+
+    if (index >= 0 && index < variable_count) {
+       // printf("Debug: Index %d está dentro del rango.\n", index);
+        
+        if (variables[index].type == INT_TYPE) {
+            variables[index].num = value;
+           // printf("Debug: Asignación exitosa, variables[%d].num = %d\n", index, variables[index].num);
+        } else {
+           // printf("Error: variables[%d] no es de tipo INT_TYPE (type = %d)\n", index, variables[index].type);
+        }
+    } else {
+       // printf("Error: Index fuera de rango (%d)\n", index);
+    }
+}
+
 void set_variable_int(int index, int value) {
-    if (index >= 0 && index < variable_count && variables[index].type == INT_TYPE) {
-        variables[index].num = value;
+    //printf("Debug: Intentando asignar %d a variables[%d]\n", value, index);
+
+    if (index >= 0 && index < variable_count) {
+       // printf("Debug: Index %d está dentro del rango.\n", index);
+        
+        if (variables[index].type == INT_TYPE) {
+            variables[index].num = value;
+           // printf("Debug: Asignación exitosa, variables[%d].num = %d\n", index, variables[index].num);
+        } else {
+           // printf("Error: variables[%d] no es de tipo INT_TYPE (type = %d)\n", index, variables[index].type);
+        }
+    } else {
+       // printf("Error: Index fuera de rango (%d)\n", index);
     }
 }
 
@@ -452,16 +483,16 @@ void set_variable_bool(int index, bool value) {
 void print_variable(Variable var) {
     switch (var.type) {
         case INT_TYPE:
-            printf("INT: %d\n", var.num);
+            printf("%d\n", var.num);
             break;
         case FLOAT_TYPE:
-            printf("FLOAT: %.2f\n", var.fnum);
+            printf("%lf\n", var.fnum);
             break;
         case STRING_TYPE:
-            printf("STRING: %s\n", var.str ? var.str : "NULL");
+            printf("%s\n", var.str ? var.str : "NULL");
             break;
         case BOOL_TYPE:
-            printf("BOOL: %s\n", var.bval ? "true" : "false");
+            printf("%s\n", var.bval ? "true" : "false");
             break;
         default:
             printf("Unknown type\n");
