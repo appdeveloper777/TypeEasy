@@ -1,27 +1,6 @@
------------- ------ ------------
-Name         Type   Line Numbers
------------- ------ -------------
-func1        undef    44 
-func1 ·      undef    17 
-func2        undef    38   48 
-add          undef    18   24   55 
-a            undef    55   59 
-b            undef    55   59 
-c            undef    38   48   52 
-c·          undef     5 
-i            undef    12   15   16   16   18   19   24   25   26   31   35   36   39 
-iˆ·          undef    10 
-iˆ·          undef    10 
-iˆ·          undef    10 
-i·          undef     4 
-p            undef    24   28   28 
-p¾·          undef    18 
-pˆ·          undef     9 
-p·          undef     7 
-val          undef     6   17   18   24   25   31 
-s            undef    50   52   53 
-res          undef     6    9   19   25   26   57   59   60 
-print        undef    26   27   32   36   37   41   53 
-print ·      undef    20 
-print ·      undef    19 
-print ·      undef    11 
+------------ -------------- ------ ------------
+Name         Type           Scope  Line Numbers
+------------ -------------- ------ ------------
+i|          undef            0     3 
+val          real             0     4    6    7 
+res          real             0     4    7 

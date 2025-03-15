@@ -39,7 +39,7 @@
 # define YY_YY_PARSER_TAB_H_INCLUDED
 /* Debug traces.  */
 #ifndef YYDEBUG
-# define YYDEBUG 1
+# define YYDEBUG 0
 #endif
 #if YYDEBUG
 extern int yydebug;
@@ -54,45 +54,25 @@ extern int yydebug;
     YYEOF = 0,                     /* "end of file"  */
     YYerror = 256,                 /* error  */
     YYUNDEF = 257,                 /* "invalid token"  */
-    CHAR = 258,                    /* CHAR  */
-    INT = 259,                     /* INT  */
-    FLOAT = 260,                   /* FLOAT  */
-    DOUBLE = 261,                  /* DOUBLE  */
-    IF = 262,                      /* IF  */
-    ELSE = 263,                    /* ELSE  */
-    FOR = 264,                     /* FOR  */
-    CONTINUE = 265,                /* CONTINUE  */
-    BREAK = 266,                   /* BREAK  */
-    VOID = 267,                    /* VOID  */
-    RETURN = 268,                  /* RETURN  */
-    ADDOP = 269,                   /* ADDOP  */
-    MULOP = 270,                   /* MULOP  */
-    DIVOP = 271,                   /* DIVOP  */
-    INCR = 272,                    /* INCR  */
-    OROP = 273,                    /* OROP  */
-    ANDOP = 274,                   /* ANDOP  */
-    NOTOP = 275,                   /* NOTOP  */
-    EQUOP = 276,                   /* EQUOP  */
-    RELOP = 277,                   /* RELOP  */
-    LPAREN = 278,                  /* LPAREN  */
-    RPAREN = 279,                  /* RPAREN  */
-    LBRACK = 280,                  /* LBRACK  */
-    RBRACK = 281,                  /* RBRACK  */
-    LBRACE = 282,                  /* LBRACE  */
-    RBRACE = 283,                  /* RBRACE  */
-    SEMI = 284,                    /* SEMI  */
-    DOT = 285,                     /* DOT  */
-    COMMA = 286,                   /* COMMA  */
-    ASSIGN = 287,                  /* ASSIGN  */
-    REFER = 288,                   /* REFER  */
-    ID = 289,                      /* ID  */
-    CONST = 290,                   /* CONST  */
-    ICONST = 291,                  /* ICONST  */
-    WHILE = 292,                   /* WHILE  */
-    PRINT = 293,                   /* PRINT  */
-    FCONST = 294,                  /* FCONST  */
-    CCONST = 295,                  /* CCONST  */
-    STRING = 296                   /* STRING  */
+    FLOAT = 258,                   /* FLOAT  */
+    VAR = 259,                     /* VAR  */
+    ASSIGN = 260,                  /* ASSIGN  */
+    PRINT = 261,                   /* PRINT  */
+    FOR = 262,                     /* FOR  */
+    LPAREN = 263,                  /* LPAREN  */
+    RPAREN = 264,                  /* RPAREN  */
+    SEMICOLON = 265,               /* SEMICOLON  */
+    PLUS = 266,                    /* PLUS  */
+    MINUS = 267,                   /* MINUS  */
+    MULTIPLY = 268,                /* MULTIPLY  */
+    DIVIDE = 269,                  /* DIVIDE  */
+    STRING = 270,                  /* STRING  */
+    INT = 271,                     /* INT  */
+    LBRACKET = 272,                /* LBRACKET  */
+    RBRACKET = 273,                /* RBRACKET  */
+    IDENTIFIER = 274,              /* IDENTIFIER  */
+    STRING_LITERAL = 275,          /* STRING_LITERAL  */
+    NUMBER = 276                   /* NUMBER  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -101,22 +81,14 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 30 "parser.y"
+#line 12 "parser.y"
 
-    char char_val;
-    int int_val;
-    double double_val;
-    char* str_val;
-    int ival;
+        int ival;
+        char *sval;
+        ASTNode *node;
+    
 
-    // different types of values
-    Value val;   
-	
-    // structures
-    list_t* symtab_item;
-    AST_Node* node;
-
-#line 120 "parser.tab.h"
+#line 92 "parser.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

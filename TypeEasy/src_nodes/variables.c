@@ -412,13 +412,9 @@ void open_csv(const char *filename) {
 Variable get_variable(const char* name) {
     for (int i = 0; i < variable_count; i++) {
         if (strcmp(variable_names[i], name) == 0) {
-           // printf("Encontrada: %s = %d\n", name, variables[i].num);
             return variables[i];
         }
     }
-
-    printf("Variable %s no encontrada\n", name);
-
     Variable null_variable = {0};
     return null_variable;  // Devuelve una variable vacía si no se encuentra
 }
@@ -450,19 +446,19 @@ void set_variable_int_for_loop(int index, int value) {
 }
 
 void set_variable_int(int index, int value) {
-    printf("Debug: Intentando asignar %d a variables[%d] variable_count %d\n", value, index, variable_count);
+    //printf("Debug: Intentando asignar %d a variables[%d]\n", value, index);
 
     if (index >= 0 && index < variable_count) {
-        printf("Debug: Index %d está dentro del rango.\n", index);
+       // printf("Debug: Index %d está dentro del rango.\n", index);
         
         if (variables[index].type == INT_TYPE) {
             variables[index].num = value;
-            printf("Debug: Asignación exitosa, variables[%d].num = %d\n", index, variables[index].num);
+           // printf("Debug: Asignación exitosa, variables[%d].num = %d\n", index, variables[index].num);
         } else {
-            printf("Error: variables[%d] no es de tipo INT_TYPE (type = %d)\n", index, variables[index].type);
+           // printf("Error: variables[%d] no es de tipo INT_TYPE (type = %d)\n", index, variables[index].type);
         }
     } else {
-        printf("Error: Index fuera de rango (%d)\n", index);
+       // printf("Error: Index fuera de rango (%d)\n", index);
     }
 }
 

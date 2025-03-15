@@ -1,23 +1,27 @@
 
-string cadena = "ESTE ES UN STRING DE LOS DIOSES.."
+string cadena = "ESTE ES UN STRING DE LOS DIOSES..";
 
-float suma = 100 + 100 * 2
-float pi = 3
-float operacion = pi * 100 + 2
+float suma = 100 + 100 * 2;
+float pi = 3;
+float operacion = 100 + 2;
 
-var tope = 5
-var incremental = 1
-var index = 0
-var contador = 0
+int tope = 5;
+int incremental = 1;
+int index = 0;
+int contador = 0;
+int j = 0;
 
-for (index ; tope ; incremental) {     
-    print contador
-    contador = contador + 1
+for (contador = 0 ; 5 ; 1){    
+    print(contador);
+    for (j = 0 ; 5 ; 1){
+    print(j);
+    }   
 }
 
-print contador
-print index
-print cadena
-print pi
-print operacion
-print suma
+
+print(contador);
+print(index);
+print(cadena);
+print(pi);
+print(operacion);
+print(suma);

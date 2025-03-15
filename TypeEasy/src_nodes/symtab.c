@@ -10,9 +10,6 @@ int cur_scope = 0;
 /* flag variable for declaring */
 int declare = 0; // 1: declaring variable, 0: not
 
-/* flag variable for function declaring */
-int function_decl = 0; // 1: declaring function, 0: not
-
 // Symbol Table Functions
 
 void init_hash_table(){
@@ -21,12 +18,48 @@ void init_hash_table(){
 	for(i = 0; i < SIZE; i++) hash_table[i] = NULL;
 }
 
-unsigned int hash(char *key){
-	unsigned int hashval = 0;
-	for(;*key!='\0';key++) hashval += *key;
-	hashval += key[0] % 11 + (key[0] << 3) - key[0];
-	return hashval % SIZE;
+list_t *lookup_in_hash_table(char *name) {
+	printf("ANTES LOOP 0 \n");
+    int index = hash(name);
+	printf("ANTES LOOP 1 \n");
+    list_t *entry = hash_table[index];
+
+	printf("ANTES LOOP \n");
+    while (entry != NULL) {
+		printf("CON LOOP \n");
+        if (strcmp(entry->st_name, name) == 0) {
+            return entry;  // Variable encontrada
+        }
+        entry = entry->next;
+		
+    }
+
+	printf("SIN LOOP \n");
+
+    return NULL;  // No encontrada
 }
+
+
+unsigned int hash(char *key) { 
+    if (key == NULL) {
+        fprintf(stderr, "Error: clave nula en la función hash\n");
+        exit(1);
+    }
+
+    printf("Calculando hash para: %s\n", key);
+
+    unsigned int hashval = 0;
+    for (const char *ptr = key; *ptr != '\0'; ptr++) {
+        printf("Caracter: %c | Valor ASCII: %d\n", *ptr, (unsigned char)(*ptr));
+        hashval += (unsigned char)(*ptr);
+    }
+
+    hashval = hashval % 11 + (hashval << 3) - hashval;
+    
+    printf("Hash final: %u\n", hashval % SIZE);
+    return hashval % SIZE;
+}
+
 
 void insert(char *name, int len, int type, int lineno){
 	unsigned int hashval = hash(name);
@@ -36,7 +69,7 @@ void insert(char *name, int len, int type, int lineno){
 	
 	/* variable not yet in table */
 	if (l == NULL){
-		/* check if we are declaring */
+		/* check if we are really declaring */
 		if(declare == 1){
 			/* set up entry */
 			l = (list_t*) malloc(sizeof(list_t));
@@ -67,8 +100,8 @@ void insert(char *name, int len, int type, int lineno){
 			hash_table[hashval] = l;
 			// printf("Inserted %s at line %d to check it again later!\n", name, lineno);
 			
-			/* Adding identifier to the revisit queue */
-			add_to_queue(l, l->st_name, PARAM_CHECK);
+			/* Adding identifier to the revisit queue! */
+			add_to_queue(l->st_name, PARAM_CHECK);
 		}
 	}
 	/* found in table */
@@ -83,7 +116,7 @@ void insert(char *name, int len, int type, int lineno){
 			t->next = (RefList*) malloc(sizeof(RefList));
 			t->next->lineno = lineno;
 			t->next->next = NULL;
-			 printf("Found %s again at line %d!\n", name, lineno);
+			// printf("Found %s again at line %d!\n", name, lineno);
 		}
 		/* new entry */
 		else{
@@ -91,17 +124,6 @@ void insert(char *name, int len, int type, int lineno){
 			if(l->scope == cur_scope){
 				fprintf(stderr, "A multiple declaration of variable %s at line %d\n", name, lineno);
  				exit(1);
-			}
-			/* other scope - but function declaration */
-			else if(function_decl == 1){
-				/* find last reference */
-				RefList *t = l->lines;
-				while (t->next != NULL) t = t->next;
-				
-				/* add linenumber to reference list */
-				t->next = (RefList*) malloc(sizeof(RefList));
-				t->next->lineno = lineno;
-				t->next->next = NULL;
 			}
 			/* other scope - create new entry */
 			else{
@@ -189,12 +211,12 @@ void set_type(char *name, int st_type, int inf_type){ // set the type of an entr
 	list_t *l = lookup(name);
 	
 	/* set as "main" type */
-	l->st_type = st_type;
+	l->st_type = st_type;	
 	
 	/* if array, pointer or function */
 	if(inf_type != UNDEF){
 		l->inf_type = inf_type;
-	}
+	}	
 }
 
 int get_type(char *name){ // get the type of an entry
@@ -245,7 +267,7 @@ Param def_param(int par_type, char *param_name, int passing){ // define paramete
 	/* set the information */
 	param.par_type = par_type;
 	strcpy(param.param_name, param_name);
-	param.passing = passing;	
+	param.passing = passing;
 	
 	/* return the structure */
 	return param;
@@ -255,54 +277,50 @@ int func_declare(char *name, int ret_type, int num_of_pars, Param *parameters){ 
 	/* lookup entry */
 	list_t *l = lookup(name);
 	
-	if(l != NULL){
-		/* if type is not defined yet */
-		if(l->st_type == UNDEF){
-			/* entry is of function type */
-			l->st_type = FUNCTION_TYPE;
-			
-			/* return type is ret_type */
-			l->inf_type = ret_type;
-			
-			/* parameter stuff */
-			l->num_of_pars = num_of_pars;
-			l->parameters = parameters;
-			
-			return 0; /* success */
-		}
-		/* already declared error */
-		else{
-			fprintf(stderr, "Function %s already declared!\n", name);
-			exit(1);
-		}
+	/* if type is not defined yet */
+	if(l->st_type != UNDEF){
+		/* entry is of function type */
+		l->st_type = FUNCTION_TYPE;
+		
+		/* return type is ret_type */
+		l->inf_type = ret_type;
+		
+		/* parameter stuff */
+		l->num_of_pars = num_of_pars;
+		l->parameters = parameters;
+		
+		return 0; /* success */
+	}
+	/* already declared error */
+	else{
+		fprintf(stderr, "Function %s already declared!\n", name);
+		exit(1);
 	}
 }
 
-int func_param_check(char *name, int num_of_calls, int** par_types, int *num_of_pars){ // check parameters
-	int i, j, type_1, type_2;
+int func_param_check(char *name, int num_of_pars, Param *parameters){ // check parameters
+	int i, type_1, type_2;
 	
 	/* lookup entry */
 	list_t *l = lookup(name);
 	
-	/* for all function calls */
-	for(i = 0 ; i < num_of_calls ; i++){
-		/* check number of parameters */
-		if(l->num_of_pars != num_of_pars[i]){
-			fprintf(stderr, "Function call of %s has wrong num of parameters!\n", name);
-			exit(1);
-		}
-		/* check if parameters are compatible */
-		for(j = 0; j < num_of_pars[i]; j++){
-			/* type of parameter in function declaration */
-			type_1 = l->parameters[j].par_type; 
-			
-			/* type of parameter in function call*/
-			type_2 = par_types[i][j]; 
-			
-			/* check compatibility for function call */
-			get_result_type(type_1, type_2, NONE);
-			/* error occurs automatically in the function */
-		}
+	/* check number of parameters */
+	if(l->num_of_pars != num_of_pars){
+		fprintf(stderr, "Function call of %s has wrong num of parameters!\n", name);
+		exit(1);
+	}
+	
+	/* check if parameters are compatible */
+	for(i = 0; i < num_of_pars; i++){
+		/* type of parameter in function declaration */
+		type_1 = l->parameters[i].par_type; 
+		
+		/* type of parameter in function call*/
+		type_2 = parameters[i].par_type; 
+		
+		/* check compatibility for function call */
+		get_result_type(type_1, type_2, NONE);
+		/* error occurs automatically in the function */
 	}
 	
 	return 0; /* success */
@@ -310,22 +328,16 @@ int func_param_check(char *name, int num_of_calls, int** par_types, int *num_of_
 
 // Revisit Queue Functions
 
-void add_to_queue(list_t *entry, char *name, int type){ /* add to queue */
+void add_to_queue(char *name, int type){ /* add to queue */
 	revisit_queue *q;
 	
 	/* queue is empty */
 	if(queue == NULL){
 		/* set up entry */
 		q = (revisit_queue*) malloc(sizeof(revisit_queue));
-		q->entry = entry;
 		q->st_name = name;
 		q->revisit_type = type;
 		q->next = NULL;
-		
-		/* additional info */
-		if(type == PARAM_CHECK){
-			q->num_of_calls = 0;
-		}
 		
 		/* q "becomes" the queue */
 		queue = q;
@@ -338,81 +350,58 @@ void add_to_queue(list_t *entry, char *name, int type){ /* add to queue */
 		
 		/* add element to the end */
 		q->next = (revisit_queue*) malloc(sizeof(revisit_queue));
-		q->next->entry = entry;
 		q->next->st_name = name;
 		q->next->revisit_type = type;
 		q->next->next = NULL;
-		
-		/* additional info */
-		if(type == PARAM_CHECK){
-			q->next->num_of_calls = 0;
-		}
 	}		
 }
 
-revisit_queue *search_queue(char *name){ /* search queue */
+int revisit(char *name){ /* revisit entry by also removing it from queue */
 	revisit_queue *q;
-	
-	/* search for the entry */
-	q = queue;
-	while( (q != NULL) && (strcmp(q->st_name, name) != 0) ) q = q->next;
-	
-	return q;
-}
-
-revisit_queue *search_prev_queue(char *name){	
-	revisit_queue *q;
-	
-	/* queue is empty */
-	if(queue == NULL){
-		return NULL;
-	}	
 	
 	/* special case - first entry */
 	if( strcmp(queue->st_name, name) == 0 ){
-		return NULL;
+		
+		/* revisit entry depending on the type */
+		switch(queue->revisit_type){
+			case PARAM_CHECK:
+				/* TO DO: run parameter check */
+				break;
+			/* ... */
+		}
+		
+		/* remove entry by setting queue to "next" */
+		queue = queue->next;
+		
+		return 0; // success
 	}
 	
-	/* search for the entry */
+	/* search for the entry that points to it */
 	q = queue;
-	while( (q != NULL) && (strcmp(q->next->st_name, name) != 0) ) q = q->next;
+	while( strcmp(q->next->st_name, name) != 0 ) q = q->next;
 	
-	return q;
-}
-
-int revisit(char *name){ /* revisit entry by also removing it from queue */
-	revisit_queue *q = search_queue(name);
-	
+	/* check if entry was not found */
 	if(q == NULL){
-		return -1; // no entry
+		return 1;  // not found
 	}
 	
 	/* revisit entry depending on the type */
-	switch(q->revisit_type){
-		case PARAM_CHECK:			
-			/* run parameter check */
-			if(!func_param_check(name, q->num_of_calls, q->par_types, q->num_of_pars)){
-				printf("Successful Parameter Check of %s\n", name);
-			}
-			
-			/* remove entry by making it point to it's next */
-			revisit_queue *q2 = search_prev_queue(name);
-			if(q2 == NULL){ /* special case: first entry */
-				queue = queue->next;
-			}
-			else{
-				q2->next = q2->next->next;
-			}
-			
-			break;
-		case ASSIGN_CHECK:
-			/* run assignment check */
+	switch(q->next->revisit_type){
+		case PARAM_CHECK:
+			/* TO DO: run parameter check */
 			break;
 		/* ... */
 	}
 	
+	/* remove entry by making the previous entry point at */
+	/* the "next" of the entry that we want to remove  */
+	q->next = q->next->next;	
+	
 	return 0; // success
 }
+
+
+
 
 void revisit_dump(FILE *of){
 	int i;
@@ -425,8 +414,7 @@ void revisit_dump(FILE *of){
   	while(q != NULL){
   		fprintf(of, "%-13s", q->st_name);
   		if(q->revisit_type == PARAM_CHECK){
-  			fprintf(of,"%s","Parameter Check ");
-  			fprintf(of,"for %d function calls",q->num_of_calls);
+  			fprintf(of,"%s","Parameter Check");
 		}
 		// more later on
 		fprintf(of, "\n");
