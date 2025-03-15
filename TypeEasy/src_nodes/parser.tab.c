@@ -522,8 +522,8 @@ static const yytype_int8 yytranslate[] =
 static const yytype_int8 yyrline[] =
 {
        0,    28,    28,    29,    34,    39,    40,    44,    48,    49,
-      54,    56,    68,    71,    72,    75,    79,    80,    81,    82,
-      83,    84,    85
+      54,    56,    69,    72,    73,    76,    80,    81,    82,    83,
+      84,    85,    86
 };
 #endif
 
@@ -1197,8 +1197,8 @@ yyreduce:
   case 11: /* statement: FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET  */
 #line 56 "parser.y"
                                                                                                                                {
-            ///printf("FOR: Iterador=%s, Inicial=%d, Condición=%d, Incremento=%d\n", 
-                //$3, $5, $7->value, $9->value);
+            
+               
             (yyval.node) = create_ast_node_for("FOR", 
                 create_ast_leaf("IDENTIFIER", 0, NULL, (yyvsp[-10].sval)),  
                 create_ast_leaf("NUMBER", (yyvsp[-8].ival), NULL, NULL),   
@@ -1206,57 +1206,58 @@ yyreduce:
                 (yyvsp[-4].node),  // Incremento
                 (yyvsp[-1].node)  // Cuerpo
             );
+            
         }
-#line 1211 "parser.tab.c"
+#line 1212 "parser.tab.c"
     break;
 
   case 15: /* expression: NUMBER  */
-#line 75 "parser.y"
+#line 76 "parser.y"
                {
            // printf("Número capturado: %d\n", $1);
             (yyval.node) = create_ast_leaf("NUMBER", (yyvsp[0].ival), NULL, NULL);
         }
-#line 1220 "parser.tab.c"
+#line 1221 "parser.tab.c"
     break;
 
   case 16: /* expression: STRING_LITERAL  */
-#line 79 "parser.y"
+#line 80 "parser.y"
                          { (yyval.node) = create_ast_leaf("STRING", 0, (yyvsp[0].sval), NULL); }
-#line 1226 "parser.tab.c"
+#line 1227 "parser.tab.c"
     break;
 
   case 17: /* expression: IDENTIFIER  */
-#line 80 "parser.y"
+#line 81 "parser.y"
                      { (yyval.node) = create_ast_leaf("IDENTIFIER", 0, NULL, (yyvsp[0].sval)); }
-#line 1232 "parser.tab.c"
+#line 1233 "parser.tab.c"
     break;
 
   case 18: /* expression: expression PLUS expression  */
-#line 81 "parser.y"
+#line 82 "parser.y"
                                      { (yyval.node) = create_ast_node("ADD", (yyvsp[-2].node), (yyvsp[0].node)); }
-#line 1238 "parser.tab.c"
+#line 1239 "parser.tab.c"
     break;
 
   case 19: /* expression: expression MINUS expression  */
-#line 82 "parser.y"
+#line 83 "parser.y"
                                       { (yyval.node) = create_ast_node("SUB", (yyvsp[-2].node), (yyvsp[0].node)); }
-#line 1244 "parser.tab.c"
+#line 1245 "parser.tab.c"
     break;
 
   case 20: /* expression: expression MULTIPLY expression  */
-#line 83 "parser.y"
+#line 84 "parser.y"
                                          { (yyval.node) = create_ast_node("MUL", (yyvsp[-2].node), (yyvsp[0].node)); }
-#line 1250 "parser.tab.c"
+#line 1251 "parser.tab.c"
     break;
 
   case 21: /* expression: expression DIVIDE expression  */
-#line 84 "parser.y"
+#line 85 "parser.y"
                                        { (yyval.node) = create_ast_node("DIV", (yyvsp[-2].node), (yyvsp[0].node)); }
-#line 1256 "parser.tab.c"
+#line 1257 "parser.tab.c"
     break;
 
 
-#line 1260 "parser.tab.c"
+#line 1261 "parser.tab.c"
 
       default: break;
     }
@@ -1449,7 +1450,7 @@ yyreturnlab:
   return yyresult;
 }
 
-#line 88 "parser.y"
+#line 89 "parser.y"
 
     
     void yyerror(const char *s) {

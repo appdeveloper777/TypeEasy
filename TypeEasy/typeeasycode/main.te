@@ -9,15 +9,14 @@ int tope = 5;
 int incremental = 1;
 int index = 0;
 int contador = 0;
-int j = 0;
+int i = 0;
 
-for (contador = 0 ; 5 ; 1){    
-    print(contador);
-    for (j = 0 ; 5 ; 1){
-    print(j);
-    }   
-}
-
+for(i = 0; 10; 1)   {
+    print(i);   
+    for(j = 0; 10; 1){
+        print(j);   
+    }  
+}  
 
 print(contador);
 print(index);

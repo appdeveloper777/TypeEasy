@@ -100,30 +100,34 @@ void interpret_ast(ASTNode *node) {
 
     //printf("Interpreting Node Type: %s\n", node->type);
     if (strcmp(node->type, "FOR") == 0) {
+        // Inicializar la variable del bucle FOR
         add_variable(node->id, node->left->value);
-        
-        ASTNode *condition = node->right;
-        ASTNode *update_node = condition->right;
-        ASTNode *update = update_node->left;
-        ASTNode *body = update_node->right;
-        
-        while (find_variable(node->id) && find_variable(node->id)->value < condition->left->value) {
-            
-            // Ejecutar el cuerpo del FOR y verificar si hay FORs anidados
-            ASTNode *current_stmt = body;
-            while (current_stmt) {
-                interpret_ast(current_stmt);
-                current_stmt = current_stmt->right;
+        printf("Ejecutando FOR: %s = %d hasta %d\n", node->id, node->left->value, node->right->value);
+
+        // Bucle FOR externo
+        while (find_variable(node->id)->value < node->right->value) {
+            //printf("Iteración de %s: %d\n", node->id, find_variable(node->id)->value);
+
+            // Obtener el cuerpo del bucle FOR
+            ASTNode *body = node->right->right->right;
+
+            if (!body) {
+                printf("Advertencia: FOR sin cuerpo\n");
+                break;
             }
-            
-            // Verificar que la variable existe antes de actualizar
-            Variable *var = find_variable(node->id);
-            if (var) {
-                var->value += update->left->value;
+
+            // Ejecutar el cuerpo del bucle FOR
+            ASTNode *stmt = body;
+            while (stmt) {
+                interpret_ast(stmt); // Ejecutar cada sentencia del cuerpo
+                stmt = stmt->right;
             }
+
+            // Incrementar la variable del bucle FOR
+            find_variable(node->id)->value += node->right->right->left->value;
         }
+
     }
-    
     
      else if (strcmp(node->type, "VAR_DECL") == 0) {
         //printf("Declaring Variable: %s\n", node->id);
@@ -200,16 +204,18 @@ ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *c
     node->id = var->id;
     node->left = init;
     node->right = condition;
-
-    ASTNode *update_node = (ASTNode *)malloc(sizeof(ASTNode));
-    update_node->type = strdup("FOR_UPDATE");
-    update_node->left = update;
-    update_node->right = body;
-
-    node->right->right = update_node;
     
+    ASTNode *update_body = (ASTNode *)malloc(sizeof(ASTNode));
+    update_body->type = strdup("FOR_BODY");
+    update_body->left = update;
+    update_body->right = body;
+    
+    node->right->right = update_body;
+
+   
     return node;
 }
+
 
 
 

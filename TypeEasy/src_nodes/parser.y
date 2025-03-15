@@ -54,8 +54,8 @@
         | PRINT LPAREN expression RPAREN SEMICOLON { $$ = create_ast_node("PRINT", $3, NULL); }
         | 
         FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list  RBRACKET {
-            ///printf("FOR: Iterador=%s, Inicial=%d, Condición=%d, Incremento=%d\n", 
-                //$3, $5, $7->value, $9->value);
+            
+               
             $$ = create_ast_node_for("FOR", 
                 create_ast_leaf("IDENTIFIER", 0, NULL, $3),  
                 create_ast_leaf("NUMBER", $5, NULL, NULL),   
@@ -63,6 +63,7 @@
                 $9,  // Incremento
                 $12  // Cuerpo
             );
+            
         }
     
     | LBRACKET statement_list RBRACKET
