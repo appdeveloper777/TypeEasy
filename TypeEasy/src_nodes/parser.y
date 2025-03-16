@@ -31,11 +31,7 @@
     
     
     statement:
-    IDENTIFIER ASSIGN IDENTIFIER PLUS NUMBER SEMICOLON {
-        
-        $$ = create_ast_node("ASSIGN", 
-            create_ast_leaf("IDENTIFIER", 0, NULL, $1), $5); 
-    } | 
+    
         STRING IDENTIFIER ASSIGN STRING_LITERAL SEMICOLON { $$ = create_var_decl_node($2, create_string_node($4)); } 
         |  INT IDENTIFIER ASSIGN expression SEMICOLON { 
             //printf("Valor de $4: %d\n", $4->value); 
@@ -47,9 +43,16 @@
         }
         | VAR IDENTIFIER ASSIGN expression SEMICOLON { $$ = create_ast_node("DECLARE", create_ast_leaf("IDENTIFIER", 0, NULL, $2), $4); }
         | IDENTIFIER ASSIGN expression SEMICOLON { 
-            printf("test..");
-            $$ = create_ast_node("ASSIGN", 
-                create_ast_leaf("IDENTIFIER", 0, NULL, $1), $3); 
+            //printf("test. $3->value %d \n", $3->value);
+            //printf("test. $1 %s \n", $1);
+            //$$ = create_ast_node("ASSIGN", $1, $3);
+            //add_or_update_variable($1, $3->value);
+
+            //printf("Asignando: %s = %d\n", $1, $3->value);
+           // add_or_update_variable($1, $3);  // ✅ Pasar el nodo AST completo
+
+           $$ = create_ast_node("ASSIGN", create_ast_leaf("VAR", 0, NULL, $1), $3);
+
         }
         | PRINT LPAREN expression RPAREN SEMICOLON { $$ = create_ast_node("PRINT", $3, NULL); }
         | 
@@ -69,17 +72,21 @@
     | LBRACKET statement_list RBRACKET
         ;
     statement_list:
-        statement
-        | statement statement_list
+        statement { $$ = $1; } 
+        | statement_list statement { $$ = add_statement($1, $2); } 
         ;
+    
     expression:
         NUMBER {
-           // printf("Número capturado: %d\n", $1);
+            //printf("Número capturado: %d\n", $1);
             $$ = create_ast_leaf("NUMBER", $1, NULL, NULL);
         }    
         | STRING_LITERAL { $$ = create_ast_leaf("STRING", 0, $1, NULL); }
         | IDENTIFIER { $$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1); }
-        | expression PLUS expression { $$ = create_ast_node("ADD", $1, $3); }
+        | expression PLUS expression { 
+            //printf("sumando");
+            $$ = create_ast_node("ADD", $1, $3); 
+        }
         | expression MINUS expression { $$ = create_ast_node("SUB", $1, $3); }
         | expression MULTIPLY expression { $$ = create_ast_node("MUL", $1, $3); }
         | expression DIVIDE expression { $$ = create_ast_node("DIV", $1, $3); }

@@ -20,10 +20,13 @@ ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right) {
     if (strcmp(type, "ADD") == 0) {
         node->value = left->value + right->value;
     }
-      else  if (strcmp(type, "ASSIGN") == 0) {
-            node->value = left->value + right->value;    
+    /*  else  if (strcmp(type, "ASSIGN") == 0) {
+       
+            node->value = right->value;    
+             printf("node->value %d = left->value %d + right->value %d;\n", node->value, left->value, right->value);
 
-    } else if (strcmp(type, "SUB") == 0) {
+    } */
+    else if (strcmp(type, "SUB") == 0) {
         node->value = left->value - right->value;
     } else if (strcmp(type, "MUL") == 0) {
         node->value = left->value * right->value;
@@ -95,44 +98,80 @@ ASTNode *create_string_node(char *value) {
     return create_ast_leaf("STRING", 0, value, NULL);
 }
 
+ASTNode *add_statement(ASTNode *list, ASTNode *stmt) {
+    if (!list) return stmt;
+    
+    ASTNode *current = list;
+    while (current->right) {
+        current = current->right;
+    }
+    current->right = stmt; // Conectar el siguiente statement correctamente
+
+    return list;
+}
+
+
 void interpret_ast(ASTNode *node) {
     if (!node) return;
 
     //printf("Interpreting Node Type: %s\n", node->type);
+
+    
+    int contador = 0;
     if (strcmp(node->type, "FOR") == 0) {
-        // Inicializar la variable del bucle FOR
-        add_variable(node->id, node->left->value);
-        printf("Ejecutando FOR: %s = %d hasta %d\n", node->id, node->left->value, node->right->value);
-
-        // Bucle FOR externo
-        while (find_variable(node->id)->value < node->right->value) {
-            //printf("Iteración de %s: %d\n", node->id, find_variable(node->id)->value);
-
-            // Obtener el cuerpo del bucle FOR
+        add_or_update_variable(node->id, node->left->value);
+    
+        int incremento = node->right->right->left->value;
+        int limite = node->right->value;
+    
+        while (find_variable(node->id)->value < limite) {  // 🔹 Evita la iteración extra cuando `j == 3`
+           
+            contador = contador + 1;
+            int valor_actual = find_variable(node->id)->value;
+    
             ASTNode *body = node->right->right->right;
-
             if (!body) {
                 printf("Advertencia: FOR sin cuerpo\n");
                 break;
             }
-
-            // Ejecutar el cuerpo del bucle FOR
+    
             ASTNode *stmt = body;
             while (stmt) {
-                interpret_ast(stmt); // Ejecutar cada sentencia del cuerpo
+                int var_value = find_variable(node->id)->value;
+    
+                if (var_value >= limite) {  
+                    break;  // 🔹 Asegurar que `FOR2` no se ejecuta cuando `j == 3`
+                }
+    
+                interpret_ast(stmt);
                 stmt = stmt->right;
             }
-
-            // Incrementar la variable del bucle FOR
-            find_variable(node->id)->value += node->right->right->left->value;
-        }
-
-    }
     
-     else if (strcmp(node->type, "VAR_DECL") == 0) {
+            find_variable(node->id)->value += incremento;
+        }
+    }
+     
+    else if (strcmp(node->type, "VAR_DECL") == 0) {
         //printf("Declaring Variable: %s\n", node->id);
         add_or_update_variable(node->id, node->left);  // Store the variable
     }
+    else if (strcmp(node->type, "ASSIGN") == 0) {
+        ASTNode *var_node = node->left;   // Variable que se asignará
+        ASTNode *expr_node = node->right; // Expresión de la asignación
+
+        if (!var_node || !expr_node) {
+            printf("Error: Asignación inválida.\n");
+            return;
+        }
+
+        // 🔹 Evaluar la expresión antes de asignarla
+        int value = evaluate_expression(expr_node);
+
+        add_or_update_variable(var_node->id, value);
+        printf("Asignación: %s = %d\n", var_node->id, value);
+    }
+
+    
     else if (strcmp(node->type, "PRINT") == 0) {
         ASTNode *expr = node->left;
         
@@ -165,6 +204,41 @@ void interpret_ast(ASTNode *node) {
         interpret_ast(node->right);
     }
 }
+
+int evaluate_expression(ASTNode *node) {
+    if (!node) return 0;
+
+    // 🚀 Si es una variable, buscar su valor
+    if (node->id) {
+        ASTNode *var = find_variable(node->id);
+        if (var) {
+            return var->value;
+        } else {
+            printf("Error: Variable '%s' no definida.\n", node->id);
+            return 0;
+        }
+    }
+
+    // 🚀 Si es una operación matemática, evaluar ambos lados
+    if (strcmp(node->type, "ADD") == 0) {
+        return evaluate_expression(node->left) + evaluate_expression(node->right);
+    } else if (strcmp(node->type, "SUB") == 0) {
+        return evaluate_expression(node->left) - evaluate_expression(node->right);
+    } else if (strcmp(node->type, "MUL") == 0) {
+        return evaluate_expression(node->left) * evaluate_expression(node->right);
+    } else if (strcmp(node->type, "DIV") == 0) {
+        int right = evaluate_expression(node->right);
+        if (right == 0) {
+            printf("Error: División por cero.\n");
+            return 0;
+        }
+        return evaluate_expression(node->left) / right;
+    }
+
+    // 🚀 Si es un número, devolverlo
+    return node->value;
+}
+
 
 void add_or_update_variable(char *id, int value) {
     ASTNode *var = find_variable(id);
@@ -221,7 +295,7 @@ ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *c
 
 ASTNode *find_variable(char *id) {
     for (int i = 0; i < var_count; i++) {
-        //printf("strcmp(vars[i].id %s: |", vars[i].id);
+       // printf("strcmp(vars[i].id %s: |", vars[i].id);
         if (strcmp(vars[i].id, id) == 0) {
             return vars[i].value;
         }

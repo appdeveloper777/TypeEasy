@@ -5,21 +5,26 @@ float suma = 100 + 100 * 2;
 float pi = 3;
 float operacion = 100 + 2;
 
-int tope = 5;
-int incremental = 1;
-int index = 0;
 int contador = 0;
 int i = 0;
+int j = 0;
+int x = 0;
 
-for(i = 0; 10; 1)   {
-    print(i);   
-    for(j = 0; 10; 1){
-        print(j);   
-    }  
-}  
+string for_uno = "FOR1";
+string for_dos = "FOR2";
+string for_tres = "FOR3";
+
+for(i = 0; 2; 1)   {  
+    contador =  contador + 111;
+    for(j = 0; 2; 1){ 
+        print(for_dos);
+        for(x = 0; 2; 1){
+            print(for_tres);
+        }           
+    }
+}
 
 print(contador);
-print(index);
 print(cadena);
 print(pi);
 print(operacion);

@@ -19,7 +19,7 @@ typedef struct Variable {
     int value;
 } Variable;
 
-
+ASTNode *add_statement(ASTNode *list, ASTNode *stmt);
 ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right);
 ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id);
 ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
