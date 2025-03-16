@@ -9,8 +9,18 @@
 %%
 
 [ \t\r\n]+              ;
+"//".*   {  }
+"/*"([^*]|\*+[^*/])*\*+"/" { /* Ignore multi-line comments */ }
 "var"                   { return VAR; }
 "string"                 { return STRING; }
+"class"       { return CLASS; }
+"constructor" { printf("Token: CONSTRUCTOR\n"); return CONSTRUCTOR; }
+"this"        { return THIS; }
+"new"         { return NEW; }
+"let"         { return LET; }
+":"           { return COLON; }
+","            return COMMA;
+
 \"(\\.|[^\"])*\"         { 
                             yylval.sval = strdup(yytext + 1); 
                             yylval.sval[strlen(yylval.sval) - 1] = '\0'; 

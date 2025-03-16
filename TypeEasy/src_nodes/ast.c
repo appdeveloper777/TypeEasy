@@ -1,11 +1,113 @@
 #include "ast.h"
 
 
-
+#define MAX_CLASSES 50
 #define MAX_VARS 100
 
 Variable vars[MAX_VARS];
+ClassNode *classes[MAX_CLASSES];
+
 int var_count = 0;
+int class_count = 0;
+
+ASTNode *create_object_with_args(ClassNode *class, ASTNode *args) {
+    if (!class) {
+        printf("Error: Clase no encontrada.\n");
+        return NULL;
+    }
+    ASTNode *obj = (ASTNode *)malloc(sizeof(ASTNode));
+    obj->type = strdup("OBJECT");
+    obj->left = NULL;
+    obj->right = args;  // Guardamos los argumentos del constructor
+    obj->id = strdup(class->name);
+    return obj;
+}
+
+
+ParameterNode *create_parameter_node(char *name, char *type) {
+    ParameterNode *param = (ParameterNode *)malloc(sizeof(ParameterNode));
+    param->name = strdup(name);
+    param->type = strdup(type);
+    param->next = NULL;
+    return param;
+}
+
+ParameterNode *add_parameter(ParameterNode *list, char *name, char *type) {
+    if (!list) return create_parameter_node(name, type);
+    ParameterNode *current = list;
+    while (current->next) {
+        current = current->next;
+    }
+    current->next = create_parameter_node(name, type);
+    return list;
+}
+
+ClassNode *find_class(char *name) {
+    for (int i = 0; i < class_count; i++) {
+        if (strcmp(classes[i]->name, name) == 0) {
+            return classes[i];  // Clase encontrada
+        }
+    }
+    printf("Error: Clase '%s' no encontrada.\n", name);
+    return NULL;  // Clase no encontrada
+}
+
+
+ClassNode *create_class(char *name) {
+    ClassNode *class_node = (ClassNode *)malloc(sizeof(ClassNode));
+    class_node->name = strdup(name);
+    class_node->attributes = NULL;
+    class_node->attr_count = 0;
+    class_node->methods = NULL;
+    class_node->next = NULL;
+    return class_node;
+}
+
+void add_class(ClassNode *class) {
+    if (class_count < MAX_CLASSES) {
+        classes[class_count++] = class;
+    }
+}
+
+void add_attribute_to_class(ClassNode *class, char *attr_name, char *attr_type) {
+    if (!class) return;
+    
+    class->attributes = realloc(class->attributes, (class->attr_count + 1) * sizeof(Variable));
+    class->attributes[class->attr_count].id = strdup(attr_name);
+    class->attributes[class->attr_count].type = strdup(attr_type);  // Guardamos el tipo
+    class->attr_count++;
+}
+
+void add_method_to_class(ClassNode *class, char *method, ASTNode *body) {
+    MethodNode *new_method = (MethodNode *)malloc(sizeof(MethodNode));
+    new_method->name = strdup(method);
+    new_method->body = body;
+    new_method->next = class->methods;
+    class->methods = new_method;
+}
+
+ObjectNode *create_object(ClassNode *class) {
+    ObjectNode *obj = (ObjectNode *)malloc(sizeof(ObjectNode));
+    obj->class = class;
+    obj->attributes = malloc(class->attr_count * sizeof(Variable));
+    for (int i = 0; i < class->attr_count; i++) {
+        obj->attributes[i].id = strdup(class->attributes[i].id);
+        obj->attributes[i].value = class->attributes[i].value;
+    }
+    return obj;
+}
+
+void call_method(ObjectNode *obj, char *method) {
+    MethodNode *m = obj->class->methods;
+    while (m) {
+        if (strcmp(m->name, method) == 0) {
+            interpret_ast(m->body);
+            return;
+        }
+        m = m->next;
+    }
+    printf("Error: Método '%s' no encontrado en la clase '%s'.\n", method, obj->class->name);
+}
 
 
 ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right) {
