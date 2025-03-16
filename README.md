@@ -11,7 +11,8 @@ Para modificar y correr el código .te:
 * make clean
 * make
 *  ./typeeasy ../typeeasycode/main.te  
-![image](https://github.com/user-attachments/assets/06aaba6a-de62-4612-9c9b-1bf6a7f2251e)
+![image](https://github.com/user-attachments/assets/2bd25ba1-657e-4880-997c-22ac0d5b2e01)
+
 
 
 
