@@ -10,8 +10,9 @@ Para modificar y correr el código .te:
    
 * make clean
 * make
-*  ./typeeasy ../typeeasycode/main.te  
-![image](https://github.com/user-attachments/assets/06aaba6a-de62-4612-9c9b-1bf6a7f2251e)
+*  ./typeeasy ../typeeasycode/main.te
+*  ![image](https://github.com/user-attachments/assets/ffe56e1a-c882-40bc-ba8a-d8f82b9379e1)
+
 
 
 
