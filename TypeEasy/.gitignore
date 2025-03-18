@@ -1,0 +1,8 @@
+# Archivos generados por Flex/Bison
+src/lex.yy.c
+src/parser.tab.c
+src/parser.tab.h
+src/parser.output
+
+# Ejecutables
+typeeasy
