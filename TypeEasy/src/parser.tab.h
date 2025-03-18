@@ -55,26 +55,26 @@ extern int yydebug;
     YYerror = 256,                 /* error  */
     YYUNDEF = 257,                 /* "invalid token"  */
     NUMBER = 258,                  /* NUMBER  */
-    IDENTIFIER = 259,              /* IDENTIFIER  */
-    VAR = 260,                     /* VAR  */
-    PRINT = 261,                   /* PRINT  */
-    ASSIGN = 262,                  /* ASSIGN  */
-    LPAREN = 263,                  /* LPAREN  */
-    RPAREN = 264,                  /* RPAREN  */
-    SEMICOLON = 265,               /* SEMICOLON  */
-    PLUS = 266,                    /* PLUS  */
-    MINUS = 267,                   /* MINUS  */
-    MUL = 268,                     /* MUL  */
-    DIV = 269,                     /* DIV  */
-    GREATERTHAN = 270,             /* GREATERTHAN  */
-    FLOAT = 271,                   /* FLOAT  */
-    FLOAT_LITERAL = 272,           /* FLOAT_LITERAL  */
+    FLOAT_LITERAL = 259,           /* FLOAT_LITERAL  */
+    IDENTIFIER = 260,              /* IDENTIFIER  */
+    STRING_LITERAL = 261,          /* STRING_LITERAL  */
+    VAR = 262,                     /* VAR  */
+    PRINT = 263,                   /* PRINT  */
+    ASSIGN = 264,                  /* ASSIGN  */
+    LPAREN = 265,                  /* LPAREN  */
+    RPAREN = 266,                  /* RPAREN  */
+    SEMICOLON = 267,               /* SEMICOLON  */
+    PLUS = 268,                    /* PLUS  */
+    MINUS = 269,                   /* MINUS  */
+    MUL = 270,                     /* MUL  */
+    DIV = 271,                     /* DIV  */
+    GREATERTHAN = 272,             /* GREATERTHAN  */
     LBRACKET = 273,                /* LBRACKET  */
     RBRACKET = 274,                /* RBRACKET  */
     COMMA = 275,                   /* COMMA  */
     STRING = 276,                  /* STRING  */
-    STRING_LITERAL = 277,          /* STRING_LITERAL  */
-    FOR = 278                      /* FOR  */
+    FOR = 277,                     /* FOR  */
+    FLOAT = 278                    /* FLOAT  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -83,13 +83,13 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 20 "parser.y"
+#line 16 "parser.y"
 
-        int num;
-        float fval;
-        char* sval;
-        char* id;
-    
+    int   ival;   
+    float fval;  
+    char* id;     
+    char* sval;   
+    Node* node;   
 
 #line 95 "parser.tab.h"
 

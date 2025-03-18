@@ -1,50 +1,44 @@
 %{
-#include "parser.tab.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include "variables.h"
-
+#include <string.h>   
+#include "ast.h"
+#include "parser.tab.h"
 %}
 
-digit   [0-9]
-letter  [a-zA-Z]
-
 %%
+"var"         { return VAR; }
+"float"       { return FLOAT; }
+"string"      { return STRING; }
+"for"         { return FOR; }
+"print"       { return PRINT; }
+[0-9]+\.[0-9]+  { yylval.fval = atof(yytext); return FLOAT_LITERAL; }
 
-[ \t\n]+             ;   // Ignorar espacios en blanco
-"var"                { return VAR; }
-"float"             { return FLOAT; }
-"<"                 { return GREATERTHAN; }
-"for"               { return FOR; }  // Reconoce "for" como un token FOR
-{digit}+"."{digit}+ { 
-    yylval.fval = atof(yytext);  // Convertir el texto en un valor float
-    return FLOAT_LITERAL; 
+[0-9]+          { yylval.ival = atoi(yytext); return NUMBER; }
+
+[a-zA-Z_][a-zA-Z0-9_]* {
+    yylval.id = strdup(yytext);
+    return IDENTIFIER;
 }
-"string"             { return STRING; }
-"print"              { return PRINT; }
-"="                  { return ASSIGN; }
-[0-9]+               { yylval.num = atoi(yytext); return NUMBER; }
-[a-zA-Z][a-zA-Z0-9]* { yylval.id = strdup(yytext); return IDENTIFIER; }
-"+"                  { return PLUS; }
-"-"                  { return MINUS; }
-"*"                  { return MUL; }
-"/"                  { return DIV; }
-"("                { return LPAREN; }
-")"                { return RPAREN; }
-"{"              { return LBRACKET; }  // Define el corchete izquierdo
-"}"              { return RBRACKET; }  // Define el corchete derecho
-";"        { return SEMICOLON; }
-","        { return COMMA; }
-\"[^\"]*\"           { 
-                        yylval.sval = strdup(yytext + 1);  // Ignorar comillas iniciales
-                        yylval.sval[strlen(yylval.sval) - 1] = '\0';  // Eliminar comillas finales
-                        return STRING_LITERAL; 
-                     }
+"\""[^\"]*"\"" {
+    yylval.sval = strdup(yytext + 1);
+    yylval.sval[strlen(yylval.sval) - 1] = '\0';
+    return STRING_LITERAL;
+}
+"="           { return ASSIGN; }
+"("           { return LPAREN; }
+")"           { return RPAREN; }
+"{"           { return LBRACKET; }
+"}"           { return RBRACKET; }
+";"           { return SEMICOLON; }
+"+"           { return PLUS; }
+"-"           { return MINUS; }
+"*"           { return MUL; }
+"/"           { return DIV; }
+">"           { return GREATERTHAN; }
 
-
-
+[ \t\n]+      { /* no hacemos nada, sólo los ignoramos */ }
 %%
-
-int yywrap() {
+int yywrap(void) {
     return 1;
 }
