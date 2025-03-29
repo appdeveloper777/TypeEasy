@@ -1,4 +1,6 @@
 #include "ast.h"
+#include <stdint.h>
+
 
 
 #define MAX_CLASSES 50
@@ -10,18 +12,53 @@ ClassNode *classes[MAX_CLASSES];
 int var_count = 0;
 int class_count = 0;
 
+// NUEVAS FUNCIONES PARA ACCEDER Y MODIFICAR ATRIBUTOS DE OBJETOS
+
+#include "ast.h"
+
+// Acceso a atributo: obj.edad
+int get_attribute_value(ObjectNode *obj, const char *attr_name) {
+    if (!obj) return 0;
+    for (int i = 0; i < obj->class->attr_count; i++) {
+        if (strcmp(obj->attributes[i].id, attr_name) == 0) {
+            return obj->attributes[i].value.int_value;
+        }
+    }
+    printf("Error: Atributo '%s' no encontrado en clase '%s'.\n", attr_name, obj->class->name);
+    return 0;
+}
+
+// Asignación de atributo: obj.edad = 30;
+void set_attribute_value(ObjectNode *obj, const char *attr_name, int value) {
+    if (!obj) return;
+    for (int i = 0; i < obj->class->attr_count; i++) {
+        if (strcmp(obj->attributes[i].id, attr_name) == 0) {
+            obj->attributes[i].value.int_value = value;
+            return;
+        }
+    }
+    printf("Error: Atributo '%s' no encontrado en clase '%s'.\n", attr_name, obj->class->name);
+    exit(EXIT_FAILURE);
+}
+
+
 ASTNode *create_object_with_args(ClassNode *class, ASTNode *args) {
     if (!class) {
         printf("Error: Clase no encontrada.\n");
         return NULL;
     }
+
+    ObjectNode *real_obj = create_object(class);  // 🔹 Aquí sí se crea el objeto
     ASTNode *obj = (ASTNode *)malloc(sizeof(ASTNode));
     obj->type = strdup("OBJECT");
     obj->left = NULL;
-    obj->right = args;  // Guardamos los argumentos del constructor
+    obj->right = args;
     obj->id = strdup(class->name);
+    obj->value = (int)(intptr_t)real_obj;  // ✅ Pasa el puntero real como int
+
     return obj;
 }
+
 
 
 ParameterNode *create_parameter_node(char *name, char *type) {
@@ -216,107 +253,168 @@ ASTNode *add_statement(ASTNode *list, ASTNode *stmt) {
 void interpret_ast(ASTNode *node) {
     if (!node) return;
 
-    //printf("Interpreting Node Type: %s\n", node->type);
+   // printf("[AST] Ejecutando nodo tipo: %s\n", node->type);
 
-    
-    int contador = 0;
+
     if (strcmp(node->type, "FOR") == 0) {
-        add_or_update_variable(node->id, node->left->value);
-    
+        add_or_update_variable(node->id, node->left);
+
+        Variable *var = find_variable(node->id);
+        if (!var || var->vtype != VAL_INT) {
+            printf("Error: Variable de control inválida en FOR.\n");
+            return;
+        }
+
         int incremento = node->right->right->left->value;
         int limite = node->right->value;
-    
-        while (find_variable(node->id)->value < limite) {  // 🔹 Evita la iteración extra cuando `j == 3`
-           
-            contador = contador + 1;
-            int valor_actual = find_variable(node->id)->value;
-    
-            ASTNode *body = node->right->right->right;
-            if (!body) {
-                printf("Advertencia: FOR sin cuerpo\n");
-                break;
-            }
-    
+        ASTNode *body = node->right->right->right;
+
+        if (!body) {
+            printf("Advertencia: FOR sin cuerpo\n");
+            return;
+        }
+
+        while (var->value.int_value < limite) {
             ASTNode *stmt = body;
             while (stmt) {
-                int var_value = find_variable(node->id)->value;
-    
-                if (var_value >= limite) {  
-                    break;  // 🔹 Asegurar que `FOR2` no se ejecuta cuando `j == 3`
-                }
-    
+                if (var->value.int_value >= limite) break;
                 interpret_ast(stmt);
                 stmt = stmt->right;
             }
-    
-            find_variable(node->id)->value += incremento;
+            var->value.int_value += incremento;
         }
     }
-     
+
     else if (strcmp(node->type, "VAR_DECL") == 0) {
-        //printf("Declaring Variable: %s\n", node->id);
-        add_or_update_variable(node->id, node->left);  // Store the variable
+        printf("Declaring Variable: %s\n", node->id);
+        declare_variable(node->id, node->left);
     }
+
+    else if (strcmp(node->type, "ASSIGN_ATTR") == 0) {
+        ASTNode *access = node->left;
+        ASTNode *value_node = node->right;
+    
+        if (!access || !value_node) {
+            printf("Error: asignación de atributo inválida.\n");
+            return;
+        }
+    
+        Variable *var = find_variable(access->left->id);
+        if (!var || var->vtype != VAL_OBJECT) {
+            printf("Error: Objeto '%s' no definido o no es un objeto.\n", access->left->id);
+            return;
+        }
+    
+        int val = evaluate_expression(value_node);
+        set_attribute_value(var->value.object_value, access->right->id, val);
+        //printf("[DEBUG] ASSIGN_ATTR Asignación: %s.%s = %d\n", access->left->id, access->right->id, val);
+    }
+    
+    
+
     else if (strcmp(node->type, "ASSIGN") == 0) {
-        ASTNode *var_node = node->left;   // Variable que se asignará
-        ASTNode *expr_node = node->right; // Expresión de la asignación
+        ASTNode *var_node = node->left;
+        ASTNode *expr_node = node->right;
 
         if (!var_node || !expr_node) {
             printf("Error: Asignación inválida.\n");
             return;
         }
 
-        // 🔹 Evaluar la expresión antes de asignarla
-        int value = evaluate_expression(expr_node);
-
-        add_or_update_variable(var_node->id, value);
-        printf("Asignación: %s = %d\n", var_node->id, value);
+        int result = evaluate_expression(expr_node);
+        ASTNode *value_node = create_ast_leaf("INT", result, NULL, NULL);
+        add_or_update_variable(var_node->id, value_node);
+        //printf("[DEBUG] Asignación: %s = %d\n", var_node->id, result);
     }
 
-    
     else if (strcmp(node->type, "PRINT") == 0) {
-        ASTNode *expr = node->left;
-        
-        if (!expr) {
-            printf("Error: PRINT statement has no expression.\n");
+       // printf("[DEBUG] Entró a PRINT\n");
+    
+        if (!node->left) {
+            printf(" PRINT: node->left es NULL\n");
             return;
         }
 
-        // Look up variable if it's an identifier
-        if (expr->id) {
-            //("Looking for variable: %s\n", expr->id);
-            ASTNode *value = find_variable(expr->id);
-            if (!value) {
-                printf("Error: Variable '%s' not defined.\n", expr->id);
+       // printf("[DEBUG] PRINT: node->left: %s\n", node->left);
+    
+        if (node->left && node->left->type) {
+            //printf("[DEBUG] PRINT: node->left->type: %s\n", node->left->type);
+        } else if (node->left && node->left->id) {
+          //  printf("[DEBUG] PRINT: node->left sin type pero con id: %s\n", node->left->id);
+        } else {
+          //  printf("[DEBUG] PRINT: node->left->type es NULL y no tiene id\n");
+        }
+    
+        // 🔹 Manejo de print(obj.edad);
+        if (node->left->type && strcmp(node->left->type, "ACCESS_ATTR") == 0) {
+            ASTNode *objNode = node->left->left;
+            ASTNode *attrNode = node->left->right;
+    
+            Variable *var = find_variable(objNode->id);
+            if (!var || var->vtype != VAL_OBJECT) {
+                printf("Error: Objeto '%s' no definido o no es un objeto.\n", objNode->id);
                 return;
             }
-            expr = value;  // Replace with actual value
+    
+            int val = get_attribute_value(var->value.object_value, attrNode->id);
+            printf("Output Atributo: %s.%s = %d\n", objNode->id, attrNode->id, val);
+            return;
         }
-
-        // Print value
-        if (expr->str_value) {
-            printf("Output: %s\n", expr->str_value);
-        } else {
-            printf("Output Numero: %d\n", expr->value);
+    
+        if (!node->left->id) {
+            printf("❌ PRINT: node->left->id es NULL\n");
+            return;
         }
-       // printf("Output Numero: %d\n", expr->value);
+    
+       // printf("[DEBUG] PRINT: Buscando variable con id: %s\n", node->left->id);
+    
+        Variable *var = find_variable(node->left->id);
+        if (!var) {
+            printf("Error: Variable '%s' no definida.\n", node->left->id);
+            return;
+        }
+    
+        switch (var->vtype) {
+            case VAL_STRING:
+                printf("Output: %s\n", var->value.string_value);
+                break;
+            case VAL_INT:
+                printf("Output Numero: %d\n", var->value.int_value);
+                break;
+            case VAL_OBJECT:
+                printf("Output Objeto de clase: %s\n", var->value.object_value->class->name);
+                break;
+            default:
+                printf("Output: tipo desconocido\n");
+        }
     }
+    
+    
+
     else if (strcmp(node->type, "STATEMENT_LIST") == 0) {
-        interpret_ast(node->left);
-        interpret_ast(node->right);
+       // printf("[AST] Recorriendo lista: RIGHT ➜ LEFT\n");
+        interpret_ast(node->right); // primero el más antiguo
+        interpret_ast(node->left);  // luego el más reciente
+    }
+    
+   
+
+    else {
+        //printf("[DEBUG] Nodo no manejado: %s\n", node->type);
     }
 }
+
 
 int evaluate_expression(ASTNode *node) {
     if (!node) return 0;
 
     // 🚀 Si es una variable, buscar su valor
     if (node->id) {
-        ASTNode *var = find_variable(node->id);
-        if (var) {
-            return var->value;
+        Variable *var = find_variable(node->id);
+        if (var && var->vtype == VAL_INT) {
+            return var->value.int_value;
         } else {
-            printf("Error: Variable '%s' no definida.\n", node->id);
+            printf("Error: Variable '%s' no definida o no es un entero.\n", node->id);
             return 0;
         }
     }
@@ -337,39 +435,102 @@ int evaluate_expression(ASTNode *node) {
         return evaluate_expression(node->left) / right;
     }
 
-    // 🚀 Si es un número, devolverlo
+    // 🚀 Si es un número literal directo, devolverlo
     return node->value;
 }
 
 
-void add_or_update_variable(char *id, int value) {
-    ASTNode *var = find_variable(id);
+
+void add_or_update_variable(char *id, ASTNode *value) {
+    if (!value) return;
+
+    // Detectar si existe
+    Variable *var = find_variable_for(id);
+
     if (var) {
-       // printf("Actualizando variable: %s = %d\n", id, value);
-        var->value = value;
+        // ACTUALIZAR
+        free(var->type);
+        var->type = strdup(value->type);
+
+        if (strcmp(value->type, "STRING") == 0) {
+            var->vtype = VAL_STRING;
+            var->value.string_value = strdup(value->str_value);
+        } else if (strcmp(value->type, "OBJECT") == 0) {
+            var->vtype = VAL_OBJECT;
+            var->value.object_value = (ObjectNode *)(intptr_t)value->value;
+        } else {
+            var->vtype = VAL_INT;
+            var->value.int_value = value->value;
+        }
     } else {
+        // CREAR VARIABLE NUEVA SIN buscarla de nuevo
         if (var_count >= MAX_VARS) {
-            printf("Error: Too many variables declared.\n");
+            printf("Error: Demasiadas variables declaradas.\n");
             return;
         }
+
+        printf("AGREGANDO VARIABLE: id=%s, tipo=%s, tipo interno=%s\n",
+               id, value->type, (strcmp(value->type, "OBJECT") == 0 ? "OBJETO" : "ESCALAR"));
+
         vars[var_count].id = strdup(id);
-        vars[var_count].value = value;
-      //  printf("Variable agregada: %s = %d\n", id, value);
-      //  printf("Dirección de memoria de nueva variable %s: %p\n", id, (void*)&vars[var_count]);
+        vars[var_count].type = strdup(value->type);
+
+        if (strcmp(value->type, "STRING") == 0) {
+            vars[var_count].vtype = VAL_STRING;
+            vars[var_count].value.string_value = strdup(value->str_value);
+        } else if (strcmp(value->type, "OBJECT") == 0) {
+            vars[var_count].vtype = VAL_OBJECT;
+            vars[var_count].value.object_value = (ObjectNode *)(intptr_t)value->value;
+        } else {
+            vars[var_count].vtype = VAL_INT;
+            vars[var_count].value.int_value = value->value;
+        }
+
+        printf("Almacenando variable nueva: %s de tipo %s en posición [%d]\n", id, value->type, var_count);
+
         var_count++;
     }
 }
 
 
 
+
+void declare_variable(char *id, ASTNode *value) {
+    if (var_count >= MAX_VARS) {
+        printf("Error: Demasiadas variables declaradas.\n");
+        return;
+    }
+
+    //printf(" [DEBUG] Declarando nueva variable: %s de tipo %s\n", id, value->type);
+
+    vars[var_count].id = strdup(id);
+    vars[var_count].type = strdup(value->type);
+
+    if (strcmp(value->type, "STRING") == 0) {
+        vars[var_count].vtype = VAL_STRING;
+        vars[var_count].value.string_value = strdup(value->str_value);
+    } else if (strcmp(value->type, "OBJECT") == 0) {
+        vars[var_count].vtype = VAL_OBJECT;
+        vars[var_count].value.object_value = (ObjectNode *)(intptr_t)value->value;
+    } else {
+        vars[var_count].vtype = VAL_INT;
+        vars[var_count].value.int_value = value->value;
+    }
+
+    //printf(" [DEBUG] Variable '%s' almacenada en posición [%d]\n", id, var_count);
+    var_count++;
+}
+
 void add_variable(char *id, int value) {
     if (var_count >= MAX_VARS) {
         printf("Error: Too many variables declared.\n");
         return;
     }
+
     vars[var_count].id = strdup(id);
-    vars[var_count].value = value;
-  //  printf("Variable agregada: %s = %d\n", id, value);
+    vars[var_count].type = strdup("int");
+    vars[var_count].vtype = VAL_INT;
+    vars[var_count].value.int_value = value;
     var_count++;
 }
 
@@ -395,39 +556,63 @@ ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *c
 
 
 
-ASTNode *find_variable(char *id) {
+Variable *find_variable(char *id) {
     for (int i = 0; i < var_count; i++) {
-       // printf("strcmp(vars[i].id %s: |", vars[i].id);
         if (strcmp(vars[i].id, id) == 0) {
-            return vars[i].value;
+            return &vars[i];
         }
     }
     return NULL;
 }
+
 
 void add_variable_for(char *id, int value) {
     if (var_count >= MAX_VARS) {
         printf("Error: Too many variables declared.\n");
         return;
     }
+
     vars[var_count].id = strdup(id);
-    vars[var_count].value = value;
+    vars[var_count].type = strdup("int");
+    vars[var_count].vtype = VAL_INT;
+    vars[var_count].value.int_value = value;
     var_count++;
 }
 
 
-Variable *find_variable_for(char *id) { 
-    printf("Buscando variable: %s\n", id);
-    for (int i = 0; i < var_count; i++) {
-        printf("  - %s = %d (Dirección: %p)\n", vars[i].id, vars[i].value, (void*)&vars[i]);
-    }
+
+Variable *find_variable_for(char *id) {
+    //printf("[DEBUG] Buscando variable: %s\n", id);
+   /* for (int i = 0; i < var_count; i++) {
+       // printf("[DEBUG]  - %s = ", vars[i].id);
+        switch (vars[i].vtype) {
+            case VAL_INT:
+                printf("%d", vars[i].value.int_value);
+                break;
+            case VAL_STRING:
+                printf("\"%s\"", vars[i].value.string_value);
+                break;
+            case VAL_OBJECT:
+                if (vars[i].value.object_value && vars[i].value.object_value->class) {
+                    //printf("[DEBUG] <objeto de clase %s>", vars[i].value.object_value->class->name);
+                } else {
+                    printf("<objeto nulo>");
+                }
+                break;
+            default:
+                printf("tipo desconocido");
+        }
+       // printf("[DEBUG] (Dirección: %p)\n", (void*)&vars[i]);
+    }*/
+
     for (int i = 0; i < var_count; i++) {
         if (strcmp(vars[i].id, id) == 0) {
-            printf("Variable encontrada: %s con valor %d (Dirección: %p)\n", vars[i].id, vars[i].value, (void*)&vars[i]);
+            //printf("[DEBUG] Variable encontrada: %s (Dirección: %p)\n", vars[i].id, (void*)&vars[i]);
             return &vars[i];
         }
     }
-    printf("Variable %s no encontrada\n", id);
+
+    //printf("[DEBUG] Variable %s no encontrada\n", id);
     return NULL;
 }
 

@@ -14,10 +14,23 @@ typedef struct ASTNode {
     struct ASTNode *right;
 } ASTNode;
 
+typedef enum {
+    VAL_INT,
+    VAL_STRING,
+    VAL_OBJECT
+} ValueType;
+
+typedef struct ObjectNode ObjectNode;
+
 typedef struct Variable {
     char *id;
-    char *type;  // Agregar este campo para almacenar el tipo de dato
-    int value;
+    ValueType vtype;
+    char *type;
+    union {
+        int int_value;
+        char *string_value;
+        ObjectNode *object_value;
+    } value; // << este nombre ES IMPORTANTE
 } Variable;
 
 
@@ -59,12 +72,14 @@ ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id
 ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *condition, ASTNode *update, ASTNode *body);
 void interpret_ast(ASTNode *node);
 Variable *find_variable_for(char *id);
-void add_or_update_variable(char *id, int value);
+void add_or_update_variable(char *id, ASTNode *value);
 void add_variable_for(char *id, int value);
 void store_variable(char *id, ASTNode *value);
-ASTNode *find_variable(char *id);
+Variable *find_variable(char *id);
+void declare_variable(char *id, ASTNode *value);
 void free_ast(ASTNode *node);
-
+int get_attribute_value(ObjectNode *obj, const char *attr_name);
+void set_attribute_value(ObjectNode *obj, const char *attr_name, int value);
 
 // Funciones para clases y objetos
 ClassNode *create_class(char *name);

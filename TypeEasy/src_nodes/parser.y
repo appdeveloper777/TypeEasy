@@ -19,7 +19,7 @@
 
 %token FLOAT VAR ASSIGN PRINT FOR LPAREN RPAREN SEMICOLON 
 %token PLUS MINUS MULTIPLY DIVIDE STRING INT LBRACKET RBRACKET
-%token CLASS CONSTRUCTOR THIS NEW LET COLON COMMA
+%token CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT
 
 %token <sval> IDENTIFIER STRING_LITERAL 
 %token <ival> NUMBER
@@ -32,22 +32,23 @@
 %%
 
 program:
-    program statement { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; }
-    | statement { root = $1; }
-    | program class_decl { $$ = add_statement($1, $2); }
-    | class_decl { root = $1; }  
-    ;
+    program statement { $$ = create_ast_node("STATEMENT_LIST", $2, $1); root = $$; }
+  | program class_decl { $$ = create_ast_node("STATEMENT_LIST", $2, $1); root = $$; }
+  | statement { root = $1; }
+  | class_decl { root = $1; };
+
+
 
 class_decl:
     CLASS IDENTIFIER
     {
-        printf("📌 Se detectó una clase: %s\n", $2);
+        //printf(" [DEBUG] Se detectó una clase: %s\n", $2);
         last_class = create_class($2);  
         add_class(last_class);
     }
     LBRACKET class_body RBRACKET
     {
-        printf("📌 Fin de la definición de clase %s\n", $2);
+       // printf(" [DEBUG] Fin de la definición de clase %s\n", $2);
     }
     ;
 
@@ -75,7 +76,7 @@ attribute_decl:
 constructor_decl:
     CONSTRUCTOR LPAREN  RPAREN LBRACKET  RBRACKET
     {
-        printf("📌 Se detectó un constructor en la clase %s\n", last_class->name);
+        //printf("[DEBUG] Se detectó un constructor en la clase %s\n", last_class->name);
         if (last_class) {
             //add_constructor_to_class(last_class, $6);
         } else {
@@ -101,8 +102,16 @@ var_decl:
     LET IDENTIFIER ASSIGN expression SEMICOLON
     {
         $$ = create_var_decl_node($2, $4);
-        printf("📌 Declaración de variable: %s\n", $2);
+        //printf(" [DEBUG] Declaración de variable: %s\n", $2);
+    }   
+    | IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON {
+        ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
+        ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3);
+        ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr);  // ✅ correctamente marcado
+        $$ = create_ast_node("ASSIGN_ATTR", access, $5);  // ✅ left = acceso, right = valor
     }
+    
+    
     ;
 
 statement:
@@ -113,6 +122,14 @@ var_decl
     | VAR IDENTIFIER ASSIGN expression SEMICOLON { $$ = create_ast_node("DECLARE", create_ast_leaf("IDENTIFIER", 0, NULL, $2), $4); }
     | IDENTIFIER ASSIGN expression SEMICOLON { $$ = create_ast_node("ASSIGN", create_ast_leaf("VAR", 0, NULL, $1), $3); }
     | PRINT LPAREN expression RPAREN SEMICOLON { $$ = create_ast_node("PRINT", $3, NULL); }
+    | PRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON {
+       // printf(" [DEBUG] Reconocido PRINT con acceso a atributo: %s.%s\n", $3, $5);
+        ASTNode *obj = create_ast_leaf("ID", 0, NULL, $3);
+        ASTNode *attr = create_ast_leaf("ID", 0, NULL, $5);
+        ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr);
+        $$ = create_ast_node("PRINT", access, NULL);
+    }
+    
     | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET
     {
         $$ = create_ast_node_for("FOR", 
@@ -140,10 +157,14 @@ var_decl
     }
     
     ;
+    statement_list:
+    statement_list statement { $$ = create_ast_node("STATEMENT_LIST", $2, $1); }
+  | statement                { $$ = $1; };
 
-statement_list:
-    statement { $$ = $1; } 
-    | statement_list statement { $$ = add_statement($1, $2); } 
+
+
+
+
     ;
 
 expression_list:
@@ -152,9 +173,16 @@ expression_list:
     ;
 
 expression:
-    NUMBER { $$ = create_ast_leaf("NUMBER", $1, NULL, NULL); }
+ IDENTIFIER DOT IDENTIFIER {
+    printf("🎯 Reconocido ACCESS_ATTR: %s.%s\n", $1, $3);
+    $$ = create_ast_node("ACCESS_ATTR",
+                        create_ast_leaf("ID", 0, NULL, $1),
+                        create_ast_leaf("ID", 0, NULL, $3));
+} 
+| IDENTIFIER { $$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1); }
+    | NUMBER { $$ = create_ast_leaf("NUMBER", $1, NULL, NULL); }  
     | STRING_LITERAL { $$ = create_ast_leaf("STRING", 0, $1, NULL); }
-    | IDENTIFIER { $$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1); }
+   
     | expression PLUS expression { $$ = create_ast_node("ADD", $1, $3); }
     | expression MINUS expression { $$ = create_ast_node("SUB", $1, $3); }
     | expression MULTIPLY expression { $$ = create_ast_node("MUL", $1, $3); }
