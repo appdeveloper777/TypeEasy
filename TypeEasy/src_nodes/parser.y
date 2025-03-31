@@ -206,7 +206,11 @@ expression_list:
 
 expression:
  IDENTIFIER DOT IDENTIFIER {
+<<<<<<< HEAD
    // printf(" [DEBUG] Reconocido ACCESS_ATTR: %s.%s\n", $1, $3);
+=======
+    printf("🎯 Reconocido ACCESS_ATTR: %s.%s\n", $1, $3);
+>>>>>>> 4e21379b49d2ceae5eedb005601a51e72dcbb618
     $$ = create_ast_node("ACCESS_ATTR",
                         create_ast_leaf("ID", 0, NULL, $1),
                         create_ast_leaf("ID", 0, NULL, $3));
