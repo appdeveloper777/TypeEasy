@@ -14,11 +14,12 @@
 "var"                   { return VAR; }
 "string"                 { return STRING; }
 "class"       { return CLASS; }
-"constructor" { printf("Token: CONSTRUCTOR\n"); return CONSTRUCTOR; }
+"constructor" { return CONSTRUCTOR; }
 "this"        { return THIS; }
 "new"         { return NEW; }
 "let"         { return LET; }
 ":"           { return COLON; }
+"."           { return DOT; }
 ","            return COMMA;
 
 \"(\\.|[^\"])*\"         { 
