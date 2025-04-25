@@ -28,6 +28,7 @@
                             return STRING_LITERAL; 
                         }
 "int"                   { return INT; }
+"this"                   { return THIS; }
 "float"                   { return FLOAT; }
 "print"                 { return PRINT; }
 "for"                   { return FOR; }

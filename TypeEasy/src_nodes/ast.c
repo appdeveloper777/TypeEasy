@@ -15,6 +15,19 @@ int class_count = 0;
 // NUEVAS FUNCIONES PARA ACCEDER Y MODIFICAR ATRIBUTOS DE OBJETOS
 
 #include "ast.h"
+#include <string.h>
+
+// Crea un ASTNode de tipo CALL_METHOD
+ASTNode *create_method_call_node(ASTNode *objectNode, const char *methodName) {
+    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    node->type      = strdup("CALL_METHOD");
+    node->id        = strdup(methodName);    // nombre del método
+    node->left      = objectNode;           // AST del objeto
+    node->right     = NULL;
+    node->str_value = NULL;
+    node->value     = 0;
+    return node;
+}
 
 // Acceso a atributo: obj.edad
 int get_attribute_value(ObjectNode *obj, const char *attr_name) {
@@ -135,6 +148,17 @@ ObjectNode *create_object(ClassNode *class) {
 }
 
 void call_method(ObjectNode *obj, char *method) {
+    // 1) Crear un ASTNode que represente 'this'
+    ASTNode *thisNode = (ASTNode *)malloc(sizeof(ASTNode));
+    thisNode->type  = strdup("OBJECT");
+    thisNode->id    = strdup("this");
+    thisNode->left  = thisNode->right = NULL;
+    thisNode->value = (int)(intptr_t)obj;
+
+    // 2) Guardar/actualizar la variable 'this' en el entorno
+    add_or_update_variable("this", thisNode);
+
+    // 3) Buscar y ejecutar el método
     MethodNode *m = obj->class->methods;
     while (m) {
         if (strcmp(m->name, method) == 0) {
@@ -143,7 +167,9 @@ void call_method(ObjectNode *obj, char *method) {
         }
         m = m->next;
     }
-    printf("Error: Método '%s' no encontrado en la clase '%s'.\n", method, obj->class->name);
+
+    printf("Error: Método '%s' no encontrado en la clase '%s'.\n",
+           method, obj->class->name);
 }
 
 
@@ -285,8 +311,27 @@ void interpret_ast(ASTNode *node) {
         }
     }
 
+        // ── Llamada a método: obj.metodo()
+        else if (strcmp(node->type, "CALL_METHOD") == 0) {
+            // 1) Obtener variable
+            ASTNode *objNode = node->left;
+            if (!objNode->id) {
+                printf("Error: llamada inválida (no hay identificador de objeto).\n");
+                return;
+            }
+            Variable *var = find_variable(objNode->id);
+            if (!var || var->vtype != VAL_OBJECT) {
+                printf("Error: '%s' no es un objeto.\n", objNode->id);
+                return;
+            }
+            // 2) Ejecutar el método
+            call_method(var->value.object_value, node->id);
+            return;
+        }
+    
+
     else if (strcmp(node->type, "VAR_DECL") == 0) {
-        printf("Declaring Variable: %s\n", node->id);
+        //printf("[DEBUG] Declaring Variable: %s\n", node->id);
         declare_variable(node->id, node->left);
     }
 
@@ -329,6 +374,18 @@ void interpret_ast(ASTNode *node) {
 
     else if (strcmp(node->type, "PRINT") == 0) {
        // printf("[DEBUG] Entró a PRINT\n");
+
+       ASTNode *arg = node->left;
+    if (!arg) {
+        printf("Error: print sin argumento\n");
+        return;
+    }
+
+    // 1) Cadena literal
+    if (arg->type && strcmp(arg->type, "STRING") == 0) {
+        printf("Output: %s\n", arg->str_value);
+        return;
+    }
     
         if (!node->left) {
             printf(" PRINT: node->left es NULL\n");
@@ -469,8 +526,8 @@ void add_or_update_variable(char *id, ASTNode *value) {
             return;
         }
 
-        printf("AGREGANDO VARIABLE: id=%s, tipo=%s, tipo interno=%s\n",
-               id, value->type, (strcmp(value->type, "OBJECT") == 0 ? "OBJETO" : "ESCALAR"));
+        //printf("[DEBUG] AGREGANDO VARIABLE: id=%s, tipo=%s, tipo interno=%s\n",
+          //     id, value->type, (strcmp(value->type, "OBJECT") == 0 ? "OBJETO" : "ESCALAR"));
 
         vars[var_count].id = strdup(id);
         vars[var_count].type = strdup(value->type);
@@ -486,7 +543,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
             vars[var_count].value.int_value = value->value;
         }
 
-        printf("Almacenando variable nueva: %s de tipo %s en posición [%d]\n", id, value->type, var_count);
+        //printf("[DEBUG] Almacenando variable nueva: %s de tipo %s en posición [%d]\n", id, value->type, var_count);
 
         var_count++;
     }

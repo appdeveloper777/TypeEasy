@@ -352,8 +352,8 @@ static void yynoreturn yy_fatal_error ( const char* msg  );
 	(yy_hold_char) = *yy_cp; \
 	*yy_cp = '\0'; \
 	(yy_c_buf_p) = yy_cp;
-#define YY_NUM_RULES 33
-#define YY_END_OF_BUFFER 34
+#define YY_NUM_RULES 34
+#define YY_END_OF_BUFFER 35
 /* This struct is not used in this scanner,
    but its presence is necessary. */
 struct yy_trans_info
@@ -363,15 +363,15 @@ struct yy_trans_info
 	};
 static const flex_int16_t yy_accept[93] =
     {   0,
-        0,    0,   34,   33,    1,   33,   19,   20,   27,   25,
-       13,   26,   12,   28,   30,   11,   24,   23,   29,   29,
-       29,   29,   29,   29,   29,   29,   29,   29,   21,   22,
-        1,    0,   14,    0,    0,    2,   30,   29,   29,   29,
-       29,   29,   29,   29,   29,   29,   29,   29,   29,    0,
-       14,    0,    0,    0,    2,   29,   29,   29,   18,   15,
-       10,    9,   29,   29,   29,    4,    0,   14,    0,    3,
-       29,   29,   29,   29,   29,    8,    0,   14,    0,    6,
-       29,   16,   17,   29,   29,    5,   29,   29,   29,   29,
+        0,    0,   35,   34,    1,   34,   20,   21,   28,   26,
+       13,   27,   12,   29,   31,   11,   25,   24,   30,   30,
+       30,   30,   30,   30,   30,   30,   30,   30,   22,   23,
+        1,    0,   14,    0,    0,    2,   31,   30,   30,   30,
+       30,   30,   30,   30,   30,   30,   30,   30,   30,    0,
+       14,    0,    0,    0,    2,   30,   30,   30,   19,   15,
+       10,    9,   30,   30,   30,    4,    0,   14,    0,    3,
+       30,   30,   30,   30,   30,    8,    0,   14,    0,    6,
+       30,   17,   18,   30,   30,    5,   30,   30,   30,   30,
         7,    0
 
     } ;
@@ -876,99 +876,104 @@ YY_RULE_SETUP
 case 16:
 YY_RULE_SETUP
 #line 31 "parser.l"
-{ return FLOAT; }
+{ return THIS; }
 	YY_BREAK
 case 17:
 YY_RULE_SETUP
 #line 32 "parser.l"
-{ return PRINT; }
+{ return FLOAT; }
 	YY_BREAK
 case 18:
 YY_RULE_SETUP
 #line 33 "parser.l"
-{ return FOR; }
+{ return PRINT; }
 	YY_BREAK
 case 19:
 YY_RULE_SETUP
 #line 34 "parser.l"
-{ return LPAREN; }
+{ return FOR; }
 	YY_BREAK
 case 20:
 YY_RULE_SETUP
 #line 35 "parser.l"
-{ return RPAREN; }
+{ return LPAREN; }
 	YY_BREAK
 case 21:
 YY_RULE_SETUP
 #line 36 "parser.l"
-{ return LBRACKET; }
+{ return RPAREN; }
 	YY_BREAK
 case 22:
 YY_RULE_SETUP
 #line 37 "parser.l"
-{ return RBRACKET; }
+{ return LBRACKET; }
 	YY_BREAK
 case 23:
 YY_RULE_SETUP
 #line 38 "parser.l"
-{ return ASSIGN; }
+{ return RBRACKET; }
 	YY_BREAK
 case 24:
 YY_RULE_SETUP
 #line 39 "parser.l"
-{ return SEMICOLON; }
+{ return ASSIGN; }
 	YY_BREAK
 case 25:
 YY_RULE_SETUP
 #line 40 "parser.l"
-{ return PLUS; }
+{ return SEMICOLON; }
 	YY_BREAK
 case 26:
 YY_RULE_SETUP
 #line 41 "parser.l"
-{ return MINUS; }
+{ return PLUS; }
 	YY_BREAK
 case 27:
 YY_RULE_SETUP
 #line 42 "parser.l"
-{ return MULTIPLY; }
+{ return MINUS; }
 	YY_BREAK
 case 28:
 YY_RULE_SETUP
 #line 43 "parser.l"
-{ return DIVIDE; }
+{ return MULTIPLY; }
 	YY_BREAK
 case 29:
 YY_RULE_SETUP
 #line 44 "parser.l"
-{ yylval.sval = strdup(yytext); return IDENTIFIER; }
+{ return DIVIDE; }
 	YY_BREAK
 case 30:
 YY_RULE_SETUP
 #line 45 "parser.l"
-{ yylval.ival = atoi(yytext); return NUMBER; }
+{ yylval.sval = strdup(yytext); return IDENTIFIER; }
 	YY_BREAK
 case 31:
-/* rule 31 can match eol */
 YY_RULE_SETUP
 #line 46 "parser.l"
+{ yylval.ival = atoi(yytext); return NUMBER; }
+	YY_BREAK
+case 32:
+/* rule 32 can match eol */
+YY_RULE_SETUP
+#line 47 "parser.l"
 { 
                             yylval.sval = strdup(yytext + 1); 
                             yylval.sval[strlen(yylval.sval) - 1] = '\0'; 
                             return STRING_LITERAL; 
                         }
 	YY_BREAK
-case 32:
-YY_RULE_SETUP
-#line 51 "parser.l"
-{ yylval.sval = strdup(yytext); return IDENTIFIER; }
-	YY_BREAK
 case 33:
 YY_RULE_SETUP
-#line 53 "parser.l"
+#line 52 "parser.l"
+{ yylval.sval = strdup(yytext); return IDENTIFIER; }
+	YY_BREAK
+case 34:
+YY_RULE_SETUP
+#line 54 "parser.l"
 ECHO;
 	YY_BREAK
-#line 971 "lex.yy.c"
+#line 976 "lex.yy.c"
 case YY_STATE_EOF(INITIAL):
 	yyterminate();
 
@@ -1973,7 +1978,7 @@ void yyfree (void * ptr )
 
 #define YYTABLES_NAME "yytables"
 
-#line 53 "parser.l"
+#line 54 "parser.l"
 
 
 int yywrap() { 

@@ -1,16 +1,33 @@
 /* ***********************
-Esta clase maravillosa
+Esta es mi clase DE LOS DIOSES
 **************************/
-class Person {    
+class Person {
     edad : int;
-    constructor() {}    
+    constructor() {}
+    /*Mi metodo de los dioses*/
+    Saludar() {
+        int contador = 0;
+        int i = 0;
+        int j = 0; 
+        string linea = "***********************************";    
+
+        for(i = 0; 2; 1)   {             
+            for(j = 0; 10; 1){ 
+                contador = contador + 1; 
+            }   
+        }
+        print(contador);
+        print(linea);
+        print("Hola amiguitos..");
+        print(this.edad);  
+    }// Fin del metodo
 }
-string cadena = "ESTE ES UN STRING DE LOS DIOSES..";
-print(cadena);
+
 let obj = new Person();
-obj.edad = 32 - 2;
-obj.anything = "hola";
+obj.edad = 28 + 2;
 print(obj.edad);
+obj.Saludar();
+
 
 
 /* ***********************
