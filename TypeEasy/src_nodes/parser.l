@@ -14,7 +14,7 @@
 "var"                   { return VAR; }
 "string"                 { return STRING; }
 "class"       { return CLASS; }
-"constructor" { return CONSTRUCTOR; }
+"__constructor" { return CONSTRUCTOR; }
 "this"        { return THIS; }
 "new"         { return NEW; }
 "let"         { return LET; }

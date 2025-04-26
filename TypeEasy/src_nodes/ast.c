@@ -333,6 +333,15 @@ void interpret_ast(ASTNode *node) {
     else if (strcmp(node->type, "VAR_DECL") == 0) {
         //printf("[DEBUG] Declaring Variable: %s\n", node->id);
         declare_variable(node->id, node->left);
+
+        /* 2) Si node->left es un objeto, invoco su constructor */
+        if (node->left && strcmp(node->left->type, "OBJECT") == 0) {
+            /* recupero la Variable recién creada */
+            Variable *var = find_variable(node->id);
+            /* ejecuto el constructor (__constructor) */
+            call_method(var->value.object_value, "__constructor");
+        }
+
     }
 
     else if (strcmp(node->type, "ASSIGN_ATTR") == 0) {
@@ -461,6 +470,16 @@ void interpret_ast(ASTNode *node) {
     }
 }
 
+void add_constructor_to_class(ClassNode *class, ASTNode *body) {
+    // Crea un MethodNode para el constructor
+    MethodNode *ctor = malloc(sizeof(MethodNode));
+    if (!ctor) exit(1);
+    ctor->name = strdup("__constructor");  // o "constructor"
+    ctor->body = body;
+    // Enlaza al frente de la lista de métodos
+    ctor->next = class->methods;
+    class->methods = ctor;
+}
 
 int evaluate_expression(ASTNode *node) {
     if (!node) return 0;

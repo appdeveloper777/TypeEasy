@@ -18,22 +18,27 @@
     int ival;
     char *sval;
     ASTNode *node;
+    ParameterNode *pnode;
 }
 
-%token FLOAT VAR ASSIGN PRINT FOR LPAREN RPAREN SEMICOLON 
-%token PLUS MINUS MULTIPLY DIVIDE STRING INT LBRACKET RBRACKET
-%token CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT THIS
-
-%token <sval> IDENTIFIER STRING_LITERAL 
+%token <sval> INT STRING FLOAT
+%token       VAR ASSIGN PRINT FOR LPAREN RPAREN SEMICOLON
+%token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
+%token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT
+%token <sval> IDENTIFIER STRING_LITERAL
 %token <ival> NUMBER
+
 %type <sval> method_name
-%type <node> expression_list var_decl
+%type <node>  expression_list var_decl constructor_decl
+%type <pnode> parameter_decl parameter_list
+
+
 %define parse.trace
 %type <node> class_member
 
 
-%type <node> statement expression program statement_list class_decl class_body 
-%type <node> attribute_decl method_decl constructor_decl parameter_list
+%type <node> statement expression program statement_list class_decl class_body
+%type <node> attribute_decl method_decl 
 
 %%
 
@@ -83,21 +88,43 @@ attribute_decl:
     ;
 
 constructor_decl:
-    CONSTRUCTOR LPAREN  RPAREN LBRACKET  RBRACKET
+    CONSTRUCTOR LPAREN parameter_list  RPAREN LBRACKET statement_list  RBRACKET
     {
-        //printf("[DEBUG] Se detectó un constructor en la clase %s\n", last_class->name);
+        printf("[DEBUG] Se detectó un constructor en la clase %s\n", last_class->name);
         if (last_class) {
-            //add_constructor_to_class(last_class, $6);
+            add_constructor_to_class(last_class, $6);
+           //add_method_to_class(last_class, last_class->name /*o "__init__"*/, $6);
+
         } else {
             printf("Error: No hay clase definida para el constructor.\n");
         }
+        $$ = NULL;
     }
+    ;
+
+    parameter_decl:
+         IDENTIFIER COLON INT
+             { $$ = create_parameter_node($1, $3); }
+       | INT IDENTIFIER
+             { $$ = create_parameter_node($2, $1); }
+       | IDENTIFIER COLON STRING
+             { $$ = create_parameter_node($1, $3); }
+       | STRING IDENTIFIER
+             { $$ = create_parameter_node($2, $1); }
+       | IDENTIFIER COLON FLOAT
+             { $$ = create_parameter_node($1, $3); }
+       | FLOAT IDENTIFIER
+             { $$ = create_parameter_node($2, $1); }
     ;
 
     parameter_list:
     /* vacío */ { $$ = NULL; }
     | IDENTIFIER COLON IDENTIFIER { $$ = create_parameter_node($1, $3); }
     | parameter_list COMMA IDENTIFIER COLON IDENTIFIER { $$ = add_parameter($1, $3, $5); }
+    | parameter_decl
+    { $$ = NULL; }
+| parameter_list COMMA  parameter_decl
+    { $$ = add_parameter($1, $3->name, $3->type); }
     ;
 
 method_decl:
@@ -125,6 +152,16 @@ var_decl:
         ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3);
         ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr);  // ✅ correctamente marcado
         $$ = create_ast_node("ASSIGN_ATTR", access, $5);  // ✅ left = acceso, right = valor
+    }
+
+      | THIS DOT IDENTIFIER ASSIGN expression SEMICOLON {
+              /* obj será siempre “this” */
+              ASTNode *obj    = create_ast_leaf("ID", 0, NULL, "this");
+                    /* 2) El nombre del atributo viene en $3 */
+                    ASTNode *attr   = create_ast_leaf("ID", 0, NULL, $3);
+                    ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr);
+                    /* 3) La expresión es $5 */
+                    $$ = create_ast_node("ASSIGN_ATTR", access, $5);
     }
     
     
@@ -211,6 +248,35 @@ var_decl
             printf("[DEBUG] Creación de objeto: %s\n", $2);
         }
     }
+
+      |  LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN RPAREN SEMICOLON
+     {
+         ClassNode *cls = find_class($5);
+         if (!cls) {
+             printf("Error: Clase '%s' no definida.\n", $5);
+             $$ = NULL;
+         } else {
+             $$ = create_var_decl_node(
+                 $2,
+                 create_object_with_args(cls, NULL)
+             );
+         }
+     }
+
+    /* constructor con argumentos: let x = new Clase(arg1, arg2, …); */
+  |  LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN expression_list RPAREN SEMICOLON
+     {
+         ClassNode *cls = find_class($5);
+         if (!cls) {
+             printf("Error: Clase '%s' no definida.\n", $5);
+             $$ = NULL;
+         } else {
+             $$ = create_var_decl_node(
+                 $2,
+                 create_object_with_args(cls, $7)
+             );
+         }
+     }
     
     ;
     statement_list:

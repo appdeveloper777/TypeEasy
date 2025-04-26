@@ -64,6 +64,9 @@ ParameterNode *add_parameter(ParameterNode *list, char *name, char *type);
 ASTNode *create_object_with_args(ClassNode *class, ASTNode *args);
 // ast.h, justo después de create_object_with_args
 ASTNode *create_method_call_node(ASTNode *objectNode, const char *methodName);
+// ast.h, justo después de add_method_to_class
+void add_constructor_to_class(ClassNode *class, ASTNode *body);
+
 
 
 

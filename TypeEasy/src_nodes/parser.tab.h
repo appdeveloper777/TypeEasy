@@ -54,20 +54,20 @@ extern int yydebug;
     YYEOF = 0,                     /* "end of file"  */
     YYerror = 256,                 /* error  */
     YYUNDEF = 257,                 /* "invalid token"  */
-    FLOAT = 258,                   /* FLOAT  */
-    VAR = 259,                     /* VAR  */
-    ASSIGN = 260,                  /* ASSIGN  */
-    PRINT = 261,                   /* PRINT  */
-    FOR = 262,                     /* FOR  */
-    LPAREN = 263,                  /* LPAREN  */
-    RPAREN = 264,                  /* RPAREN  */
-    SEMICOLON = 265,               /* SEMICOLON  */
-    PLUS = 266,                    /* PLUS  */
-    MINUS = 267,                   /* MINUS  */
-    MULTIPLY = 268,                /* MULTIPLY  */
-    DIVIDE = 269,                  /* DIVIDE  */
-    STRING = 270,                  /* STRING  */
-    INT = 271,                     /* INT  */
+    INT = 258,                     /* INT  */
+    STRING = 259,                  /* STRING  */
+    FLOAT = 260,                   /* FLOAT  */
+    VAR = 261,                     /* VAR  */
+    ASSIGN = 262,                  /* ASSIGN  */
+    PRINT = 263,                   /* PRINT  */
+    FOR = 264,                     /* FOR  */
+    LPAREN = 265,                  /* LPAREN  */
+    RPAREN = 266,                  /* RPAREN  */
+    SEMICOLON = 267,               /* SEMICOLON  */
+    PLUS = 268,                    /* PLUS  */
+    MINUS = 269,                   /* MINUS  */
+    MULTIPLY = 270,                /* MULTIPLY  */
+    DIVIDE = 271,                  /* DIVIDE  */
     LBRACKET = 272,                /* LBRACKET  */
     RBRACKET = 273,                /* RBRACKET  */
     CLASS = 274,                   /* CLASS  */
@@ -94,8 +94,9 @@ union YYSTYPE
     int ival;
     char *sval;
     ASTNode *node;
+    ParameterNode *pnode;
 
-#line 99 "parser.tab.h"
+#line 100 "parser.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;
