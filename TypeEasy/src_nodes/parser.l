@@ -13,6 +13,9 @@
 "/*"([^*]|\*+[^*/])*\*+"/" { /* Ignore multi-line comments */ }
 "var"                   { return VAR; }
 "return"                   { return RETURN; }
+
+"concat"                   { return CONCAT; }
+
 "string"                 { return STRING; }
 "class"       { return CLASS; }
 "__constructor" { return CONSTRUCTOR; }

@@ -79,6 +79,7 @@ void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *
 
 
 
+ASTNode *create_function_call_node(const char *funcName, ASTNode *args);
 
 
 ASTNode *add_statement(ASTNode *list, ASTNode *stmt);

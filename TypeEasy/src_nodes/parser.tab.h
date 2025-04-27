@@ -64,24 +64,25 @@ extern int yydebug;
     LPAREN = 265,                  /* LPAREN  */
     RPAREN = 266,                  /* RPAREN  */
     SEMICOLON = 267,               /* SEMICOLON  */
-    PLUS = 268,                    /* PLUS  */
-    MINUS = 269,                   /* MINUS  */
-    MULTIPLY = 270,                /* MULTIPLY  */
-    DIVIDE = 271,                  /* DIVIDE  */
-    LBRACKET = 272,                /* LBRACKET  */
-    RBRACKET = 273,                /* RBRACKET  */
-    CLASS = 274,                   /* CLASS  */
-    CONSTRUCTOR = 275,             /* CONSTRUCTOR  */
-    THIS = 276,                    /* THIS  */
-    NEW = 277,                     /* NEW  */
-    LET = 278,                     /* LET  */
-    COLON = 279,                   /* COLON  */
-    COMMA = 280,                   /* COMMA  */
-    DOT = 281,                     /* DOT  */
-    RETURN = 282,                  /* RETURN  */
-    IDENTIFIER = 283,              /* IDENTIFIER  */
-    STRING_LITERAL = 284,          /* STRING_LITERAL  */
-    NUMBER = 285                   /* NUMBER  */
+    CONCAT = 268,                  /* CONCAT  */
+    PLUS = 269,                    /* PLUS  */
+    MINUS = 270,                   /* MINUS  */
+    MULTIPLY = 271,                /* MULTIPLY  */
+    DIVIDE = 272,                  /* DIVIDE  */
+    LBRACKET = 273,                /* LBRACKET  */
+    RBRACKET = 274,                /* RBRACKET  */
+    CLASS = 275,                   /* CLASS  */
+    CONSTRUCTOR = 276,             /* CONSTRUCTOR  */
+    THIS = 277,                    /* THIS  */
+    NEW = 278,                     /* NEW  */
+    LET = 279,                     /* LET  */
+    COLON = 280,                   /* COLON  */
+    COMMA = 281,                   /* COMMA  */
+    DOT = 282,                     /* DOT  */
+    RETURN = 283,                  /* RETURN  */
+    IDENTIFIER = 284,              /* IDENTIFIER  */
+    STRING_LITERAL = 285,          /* STRING_LITERAL  */
+    NUMBER = 286                   /* NUMBER  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -97,7 +98,7 @@ union YYSTYPE
     ASTNode *node;
     ParameterNode *pnode;
 
-#line 101 "parser.tab.h"
+#line 102 "parser.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

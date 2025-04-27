@@ -192,8 +192,27 @@ void call_method(ObjectNode *obj, char *method) {
            method, obj->class->name);
 }
 
+ASTNode *create_function_call_node(const char *funcName, ASTNode *args) {
+    ASTNode *n = malloc(sizeof(ASTNode));
+    n->type      = strdup("CALL_FUNC");
+    n->id        = strdup(funcName);
+    n->left      = args;    // lista de argumentos (arg1->right = arg2->right->…)
+    n->right     = NULL;
+    n->str_value = NULL;
+    n->value     = 0;
+    return n;
+}
+
 
 ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right) {
+   
+   /* fprintf(stderr,
+        "[DBG create_ast_node] type=%s, left=%s, right=%s\n",
+        type,
+        left  ? left->type  : "NULL",
+        right ? right->type : "NULL"
+    );*/
+
     ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
     node->type = strdup(type);
     node->left = left;
@@ -203,21 +222,40 @@ ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right) {
 
     // Calcular el resultado si el nodo es una suma
     if (strcmp(type, "ADD") == 0 &&
-        ((left->type && strcmp(left->type, "STRING") == 0) ||
-         (right->type && strcmp(right->type, "STRING") == 0))) {
-        // Extrae las dos cadenas
-        const char *s1 = left->type && strcmp(left->type, "STRING")==0
-                         ? left->str_value : "";
-        const char *s2 = right->type && strcmp(right->type, "STRING")==0
-                         ? right->str_value : "";
-        // Resultado
-        size_t len = strlen(s1) + strlen(s2) + 1;
-        char *buf = malloc(len);
-        strcpy(buf, s1);
-        strcat(buf, s2);
-        // Devuelve un literal STRING
-        return create_ast_leaf("STRING", 0, buf, NULL);
-    } else
+    ((left->type && strcmp(left->type, "STRING") == 0) ||
+     (right->type && strcmp(right->type, "STRING") == 0))) {
+
+        printf("Error: Suma de cadenas no permitida.\n");
+
+    // 1) Obtener s1
+    char *s1;
+    if (left->type && strcmp(left->type, "STRING") == 0) {
+        s1 = left->str_value;
+    } else {
+        // es un entero, conviértelo
+        char buf1[32];
+        sprintf(buf1, "%d", left->value);
+        s1 = buf1;
+    }
+    // 2) Obtener s2
+    char *s2;
+    if (right->type && strcmp(right->type, "STRING") == 0) {
+        s2 = right->str_value;
+    } else {
+        char buf2[32];
+        sprintf(buf2, "%d", right->value);
+        s2 = buf2;
+    }
+    // 3) Alocar y concatenar
+    size_t len = strlen(s1) + strlen(s2) + 1;
+    char *res = malloc(len);
+    strcpy(res, s1);
+    strcat(res, s2);
+
+    // 4) Devolver literal STRING
+    return create_ast_leaf("STRING", 0, res, NULL);
+} 
+
     if (strcmp(type, "ADD") == 0) {
         node->value = left->value + right->value;
     }
@@ -311,13 +349,62 @@ ASTNode *add_statement(ASTNode *list, ASTNode *stmt) {
     return list;
 }
 
+// Convierte un int a string dinámica
+static char* int_to_string(int x) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d", x);
+    return strdup(buf);
+}
+
+// Obtiene la representación string de *cualquier* ASTNode
+static char* get_node_string(ASTNode *node) {
+    if (!node) return strdup("");
+    // LITERAL
+    if (strcmp(node->type, "STRING") == 0) {
+        return strdup(node->str_value);
+    }
+    // ACCESO A ATRIBUTO
+    if (strcmp(node->type, "ACCESS_ATTR") == 0) {
+        ASTNode *o = node->left, *a = node->right;
+        Variable *v = find_variable(o->id);
+        if (v && v->vtype == VAL_OBJECT) {
+            ObjectNode *obj = v->value.object_value;
+            for (int i = 0; i < obj->class->attr_count; i++) {
+                if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
+                    if (strcmp(obj->class->attributes[i].type, "string") == 0) {
+                        return strdup(obj->attributes[i].value.string_value);
+                    } else {
+                        return int_to_string(obj->attributes[i].value.int_value);
+                    }
+                }
+            }
+        }
+        return strdup("");
+    }
+    // NODO ADD mixto o anidado
+    if (strcmp(node->type, "ADD") == 0) {
+        char *s1 = get_node_string(node->left);
+        char *s2 = get_node_string(node->right);
+        size_t len = strlen(s1) + strlen(s2) + 1;
+        char *res = malloc(len);
+        strcpy(res, s1);
+        strcat(res, s2);
+        free(s1);
+        free(s2);
+        return res;
+    }
+    // Cualquier otra expresión numérica
+    int v = evaluate_expression(node);
+    return int_to_string(v);
+}
+
 
 void interpret_ast(ASTNode *node) {
     if (!node) return;
 
     if (return_flag) return;  // si ya retornó, no ejecutar nada más
 
-
+    
     // ── Bucle FOR ───────────────────────────────────────────────────────────
     if (strcmp(node->type, "FOR") == 0) {
         add_or_update_variable(node->id, node->left);
@@ -343,6 +430,30 @@ void interpret_ast(ASTNode *node) {
             var->value.int_value += incremento;
         }
     }
+    else if (strcmp(node->type, "CALL_FUNC") == 0) {
+
+        printf("concat(%s, %s)\n", get_node_string(node->left), get_node_string(node->right));
+
+        if (strcmp(node->id, "concat") == 0) {
+
+            // asumimos dos args
+            ASTNode *arg1 = node->left;
+            ASTNode *arg2 = arg1 ? arg1->right : NULL;
+            char *s1 = get_node_string(arg1);
+            char *s2 = get_node_string(arg2);
+            size_t len = strlen(s1) + strlen(s2) + 1;
+            char *res = malloc(len);
+            strcpy(res, s1);
+            strcat(res, s2);
+            free(s1); free(s2);
+            // guardamos en __ret__
+            ASTNode *lit = create_ast_leaf("STRING", 0, res, NULL);
+            add_or_update_variable("__ret__", lit);
+            return;
+        }
+        // aquí podrías añadir más funciones nativas…
+    }
+    
 
    /* ── Manejo de RETURN dentro de un método ──────────────────────────── */
 else if (strcmp(node->type, "RETURN") == 0) {
@@ -413,6 +524,19 @@ else if (strcmp(node->type, "CALL_METHOD") == 0) {
             if (return_node->type && strcmp(return_node->type, "STRING") == 0) {
                 lit = create_ast_leaf("STRING", 0, return_node->str_value, NULL);
             }
+                   else if (return_node->id) {
+                            Variable *v = find_variable(return_node->id);
+                            if (v && v->vtype == VAL_STRING) {
+                                lit = create_ast_leaf("STRING", 0,
+                                         strdup(v->value.string_value), NULL);
+                            } else if (v && v->vtype == VAL_INT) {
+                                lit = create_ast_leaf_number("INT",
+                                         v->value.int_value, NULL, NULL);
+                            } else {
+                                // por si acaso otro tipo de dato u objeto
+                                lit = create_ast_leaf("STRING", 0, "", NULL);
+                            }
+                        }
             // 2) ACCESO A ATRIBUTO (this.nombre u otro.obj)
             else if (return_node->type && strcmp(return_node->type, "ACCESS_ATTR") == 0) {
                 ASTNode *objNode  = return_node->left;

@@ -16,14 +16,17 @@ class Person {
         print(this.nombre);
     }  
     
-    Saludar() {
-        return this.nombre;        
+    Saludar() {           
+        return this.nombre;   
     }
 }
 
 let obj = new Person(28, "PEDRO");
 obj.Imprimir(12);
 string saludo = obj.Saludar();
+int edad = 25;
+//this.edad = this.edad + 12;
+print(this.edad);
 print(saludo);
 
 
