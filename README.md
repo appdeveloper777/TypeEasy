@@ -13,6 +13,9 @@ Para modificar y correr el código .te:
 *  ./typeeasy ../typeeasycode/main.te  
 ![image](https://github.com/user-attachments/assets/2bd25ba1-657e-4880-997c-22ac0d5b2e01)
 
+Diagrama de Flujo:
+![image](https://github.com/user-attachments/assets/120f6734-bf12-4bbe-aedf-ba4372f169f9)
+
 
 
 
