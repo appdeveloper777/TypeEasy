@@ -24,12 +24,12 @@
 %token <sval> INT STRING FLOAT
 %token       VAR ASSIGN PRINT FOR LPAREN RPAREN SEMICOLON
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
-%token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT
+%token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN
 %token <sval> IDENTIFIER STRING_LITERAL
 %token <ival> NUMBER
 
 %type <sval> method_name
-%type <node>  expression_list var_decl constructor_decl
+%type <node>  expression_list var_decl constructor_decl return_stmt
 %type <pnode> parameter_decl parameter_list
 
 
@@ -168,7 +168,19 @@ var_decl:
     {
         $$ = create_var_decl_node($2, $4);
         //printf(" [DEBUG] Declaración de variable: %s\n", $2);
-    }   
+    }  |
+    STRING IDENTIFIER ASSIGN expression SEMICOLON {
+        //printf(" [DEBUG] Reconocido LET con acceso a atributo: %s.%s\n", $2, $4);
+        //ASTNode *obj = create_ast_leaf("ID", 0, NULL, $2);
+      //  ASTNode *attr = create_ast_leaf("ID", 0, NULL, $4);
+      //  ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr);  //  correctamente marcado
+       // $$ = create_ast_node("ASSIGN_ATTR", access, $6);  //  left = acceso, right = valor
+
+
+        $$ = create_var_decl_node($2, $4);
+
+    }
+ 
     | IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON {
         ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
         ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3);
@@ -190,6 +202,14 @@ var_decl:
     ;
 
 statement:
+ LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON
+        { $$ = create_var_decl_node($2, $4); }
+|  RETURN expression SEMICOLON
+{
+   // printf(" [DEBUG] Reconocido RETURN\n");
+  // crea un nodo de retorno
+  $$ = create_return_node($2);
+} |
 var_decl    
     | STRING STRING expression SEMICOLON { 
 
@@ -327,13 +347,28 @@ expression_list:
     ;
 
 expression:
+
+IDENTIFIER DOT IDENTIFIER LPAREN RPAREN {
+    /* obj.metodo() sin argumentos */
+    ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
+    $$ = create_method_call_node(obj, $3, NULL);
+}
+| IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN {
+    /* obj.metodo(arg1, arg2, ...) */
+    ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
+    $$ = create_method_call_node(obj, $3, $5);
+} |
  IDENTIFIER DOT IDENTIFIER {
 
    // printf(" [DEBUG] Reconocido ACCESS_ATTR: %s.%s\n", $1, $3);
 
-    $$ = create_ast_node("ACCESS_ATTR",
+   ASTNode *obj  = create_ast_leaf("ID", 0, NULL, $1);
+        ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3);
+        $$ = create_ast_node("ACCESS_ATTR", obj, attr);
+
+    /*$$ = create_ast_node("ACCESS_ATTR",
                         create_ast_leaf("ID", 0, NULL, $1),
-                        create_ast_leaf("ID", 0, NULL, $3));
+                        create_ast_leaf("ID", 0, NULL, $3));*/
 } 
 
 | expression DOT IDENTIFIER LPAREN RPAREN {
@@ -364,7 +399,7 @@ expression DOT IDENTIFIER LPAREN expression_list RPAREN
         }
     
 
-| IDENTIFIER { $$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1); }
+| IDENTIFIER { $$ = create_ast_leaf("IDENTIFIER", 0, NULL,  $1); }
     | NUMBER { $$ = create_ast_leaf("NUMBER", $1, NULL, NULL); }  
     | STRING_LITERAL { $$ = create_ast_leaf("STRING", 0, $1, NULL); }
    

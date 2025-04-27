@@ -17,36 +17,14 @@ class Person {
     }  
     
     Saludar() {
-        print("HOLA MUNDO");
-
-        int contador = 0;
-        int i = 0;
-        int j = 0;
-        int x = 0;
-
-        string for_uno = "FOR1";
-        string for_dos = "FOR2";
-        string for_tres = "FOR3";
-
-        /* ***********************
-        FOR ANIDADOS
-        **************************/
-
-        for(i = 0; 2; 1)   {              
-            for(j = 0; 9; 1){ 
-               contador =  contador + 1;
-            }
-        }
-
-        print(contador);
-        
+        return this.nombre;        
     }
 }
 
 let obj = new Person(28, "PEDRO");
 obj.Imprimir(12);
-obj.Saludar();
-
+string saludo = obj.Saludar();
+print(saludo);
 
 
 

@@ -12,6 +12,11 @@ ClassNode *classes[MAX_CLASSES];
 int var_count = 0;
 int class_count = 0;
 
+
+static int    return_flag  = 0;      // indica si hubo RETURN
+static ASTNode *return_node = NULL;  // expr que devuelve
+
+
 // NUEVAS FUNCIONES PARA ACCEDER Y MODIFICAR ATRIBUTOS DE OBJETOS
 
 #include "ast.h"
@@ -197,6 +202,22 @@ ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right) {
     node->str_value = NULL;
 
     // Calcular el resultado si el nodo es una suma
+    if (strcmp(type, "ADD") == 0 &&
+        ((left->type && strcmp(left->type, "STRING") == 0) ||
+         (right->type && strcmp(right->type, "STRING") == 0))) {
+        // Extrae las dos cadenas
+        const char *s1 = left->type && strcmp(left->type, "STRING")==0
+                         ? left->str_value : "";
+        const char *s2 = right->type && strcmp(right->type, "STRING")==0
+                         ? right->str_value : "";
+        // Resultado
+        size_t len = strlen(s1) + strlen(s2) + 1;
+        char *buf = malloc(len);
+        strcpy(buf, s1);
+        strcat(buf, s2);
+        // Devuelve un literal STRING
+        return create_ast_leaf("STRING", 0, buf, NULL);
+    } else
     if (strcmp(type, "ADD") == 0) {
         node->value = left->value + right->value;
     }
@@ -294,6 +315,9 @@ ASTNode *add_statement(ASTNode *list, ASTNode *stmt) {
 void interpret_ast(ASTNode *node) {
     if (!node) return;
 
+    if (return_flag) return;  // si ya retornó, no ejecutar nada más
+
+
     // ── Bucle FOR ───────────────────────────────────────────────────────────
     if (strcmp(node->type, "FOR") == 0) {
         add_or_update_variable(node->id, node->left);
@@ -320,12 +344,23 @@ void interpret_ast(ASTNode *node) {
         }
     }
 
-    // ── Llamada a método: obj.metodo() ────────────────────────────────────
-  // ── Llamada a método: obj.metodo() ────────────────────────────────────
+   /* ── Manejo de RETURN dentro de un método ──────────────────────────── */
+else if (strcmp(node->type, "RETURN") == 0) {
+    // Al encontrar RETURN, guardamos la expresión y marcamos la bandera
+    return_node = node->left;
+    return_flag = 1;
+    return;
+}
+
+
 else if (strcmp(node->type, "CALL_METHOD") == 0) {
     // 1) Obtener objeto y método
     ASTNode *objNode = node->left;
     Variable *v = find_variable(objNode->id);
+
+    return_flag  = 0;
+    return_node  = NULL;
+
     if (!v || v->vtype != VAL_OBJECT) {
         printf("Error: '%s' no es un objeto válido.\n", objNode->id);
         return;
@@ -369,35 +404,125 @@ else if (strcmp(node->type, "CALL_METHOD") == 0) {
 
     // 5) ¡Aquí estaba el fallo! Ahora sí ejecutamos el cuerpo del método:
     interpret_ast(m->body);
+        // … tras interpret_ast(m->body); …
+
+        if (return_flag && return_node) {
+            ASTNode *lit = NULL;
+    
+            // 1) LITERAL STRING puro
+            if (return_node->type && strcmp(return_node->type, "STRING") == 0) {
+                lit = create_ast_leaf("STRING", 0, return_node->str_value, NULL);
+            }
+            // 2) ACCESO A ATRIBUTO (this.nombre u otro.obj)
+            else if (return_node->type && strcmp(return_node->type, "ACCESS_ATTR") == 0) {
+                ASTNode *objNode  = return_node->left;
+                ASTNode *attrNode = return_node->right;
+                Variable *v = find_variable(objNode->id);
+                if (v && v->vtype == VAL_OBJECT) {
+                    ObjectNode *obj = v->value.object_value;
+                    // busca índice del atributo
+                    int idx = -1;
+                    for (int i = 0; i < obj->class->attr_count; i++) {
+                        if (strcmp(obj->class->attributes[i].id, attrNode->id) == 0) {
+                            idx = i;
+                            break;
+                        }
+                    }
+                    if (idx >= 0) {
+                        // si el atributo es STRING
+                        if (strcmp(obj->class->attributes[idx].type, "string") == 0) {
+                            lit = create_ast_leaf(
+                                "STRING",
+                                0,
+                                obj->attributes[idx].value.string_value,
+                                NULL
+                            );
+                        } else {
+                            // entero
+                            lit = create_ast_leaf_number(
+                                "INT",
+                                obj->attributes[idx].value.int_value,
+                                NULL,
+                                NULL
+                            );
+                        }
+                    }
+                }
+                // si algo falla, devolvemos cadena vacía
+                if (!lit) {
+                    lit = create_ast_leaf("STRING", 0, "", NULL);
+                }
+            }
+            // 3) Cualquier otra expresión numérica
+            else {
+                int rv = evaluate_expression(return_node);
+                lit = create_ast_leaf_number("INT", rv, NULL, NULL);
+            }
+    
+            // guardamos en __ret__ y limpiamos
+            add_or_update_variable("__ret__", lit);
+            return_flag  = 0;
+            return_node  = NULL;
+        }
+    
+
     return;
 }
 
     // ── Declaración de variable y ejecución de constructor ────────────────
     else if (strcmp(node->type, "VAR_DECL") == 0) {
-        // 1) Declara la variable
+        // ── 1) Si node->left es una llamada a método, ejecútala y captura __ret__ ──
+        if (node->left && strcmp(node->left->type, "CALL_METHOD") == 0) {
+            // Ejecutar la llamada (puebla return_node + return_flag)
+            interpret_ast(node->left);
+    
+            // Recuperar __ret__
+            Variable *r = find_variable("__ret__");
+            if (!r) {
+                printf("Error: No se capturó valor de retorno.\n");
+                return;
+            }
+    
+            // Construir un ASTNode literal a partir de __ret__
+            ASTNode *lit;
+            if (r->vtype == VAL_STRING) {
+                lit = create_ast_leaf("STRING", 0, r->value.string_value, NULL);
+            } else {
+                lit = create_ast_leaf_number("INT", r->value.int_value, NULL, NULL);
+            }
+    
+            // Declarar la variable con ese literal
+            declare_variable(node->id, lit);
+    
+            // Limpiar el estado de retorno
+            return_flag  = 0;
+            return_node  = NULL;
+            return;
+        }
+    
+        // ── 2) Flujo normal de declaración ───────────────────────────────────────
+        // 2.1) Declara la variable con el AST que venga (literal, expresión, NEW, etc)
         declare_variable(node->id, node->left);
-
-        // 2) Si es un objeto, invocamos su constructor
+    
+        // 2.2) Si node->left es NEW Clase(...), invocar constructor
         if (node->left && strcmp(node->left->type, "OBJECT") == 0) {
             Variable *var = find_variable(node->id);
             if (!var || var->vtype != VAL_OBJECT) return;
-
-            // 3) Busca el MethodNode del constructor
+    
+            // Buscar el MethodNode del constructor
             MethodNode *m = var->value.object_value->class->methods;
             while (m && strcmp(m->name, "__constructor") != 0) {
                 m = m->next;
             }
             if (m) {
-                // 4) Enlaza parámetros y argumentos
+                // Enlazar parámetros con argumentos
                 ParameterNode *p   = m->params;
                 ASTNode       *arg = node->left->right;
                 while (p && arg) {
                     ASTNode *val_node;
                     if (arg->type && strcmp(arg->type, "STRING") == 0) {
-                        // literal string
                         val_node = create_ast_leaf("STRING", 0, arg->str_value, NULL);
                     } else {
-                        // int u otras expresiones
                         int v = evaluate_expression(arg);
                         val_node = create_ast_leaf_number("INT", v, NULL, NULL);
                     }
@@ -405,11 +530,13 @@ else if (strcmp(node->type, "CALL_METHOD") == 0) {
                     p   = p->next;
                     arg = arg->right;
                 }
-                // 5) Ejecuta el cuerpo del constructor
+                // Ejecutar el constructor
                 call_method(var->value.object_value, "__constructor");
             }
         }
     }
+    
+    
 
     // ── Asignación a atributo (int o string) ──────────────────────────────
     else if (strcmp(node->type, "ASSIGN_ATTR") == 0) {
@@ -653,6 +780,17 @@ void add_or_update_variable(char *id, ASTNode *value) {
     }
 }
 
+/* ast.c */
+ASTNode *create_return_node(ASTNode *expr) {
+    ASTNode *node = malloc(sizeof(ASTNode));
+    node->type      = strdup("RETURN");
+    node->id        = NULL;
+    node->left      = expr;    // la expresión a retornar
+    node->right     = NULL;
+    node->str_value = NULL;
+    node->value     = 0;
+    return node;
+}
 
 
 

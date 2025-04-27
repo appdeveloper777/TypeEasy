@@ -71,6 +71,8 @@ ASTNode *create_method_call_node(ASTNode *objectNode,
                                      ASTNode *args);
 
 ASTNode *add_argument(ASTNode *list, ASTNode *expr);
+/* ast.h – justo tras tus otras creaciones de ASTNode */
+ASTNode *create_return_node(ASTNode *expr);
 
 // ast.h, justo después de add_method_to_class
 void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *body);

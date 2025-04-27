@@ -12,6 +12,7 @@
 "//".*   {  }
 "/*"([^*]|\*+[^*/])*\*+"/" { /* Ignore multi-line comments */ }
 "var"                   { return VAR; }
+"return"                   { return RETURN; }
 "string"                 { return STRING; }
 "class"       { return CLASS; }
 "__constructor" { return CONSTRUCTOR; }

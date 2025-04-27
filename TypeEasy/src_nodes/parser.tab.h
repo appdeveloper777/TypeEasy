@@ -78,9 +78,10 @@ extern int yydebug;
     COLON = 279,                   /* COLON  */
     COMMA = 280,                   /* COMMA  */
     DOT = 281,                     /* DOT  */
-    IDENTIFIER = 282,              /* IDENTIFIER  */
-    STRING_LITERAL = 283,          /* STRING_LITERAL  */
-    NUMBER = 284                   /* NUMBER  */
+    RETURN = 282,                  /* RETURN  */
+    IDENTIFIER = 283,              /* IDENTIFIER  */
+    STRING_LITERAL = 284,          /* STRING_LITERAL  */
+    NUMBER = 285                   /* NUMBER  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -96,7 +97,7 @@ union YYSTYPE
     ASTNode *node;
     ParameterNode *pnode;
 
-#line 100 "parser.tab.h"
+#line 101 "parser.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;
