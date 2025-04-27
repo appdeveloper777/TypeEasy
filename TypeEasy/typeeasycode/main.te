@@ -2,31 +2,51 @@
 Esta es mi clase DE LOS DIOSES
 **************************/
 class Person {
-    edad : int;
-    constructor() {}
-    /*Mi metodo de los dioses*/
+    edad : int;  
+    nombre : string;
+    __constructor(_edad : int, _nombre : string) {    // <- aquí: nombre primero, luego “: tipo”       
+        this.edad = _edad;
+        this.nombre = _nombre;        
+    }
+    Imprimir(p_edad : int) {   
+        this.edad = p_edad;      
+        print("MI EDAD ES: ");
+        print(this.edad);
+        print("MI NOMBRE ES: ");
+        print(this.nombre);
+    }  
+    
     Saludar() {
+        print("HOLA MUNDO");
+
         int contador = 0;
         int i = 0;
-        int j = 0; 
-        string linea = "***********************************";    
+        int j = 0;
+        int x = 0;
 
-        for(i = 0; 2; 1)   {             
-            for(j = 0; 10; 1){ 
-                contador = contador + 1; 
-            }   
+        string for_uno = "FOR1";
+        string for_dos = "FOR2";
+        string for_tres = "FOR3";
+
+        /* ***********************
+        FOR ANIDADOS
+        **************************/
+
+        for(i = 0; 2; 1)   {              
+            for(j = 0; 9; 1){ 
+               contador =  contador + 1;
+            }
         }
+
         print(contador);
-        print(linea);
-        print("Hola amiguitos..");
-        print(this.edad);  
-    }// Fin del metodo
+        
+    }
 }
 
-let obj = new Person();
-obj.edad = 28 + 2;
-print(obj.edad);
+let obj = new Person(28, "PEDRO");
+obj.Imprimir(12);
 obj.Saludar();
+
 
 
 

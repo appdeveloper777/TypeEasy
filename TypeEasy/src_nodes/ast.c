@@ -18,15 +18,25 @@ int class_count = 0;
 #include <string.h>
 
 // Crea un ASTNode de tipo CALL_METHOD
-ASTNode *create_method_call_node(ASTNode *objectNode, const char *methodName) {
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+ASTNode *create_method_call_node(ASTNode *objectNode,
+    const char *methodName,
+    ASTNode *args) {
+    ASTNode *node = malloc(sizeof(ASTNode));
     node->type      = strdup("CALL_METHOD");
-    node->id        = strdup(methodName);    // nombre del método
+    node->id        = strdup(methodName);   // nombre del método
     node->left      = objectNode;           // AST del objeto
-    node->right     = NULL;
+    node->right     = args;                 // AST de la lista de args (o NULL)
     node->str_value = NULL;
     node->value     = 0;
     return node;
+}
+
+ASTNode *add_argument(ASTNode *list, ASTNode *expr) {
+    if (!list) return expr;
+    ASTNode *cur = list;
+    while (cur->right) cur = cur->right;
+    cur->right = expr;
+    return list;
 }
 
 // Acceso a atributo: obj.edad
@@ -61,13 +71,13 @@ ASTNode *create_object_with_args(ClassNode *class, ASTNode *args) {
         return NULL;
     }
 
-    ObjectNode *real_obj = create_object(class);  // 🔹 Aquí sí se crea el objeto
+    ObjectNode *real_obj = create_object(class);  //  Aquí sí se crea el objeto
     ASTNode *obj = (ASTNode *)malloc(sizeof(ASTNode));
     obj->type = strdup("OBJECT");
     obj->left = NULL;
     obj->right = args;
     obj->id = strdup(class->name);
-    obj->value = (int)(intptr_t)real_obj;  // ✅ Pasa el puntero real como int
+    obj->value = (int)(intptr_t)real_obj;  //  Pasa el puntero real como int
 
     return obj;
 }
@@ -128,12 +138,17 @@ void add_attribute_to_class(ClassNode *class, char *attr_name, char *attr_type) 
     class->attr_count++;
 }
 
-void add_method_to_class(ClassNode *class, char *method, ASTNode *body) {
-    MethodNode *new_method = (MethodNode *)malloc(sizeof(MethodNode));
-    new_method->name = strdup(method);
-    new_method->body = body;
-    new_method->next = class->methods;
-    class->methods = new_method;
+void add_method_to_class(ClassNode *cls,
+    char *method,
+    ParameterNode *params,
+    ASTNode *body) {
+    MethodNode *m = malloc(sizeof(MethodNode));
+    if (!m) exit(1);
+    m->name   = strdup(method);
+    m->params = params;    // puede ser NULL
+    m->body   = body;
+    m->next   = cls->methods;
+    cls->methods = m;
 }
 
 ObjectNode *create_object(ClassNode *class) {
@@ -279,27 +294,21 @@ ASTNode *add_statement(ASTNode *list, ASTNode *stmt) {
 void interpret_ast(ASTNode *node) {
     if (!node) return;
 
-   // printf("[AST] Ejecutando nodo tipo: %s\n", node->type);
-
-
+    // ── Bucle FOR ───────────────────────────────────────────────────────────
     if (strcmp(node->type, "FOR") == 0) {
         add_or_update_variable(node->id, node->left);
-
         Variable *var = find_variable(node->id);
         if (!var || var->vtype != VAL_INT) {
             printf("Error: Variable de control inválida en FOR.\n");
             return;
         }
-
         int incremento = node->right->right->left->value;
-        int limite = node->right->value;
-        ASTNode *body = node->right->right->right;
-
+        int limite      = node->right->value;
+        ASTNode *body   = node->right->right->right;
         if (!body) {
             printf("Advertencia: FOR sin cuerpo\n");
             return;
         }
-
         while (var->value.int_value < limite) {
             ASTNode *stmt = body;
             while (stmt) {
@@ -311,170 +320,246 @@ void interpret_ast(ASTNode *node) {
         }
     }
 
-        // ── Llamada a método: obj.metodo()
-        else if (strcmp(node->type, "CALL_METHOD") == 0) {
-            // 1) Obtener variable
-            ASTNode *objNode = node->left;
-            if (!objNode->id) {
-                printf("Error: llamada inválida (no hay identificador de objeto).\n");
-                return;
-            }
-            Variable *var = find_variable(objNode->id);
-            if (!var || var->vtype != VAL_OBJECT) {
-                printf("Error: '%s' no es un objeto.\n", objNode->id);
-                return;
-            }
-            // 2) Ejecutar el método
-            call_method(var->value.object_value, node->id);
-            return;
-        }
-    
+    // ── Llamada a método: obj.metodo() ────────────────────────────────────
+  // ── Llamada a método: obj.metodo() ────────────────────────────────────
+else if (strcmp(node->type, "CALL_METHOD") == 0) {
+    // 1) Obtener objeto y método
+    ASTNode *objNode = node->left;
+    Variable *v = find_variable(objNode->id);
+    if (!v || v->vtype != VAL_OBJECT) {
+        printf("Error: '%s' no es un objeto válido.\n", objNode->id);
+        return;
+    }
+    ObjectNode *obj = v->value.object_value;
 
+    // 2) Buscar MethodNode
+    MethodNode *m = obj->class->methods;
+    while (m && strcmp(m->name, node->id) != 0) {
+        m = m->next;
+    }
+    if (!m) {
+        printf("Error: Método '%s' no encontrado en clase '%s'.\n",
+               node->id, obj->class->name);
+        return;
+    }
+
+    // 3) Define 'this'
+    ASTNode *thisNode = malloc(sizeof(ASTNode));
+    thisNode->type      = strdup("OBJECT");
+    thisNode->id        = strdup("this");
+    thisNode->left      = thisNode->right = NULL;
+    thisNode->value     = (int)(intptr_t)obj;
+    add_or_update_variable("this", thisNode);
+
+    // 4) Enlazar parámetros con argumentos
+    ParameterNode *p   = m->params;     // puede ser NULL
+    ASTNode       *arg = node->right;   // lista de args (o NULL)
+    while (p && arg) {
+        ASTNode *val_node;
+        if (arg->type && strcmp(arg->type, "STRING") == 0) {
+            val_node = create_ast_leaf("STRING", 0, arg->str_value, NULL);
+        } else {
+            int iv = evaluate_expression(arg);
+            val_node = create_ast_leaf_number("INT", iv, NULL, NULL);
+        }
+        add_or_update_variable(p->name, val_node);
+        p   = p->next;
+        arg = arg->right;
+    }
+
+    // 5) ¡Aquí estaba el fallo! Ahora sí ejecutamos el cuerpo del método:
+    interpret_ast(m->body);
+    return;
+}
+
+    // ── Declaración de variable y ejecución de constructor ────────────────
     else if (strcmp(node->type, "VAR_DECL") == 0) {
-        //printf("[DEBUG] Declaring Variable: %s\n", node->id);
+        // 1) Declara la variable
         declare_variable(node->id, node->left);
 
-        /* 2) Si node->left es un objeto, invoco su constructor */
+        // 2) Si es un objeto, invocamos su constructor
         if (node->left && strcmp(node->left->type, "OBJECT") == 0) {
-            /* recupero la Variable recién creada */
             Variable *var = find_variable(node->id);
-            /* ejecuto el constructor (__constructor) */
-            call_method(var->value.object_value, "__constructor");
-        }
+            if (!var || var->vtype != VAL_OBJECT) return;
 
+            // 3) Busca el MethodNode del constructor
+            MethodNode *m = var->value.object_value->class->methods;
+            while (m && strcmp(m->name, "__constructor") != 0) {
+                m = m->next;
+            }
+            if (m) {
+                // 4) Enlaza parámetros y argumentos
+                ParameterNode *p   = m->params;
+                ASTNode       *arg = node->left->right;
+                while (p && arg) {
+                    ASTNode *val_node;
+                    if (arg->type && strcmp(arg->type, "STRING") == 0) {
+                        // literal string
+                        val_node = create_ast_leaf("STRING", 0, arg->str_value, NULL);
+                    } else {
+                        // int u otras expresiones
+                        int v = evaluate_expression(arg);
+                        val_node = create_ast_leaf_number("INT", v, NULL, NULL);
+                    }
+                    add_or_update_variable(p->name, val_node);
+                    p   = p->next;
+                    arg = arg->right;
+                }
+                // 5) Ejecuta el cuerpo del constructor
+                call_method(var->value.object_value, "__constructor");
+            }
+        }
     }
 
+    // ── Asignación a atributo (int o string) ──────────────────────────────
     else if (strcmp(node->type, "ASSIGN_ATTR") == 0) {
-        ASTNode *access = node->left;
+        ASTNode *access     = node->left;
         ASTNode *value_node = node->right;
-    
-        if (!access || !value_node) {
-            printf("Error: asignación de atributo inválida.\n");
-            return;
-        }
-    
+
+        // 1) Objeto base
         Variable *var = find_variable(access->left->id);
         if (!var || var->vtype != VAL_OBJECT) {
-            printf("Error: Objeto '%s' no definido o no es un objeto.\n", access->left->id);
+            printf("Error: Objeto '%s' no definido o no es un objeto.\n",
+                   access->left->id);
             return;
         }
-    
-        int val = evaluate_expression(value_node);
-        set_attribute_value(var->value.object_value, access->right->id, val);
-        //printf("[DEBUG] ASSIGN_ATTR Asignación: %s.%s = %d\n", access->left->id, access->right->id, val);
+        ObjectNode *obj = var->value.object_value;
+
+        // 2) Nombre del atributo
+        const char *attr_name = access->right->id;
+
+        // 3) Busca índice en la clase
+        int idx = -1;
+        for (int i = 0; i < obj->class->attr_count; i++) {
+            if (strcmp(obj->class->attributes[i].id, attr_name) == 0) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0) {
+            printf("Error: Atributo '%s' no encontrado en clase '%s'.\n",
+                   attr_name, obj->class->name);
+            return;
+        }
+
+        // 4) Asigna según tipo declarado
+        const char *declared = obj->class->attributes[idx].type;
+        if (strcmp(declared, "string") == 0) {
+            // cadena literal o variable string
+            if (value_node->str_value) {
+                obj->attributes[idx].value.string_value = strdup(value_node->str_value);
+            } else {
+                Variable *v = find_variable(value_node->id);
+                if (!v || v->vtype != VAL_STRING) {
+                    printf("Error: expresión no es una cadena válida.\n");
+                    return;
+                }
+                obj->attributes[idx].value.string_value = strdup(v->value.string_value);
+            }
+            obj->attributes[idx].vtype = VAL_STRING;
+        } else {
+            // entero u otras expresiones
+            int val = evaluate_expression(value_node);
+            obj->attributes[idx].value.int_value = val;
+            obj->attributes[idx].vtype = VAL_INT;
+        }
     }
-    
-    
 
+    // ── Asignación simple: x = expr ────────────────────────────────────────
     else if (strcmp(node->type, "ASSIGN") == 0) {
-        ASTNode *var_node = node->left;
+        ASTNode *var_node  = node->left;
         ASTNode *expr_node = node->right;
-
         if (!var_node || !expr_node) {
             printf("Error: Asignación inválida.\n");
             return;
         }
-
         int result = evaluate_expression(expr_node);
         ASTNode *value_node = create_ast_leaf("INT", result, NULL, NULL);
         add_or_update_variable(var_node->id, value_node);
-        //printf("[DEBUG] Asignación: %s = %d\n", var_node->id, result);
     }
 
+    // ── PRINT, con soporte para literales, variables y atributos ─────────
     else if (strcmp(node->type, "PRINT") == 0) {
-       // printf("[DEBUG] Entró a PRINT\n");
-
-       ASTNode *arg = node->left;
-    if (!arg) {
-        printf("Error: print sin argumento\n");
-        return;
-    }
-
-    // 1) Cadena literal
-    if (arg->type && strcmp(arg->type, "STRING") == 0) {
-        printf("Output: %s\n", arg->str_value);
-        return;
-    }
-    
-        if (!node->left) {
-            printf(" PRINT: node->left es NULL\n");
+        ASTNode *arg = node->left;
+        if (!arg) {
+            printf("Error: print sin argumento\n");
             return;
         }
-
-       // printf("[DEBUG] PRINT: node->left: %s\n", node->left);
-    
-        if (node->left && node->left->type) {
-            //printf("[DEBUG] PRINT: node->left->type: %s\n", node->left->type);
-        } else if (node->left && node->left->id) {
-          //  printf("[DEBUG] PRINT: node->left sin type pero con id: %s\n", node->left->id);
-        } else {
-          //  printf("[DEBUG] PRINT: node->left->type es NULL y no tiene id\n");
+        // 1) literal string directo
+        if (arg->type && strcmp(arg->type, "STRING") == 0) {
+            printf("Output: %s\n", arg->str_value);
+            return;
         }
-    
-        // 🔹 Manejo de print(obj.edad);
-        if (node->left->type && strcmp(node->left->type, "ACCESS_ATTR") == 0) {
-            ASTNode *objNode = node->left->left;
-            ASTNode *attrNode = node->left->right;
-    
-            Variable *var = find_variable(objNode->id);
-            if (!var || var->vtype != VAL_OBJECT) {
-                printf("Error: Objeto '%s' no definido o no es un objeto.\n", objNode->id);
+        // 2) acceso a atributo
+        if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
+            ASTNode *o = arg->left;
+            ASTNode *a = arg->right;
+            Variable *v = find_variable(o->id);
+            if (!v || v->vtype != VAL_OBJECT) {
+                printf("Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
                 return;
             }
-    
-            int val = get_attribute_value(var->value.object_value, attrNode->id);
-            printf("Output Atributo: %s.%s = %d\n", objNode->id, attrNode->id, val);
+            ObjectNode *obj = v->value.object_value;
+            // busca índice
+            int idx = -1;
+            for (int i = 0; i < obj->class->attr_count; i++) {
+                if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
+                    idx = i;
+                    break;
+                }
+            }
+            if (idx < 0) {
+                printf("Error: Atributo '%s' no encontrado en clase '%s'.\n",
+                       a->id, obj->class->name);
+                return;
+            }
+            Variable *attr = &obj->attributes[idx];
+            if (attr->vtype == VAL_STRING) {
+                printf("Output: %s\n", attr->value.string_value);
+            } else {
+                printf("Output: %d\n", attr->value.int_value);
+            }
             return;
         }
-    
-        if (!node->left->id) {
-            printf(" PRINT: node->left->id es NULL\n");
+        // 3) variable simple
+        if (!arg->id) {
+            printf("Error: print sin identificador válido.\n");
             return;
         }
-    
-       // printf("[DEBUG] PRINT: Buscando variable con id: %s\n", node->left->id);
-    
-        Variable *var = find_variable(node->left->id);
-        if (!var) {
-            printf("Error: Variable '%s' no definida.\n", node->left->id);
+        Variable *v = find_variable(arg->id);
+        if (!v) {
+            printf("Error: Variable '%s' no definida.\n", arg->id);
             return;
         }
-    
-        switch (var->vtype) {
-            case VAL_STRING:
-                printf("Output: %s\n", var->value.string_value);
-                break;
-            case VAL_INT:
-                printf("Output Numero: %d\n", var->value.int_value);
-                break;
-            case VAL_OBJECT:
-                printf("Output Objeto de clase: %s\n", var->value.object_value->class->name);
-                break;
-            default:
-                printf("Output: tipo desconocido\n");
+        if (v->vtype == VAL_STRING) {
+            printf("Output: %s\n", v->value.string_value);
+        } else if (v->vtype == VAL_INT) {
+            printf("Output: %d\n", v->value.int_value);
+        } else {
+            printf("Output: Objeto de clase: %s\n", v->value.object_value->class->name);
         }
     }
-    
-    
 
+    // ── Lista de sentencias: recórrela ─────────────────────────────────────
     else if (strcmp(node->type, "STATEMENT_LIST") == 0) {
-       // printf("[AST] Recorriendo lista: RIGHT ➜ LEFT\n");
-        interpret_ast(node->right); // primero el más antiguo
-        interpret_ast(node->left);  // luego el más reciente
+        interpret_ast(node->right);
+        interpret_ast(node->left);
     }
-    
-   
 
+    // ── Nodo no reconocido ────────────────────────────────────────────────
     else {
-        //printf("[DEBUG] Nodo no manejado: %s\n", node->type);
+        // Nada que hacer
     }
 }
 
-void add_constructor_to_class(ClassNode *class, ASTNode *body) {
+void add_constructor_to_class(ClassNode *class,
+    ParameterNode *params,
+    ASTNode *body) {
     // Crea un MethodNode para el constructor
     MethodNode *ctor = malloc(sizeof(MethodNode));
     if (!ctor) exit(1);
     ctor->name = strdup("__constructor");  // o "constructor"
+    ctor->params = params;
     ctor->body = body;
     // Enlaza al frente de la lista de métodos
     ctor->next = class->methods;

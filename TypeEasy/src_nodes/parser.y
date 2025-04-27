@@ -84,15 +84,25 @@ attribute_decl:
         } else {
             printf("Error: No hay clase definida para el atributo '%s'.\n", $1);
         }
+    } |
+
+    IDENTIFIER COLON STRING SEMICOLON
+    {
+        if (last_class) {
+            add_attribute_to_class(last_class, $1, "string");  
+        } else {
+            printf("Error: No hay clase definida para el atributo '%s'.\n", $1);
+        }
     }
     ;
 
 constructor_decl:
     CONSTRUCTOR LPAREN parameter_list  RPAREN LBRACKET statement_list  RBRACKET
     {
-        printf("[DEBUG] Se detectó un constructor en la clase %s\n", last_class->name);
+        //printf("[DEBUG] Se detectó un constructor en la clase %s\n", last_class->name);
         if (last_class) {
-            add_constructor_to_class(last_class, $6);
+            add_constructor_to_class(last_class, $3, $6);
+           // add_constructor_to_class(last_class, $6);
            //add_method_to_class(last_class, last_class->name /*o "__init__"*/, $6);
 
         } else {
@@ -122,7 +132,7 @@ constructor_decl:
     | IDENTIFIER COLON IDENTIFIER { $$ = create_parameter_node($1, $3); }
     | parameter_list COMMA IDENTIFIER COLON IDENTIFIER { $$ = add_parameter($1, $3, $5); }
     | parameter_decl
-    { $$ = NULL; }
+    { $$ = $1;}
 | parameter_list COMMA  parameter_decl
     { $$ = add_parameter($1, $3->name, $3->type); }
     ;
@@ -131,12 +141,24 @@ method_decl:
     IDENTIFIER LPAREN RPAREN LBRACKET statement_list RBRACKET
     {        
         /* Añade el método $1 al último last_class declarado */
+                if (!last_class) {
+                        printf("Error interno: no hay clase activa para añadir método '%s'.\n", $1);
+                    } else {
+                        /* params = NULL, body = $5 */
+                        add_method_to_class(last_class, $1, NULL, $5);
+                    }
+                    $$ = NULL;
+    }
+    |
+    
+    IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
+    {
         if (!last_class) {
             printf("Error interno: no hay clase activa para añadir método '%s'.\n", $1);
-            exit(EXIT_FAILURE);
+        } else {
+            /* params = $3, body = $6 */
+            add_method_to_class(last_class, $1, $3, $6);
         }
-        //printf("[DEBUG] Se detectó un método en la clase %s\n", last_class->name);
-        add_method_to_class(last_class, $1, $5);
         $$ = NULL;
     }
     ;
@@ -150,8 +172,8 @@ var_decl:
     | IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON {
         ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
         ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3);
-        ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr);  // ✅ correctamente marcado
-        $$ = create_ast_node("ASSIGN_ATTR", access, $5);  // ✅ left = acceso, right = valor
+        ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr);  //  correctamente marcado
+        $$ = create_ast_node("ASSIGN_ATTR", access, $5);  //  left = acceso, right = valor
     }
 
       | THIS DOT IDENTIFIER ASSIGN expression SEMICOLON {
@@ -201,13 +223,23 @@ var_decl
      /* ——— llamadas a método ——— */
   | IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON
   {
+    
     ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
-    $$ = create_method_call_node(obj, $3);
+    $$ = create_method_call_node(obj, $3, NULL);
   }
+
+  | IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON
+  {
+    
+    //ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
+    ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
+    $$ = create_method_call_node(obj, $3, $5);
+  }
+
 | THIS DOT IDENTIFIER LPAREN RPAREN SEMICOLON
   {
     ASTNode *thisObj = create_ast_leaf("ID", 0, NULL, "this");
-    $$ = create_method_call_node(thisObj, $3);
+    $$ = create_method_call_node(thisObj, $3, NULL);
   }
     | STRING IDENTIFIER ASSIGN STRING_LITERAL SEMICOLON { $$ = create_var_decl_node($2, create_string_node($4)); }
     | INT IDENTIFIER ASSIGN expression SEMICOLON { $$ = create_var_decl_node($2, create_int_node($4->value)); }
@@ -305,9 +337,18 @@ expression:
 } 
 
 | expression DOT IDENTIFIER LPAREN RPAREN {
+    printf(" [DEBUG] Reconocido METHOD_CALL: %s.%s()\n", $1, $3);
     // $1 = AST del objeto, $3 = nombre del método
-    $$ = create_method_call_node($1, $3);
+    $$ = create_method_call_node($1, $3, NULL);
 }
+
+|
+
+expression DOT IDENTIFIER LPAREN expression_list RPAREN
+    {
+        /* objeto en $1, nombre en $3, args en $5 */
+        $$ = create_method_call_node($1, $3, $5);
+    }
 
   | THIS DOT IDENTIFIER {
             $$ = create_ast_node("ACCESS_ATTR",
@@ -319,7 +360,7 @@ expression:
       | THIS DOT IDENTIFIER LPAREN RPAREN {
            $$ = create_method_call_node(
                    create_ast_leaf("ID", 0, NULL, "this"),
-                   $3);
+                   $3, NULL);
         }
     
 

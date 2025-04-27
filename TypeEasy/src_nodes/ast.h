@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct ParameterNode ParameterNode;
+
 typedef struct ASTNode {
     char *type;
     char *id;
@@ -37,6 +39,7 @@ typedef struct Variable {
 typedef struct MethodNode {
     char *name;
     ASTNode *body;
+    ParameterNode *params; 
     struct MethodNode *next;
 } MethodNode;
 
@@ -63,9 +66,14 @@ ParameterNode *create_parameter_node(char *name, char *type);
 ParameterNode *add_parameter(ParameterNode *list, char *name, char *type);
 ASTNode *create_object_with_args(ClassNode *class, ASTNode *args);
 // ast.h, justo después de create_object_with_args
-ASTNode *create_method_call_node(ASTNode *objectNode, const char *methodName);
+ASTNode *create_method_call_node(ASTNode *objectNode,
+                                     const char *methodName,
+                                     ASTNode *args);
+
+ASTNode *add_argument(ASTNode *list, ASTNode *expr);
+
 // ast.h, justo después de add_method_to_class
-void add_constructor_to_class(ClassNode *class, ASTNode *body);
+void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *body);
 
 
 
@@ -91,7 +99,10 @@ void set_attribute_value(ObjectNode *obj, const char *attr_name, int value);
 ClassNode *create_class(char *name);
 void add_class(ClassNode *class);
 void add_attribute_to_class(ClassNode *class, char *attr_name, char *attr_type);
-void add_method_to_class(ClassNode *class, char *method, ASTNode *body);
+void add_method_to_class(ClassNode *class,
+                             char *method,
+                             ParameterNode *params,
+                             ASTNode *body);
 ObjectNode *create_object(ClassNode *class);
 void call_method(ObjectNode *obj, char *method);
 ClassNode *find_class(char *name);
