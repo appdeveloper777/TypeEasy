@@ -1,7 +1,7 @@
 /* ***********************
 Esta es mi clase DE LOS DIOSES
 **************************/
-/*class Person {
+class Person {
     edad : int;  
     nombre : string;
     __constructor(_edad : int, _nombre : string) {     
@@ -23,6 +23,31 @@ Esta es mi clase DE LOS DIOSES
 
     Contar(){
         int numero = 2 +1 +1 +1 - 1 ;
+
+int contador = 0;
+int i = 0;
+int j = 0;
+int x = 0;
+
+string for_uno = "FOR1";
+string for_dos = "FOR2";
+string for_tres = "FOR3";
+
+/* ***********************
+FOR ANIDADOS
+**************************/
+
+for(i = 0; 2; 1)   {  
+    contador =  contador + 111;
+    for(j = 0; 2; 1){ 
+        print(for_dos);
+        for(x = 0; 2; 1){
+            print(for_tres);
+        }           
+    }
+}
+
+
         return numero;
     }
 }
@@ -34,10 +59,10 @@ int edad = 25;
 int miNumero = obj.Contar();
 this.edad = this.edad + 12;
 //print(this.edad);
-//(saludo);
-print(miNumero);*/
+print(saludo);
+print(miNumero);
 
-dataset train_data from "train.csv";
+/*dataset train_data from "train.csv";
 model myModel { 
         layer Dense(128, relu);
         layer Dense(10, softmax);
@@ -45,7 +70,7 @@ model myModel {
 train(myModel, train_data, epochs=25);
 var i = predict(myModel, test_sample);
 print(i);
-
+*/
 
 
 

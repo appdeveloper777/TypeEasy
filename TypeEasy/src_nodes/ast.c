@@ -945,14 +945,8 @@ static void interpret_print(ASTNode *node) {
 }
 
 static void interpret_statement_list(ASTNode *node) {
-    if (node->left) {
-        printf("[TRACE] Interpretando nodo izquierdo: %s\n", node->left->type);
-        interpret_ast(node->left);  // ← primero lo que está arriba en el código fuente
-    }
-    if (node->right) {
-        printf("[TRACE] Interpretando nodo derecho: %s\n", node->right->type);
-        interpret_ast(node->right);  // ← luego lo que está más abajo
-    }
+    interpret_ast(node->right);
+    interpret_ast(node->left);
 }
 
 
