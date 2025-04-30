@@ -5,6 +5,32 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Definiciones de tipos - MACHINE LEARNING */
+typedef struct TensorNode {
+    float* data;
+    int* shape;
+    int ndim;
+} TensorNode;
+
+typedef struct LayerNode {
+    char* layer_type; // "Dense", "ReLU", etc.
+    int units;
+    char* activation;
+} LayerNode;
+
+typedef struct ModelNode {
+    LayerNode** layers;
+    int layer_count;
+} ModelNode;
+
+// END - MACHINE LEARNING
+typedef struct DatasetNode {
+    TensorNode** inputs;
+    TensorNode** labels;
+    int count;
+} DatasetNode;
+
+
 typedef struct ParameterNode ParameterNode;
 
 typedef struct ASTNode {
@@ -61,7 +87,13 @@ typedef struct ParameterNode {
     char *type;
     struct ParameterNode *next;
 } ParameterNode;
+ASTNode* create_layer_node(const char*, int, const char*);
+ASTNode* append_layer_to_list(ASTNode*, ASTNode*);
+ASTNode* create_model_node(const char*, ASTNode*);
 
+ASTNode* create_predict_node(const char* model_name, const char* input_name);
+ASTNode* create_dataset_node(const char* name, const char* path);
+ASTNode* create_identifier_node(const char* name);
 ParameterNode *create_parameter_node(char *name, char *type);
 ParameterNode *add_parameter(ParameterNode *list, char *name, char *type);
 ASTNode *create_object_with_args(ClassNode *class, ASTNode *args);
@@ -80,6 +112,7 @@ void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *
 
 
 ASTNode *create_function_call_node(const char *funcName, ASTNode *args);
+
 
 
 ASTNode *add_statement(ASTNode *list, ASTNode *stmt);

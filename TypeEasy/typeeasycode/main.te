@@ -1,10 +1,10 @@
 /* ***********************
 Esta es mi clase DE LOS DIOSES
 **************************/
-class Person {
+/*class Person {
     edad : int;  
     nombre : string;
-    __constructor(_edad : int, _nombre : string) {    // <- aquí: nombre primero, luego “: tipo”       
+    __constructor(_edad : int, _nombre : string) {     
         this.edad = _edad;
         this.nombre = _nombre;        
     }
@@ -17,17 +17,56 @@ class Person {
     }  
     
     Saludar() {           
-        return this.nombre;   
+        string test = "hola";
+        return test;   
+    }
+
+    Contar(){
+        int numero = 2 +1 +1 +1 - 1 ;
+        return numero;
     }
 }
 
 let obj = new Person(28, "PEDRO");
-obj.Imprimir(12);
+//obj.Imprimir(12);
 string saludo = obj.Saludar();
 int edad = 25;
+int miNumero = obj.Contar();
+this.edad = this.edad + 12;
+//print(this.edad);
+//(saludo);
+print(miNumero);*/
+
+dataset train_data from "train.csv";
+model myModel { 
+        layer Dense(128, relu);
+        layer Dense(10, softmax);
+ }
+train(myModel, train_data, epochs=25);
+var i = predict(myModel, test_sample);
+print(i);
+
+
+
+
+/*var sample_input = "entrada";
+predict(myModel, sample_input);
+print(sample_input);*/
+
+
+/*string myModel = "modelo";
+string sample_input = "entrada";
+
+predict(myModel, sample_input);*/
+
+
+//let obj = new Person(28, "PEDRO");
+//obj.Imprimir(12);
+//string saludo = obj.Saludar();
+//int edad = 25;
 //this.edad = this.edad + 12;
-print(this.edad);
-print(saludo);
+//print(this.edad);
+//print(saludo);
 
 
 

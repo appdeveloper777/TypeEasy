@@ -21,7 +21,8 @@
     ParameterNode *pnode;
 }
 
-%token <sval> INT STRING FLOAT
+%token <sval> INT STRING FLOAT LAYER
+%token DATASET MODEL TRAIN PREDICT FROM
 %token       VAR ASSIGN PRINT FOR LPAREN RPAREN SEMICOLON CONCAT
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
 %token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN
@@ -31,6 +32,14 @@
 %type <sval> method_name
 %type <node>  expression_list var_decl constructor_decl return_stmt
 %type <pnode> parameter_decl parameter_list
+
+%type <node> dataset_decl
+%type <node> model_decl
+%type <node> layer_list
+%type <node> layer_decl
+%type <node> train_stmt
+%type <node> train_options
+%type <node> predict_stmt
 
 
 %define parse.trace
@@ -75,6 +84,30 @@ class_body:
 | class_body class_member                 { $$ = $1; }
 ;
 
+train_options:
+    IDENTIFIER ASSIGN NUMBER
+    {
+        $$ = create_train_option_node($1, $3);
+    }
+;
+
+layer_list:
+    layer_decl
+    {
+        $$ = $1;
+    }
+    | layer_list layer_decl
+    {
+        $$ = append_layer_to_list($1, $2);
+    }
+;
+
+layer_decl:
+    LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON
+    {
+        $$ = create_layer_node($2, $4, $6);
+    }
+;
 
 attribute_decl:
     IDENTIFIER COLON INT SEMICOLON
@@ -181,6 +214,33 @@ var_decl:
 
     }
 
+    |
+    VAR IDENTIFIER ASSIGN expression SEMICOLON {
+        printf("IMPRIMIENDO VAR \n");
+        //printf(" [DEBUG] Reconocido LET con acceso a atributo: %s.%s\n", $2, $4);
+        //ASTNode *obj = create_ast_leaf("ID", 0, NULL, $2);
+      //  ASTNode *attr = create_ast_leaf("ID", 0, NULL, $4);
+      //  ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr);  //  correctamente marcado
+       // $$ = create_ast_node("ASSIGN_ATTR", access, $6);  //  left = acceso, right = valor
+
+
+        $$ = create_var_decl_node($2, $4);
+
+    }
+
+    |
+    INT IDENTIFIER ASSIGN expression SEMICOLON {
+        //printf(" [DEBUG] Reconocido LET con acceso a atributo: %s.%s\n", $2, $4);
+        //ASTNode *obj = create_ast_leaf("ID", 0, NULL, $2);
+      //  ASTNode *attr = create_ast_leaf("ID", 0, NULL, $4);
+      //  ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr);  //  correctamente marcado
+       // $$ = create_ast_node("ASSIGN_ATTR", access, $6);  //  left = acceso, right = valor
+
+
+        $$ = create_var_decl_node($2, $4);
+
+    }
+
     | IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON {
         ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
         ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3);
@@ -201,7 +261,7 @@ var_decl:
 
     ;
 
-statement:
+statement:    
  LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON
         { $$ = create_var_decl_node($2, $4); }
 |  RETURN expression SEMICOLON
@@ -330,6 +390,95 @@ var_decl
          }
      }
 
+
+     |
+
+     DATASET IDENTIFIER FROM STRING_LITERAL SEMICOLON
+     { printf(" [DEBUG] Reconocido DATASET\n");
+        $$ = create_dataset_node($2,$4);
+     }
+
+     |
+
+     PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON
+     { 
+        printf(" [DEBUG] Reconocido PREDICT\n");
+        $$ = create_predict_node($3,$5); 
+    }
+
+    |
+
+    VAR IDENTIFIER ASSIGN PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON
+     { 
+        printf(" [DEBUG] Reconocido PREDICT\n");
+
+        ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i");
+        $$ = create_method_call_node(obj, "predict", NULL);
+
+
+        $$ = create_predict_node($6,$8); 
+    }
+
+
+
+|
+    DATASET IDENTIFIER FROM STRING_LITERAL SEMICOLON
+    {
+        $$ = create_dataset_node($2, $4);
+    }
+|
+   MODEL IDENTIFIER LBRACKET layer_list RBRACKET
+{
+    printf("[DEBUG] Reconocido MODEL\n");
+    printf("[DEBUG] Nombre del modelo: %s\n", $2);
+
+    // Mostrar lista de capas
+    ASTNode* layer = $4;
+    int capa_index = 0;
+    while (layer) {
+        if (strcmp(layer->type, "LAYER") == 0) {
+            printf("[DEBUG] Capa #%d: tipo=%s, unidades=%d, activación=%s\n",
+                   capa_index++,
+                   layer->id,
+                   layer->value,
+                   layer->str_value);
+        }
+        layer = layer->right;
+    }
+
+    ASTNode* modelNode = create_model_node($2, $4);
+    printf("[DEBUG] Nodo de modelo creado: type=%s, id=%s\n", modelNode->type, modelNode->id);
+
+    $$ = create_var_decl_node($2, modelNode);
+    printf("[DEBUG] VAR_DECL creado para modelo '%s'\n", $2);
+}
+
+|
+    LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON
+    {
+        $$ = create_layer_node($2, $4, $6);
+    }
+|
+
+
+    TRAIN LPAREN IDENTIFIER COMMA IDENTIFIER COMMA train_options RPAREN SEMICOLON
+    {
+        $$ = create_train_node($3, $5, $7);
+    }
+
+|
+
+    IDENTIFIER ASSIGN NUMBER
+    {
+        $$ = create_train_option_node($1, $3);
+    }
+
+
+
+
+
+
+
     ;
     statement_list:
     statement_list statement { $$ = create_ast_node("STATEMENT_LIST", $2, $1); }
@@ -346,8 +495,26 @@ expression_list:
     | expression_list COMMA expression { $$ = add_statement($1, $3); }
     ;
 
+    
+
+
 expression:
 
+PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN
+{
+
+     /* obj.metodo() sin argumentos */
+     ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i");
+     $$ = create_method_call_node(obj, $3, NULL);
+
+
+     
+   // *obj  = create_ast_leaf("ID", 0, NULL, $1);
+   //ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3);
+   //$$ = create_ast_node("ACCESS_ATTR", obj, attr);
+
+}
+|
 IDENTIFIER DOT IDENTIFIER LPAREN RPAREN {
     /* obj.metodo() sin argumentos */
     ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
@@ -412,7 +579,7 @@ expression DOT IDENTIFIER LPAREN expression_list RPAREN
 
     | expression PLUS expression {
         $$ = create_ast_node("ADD", $1, $3);
-        printf(" [DEBUG] Reconocido ADD: %s + %s\n", $1, $3);
+        //printf(" [DEBUG] Reconocido ADD: %s + %s\n", $1, $3);
     }
     | expression MINUS expression { $$ = create_ast_node("SUB", $1, $3); }
     | expression MULTIPLY expression { $$ = create_ast_node("MUL", $1, $3); }
@@ -430,6 +597,8 @@ expression DOT IDENTIFIER LPAREN expression_list RPAREN
         }
     }
     ;
+
+
 
 %%
 
