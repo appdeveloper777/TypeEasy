@@ -10,6 +10,10 @@ Para modificar y correr el código .te:
    
 * make clean
 * make
+*  ./typeeasy ../typeeasycode/main.te
+*  ./typeeasy ../typeeasycode/buble_for.te
+*  ./typeeasy ../typeeasycode/crear_clase.te
+*  ./typeeasy ../typeeasycode/machine_learning.te
 *  ./typeeasy ../typeeasycode/main.te  
 ![image](https://github.com/user-attachments/assets/2bd25ba1-657e-4880-997c-22ac0d5b2e01)
 
