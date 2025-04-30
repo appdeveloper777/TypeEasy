@@ -1,0 +1,41 @@
+/* ***********************
+ Creación de variables
+**************************/
+// String
+string cadena = "ESTE ES UN STRING DE LOS DIOSES..";
+// Float
+float suma = 100 + 100 * 2;
+float pi = 3;
+float operacion = 100 + 2;
+// Int
+int contador = 0;
+int i = 0;
+int j = 0;
+int x = 0;
+
+string for_uno = "FOR1";
+string for_dos = "FOR2";
+string for_tres = "FOR3";
+
+/* ***********************
+FOR ANIDADOS
+**************************/
+
+for(i = 0; 2; 1)   {  
+    contador =  contador + 111;
+    for(j = 0; 2; 1){ 
+        print(for_dos);
+        for(x = 0; 2; 1){
+            print(for_tres);
+        }           
+    }
+}
+
+/* ***********************
+Imprimiendo RESULTADOS:
+**************************/
+print(contador);
+print(cadena);
+print(pi);
+print(operacion);
+print(suma);

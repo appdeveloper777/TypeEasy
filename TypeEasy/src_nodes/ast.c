@@ -655,6 +655,7 @@ static void interpret_assign_attr(ASTNode *node);
 static void interpret_assign(ASTNode *node);
 static void interpret_print(ASTNode *node);
 static void interpret_statement_list(ASTNode *node);
+double evaluate_number(ASTNode *node);
 
 
 /* ─── DATASET ─────────────────────────────────────────────────────────── */
@@ -671,6 +672,10 @@ static void interpret_dataset(ASTNode *node) {
 void interpret_ast(ASTNode *node) {
     if (!node || return_flag) return;
 
+    /* Mensaje de depuración mostrando el origen */
+  //  printf("[DEBUG] Interpretando '%s'\n",
+    //       node->type);
+
     /* Despacho según tipo de nodo */
     if (strcmp(node->type, "FOR") == 0)                interpret_for(node);
     else if (strcmp(node->type, "DATASET") == 0)       interpret_dataset(node);
@@ -685,9 +690,62 @@ void interpret_ast(ASTNode *node) {
     else if (strcmp(node->type, "ASSIGN") == 0)        interpret_assign(node);
     else if (strcmp(node->type, "PRINT") == 0)         interpret_print(node);
     else if (strcmp(node->type, "STATEMENT_LIST") == 0)interpret_statement_list(node);
+    else if (strcmp(node->type, "PLOT") == 0) {
+        printf("[DEBUG] Generando gráfico...\n");
+    
+        // Extrae datos desde los nodos hijos
+        double values[100];
+        int count = 0;
+        ASTNode *child = node->left;
+        while (child != NULL && count < 100) {
+            values[count++] = evaluate_number(child);
+            child = child->next;
+        }
+    
+        generate_plot(values, count);
+    }
+    
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
+
+double evaluate_number(ASTNode *node) {
+    if (node == NULL) {
+        fprintf(stderr, "Error: Nodo nulo en evaluate_number\n");
+        return 0;
+    }
+
+    if (strcmp(node->type, "NUMBER") == 0) {
+        return node->value;
+    }
+
+    if (strcmp(node->type, "FLOAT") == 0) {
+        return node->value;
+    }
+
+    if (strcmp(node->type, "EXPRESSION") == 0) {
+        // Puedes extenderlo para +, -, *, /
+        return evaluate_number(node->left); // simplificado
+    }
+
+    fprintf(stderr, "Error: Tipo no soportado en evaluate_number: %s\n", node->type);
+    return 0;
+}
+
+void generate_plot(double *values, int count) {
+    FILE *fp = fopen("plot_data.txt", "w");
+    for (int i = 0; i < count; i++) {
+        fprintf(fp, "%d %f\n", i, values[i]);
+    }
+    fclose(fp);
+
+    // Llama a gnuplot
+    FILE *gnuplot = popen("gnuplot -persistent", "w");
+    fprintf(gnuplot, "set title 'Gráfico generado por TypeEasy'\n");
+    fprintf(gnuplot, "plot 'plot_data.txt' with linespoints\n");
+    pclose(gnuplot);
+}
+
 
 static void interpret_for(ASTNode *node) {
     add_or_update_variable(node->id, node->left);
@@ -947,6 +1005,13 @@ static void interpret_print(ASTNode *node) {
 static void interpret_statement_list(ASTNode *node) {
     interpret_ast(node->right);
     interpret_ast(node->left);
+
+    /*ASTNode *current = node;
+    while (current) {
+        interpret_ast(current->right);
+        current = current->left;
+    }*/
+
 }
 
 

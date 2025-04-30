@@ -63,32 +63,33 @@ extern int yydebug;
     TRAIN = 264,                   /* TRAIN  */
     PREDICT = 265,                 /* PREDICT  */
     FROM = 266,                    /* FROM  */
-    VAR = 267,                     /* VAR  */
-    ASSIGN = 268,                  /* ASSIGN  */
-    PRINT = 269,                   /* PRINT  */
-    FOR = 270,                     /* FOR  */
-    LPAREN = 271,                  /* LPAREN  */
-    RPAREN = 272,                  /* RPAREN  */
-    SEMICOLON = 273,               /* SEMICOLON  */
-    CONCAT = 274,                  /* CONCAT  */
-    PLUS = 275,                    /* PLUS  */
-    MINUS = 276,                   /* MINUS  */
-    MULTIPLY = 277,                /* MULTIPLY  */
-    DIVIDE = 278,                  /* DIVIDE  */
-    LBRACKET = 279,                /* LBRACKET  */
-    RBRACKET = 280,                /* RBRACKET  */
-    CLASS = 281,                   /* CLASS  */
-    CONSTRUCTOR = 282,             /* CONSTRUCTOR  */
-    THIS = 283,                    /* THIS  */
-    NEW = 284,                     /* NEW  */
-    LET = 285,                     /* LET  */
-    COLON = 286,                   /* COLON  */
-    COMMA = 287,                   /* COMMA  */
-    DOT = 288,                     /* DOT  */
-    RETURN = 289,                  /* RETURN  */
-    IDENTIFIER = 290,              /* IDENTIFIER  */
-    STRING_LITERAL = 291,          /* STRING_LITERAL  */
-    NUMBER = 292                   /* NUMBER  */
+    PLOT = 267,                    /* PLOT  */
+    VAR = 268,                     /* VAR  */
+    ASSIGN = 269,                  /* ASSIGN  */
+    PRINT = 270,                   /* PRINT  */
+    FOR = 271,                     /* FOR  */
+    LPAREN = 272,                  /* LPAREN  */
+    RPAREN = 273,                  /* RPAREN  */
+    SEMICOLON = 274,               /* SEMICOLON  */
+    CONCAT = 275,                  /* CONCAT  */
+    PLUS = 276,                    /* PLUS  */
+    MINUS = 277,                   /* MINUS  */
+    MULTIPLY = 278,                /* MULTIPLY  */
+    DIVIDE = 279,                  /* DIVIDE  */
+    LBRACKET = 280,                /* LBRACKET  */
+    RBRACKET = 281,                /* RBRACKET  */
+    CLASS = 282,                   /* CLASS  */
+    CONSTRUCTOR = 283,             /* CONSTRUCTOR  */
+    THIS = 284,                    /* THIS  */
+    NEW = 285,                     /* NEW  */
+    LET = 286,                     /* LET  */
+    COLON = 287,                   /* COLON  */
+    COMMA = 288,                   /* COMMA  */
+    DOT = 289,                     /* DOT  */
+    RETURN = 290,                  /* RETURN  */
+    IDENTIFIER = 291,              /* IDENTIFIER  */
+    STRING_LITERAL = 292,          /* STRING_LITERAL  */
+    NUMBER = 293                   /* NUMBER  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -104,7 +105,7 @@ union YYSTYPE
     ASTNode *node;
     ParameterNode *pnode;
 
-#line 108 "parser.tab.h"
+#line 109 "parser.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

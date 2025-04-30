@@ -20,6 +20,8 @@
 "predict"    { yylval.sval = strdup(yytext); return PREDICT; }
 "from"       { yylval.sval = strdup(yytext); return FROM; }
 "layer"      { yylval.sval = strdup(yytext); return LAYER; }
+"plot"                   { return PLOT; }       
+
 
 
 

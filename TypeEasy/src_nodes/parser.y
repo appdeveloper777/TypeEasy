@@ -22,7 +22,7 @@
 }
 
 %token <sval> INT STRING FLOAT LAYER
-%token DATASET MODEL TRAIN PREDICT FROM
+%token DATASET MODEL TRAIN PREDICT FROM PLOT
 %token       VAR ASSIGN PRINT FOR LPAREN RPAREN SEMICOLON CONCAT
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
 %token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN
@@ -426,6 +426,8 @@ var_decl
     {
         $$ = create_dataset_node($2, $4);
     }
+    | PLOT LPAREN expression_list RPAREN SEMICOLON { $$ = create_ast_node("PLOT", $3, NULL); }
+
 |
    MODEL IDENTIFIER LBRACKET layer_list RBRACKET
 {
@@ -449,8 +451,8 @@ var_decl
     ASTNode* modelNode = create_model_node($2, $4);
     printf("[DEBUG] Nodo de modelo creado: type=%s, id=%s\n", modelNode->type, modelNode->id);
 
-    $$ = create_var_decl_node($2, modelNode);
-    printf("[DEBUG] VAR_DECL creado para modelo '%s'\n", $2);
+    //$$ = create_var_decl_node($2, modelNode);
+    //printf("[DEBUG] VAR_DECL creado para modelo '%s'\n", $2);
 }
 
 |
