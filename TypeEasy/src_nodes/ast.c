@@ -72,7 +72,7 @@ static char* get_node_string(ASTNode *node) {
         return res;
     }
 
-    // Expresión numérica
+    // Expresión numérica    
     int v = evaluate_expression(node);
     return int_to_string(v);
 }
@@ -139,9 +139,12 @@ ObjectNode *create_object(ClassNode *class) {
     obj->class = class;
     obj->attributes = malloc(class->attr_count * sizeof(Variable));
     for (int i = 0; i < class->attr_count; i++) {
-        obj->attributes[i].id = strdup(class->attributes[i].id);
-        obj->attributes[i].value = class->attributes[i].value;
+        obj->attributes[i].id    = strdup(class->attributes[i].id);
+        obj->attributes[i].type  = strdup(class->attributes[i].type);
+        obj->attributes[i].vtype = VAL_INT;
+        obj->attributes[i].value.int_value = 0;
     }
+    
     return obj;
 }
 
@@ -555,7 +558,7 @@ int evaluate_expression(ASTNode *node) {
             if (var->vtype == VAL_INT) {
                 return var->value.int_value;
             } else if (var->vtype == VAL_STRING) {
-                printf("Error: Variable '%s' es string, no se puede evaluar como número.\n", node->id);
+                printf("Error: Variable '%s' es ddd string, no se puede evaluar como número.\n", node->id);
                 return 0;
             } else {
                 printf("Error: Variable '%s' es un objeto, no se puede evaluar como número.\n", node->id);
@@ -673,8 +676,8 @@ void interpret_ast(ASTNode *node) {
     if (!node || return_flag) return;
 
     /* Mensaje de depuración mostrando el origen */
-  //  printf("[DEBUG] Interpretando '%s'\n",
-    //       node->type);
+    //printf("[DEBUG] Interpretando '%s'\n",
+    //      node->type);
 
     /* Despacho según tipo de nodo */
     if (strcmp(node->type, "FOR") == 0)                interpret_for(node);
@@ -840,19 +843,42 @@ static void interpret_call_method(ASTNode *node) {
     add_or_update_variable("this", thisNode);
     /* Enlazar parámetros */
     ParameterNode *p = m->params;
-    ASTNode *arg = node->right;
+    ASTNode      *arg = node->left->right;
     while (p && arg) {
-        ASTNode *val_node;
-        if (arg->type && strcmp(arg->type, "STRING") == 0)
-            val_node = create_ast_leaf("STRING", 0, arg->str_value, NULL);
-        else {
-            int iv = evaluate_expression(arg);
-            val_node = create_ast_leaf_number("INT", iv, NULL, NULL);
+        ASTNode *vn = NULL;
+
+        if (arg->type && strcmp(arg->type, "STRING") == 0) {
+            // 1) Literal string
+            vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
+
+        }else if (arg->type &&
+                (strcmp(arg->type,"ID")==0 || strcmp(arg->type,"IDENTIFIER")==0)) {
+           printf("[DEBUG-CONSTR] enlazando %s como %s\n",
+                  arg->id,
+                  (find_variable(arg->id)->vtype == VAL_STRING ? "STRING" : "INT"));
+            // 2) Variable (ID o IDENTIFIER)
+            Variable *v = find_variable(arg->id);
+            if (!v) {
+                printf("Error: Variable '%s' no encontrada.\n", arg->id);
+                return;
+            }
+            if (v->vtype == VAL_STRING) {
+                vn = create_ast_leaf("STRING", 0, strdup(v->value.string_value), NULL);
+            } else {
+                vn = create_ast_leaf_number("INT", v->value.int_value, NULL, NULL);
+            }
+
+        } else {
+            // 3) Cualquier otra expresión numérica
+            int val = evaluate_expression(arg);
+            vn = create_ast_leaf_number("INT", val, NULL, NULL);
         }
-        add_or_update_variable(p->name, val_node);
-        p = p->next;
+
+        add_or_update_variable(p->name, vn);
+        p   = p->next;
         arg = arg->right;
     }
+
     /* Ejecutar cuerpo */
     interpret_ast(m->body);
     if (return_flag && return_node) {
@@ -912,7 +938,7 @@ static void interpret_var_decl(ASTNode *node) {
         }
         return_flag=0; return_node=NULL; return;
     }
-    declare_variable(node->id, node->left);
+    declare_variable(node->id, node->left);    
     /* Llamada al constructor si existe */
     if (node->left && strcmp(node->left->type, "OBJECT")==0) {
         Variable *var = find_variable(node->id);
@@ -920,18 +946,44 @@ static void interpret_var_decl(ASTNode *node) {
         MethodNode *m = var->value.object_value->class->methods;
         while (m && strcmp(m->name,"__constructor")!=0) m=m->next;
         if (m) {
-            ParameterNode *p=m->params;
-            ASTNode *arg=node->left->right;
-            while(p && arg) {
-                ASTNode *vn = (arg->type && strcmp(arg->type,"STRING")==0)
-                    ? create_ast_leaf("STRING",0,arg->str_value,NULL)
-                    : create_ast_leaf_number("INT",evaluate_expression(arg),NULL,NULL);
-                add_or_update_variable(p->name,vn);
-                p=p->next; arg=arg->right;
+            ParameterNode *p = m->params;
+            ASTNode      *arg = node->left->right;
+            while (p && arg) {
+                ASTNode *vn = NULL;
+
+                if (arg->type && strcmp(arg->type, "STRING") == 0) {
+                    // 1) literal string
+                    vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
+
+                } else if (arg->type && (
+                        strcmp(arg->type, "ID") == 0 ||
+                        strcmp(arg->type, "IDENTIFIER") == 0)) {
+                    // 2) variable (ID o IDENTIFIER)
+                    Variable *v = find_variable(arg->id);
+                    if (!v) {
+                        printf("Error: Variable '%s' no encontrada.\n", arg->id);
+                        return;
+                    }
+                    if (v->vtype == VAL_STRING) {
+                        vn = create_ast_leaf("STRING", 0, strdup(v->value.string_value), NULL);
+                    } else {
+                        vn = create_ast_leaf_number("INT", v->value.int_value, NULL, NULL);
+                    }
+
+                } else {
+                    // 3) cualquier otra expresión numérica
+                    int val = evaluate_expression(arg);
+                    vn = create_ast_leaf_number("INT", val, NULL, NULL);
+                }
+
+                add_or_update_variable(p->name, vn);
+                p   = p->next;
+                arg = arg->right;
             }
-            call_method(var->value.object_value,"__constructor");
+            call_method(var->value.object_value, "__constructor");
         }
     }
+
 }
 
 static void interpret_assign_attr(ASTNode *node) {
@@ -948,17 +1000,40 @@ static void interpret_assign_attr(ASTNode *node) {
         if(strcmp(obj->class->attributes[i].id,attr_name)==0){idx=i;break;}
     }
     if(idx<0){ printf("Error: Atributo '%s' no encontrado en clase '%s'.\n", attr_name, obj->class->name); return; }
-    const char *declared = obj->class->attributes[idx].type;
-    if(strcmp(declared,"string")==0) {
-        if(value_node->str_value)
-            obj->attributes[idx].value.string_value = strdup(value_node->str_value);
-        else {
-            Variable *v2=find_variable(value_node->id);
-            if(!v2||v2->vtype!=VAL_STRING){ printf("Error: expresión no es una cadena válida.\n"); return; }
-            obj->attributes[idx].value.string_value = strdup(v2->value.string_value);
+    const char *declared = obj->attributes[idx].type; 
+
+    if (declared == NULL) {
+        printf("Error: El atributo '%s' no tiene tipo definido.\n", attr_name);
+        return;
+    }    
+
+    if (strcmp(declared, "string") == 0) {
+        // si viene literal STRING (por parseo de "hola")
+        if (value_node->str_value) {
+          obj->attributes[idx].value.string_value = strdup(value_node->str_value);
+        }
+        // si viene cualquier referencia a variable (ID o IDENTIFIER)
+        else if (value_node->id) {
+          Variable *v2 = find_variable(value_node->id);
+          if (!v2 || v2->vtype != VAL_STRING) {
+            printf("Error: expresión no es una cadena válida.\n");
+            return;
+          }
+          obj->attributes[idx].value.string_value = strdup(v2->value.string_value);
+        }
+        // si viene una llamada a función que devuelve STRING
+        else if (strcmp(value_node->type, "CALL_FUNC") == 0) {
+          interpret_ast(value_node);
+          Variable *r = find_variable("__ret__");
+          if (!r || r->vtype != VAL_STRING) {
+            printf("Error: resultado de función no es una cadena.\n");
+            return;
+          }
+          obj->attributes[idx].value.string_value = strdup(r->value.string_value);
         }
         obj->attributes[idx].vtype = VAL_STRING;
-    } else {
+      } else {
+       
         int val = evaluate_expression(value_node);
         obj->attributes[idx].value.int_value = val;
         obj->attributes[idx].vtype = VAL_INT;
@@ -969,7 +1044,8 @@ static void interpret_assign(ASTNode *node) {
     ASTNode *var_node = node->left;
     ASTNode *expr_node = node->right;
     if (!var_node || !expr_node) { printf("Error: Asignación inválida.\n"); return; }
-    int result = evaluate_expression(expr_node);
+    printf("Declaring interpret_assign: '%s'\n", var_node->id);
+    int result = evaluate_expression(expr_node);    
     ASTNode *value_node = create_ast_leaf("INT", result, NULL, NULL);
     add_or_update_variable(var_node->id, value_node);
 }
