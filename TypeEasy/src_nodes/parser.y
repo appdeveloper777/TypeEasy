@@ -57,14 +57,15 @@
 %%
 
 program:
-      program statement       { $$ = create_ast_node("STATEMENT_LIST", $2, $1); root = $$; }
-    | program class_decl      { $$ = $1; /* Ignora definición de clase */ root = $$; }
-    | statement               { $$ = $1; root = $$; }
-    | class_decl              { $$ = NULL; /* Ignora definición de clase */ }
+        program statement       { $$ = create_ast_node("STATEMENT_LIST", $2, $1); root = $$; }
+        | program class_decl      { $$ = $1; /* Ignora definición de clase */ root = $$; }
+        | statement               { $$ = $1; root = $$; }
+        | class_decl              { $$ = NULL; /* Ignora definición de clase */ }
 
 
 class_decl:
-    CLASS IDENTIFIER { last_class = create_class($2); add_class(last_class); } LBRACKET class_body RBRACKET { $$ = NULL; }
+        CLASS IDENTIFIER { last_class = create_class($2); add_class(last_class); } 
+        LBRACKET class_body RBRACKET { $$ = NULL; }
 ;
 
 class_member:
