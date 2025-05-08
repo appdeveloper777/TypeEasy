@@ -35,13 +35,16 @@
 "print"                 { return PRINT; }
 "for"                   { return FOR; }
 "concat"                { return CONCAT; }
-
+"in"                    { return IN; }
 
 "int"                   { return INT; }
 "float"                 { return FLOAT; }
 "string"                { return STRING; }
 
-
+">"                     { return GT; }  
+"=>"                    { return ARROW; }
+"["                     { return LSBRACKET;}
+"]"                     { return RSBRACKET;}
 "("                     { return LPAREN; }
 ")"                     { return RPAREN; }
 "{"                     { return LBRACKET; }

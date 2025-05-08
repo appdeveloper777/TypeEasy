@@ -1,0 +1,28 @@
+class Producto {
+    nombre : string;
+    precio : int;
+
+    __constructor(_nombre : string, _precio : int) {
+        this.nombre = _nombre;
+        this.precio = _precio;
+    }
+
+    Mostrar() {
+        print(this.nombre);
+        print(this.precio);
+    }
+}
+
+let productos = [
+    new Producto("Pan", 1),
+    new Producto("Leche", 3),
+    new Producto("Queso", 4)
+];
+
+print(productos);
+
+let caros = productos.filter(p => );
+
+for (let item in caros) {
+    item.Mostrar();
+}

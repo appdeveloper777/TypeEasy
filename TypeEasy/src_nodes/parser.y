@@ -21,8 +21,8 @@
     ParameterNode *pnode;
 }
 
-%token <sval> INT STRING FLOAT LAYER
-%token DATASET MODEL TRAIN PREDICT FROM PLOT
+%token <sval> INT STRING FLOAT LAYER LSBRACKET RSBRACKET
+%token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA
 %token       VAR ASSIGN PRINT FOR LPAREN RPAREN SEMICOLON CONCAT
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
 %token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN
@@ -30,8 +30,8 @@
 %token <ival> NUMBER
 
 %type <sval> method_name
-%type <node>  expression_list var_decl constructor_decl return_stmt
-%type <pnode> parameter_decl parameter_list
+%type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args
+%type <pnode> parameter_decl parameter_list list_literal
 
 %type <node> dataset_decl
 %type <node> model_decl
@@ -40,6 +40,8 @@
 %type <node> train_stmt
 %type <node> train_options
 %type <node> predict_stmt
+%type <node> lambda
+%type <node> expr_list
 
 
 %define parse.trace
@@ -48,6 +50,10 @@
 
 %type <node> statement expression program statement_list class_decl class_body
 %type <node> attribute_decl method_decl
+
+%right ARROW
+%nonassoc GT LT EQ /* tus operadores relacionales */
+
 
 %%
 
@@ -262,8 +268,16 @@ var_decl:
     ;
 
 statement:    
+FOR LPAREN LET IDENTIFIER IN expression RPAREN statement
+        {
+          /* $4 = nombre de variable, $6 = expresión que evalúa la lista,
+             $8 = cuerpo (puede ser bloque o simple statement) */
+          $$ = create_for_in_node($4, $6, $8);
+        }
+    |
  LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON
-        { $$ = create_var_decl_node($2, $4); }
+        { printf(" [DEBUG] Reconocido LET con acceso a atributo: %s.%s\n", $2, $4);
+            $$ = create_var_decl_node($2, $4); }
 |  RETURN expression SEMICOLON
 {
    // printf(" [DEBUG] Reconocido RETURN\n");
@@ -347,7 +361,7 @@ var_decl
     }
     | LBRACKET statement_list RBRACKET
     |
-    statement:
+statement:
     var_decl
     | NEW IDENTIFIER LPAREN RPAREN SEMICOLON
     {
@@ -501,103 +515,162 @@ expression_list:
 
 
 expression:
+            expression DOT IDENTIFIER LPAREN lambda RPAREN {
+                printf("[DEBUG] Reconocido llamada a lambda: %s\n", $3);
+                if (strcmp($3, "filter")==0) {
+                    $$ = create_list_function_call_node($1, $3, $5);
+                  } else {
+                    $$ = create_method_call_node($1, $3, NULL);
+                  }
+                  free($3);
+            }
+            |
+            LSBRACKET expr_list RSBRACKET  { $$ = create_list_node($2); }
+            |
+            PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN
+            {
 
-PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN
-{
-
-     /* obj.metodo() sin argumentos */
-     ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i");
-     $$ = create_method_call_node(obj, $3, NULL);
+                /* obj.metodo() sin argumentos */
+                ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i");
+                $$ = create_method_call_node(obj, $3, NULL);
 
 
-     
-   // *obj  = create_ast_leaf("ID", 0, NULL, $1);
-   //ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3);
-   //$$ = create_ast_node("ACCESS_ATTR", obj, attr);
+                
+            // *obj  = create_ast_leaf("ID", 0, NULL, $1);
+            //ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3);
+            //$$ = create_ast_node("ACCESS_ATTR", obj, attr);
 
-}
-|
-IDENTIFIER DOT IDENTIFIER LPAREN RPAREN {
-    /* obj.metodo() sin argumentos */
-    ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
-    $$ = create_method_call_node(obj, $3, NULL);
-}
-| IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN {
-    /* obj.metodo(arg1, arg2, ...) */
-    ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
-    $$ = create_method_call_node(obj, $3, $5);
-} |
- IDENTIFIER DOT IDENTIFIER {
+            }
+            |
+            IDENTIFIER DOT IDENTIFIER LPAREN RPAREN {
+                /* obj.metodo() sin argumentos */
+                ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
+                $$ = create_method_call_node(obj, $3, NULL);
+            }
+            | IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN {
+                /* obj.metodo(arg1, arg2, ...) */
+                ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1);
+                $$ = create_method_call_node(obj, $3, $5);
+            } |
+            IDENTIFIER DOT IDENTIFIER {
 
-   // printf(" [DEBUG] Reconocido ACCESS_ATTR: %s.%s\n", $1, $3);
+            // printf(" [DEBUG] Reconocido ACCESS_ATTR: %s.%s\n", $1, $3);
 
-   ASTNode *obj  = create_ast_leaf("ID", 0, NULL, $1);
-        ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3);
-        $$ = create_ast_node("ACCESS_ATTR", obj, attr);
+            ASTNode *obj  = create_ast_leaf("ID", 0, NULL, $1);
+                    ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3);
+                    $$ = create_ast_node("ACCESS_ATTR", obj, attr);
 
-    /*$$ = create_ast_node("ACCESS_ATTR",
-                        create_ast_leaf("ID", 0, NULL, $1),
-                        create_ast_leaf("ID", 0, NULL, $3));*/
-}
+                /*$$ = create_ast_node("ACCESS_ATTR",
+                                    create_ast_leaf("ID", 0, NULL, $1),
+                                    create_ast_leaf("ID", 0, NULL, $3));*/
+            }
 
-| expression DOT IDENTIFIER LPAREN RPAREN {
-    printf(" [DEBUG] Reconocido METHOD_CALL: %s.%s()\n", $1, $3);
-    // $1 = AST del objeto, $3 = nombre del método
-    $$ = create_method_call_node($1, $3, NULL);
-}
+            | expression DOT IDENTIFIER LPAREN RPAREN {
+                printf(" [DEBUG] Reconocido METHOD_CALL: %s.%s()\n", $1, $3);
+                // $1 = AST del objeto, $3 = nombre del método
+                $$ = create_method_call_node($1, $3, NULL);
+            }
 
-|
+            |
 
-expression DOT IDENTIFIER LPAREN expression_list RPAREN
+            expression DOT IDENTIFIER LPAREN expression_list RPAREN
+                {
+                    /* objeto en $1, nombre en $3, args en $5 */
+                    $$ = create_method_call_node($1, $3, $5);
+                }
+
+            | THIS DOT IDENTIFIER {
+                        $$ = create_ast_node("ACCESS_ATTR",
+                            create_ast_leaf("ID", 0, NULL, "this"),
+                            create_ast_leaf("ID", 0, NULL, $3));
+                    }
+
+                    /* this.metodo() */
+                | THIS DOT IDENTIFIER LPAREN RPAREN {
+                    $$ = create_method_call_node(
+                            create_ast_leaf("ID", 0, NULL, "this"),
+                            $3, NULL);
+                    }
+
+
+            | IDENTIFIER { $$ = create_ast_leaf("IDENTIFIER", 0, NULL,  $1); }
+                | NUMBER { $$ = create_ast_leaf("NUMBER", $1, NULL, NULL); }
+                | STRING_LITERAL { $$ = create_ast_leaf("STRING", 0, $1, NULL); }
+                | CONCAT LPAREN expression_list RPAREN {
+                    printf(" [DEBUG] Reconocido FUNCTION_CALL: %s(%s)\n", "concat", $3);
+                    // create_function_call_node(name, args)
+
+                $$ = create_function_call_node("concat", $3);
+
+                }
+
+                | expression PLUS expression {
+                    $$ = create_ast_node("ADD", $1, $3);
+                    //printf(" [DEBUG] Reconocido ADD: %s + %s\n", $1, $3);
+                }
+                | expression MINUS expression { $$ = create_ast_node("SUB", $1, $3); }
+                | expression MULTIPLY expression { $$ = create_ast_node("MUL", $1, $3); }
+                | expression DIVIDE expression { $$ = create_ast_node("DIV", $1, $3); }
+                | LPAREN expression
+                | NEW IDENTIFIER LPAREN RPAREN
+                {
+
+                    ClassNode *cls = find_class($2);
+                    if (!cls) {
+                        printf("Error: Clase '%s' no definida.\n", $2);
+                        $$ = NULL;
+                    } else {
+                    $$ = (ASTNode *)create_object_with_args(cls, $2);
+                    }
+                }
+                |
+                NEW IDENTIFIER LPAREN arg_list RPAREN
+                {
+                  /* 1) Buscamos la definición de la clase */
+                  ClassNode *cls = find_class($2);
+                  if (!cls) {
+                    fprintf(stderr, "Error: clase '%s' no encontrada\n", $2);
+                    exit(1);
+                  }
+                  /* 2) Creamos el AST de la instanciación con argumentos */
+                  $$ = create_object_with_args(cls, $4);
+                  free($2);
+                }
+    ;
+    expr_list:
+      expression                  { $$ = $1; }
+    | expr_list COMMA expression   { $$ = append_to_list($1, $3); }
+    ;
+
+    list_literal:
+    LSBRACKET expr_list RSBRACKET             { $$ = create_list_node($2); }
+    ;
+
+    lambda:
+    IDENTIFIER ARROW   { 
+        printf(" [DEBUG] Reconocido LAMBDA\n");
+        //$$ = create_lambda_node($1, $4); 
+        //free($1);
+    }
+    | LPAREN IDENTIFIER RPAREN ARROW expression
     {
-        /* objeto en $1, nombre en $3, args en $5 */
-        $$ = create_method_call_node($1, $3, $5);
+      $$ = create_lambda_node($2, $5);
+      free($2);
     }
+    ;
 
-  | THIS DOT IDENTIFIER {
-            $$ = create_ast_node("ACCESS_ATTR",
-                  create_ast_leaf("ID", 0, NULL, "this"),
-                  create_ast_leaf("ID", 0, NULL, $3));
-        }
+    arg_list
+    : /* vacío */ 
+        { $$ = NULL; }
+    | expression more_args
+        { $$ = add_argument($1, $2); }
+    ;
 
-        /* this.metodo() */
-      | THIS DOT IDENTIFIER LPAREN RPAREN {
-           $$ = create_method_call_node(
-                   create_ast_leaf("ID", 0, NULL, "this"),
-                   $3, NULL);
-        }
-
-
-| IDENTIFIER { $$ = create_ast_leaf("IDENTIFIER", 0, NULL,  $1); }
-    | NUMBER { $$ = create_ast_leaf("NUMBER", $1, NULL, NULL); }
-    | STRING_LITERAL { $$ = create_ast_leaf("STRING", 0, $1, NULL); }
-    | CONCAT LPAREN expression_list RPAREN {
-        printf(" [DEBUG] Reconocido FUNCTION_CALL: %s(%s)\n", "concat", $3);
-        // create_function_call_node(name, args)
-
-       $$ = create_function_call_node("concat", $3);
-
-    }
-
-    | expression PLUS expression {
-        $$ = create_ast_node("ADD", $1, $3);
-        //printf(" [DEBUG] Reconocido ADD: %s + %s\n", $1, $3);
-    }
-    | expression MINUS expression { $$ = create_ast_node("SUB", $1, $3); }
-    | expression MULTIPLY expression { $$ = create_ast_node("MUL", $1, $3); }
-    | expression DIVIDE expression { $$ = create_ast_node("DIV", $1, $3); }
-    | LPAREN expression
-    | NEW IDENTIFIER LPAREN RPAREN
-    {
-
-        ClassNode *cls = find_class($2);
-        if (!cls) {
-            printf("Error: Clase '%s' no definida.\n", $2);
-            $$ = NULL;
-        } else {
-           $$ = (ASTNode *)create_object_with_args(cls, $2);
-        }
-    }
+    more_args
+    : /* vacío */ 
+        { $$ = NULL; }
+    | COMMA expression more_args
+        { $$ = add_argument($2, $3); }
     ;
 
 

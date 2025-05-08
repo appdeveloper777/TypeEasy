@@ -44,6 +44,9 @@
 %type <num> expression
 %type <stmt> statement
 %type <body> statement_body
+
+%type <node> expr_list arg_list arg_list_opt
+
     
 %left PLUS MINUS
 %left MUL DIV
@@ -163,6 +166,8 @@ statement_body:
 ;
     
 expression:
+    NEW IDENTIFIER LPAREN arg_list_opt RPAREN { $$ = create_object_with_args(find_class($2), $4); }
+    |
     NUMBER {   $$ = $1; }
     | FLOAT_LITERAL { $$ = $1; }
     | IDENTIFIER {
@@ -186,6 +191,17 @@ expression:
         }
     }
     | expression GREATERTHAN expression { $$ = $1 < $3; };
+
+    arg_list_opt:
+    /* vacío */ { $$ = NULL; }
+  | arg_list   { $$ = $1; }
+;
+
+arg_list:
+    expression               { $$ = $1; }
+  | arg_list ',' expression { $$ = add_argument($1, $3); }
+;
+
     
 %%
 void execute_statement_body(StatementBody body) {

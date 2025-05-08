@@ -88,6 +88,15 @@ typedef struct ParameterNode {
     char *type;
     struct ParameterNode *next;
 } ParameterNode;
+
+ASTNode *create_list_node(ASTNode *items);
+ASTNode *append_to_list(ASTNode *list, ASTNode *item);
+ASTNode *create_list_function_call_node(ASTNode *list, const char *funcName, ASTNode *lambda);
+ASTNode *create_lambda_node(const char *argName, ASTNode *body);
+// Nuevo en ast.h
+ASTNode* create_for_in_node(const char *var_name, ASTNode *list_expr, ASTNode *body);
+
+
 ASTNode* create_layer_node(const char*, int, const char*);
 ASTNode* append_layer_to_list(ASTNode*, ASTNode*);
 ASTNode* create_model_node(const char*, ASTNode*);

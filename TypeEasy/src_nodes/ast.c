@@ -672,6 +672,71 @@ static void interpret_dataset(ASTNode *node) {
 }
 
 
+void interpret_list_func_call(ASTNode *node) {
+    if (!node || !node->left || !node->right) return;
+    
+    ASTNode *listNode = node->left;
+    ASTNode *lambda = node->right;
+    const char *func = node->id;
+
+    if (strcmp(func, "filter") == 0) {
+        ASTNode *result = NULL;
+        ASTNode *item = listNode->left;
+        while (item) {
+            // Simular p => p.precio > 2
+            add_or_update_variable(lambda->id, item); // lambda->id es 'p'
+            int r = evaluate_expression(lambda->left); // lambda->left es el cuerpo
+            if (r) {
+                if (!result) result = item;
+                else append_to_list(result, item);
+            }
+            item = item->right;
+        }
+        add_or_update_variable("__ret__", create_list_node(result));
+    }
+}
+
+// Nuevo en ast.h
+ASTNode* create_for_in_node(const char *var_name, ASTNode *list_expr, ASTNode *body) {
+    ASTNode *node = malloc(sizeof(ASTNode));
+    node->type      = strdup("FOR_IN");
+    node->id        = strdup(var_name);   // nombre de la variable de iteración
+    node->left      = list_expr;          // la lista a recorrer
+    node->right     = body;               // cuerpo del for
+    node->next      = NULL;
+    return node;
+}
+
+
+
+static void interpret_for_in(ASTNode *node) {
+    // 1) Evalúa la expresión de la lista y deja el AST LIST en __ret__
+    interpret_ast(node->left);
+
+    // 2) Recupera la variable temporal __ret__
+    Variable *tmp = find_variable("__ret__");
+    if (!tmp || tmp->vtype != VAL_OBJECT) {
+        printf("Error: for-in sobre algo que no es una lista válida.\n");
+        return;
+    }
+
+    // 3) Reconstruye el ASTNode* de la lista desde object_value
+    ASTNode *listNode = (ASTNode *)(intptr_t) tmp->value.object_value;
+
+    // 4) Los elementos de la lista están encadenados a través de listNode->left y luego ->right
+    ASTNode *items = listNode->left;
+
+    // 5) Itera sobre cada elemento
+    for (ASTNode *item = items; item; item = item->right) {
+        // a) Asigna la variable de iteración con el nodo actual
+        add_or_update_variable(node->id, item);
+        // b) Ejecuta el cuerpo del for-in
+        interpret_ast(node->right);
+    }
+}
+
+
+
 void interpret_ast(ASTNode *node) {
     if (!node || return_flag) return;
 
@@ -681,6 +746,10 @@ void interpret_ast(ASTNode *node) {
 
     /* Despacho según tipo de nodo */
     if (strcmp(node->type, "FOR") == 0)                interpret_for(node);
+    else if (strcmp(node->type, "FOR_IN") == 0) {
+        interpret_for_in(node);
+    }
+    else if (strcmp(node->type, "LIST_FUNC_CALL") == 0) interpret_list_func_call(node);
     else if (strcmp(node->type, "DATASET") == 0)       interpret_dataset(node);
     else if (strcmp(node->type, "MODEL") == 0 || strcmp(node->type, "OBJECT") == 0) interpret_model_object(node);
     else if (strcmp(node->type, "TRAIN") == 0)         interpret_train_node(node);
@@ -985,6 +1054,48 @@ static void interpret_var_decl(ASTNode *node) {
     }
 
 }
+
+ASTNode *create_list_node(ASTNode *items) {
+    ASTNode *node = malloc(sizeof(ASTNode));
+    node->type = strdup("LIST");
+    node->left = items;
+    node->right = NULL;
+    node->next = NULL;
+    node->id = NULL;
+    node->str_value = NULL;
+    node->value = 0;
+    return node;
+}
+
+ASTNode *append_to_list(ASTNode *list, ASTNode *item) {
+    ASTNode *current = list;
+    while (current->right) {
+        current = current->right;
+    }
+    current->right = item;
+    return list;
+}
+
+ASTNode *create_list_function_call_node(ASTNode *list, const char *funcName, ASTNode *lambda) {
+    ASTNode *node = malloc(sizeof(ASTNode));
+    node->type = strdup("LIST_FUNC_CALL");
+    node->id = strdup(funcName);
+    node->left = list;    // lista original
+    node->right = lambda; // lambda
+    node->next = NULL;
+    return node;
+}
+
+ASTNode *create_lambda_node(const char *argName, ASTNode *body) {
+    ASTNode *lambda = malloc(sizeof(ASTNode));
+    lambda->type = strdup("LAMBDA");
+    lambda->id = strdup(argName);
+    lambda->left = body;
+    lambda->right = NULL;
+    lambda->str_value = NULL;
+    return lambda;
+}
+
 
 static void interpret_assign_attr(ASTNode *node) {
     ASTNode *access = node->left;
