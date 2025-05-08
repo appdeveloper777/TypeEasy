@@ -199,7 +199,7 @@ expression:
 
 arg_list:
     expression               { $$ = $1; }
-  | arg_list ',' expression { $$ = add_argument($1, $3); }
+  | arg_list COMMA expression { printf(" [DEBUG] Reconocido COMMA\n"); $$ = add_argument($1, $3); }
 ;
 
     
