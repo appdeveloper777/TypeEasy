@@ -155,18 +155,30 @@ statement:
   | LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { printf(" [DEBUG] Reconocido LET con acceso a atributo: %s.%s\n", $2, $4); $$ = create_var_decl_node($2, $4); }
   | RETURN expression SEMICOLON  { $$ = create_return_node($2); }
   | var_decl
-  | STRING STRING expression SEMICOLON  { printf(" [DEBUG] Declaración de variable s: ¿"); char buffer[2048]; sprintf(buffer,"#include \"easyspark/dataframe.hpp\"\n..."); generate_code(buffer); }
+  | STRING STRING expression SEMICOLON                          { printf(" [DEBUG] Declaración de variable s: ¿"); char buffer[2048]; sprintf(buffer,"#include \"easyspark/dataframe.hpp\"\n..."); generate_code(buffer); }
   | IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); $$ = create_method_call_node(obj, $3, NULL); }
   | IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); $$ = create_method_call_node(obj, $3, $5); }
-  | THIS DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *thisObj = create_ast_leaf("ID",0,NULL,"this"); $$ = create_method_call_node(thisObj, $3, NULL); }
-  | STRING IDENTIFIER ASSIGN STRING_LITERAL SEMICOLON  { $$ = create_var_decl_node($2, create_string_node($4)); }
-  | INT IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, create_int_node($4->value)); }
-  | FLOAT IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, create_float_node($4->value)); }
-  | VAR IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_ast_node("DECLARE", create_ast_leaf("IDENTIFIER", 0, NULL, $2), $4); }
-  | IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_ast_node("ASSIGN", create_ast_leaf("VAR",0,NULL,$1), $3); }
-  | PRINT LPAREN expression RPAREN SEMICOLON  { $$ = create_ast_node("PRINT", $3, NULL); }
-  | PRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("PRINT", access, NULL); }
+  | THIS DOT IDENTIFIER LPAREN RPAREN SEMICOLON                 { ASTNode *thisObj = create_ast_leaf("ID",0,NULL,"this"); $$ = create_method_call_node(thisObj, $3, NULL); }
+  | STRING IDENTIFIER ASSIGN STRING_LITERAL SEMICOLON           { $$ = create_var_decl_node($2, create_string_node($4)); }
+  | INT IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_var_decl_node($2, create_int_node($4->value)); }
+  | FLOAT IDENTIFIER ASSIGN expression SEMICOLON                { $$ = create_var_decl_node($2, create_float_node($4->value)); }
+  | VAR IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_ast_node("DECLARE", create_ast_leaf("IDENTIFIER", 0, NULL, $2), $4); }
+  | IDENTIFIER ASSIGN expression SEMICOLON                      { $$ = create_ast_node("ASSIGN", create_ast_leaf("VAR",0,NULL,$1), $3); }
+  | PRINT LPAREN expression RPAREN SEMICOLON                    { $$ = create_ast_node("PRINT", $3, NULL); }
+  | PRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON     { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("PRINT", access, NULL); }
   | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf("NUMBER",$5,NULL,NULL), $7, $9, $12); }
+  | NEW IDENTIFIER LPAREN RPAREN SEMICOLON                          { ClassNode *cls = find_class($2); if (!cls) { printf("Error: Clase '%s' no definida.\n", $2); $$ = NULL; } else { $$ = (ASTNode *)create_object_with_args(cls, NULL); printf("[DEBUG] Creación de objeto: %s\n", $2); } }
+  | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN RPAREN SEMICOLON    { ClassNode *cls = find_class($5); if (!cls) { printf("Error: Clase '%s' no definida.\n", $5); $$ = NULL; } else { $$ = create_var_decl_node($2, create_object_with_args(cls, NULL)); } }
+  | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  { ClassNode *cls = find_class($5); if (!cls) { printf("Error: Clase '%s' no definida.\n", $5); $$ = NULL; } else { $$ = create_var_decl_node($2, create_object_with_args(cls, $7)); } }
+  | DATASET IDENTIFIER FROM STRING_LITERAL SEMICOLON                { printf(" [DEBUG] Reconocido DATASET\n"); $$ = create_dataset_node($2, $4); }
+  | PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON     { printf(" [DEBUG] Reconocido PREDICT\n"); $$ = create_predict_node($3, $5); }
+  | VAR IDENTIFIER ASSIGN PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON { printf(" [DEBUG] Reconocido PREDICT\n"); ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i"); $$ = create_method_call_node(obj, "predict", NULL); $$ = create_predict_node($6, $8); }
+  | DATASET IDENTIFIER FROM STRING_LITERAL SEMICOLON            { $$ = create_dataset_node($2, $4); }
+  | PLOT LPAREN expression_list RPAREN SEMICOLON                { $$ = create_ast_node("PLOT", $3, NULL); }
+  | MODEL IDENTIFIER LBRACKET layer_list RBRACKET               { printf("[DEBUG] Reconocido MODEL\n"); printf("[DEBUG] Nombre del modelo: %s\n", $2); ASTNode *layer = $4; int capa_index = 0; while (layer) { if (strcmp(layer->type, "LAYER") == 0) { printf("[DEBUG] Capa #%d: tipo=%s, unidades=%d, activación=%s\n", capa_index++, layer->id, layer->value, layer->str_value); } layer = layer->right; } ASTNode *modelNode = create_model_node($2, $4); printf("[DEBUG] Nodo de modelo creado: type=%s, id=%s\n", modelNode->type, modelNode->id); }
+  | LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON  { $$ = create_layer_node($2, $4, $6); }
+  | TRAIN LPAREN IDENTIFIER COMMA IDENTIFIER COMMA train_options RPAREN SEMICOLON  { $$ = create_train_node($3, $5, $7); }
+  | IDENTIFIER ASSIGN NUMBER                                    { $$ = create_train_option_node($1, $3); }
   ;
 
 statement_list:
