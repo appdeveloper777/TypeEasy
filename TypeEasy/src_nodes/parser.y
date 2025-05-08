@@ -57,7 +57,7 @@
 %%
 
 program:
-        program statement       { $$ = create_ast_node("STATEMENT_LIST", $2, $1); root = $$; }
+        program statement       { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; }
         | program class_decl      { $$ = $1; /* Ignora definición de clase */ root = $$; }
         | statement               { $$ = $1; root = $$; }
         | class_decl              { $$ = NULL; /* Ignora definición de clase */ }
@@ -118,7 +118,11 @@ method_decl:
 
 expression:
   expression DOT IDENTIFIER LPAREN lambda RPAREN  { printf("[DEBUG] Reconocido llamada a lambda: %s\n", $3); if (strcmp($3, "filter")==0) { $$ = create_list_function_call_node($1, $3, $5); } else { $$ = create_method_call_node($1, $3, NULL); } free($3); }
-| LSBRACKET expr_list RSBRACKET                   { $$ = create_list_node($2); }
+| LSBRACKET expr_list RSBRACKET                   { 
+    printf("[DEBUG] Reconocido list literal\n");
+    //$$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1);
+    $$ = create_list_node($2); 
+}
 | PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN  { ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i"); $$ = create_method_call_node(obj, $3, NULL); }
 | IDENTIFIER DOT IDENTIFIER LPAREN RPAREN         { ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1); $$ = create_method_call_node(obj, $3, NULL); }
 | IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN  { ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1); $$ = create_method_call_node(obj, $3, $5); }
@@ -137,7 +141,13 @@ expression:
 | expression DIVIDE expression                    { $$ = create_ast_node("DIV", $1, $3); }
 | LPAREN expression RPAREN                        { $$ = $2; }
 | NEW IDENTIFIER LPAREN RPAREN                    { ClassNode *cls = find_class($2); if (!cls) { printf("Error: Clase '%s' no definida.\n", $2); $$ = NULL; } else { $$ = (ASTNode *)create_object_with_args(cls, $2); } }
-| NEW IDENTIFIER LPAREN arg_list RPAREN           { ClassNode *cls = find_class($2); if (!cls) { fprintf(stderr, "Error: clase '%s' no encontrada\n", $2); exit(1); } $$ = create_object_with_args(cls, $4); free($2); }
+| NEW IDENTIFIER LPAREN arg_list RPAREN           { 
+    printf(" [DEBUG] Reconocido NEW99999999999999\n");
+    ClassNode *cls = find_class($2); if (!cls) { fprintf(stderr, "Error: clase '%s' no encontrada\n", $2); exit(1); } $$ = create_object_with_args(cls, $4); free($2); }
+| NEW IDENTIFIER LPAREN expr_list RPAREN {
+    printf(" [DEBUG] Reconocido NEW888888888888888\n");
+    $$ = create_object_with_args(find_class($2), $4);
+}
 ;
 
 
@@ -151,7 +161,11 @@ var_decl:
   ;
 
 statement:
-    FOR LPAREN LET IDENTIFIER IN expression RPAREN statement  { $$ = create_for_in_node($4, $6, $8); }
+FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET
+{ 
+    printf(" [DEBUG] sape Reconocido FOR IN\n");
+    $$ = create_for_in_node($4, $6, $9); }
+
   | LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { printf(" [DEBUG] Reconocido LET con acceso a atributo: %s.%s\n", $2, $4); $$ = create_var_decl_node($2, $4); }
   | RETURN expression SEMICOLON  { $$ = create_return_node($2); }
   | var_decl
@@ -182,7 +196,7 @@ statement:
   ;
 
 statement_list:
-    statement_list statement  { $$ = create_ast_node("STATEMENT_LIST", $2, $1); }
+    statement_list statement  { $$ = create_ast_node("STATEMENT_LIST", $1, $2); }
   | statement                { $$ = $1; }
   ;
 

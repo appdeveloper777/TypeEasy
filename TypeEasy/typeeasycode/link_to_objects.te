@@ -8,10 +8,14 @@ class Producto {
     }
 
     Mostrar() {
+        print("Producto sape: ");
         print(this.nombre);
         print(this.precio);
     }
 }
+
+let producto = new Producto("Pan", 1);
+producto.Mostrar();
 
 let productos = [
     new Producto("Pan", 1),
@@ -19,10 +23,8 @@ let productos = [
     new Producto("Queso", 4)
 ];
 
-print(productos);
 
-let caros = productos.filter(p => );
-
-for (let item in caros) {
+for (let item in productos) {
+    print("Producto: ");
     item.Mostrar();
 }

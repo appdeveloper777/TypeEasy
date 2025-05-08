@@ -29,7 +29,7 @@ class Person {
         return numero;
     }
 }
-int mi_edad = 40;
+int mi_edad = 36;
 string mi_nombre = "Fernando Ingunza";
 string mi_empresa = "Google";
 let obj = new Person(mi_edad, mi_nombre, mi_empresa);

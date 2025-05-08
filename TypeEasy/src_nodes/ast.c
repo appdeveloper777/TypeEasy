@@ -169,6 +169,10 @@ Variable *find_variable_for(char *id) {
 }
 
 void declare_variable(char *id, ASTNode *value) {
+
+    printf("[DEBUG] declarando %s con tipo %s\n", id, value->type);
+
+
     if (var_count >= MAX_VARS) {
         printf("Error: Demasiadas variables declaradas.\n");
         return;
@@ -180,7 +184,63 @@ void declare_variable(char *id, ASTNode *value) {
     if (strcmp(value->type, "STRING") == 0) {
         vars[var_count].vtype = VAL_STRING;
         vars[var_count].value.string_value = strdup(value->str_value);
-    } else if (strcmp(value->type, "OBJECT") == 0) {
+    } 
+    else if (strcmp(value->type, "LIST") == 0) {
+        vars[var_count].vtype = VAL_OBJECT;
+        vars[var_count].value.object_value = (void *)(intptr_t)value;
+
+        // Recorre la lista y llama a __constructor si hay objetos
+        ASTNode *cur = value->left;
+        int i = 0;
+        while (cur) {
+            printf("[DEBUG] Elemento #%d tipo: %s\n", i++, cur->type);
+            if (strcmp(cur->type, "OBJECT") != 0) {
+                printf("Error: Solo se permiten objetos en una lista de objetos.\n");
+                return;
+            }
+            printf("[DEBUG] Elemento #%d tipo: %s\n", i++, cur->type);
+            if (strcmp(cur->type, "OBJECT") == 0) {
+                ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
+                MethodNode *m = obj->class->methods;
+                while (m && strcmp(m->name, "__constructor") != 0) m = m->next;
+                if (m) {
+                    // Enlaza argumentos al constructor
+                    ParameterNode *p = m->params;
+                    ASTNode *arg = cur->right;
+                    while (p && arg) {
+                        ASTNode *vn = NULL;
+                        if (arg->type && strcmp(arg->type, "STRING") == 0) {
+                            vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
+                        } else if (arg->type &&
+                                   (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+                            Variable *v = find_variable(arg->id);
+                            if (!v) {
+                                printf("Error: Variable '%s' no encontrada.\n", arg->id);
+                                return;
+                            }
+                            if (v->vtype == VAL_STRING) {
+                                vn = create_ast_leaf("STRING", 0, strdup(v->value.string_value), NULL);
+                            } else {
+                                vn = create_ast_leaf_number("INT", v->value.int_value, NULL, NULL);
+                            }
+                        } else {
+                            int val = evaluate_expression(arg);
+                            vn = create_ast_leaf_number("INT", val, NULL, NULL);
+                        }
+
+                        add_or_update_variable(p->name, vn);
+                        p = p->next;
+                        arg = arg->right;
+                    }
+
+                    // Llama al constructor
+                    call_method(obj, "__constructor");
+                }
+            }
+            cur = cur->right;
+        }
+    }  
+    else if (strcmp(value->type, "OBJECT") == 0) {
         vars[var_count].vtype = VAL_OBJECT;
         vars[var_count].value.object_value = (ObjectNode *)(intptr_t)value->value;
     } else {
@@ -393,6 +453,7 @@ ASTNode *create_object_with_args(ClassNode *class, ASTNode *args) {
     obj->right = args;
     obj->id = strdup(class->name);
     obj->value = (int)(intptr_t)real_obj;
+    printf("[DEBUG] Creado OBJECT para clase %s con args encadenados en right\n", class->name);
 
     return obj;
 }
@@ -640,10 +701,6 @@ void execute_predict(ASTNode* model_node, ASTNode* input_node) {
     add_or_update_variable("__ret__", lit);
 }
 
-/* Refactorización de interpret_ast en funciones auxiliares para mejorar legibilidad */
-
-/* Refactorización de interpret_ast en funciones auxiliares para mejorar legibilidad */
-
 /* Prototipos de funciones auxiliares */
 static void interpret_dataset(ASTNode *node);
 static void interpret_for(ASTNode *node);
@@ -710,31 +767,60 @@ ASTNode* create_for_in_node(const char *var_name, ASTNode *list_expr, ASTNode *b
 
 
 static void interpret_for_in(ASTNode *node) {
-    // 1) Evalúa la expresión de la lista y deja el AST LIST en __ret__
-    interpret_ast(node->left);
+    printf("[DEBUG] Entrando a interpret_for_in\n");
 
-    // 2) Recupera la variable temporal __ret__
-    Variable *tmp = find_variable("__ret__");
-    if (!tmp || tmp->vtype != VAL_OBJECT) {
-        printf("Error: for-in sobre algo que no es una lista válida.\n");
+    ASTNode *list_expr = node->left;
+    ASTNode *listNode = NULL;
+
+    // Si es un ID (por ejemplo: productos)
+    if (list_expr->type && (
+        strcmp(list_expr->type, "ID") == 0 ||
+        strcmp(list_expr->type, "IDENTIFIER") == 0)) {
+
+        Variable *v = find_variable(list_expr->id);
+        if (!v || v->vtype != VAL_OBJECT || strcmp(v->type, "LIST") != 0) {
+            printf("Error: '%s' no es una lista válida.\n", list_expr->id);
+            return;
+        }
+        listNode = (ASTNode *)(intptr_t)v->value.object_value;
+    } 
+    // Si es un nodo LIST literal (for in [ ... ])
+    else if (list_expr->type && strcmp(list_expr->type, "LIST") == 0) {
+        listNode = list_expr;
+    } 
+    else {
+        printf("Error: expresión de for-in no soportada (tipo: %s).\n", list_expr->type);
         return;
     }
 
-    // 3) Reconstruye el ASTNode* de la lista desde object_value
-    ASTNode *listNode = (ASTNode *)(intptr_t) tmp->value.object_value;
+    // Validación final
+    if (!listNode || strcmp(listNode->type, "LIST") != 0) {
+        printf("Error: El nodo no es una lista válida.\n");
+        return;
+    }
 
-    // 4) Los elementos de la lista están encadenados a través de listNode->left y luego ->right
+    // Recorre los elementos de la lista
     ASTNode *items = listNode->left;
-
-    // 5) Itera sobre cada elemento
     for (ASTNode *item = items; item; item = item->right) {
-        // a) Asigna la variable de iteración con el nodo actual
-        add_or_update_variable(node->id, item);
-        // b) Ejecuta el cuerpo del for-in
-        interpret_ast(node->right);
+        printf("[DEBUG] Iterando item tipo: %s\n", item->type);
+
+        if (item->type && strcmp(item->type, "OBJECT") == 0) {
+            ObjectNode *obj = (ObjectNode *)(intptr_t)item->value;
+
+            ASTNode *wrapper = create_ast_leaf("ID", 0, NULL, node->id);
+            add_or_update_variable(node->id, wrapper);
+
+            Variable *slot = find_variable(node->id);
+            if (slot) {
+                slot->vtype = VAL_OBJECT;
+                slot->type = strdup("OBJECT");
+                slot->value.object_value = obj;
+            }
+
+            interpret_ast(node->right);
+        }
     }
 }
-
 
 
 void interpret_ast(ASTNode *node) {
@@ -742,7 +828,7 @@ void interpret_ast(ASTNode *node) {
 
     /* Mensaje de depuración mostrando el origen */
     //printf("[DEBUG] Interpretando '%s'\n",
-    //      node->type);
+      //    node->type);
 
     /* Despacho según tipo de nodo */
     if (strcmp(node->type, "FOR") == 0)                interpret_for(node);
@@ -1064,17 +1150,55 @@ ASTNode *create_list_node(ASTNode *items) {
     node->id = NULL;
     node->str_value = NULL;
     node->value = 0;
+
+    // VALIDACIÓN:
+    printf("[DEBUG] Verificando nodos dentro de create_list_node...\n");
+    int i = 0;
+    ASTNode *cur = items;
+    while (cur) {
+        printf("  [ITEM %d] type: %s\n", i, cur->type);
+        if (strcmp(cur->type, "OBJECT") != 0) {
+            printf("  [ERROR] Nodo no es OBJECT\n");
+        }
+
+        if (cur->right != NULL) {
+            printf("  [WARNING] OBJECT #%d tiene right ≠ NULL (puede estar colgando argumento)\n", i);
+        }
+
+        i++;
+        cur = cur->right;
+    }
+
     return node;
 }
 
+
 ASTNode *append_to_list(ASTNode *list, ASTNode *item) {
-    ASTNode *current = list;
-    while (current->right) {
-        current = current->right;
+    if (!item) {
+        printf("[ERROR] Nodo NULL agregado a lista.\n");
+        return list;
     }
-    current->right = item;
+
+    // ⚠️ Solo permitir nodos tipo OBJECT
+    if (strcmp(item->type, "OBJECT") != 0) {
+        printf("[ERROR] Solo se permiten OBJECT en listas. Se recibió: %s\n", item->type);
+        return list;
+    }
+
+    // Crear nuevo nodo OBJECT con mismos datos (evita compartir right erróneo)
+    ASTNode *cloned = malloc(sizeof(ASTNode));
+    *cloned = *item;
+    cloned->right = NULL; // cortamos el encadenamiento de argumentos como si fueran hermanos
+
+    if (!list) return cloned;
+
+    ASTNode *cur = list;
+    while (cur->right) cur = cur->right;
+    cur->right = cloned;
     return list;
 }
+
+
 
 ASTNode *create_list_function_call_node(ASTNode *list, const char *funcName, ASTNode *lambda) {
     ASTNode *node = malloc(sizeof(ASTNode));
@@ -1163,35 +1287,89 @@ static void interpret_assign(ASTNode *node) {
 
 static void interpret_print(ASTNode *node) {
     ASTNode *arg = node->left;
-    if (!arg) { printf("Error: print sin argumento\n"); return; }
-    if (arg->type && strcmp(arg->type,"STRING")==0) {
+    if (!arg) {
+        printf("Error: print sin argumento\n");
+        return;
+    }
+
+    // Literal string directo
+    if (arg->type && strcmp(arg->type, "STRING") == 0) {
         printf("Output: %s\n", arg->str_value);
         return;
     }
-    if (arg->type && strcmp(arg->type,"ACCESS_ATTR")==0) {
-        ASTNode *o = arg->left; ASTNode *a = arg->right;
+
+    // Acceso a atributo: objeto.atributo
+    if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
+        ASTNode *o = arg->left;
+        ASTNode *a = arg->right;
         Variable *v = find_variable(o->id);
-        if(!v||v->vtype!=VAL_OBJECT){ printf("Error: Objeto '%s' no definido o no es un objeto.\n", o->id); return; }
+        if (!v || v->vtype != VAL_OBJECT) {
+            printf("Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
+            return;
+        }
         ObjectNode *obj = v->value.object_value;
-        int idx=-1;
-        for(int i=0;i<obj->class->attr_count;i++){ if(strcmp(obj->class->attributes[i].id,a->id)==0){idx=i;break;} }
-        if(idx<0){ printf("Error: Atributo '%s' no encontrado en clase '%s'.\n", a->id, obj->class->name); return; }
-        Variable *attr=&obj->attributes[idx];
-        if(attr->vtype==VAL_STRING) printf("Output: %s\n", attr->value.string_value);
-        else printf("Output: %d\n", attr->value.int_value);
+        int idx = -1;
+        for (int i = 0; i < obj->class->attr_count; i++) {
+            if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0) {
+            printf("Error: Atributo '%s' no encontrado en clase '%s'.\n", a->id, obj->class->name);
+            return;
+        }
+        Variable *attr = &obj->attributes[idx];
+        if (attr->vtype == VAL_STRING)
+            printf("Output: %s\n", attr->value.string_value);
+        else
+            printf("Output: %d\n", attr->value.int_value);
         return;
     }
-    if (!arg->id) { printf("Error: print sin identificador válido.\n"); return; }
+
+    // Identificador (nombre de variable)
+    if (!arg->id) {
+        printf("Error: print sin identificador válido.\n");
+        return;
+    }
+
     Variable *v = find_variable(arg->id);
-    if (!v) { printf("Error: Variable '%s' no definida.\n", arg->id); return; }
-    if (v->vtype==VAL_STRING) printf("Output: %s\n", v->value.string_value);
-    else if (v->vtype==VAL_INT) printf("Output: %d\n", v->value.int_value);
-    else printf("Output: Objeto de clase: %s\n", v->value.object_value->class->name);
+    if (!v) {
+        printf("Error: Variable '%s' no definida.\n", arg->id);
+        return;
+    }
+
+    // Verifica si es una lista (guardada como VAL_OBJECT + type == "LIST")
+    if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
+        ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
+        if (listNode && strcmp(listNode->type, "LIST") == 0) {
+            ASTNode *cur = listNode->left;
+            printf("Output: [\n");
+            while (cur) {
+                if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
+                    ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
+                    call_method(obj, "Mostrar");
+                }
+                cur = cur->right;
+            }
+            printf("]\n");
+            return;
+        }
+    }
+
+    // Escalares
+    if (v->vtype == VAL_STRING)
+        printf("Output: %s\n", v->value.string_value);
+    else if (v->vtype == VAL_INT)
+        printf("Output: %d\n", v->value.int_value);
+    else
+        printf("Output: Objeto de clase: %s\n", v->value.object_value->class->name);
 }
 
+
 static void interpret_statement_list(ASTNode *node) {
-    interpret_ast(node->right);
     interpret_ast(node->left);
+    interpret_ast(node->right);
 
     /*ASTNode *current = node;
     while (current) {
