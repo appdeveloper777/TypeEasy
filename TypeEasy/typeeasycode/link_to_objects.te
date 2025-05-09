@@ -13,9 +13,22 @@ class Producto {
   }
 }
 
+let productos_del_papa_leon = [
+    new Producto("Chocolate", 1),
+    new Producto("Panetón", 2),
+    new Producto("Empanada", 3),
+    new Producto("Flan", 2),
+    new Producto("Ceviche", 2)
+];
+
 let productos = from "productos.csv", Producto;
 let filtrados = filter(productos, p => p.precio != 2); // LINQ
-for (let item in filtrados) {
-    print("Producto:");
+for (let item in productos_del_papa_leon) {
+    print("Producto de papa leon:");
     item.Mostrar();
+}
+
+for (let _item in filtrados) {
+    print("Producto:");
+    _item.Mostrar();
 }
