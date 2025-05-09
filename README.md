@@ -15,7 +15,8 @@ Para modificar y correr el código .te:
 *  ./typeeasy ../typeeasycode/crear_clase.te
 *  ./typeeasy ../typeeasycode/machine_learning.te
 *  ./typeeasy ../typeeasycode/main.te  
-![image](https://github.com/user-attachments/assets/db608fec-2238-4687-84c4-3cfd0500ffee)
+![image](https://github.com/user-attachments/assets/d4617ae8-71f0-4270-9e70-ad00bd6694ab)
+
 
 Diagrama de Flujo:
 ![image](https://github.com/user-attachments/assets/120f6734-bf12-4bbe-aedf-ba4372f169f9)
