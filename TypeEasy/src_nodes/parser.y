@@ -1,8 +1,4 @@
-%{
-
-    #ifdef _WIN32
-    #include <windows.h>
-    #endif
+%{   
 
     #include <stdio.h>
     #include <stdlib.h>
@@ -294,13 +290,7 @@ void yyerror(const char *s) {
 int main(int argc, char *argv[]) {
 
     //yydebug = 1;
-    setlocale(LC_ALL, "");
-
-    #ifdef _WIN32
-    // Forzar consola a modo UTF-8
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
-    #endif
+  
 
     // Flags para el modo de ejecución
     int interpret_mode = 0;
