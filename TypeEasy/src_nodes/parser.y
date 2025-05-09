@@ -30,7 +30,7 @@
 %token <ival> NUMBER
 
 %type <sval> method_name
-%type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args
+%type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args lambda_expression
 %type <pnode> parameter_decl parameter_list list_literal
 %type <node> object_expression object_list
 
@@ -119,11 +119,35 @@ method_decl:
 
 expression:
 
-    LSBRACKET object_list RSBRACKET {
+expression GT expression
+      {
+        $$ = create_ast_node("GT", $1, $3);
+      }
+| IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN
+      {
+
+        printf(" [DEBUG] PERU Reconocido FUNCTION_CALL: %s(%s)\n", $1, $3);
+
+        /*$$ = create_list_function_call_node(
+            create_identifier_node($1),  // filter
+            $3,                          // lista
+            $5                           // lambda
+        );*/
+
+        ASTNode *listExpr = create_identifier_node($1);                // productos
+        ASTNode *filterCall = create_list_function_call_node(
+            listExpr,  // filter
+            $3,                          // lista
+            $5                           // lambda
+        );
+        $$ = create_var_decl_node($1, filterCall);                    // let filtrados = ...
+
+      }
+|    LSBRACKET object_list RSBRACKET {
        // printf(" [DEBUG] Reconocido OBJECT_LIST\n");
        $$ = $2; }
 | expression DOT IDENTIFIER LPAREN lambda RPAREN  {  if (strcmp($3, "filter")==0) { $$ = create_list_function_call_node($1, $3, $5); } else { $$ = create_method_call_node($1, $3, NULL); } free($3); }
-| LSBRACKET expr_list RSBRACKET                   { 
+| LSBRACKET expr_list RSBRACKET                  { 
     
     //$$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1);
     $$ = create_list_node($2); 
@@ -159,7 +183,18 @@ expression:
 
 
 var_decl:
-    LET IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
+LET IDENTIFIER ASSIGN IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN SEMICOLON
+      {
+        printf(" [DEBUG] Reconocido FILTER_CALL: let %s = %s(...)\n", $2, $4);
+
+        ASTNode *listExpr = $6;
+        ASTNode *lambda = $8;
+        ASTNode *filterCall = create_list_function_call_node(listExpr, $4, lambda);
+        filterCall->type = strdup("FILTER_CALL"); 
+    
+        $$ = create_var_decl_node($2, filterCall);
+      }
+  | LET IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
   | STRING IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
   | VAR IDENTIFIER ASSIGN expression SEMICOLON  { printf("IMPRIMIENDO VAR \n"); $$ = create_var_decl_node($2, $4); }
   | INT IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
@@ -247,7 +282,10 @@ arg_list:
 ;
 object_list
     : object_expression
-      { $$ = create_list_node($1); } // ✅ solo aquí se crea LIST
+      {
+        printf(" [DEBUG] eeeee Reconocido OBJECT_EXPRESSION\n");
+         $$ = create_list_node($1); 
+    } 
     | object_list COMMA object_expression
       { $$ = append_to_list($1, $3); }
 ;

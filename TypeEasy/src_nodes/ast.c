@@ -631,6 +631,17 @@ int evaluate_expression(ASTNode *node) {
             return 0;
         }
     }
+
+    if (strcmp(node->type, "GT") == 0) {
+        return evaluate_expression(node->left) > evaluate_expression(node->right);
+    }
+    if (strcmp(node->type, "LT") == 0) {
+        return evaluate_expression(node->left) < evaluate_expression(node->right);
+    }
+    if (strcmp(node->type, "EQ") == 0) {
+        return evaluate_expression(node->left) == evaluate_expression(node->right);
+    }
+    
     
     // Operaciones matemáticas
     if (strcmp(node->type, "ADD") == 0) {
@@ -647,6 +658,29 @@ int evaluate_expression(ASTNode *node) {
         }
         return evaluate_expression(node->left) / right;
     }
+
+
+    if (strcmp(node->type, "ACCESS_ATTR") == 0) {
+        ASTNode *objRef = node->left;
+        ASTNode *attr   = node->right;
+    
+        Variable *v = find_variable(objRef->id);
+        if (!v || v->vtype != VAL_OBJECT) {
+            printf("Error: '%s' no es un objeto válido para acceder atributo.\n", objRef->id);
+            return 0;
+        }
+    
+        ObjectNode *obj = v->value.object_value;
+        for (int i = 0; i < obj->class->attr_count; i++) {
+            if (strcmp(obj->class->attributes[i].id, attr->id) == 0) {
+                return obj->attributes[i].value.int_value;
+            }
+        }
+    
+        printf("Error: Atributo '%s' no encontrado en objeto '%s'.\n", attr->id, objRef->id);
+        return 0;
+    }
+    
 
     // Número literal
     return node->value;
@@ -860,37 +894,78 @@ static void interpret_for_in(ASTNode *node) {
     }
 }
 
+ASTNode *create_object_node(ObjectNode *obj) {
+    ASTNode *node = malloc(sizeof(ASTNode));
+    node->type = strdup("OBJECT");
+    node->value = (int)(intptr_t)obj;
+    node->left = NULL;
+    node->right = NULL;
+    node->next = NULL;
+    return node;
+}
+
 
 void interpret_ast(ASTNode *node) {
     if (!node || return_flag) return;
 
-    /* Mensaje de depuración mostrando el origen */
-    //printf("[DEBUG] Interpretando '%s'\n",
-      //    node->type);
-
-    /* Despacho según tipo de nodo */
     if (strcmp(node->type, "FOR") == 0)                interpret_for(node);
-    else if (strcmp(node->type, "FOR_IN") == 0) {
-        //printf("[DEBUG] Interpretando nodo FOR_IN\n");
-        interpret_for_in(node);
+    else if (strcmp(node->type, "FOR_IN") == 0)        interpret_for_in(node);
+    else if (strcmp(node->type, "FILTER_CALL") == 0) {
+        printf("[DEBUG] FILTER_CALL ejecutando sape\n");
+        ASTNode *listExpr = node->left;
+        ASTNode *lambda = node->right;
+
+        Variable *v = find_variable(listExpr->id);
+        if (!v || v->vtype != VAL_OBJECT || strcmp(v->type, "LIST") != 0) {
+            printf("Error: '%s' no es una lista válida para filtrar.\n", listExpr->id);
+            return;
+        }
+
+        ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
+        ASTNode *items = listNode->left;
+        ASTNode *filteredList = NULL;
+        int count = 0;
+        for (ASTNode *item = items; item; item = item->next) {
+            if (item->type && strcmp(item->type, "OBJECT") == 0) {
+                ObjectNode *obj = (ObjectNode *)(intptr_t)item->value;
+
+                ASTNode *wrapper = malloc(sizeof(ASTNode));
+                wrapper->type = strdup("OBJECT");
+                wrapper->id = strdup(lambda->id); // variable de la lambda (ej: p)
+                wrapper->left = wrapper->right = NULL;
+                wrapper->value = (int)(intptr_t)obj;
+
+                add_or_update_variable(lambda->id, wrapper);
+
+                int result = evaluate_expression(lambda->left);
+                
+                if (result) {
+                    filteredList = append_to_list(filteredList, create_object_node(obj));  // ✅ solo OBJECT
+
+                    count++;
+                }
+            }
+        }
+        printf("[DEBUG] Total filtrados: %d\n", count);
+       
+        ASTNode *finalList = create_list_node(filteredList);
+        declare_variable(node->id, finalList);
     }
     else if (strcmp(node->type, "LIST_FUNC_CALL") == 0) interpret_list_func_call(node);
-    else if (strcmp(node->type, "DATASET") == 0)       interpret_dataset(node);
+    else if (strcmp(node->type, "DATASET") == 0)        interpret_dataset(node);
     else if (strcmp(node->type, "MODEL") == 0 || strcmp(node->type, "OBJECT") == 0) interpret_model_object(node);
-    else if (strcmp(node->type, "TRAIN") == 0)         interpret_train_node(node);
-    else if (strcmp(node->type, "PREDICT") == 0)       interpret_predict_node(node);
-    else if (strcmp(node->type, "CALL_FUNC") == 0)     interpret_call_func(node);
-    else if (strcmp(node->type, "RETURN") == 0)        interpret_return_node(node);
-    else if (strcmp(node->type, "CALL_METHOD") == 0)   interpret_call_method(node);
-    else if (strcmp(node->type, "VAR_DECL") == 0)      interpret_var_decl(node);
-    else if (strcmp(node->type, "ASSIGN_ATTR") == 0)   interpret_assign_attr(node);
-    else if (strcmp(node->type, "ASSIGN") == 0)        interpret_assign(node);
-    else if (strcmp(node->type, "PRINT") == 0)         interpret_print(node);
-    else if (strcmp(node->type, "STATEMENT_LIST") == 0)interpret_statement_list(node);
+    else if (strcmp(node->type, "TRAIN") == 0)          interpret_train_node(node);
+    else if (strcmp(node->type, "PREDICT") == 0)        interpret_predict_node(node);
+    else if (strcmp(node->type, "CALL_FUNC") == 0)      interpret_call_func(node);
+    else if (strcmp(node->type, "RETURN") == 0)         interpret_return_node(node);
+    else if (strcmp(node->type, "CALL_METHOD") == 0)    interpret_call_method(node);
+    else if (strcmp(node->type, "VAR_DECL") == 0)       interpret_var_decl(node);
+    else if (strcmp(node->type, "ASSIGN_ATTR") == 0)    interpret_assign_attr(node);
+    else if (strcmp(node->type, "ASSIGN") == 0)         interpret_assign(node);
+    else if (strcmp(node->type, "PRINT") == 0)          interpret_print(node);
+    else if (strcmp(node->type, "STATEMENT_LIST") == 0) interpret_statement_list(node);
     else if (strcmp(node->type, "PLOT") == 0) {
         printf("[DEBUG] Generando gráfico...\n");
-    
-        // Extrae datos desde los nodos hijos
         double values[100];
         int count = 0;
         ASTNode *child = node->left;
@@ -898,11 +973,10 @@ void interpret_ast(ASTNode *node) {
             values[count++] = evaluate_number(child);
             child = child->next;
         }
-    
         generate_plot(values, count);
     }
-    
 }
+
 
 /* ────────────────────────────────────────────────────────────────────────── */
 
@@ -1119,6 +1193,54 @@ static void interpret_var_decl(ASTNode *node) {
 
     //printf("[DEBUG] interpret_var_decl para '%s'\n", node->id);
 
+    if (node->left && node->left->type)
+        printf("[DEBUG] interpret_var_decl: '%s' = tipo '%s'\n", node->id, node->left->type);
+
+
+        if (node->left && strcmp(node->left->type, "FILTER_CALL") == 0) {
+            ASTNode *filterCall = node->left;
+        
+            ASTNode *listExpr = filterCall->left;
+            ASTNode *lambda = filterCall->right;
+        
+            Variable *v = find_variable(listExpr->id);
+            if (!v || v->vtype != VAL_OBJECT || strcmp(v->type, "LIST") != 0) {
+                printf("Error: '%s' no es una lista válida para filtrar.\n", listExpr->id);
+                return;
+            }
+        
+            ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
+            ASTNode *items = listNode->left;
+            ASTNode *filteredList = NULL;
+        
+            int count = 0;
+            for (ASTNode *item = items; item; item = item->next) {
+                if (item->type && strcmp(item->type, "OBJECT") == 0) {
+                    ObjectNode *obj = (ObjectNode *)(intptr_t)item->value;
+        
+                    ASTNode *wrapper = malloc(sizeof(ASTNode));
+                    wrapper->type = strdup("OBJECT");
+                    wrapper->id = strdup(lambda->id); // p
+                    wrapper->left = wrapper->right = NULL;
+                    wrapper->value = (int)(intptr_t)obj;
+                    add_or_update_variable(lambda->id, wrapper);
+        
+                    int result = evaluate_expression(lambda->left);
+                    if (result) {
+                        filteredList = append_to_list(filteredList, create_object_node(obj));  // ✅ solo OBJECT
+
+                        count++;
+                    }
+                }
+            }
+        
+            printf("[DEBUG] Total filtrados: %d\n", count);
+            ASTNode *finalList = create_list_node(filteredList);
+            declare_variable(node->id, finalList);
+            return;
+        }
+        
+
     if (node->left && (strcmp(node->left->type, "CALL_METHOD") == 0 || strcmp(node->left->type, "PREDICT") == 0)) {
         interpret_ast(node->left);
         Variable *r = find_variable("__ret__");
@@ -1184,6 +1306,7 @@ static void interpret_var_decl(ASTNode *node) {
 }
 
 ASTNode *create_list_node(ASTNode *items) {
+    printf("[DEBUG] create_list_node\n");
     ASTNode *node = malloc(sizeof(ASTNode));
     node->type = strdup("LIST");
     node->left = items;
@@ -1197,6 +1320,21 @@ ASTNode *create_list_node(ASTNode *items) {
     
     ASTNode *cur = items;
     int index = 0;
+    if (!cur) {
+        printf("Advertencia: Lista vacía pasada a create_list_node.\n");
+        return node;  // Permitir listas vacías si quieres
+    }
+    
+    if (strcmp(cur->type, "LIST") == 0) {
+        printf("Error: No se puede anidar un nodo LIST dentro de otro LIST.\n");
+        return NULL;
+    }
+    
+    if (strcmp(cur->type, "OBJECT") != 0) {
+        printf("Error: Solo se permiten objetos en una lista de objetos. Se recibió tipo: %s\n", cur->type);
+        return NULL;
+    }
+    
     while (cur) {
         printf("[DEBUG] Nodo #%d en lista: tipo=%s\n", index, cur->type);
         if (strcmp(cur->type, "OBJECT") != 0) {
@@ -1222,9 +1360,16 @@ ASTNode *append_argument_raw(ASTNode *list, ASTNode *arg) {
 
 
 ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
+    if (!item) return list;
+
+    if (strcmp(item->type, "LIST") == 0) {
+        printf("Error: No se puede insertar un nodo LIST dentro de una lista.\n");
+        return list;
+    }
+
     if (!list) {
         item->next = NULL;
-        return create_list_node(item);  // primer elemento
+        return create_list_node(item);
     }
 
     if (strcmp(list->type, "LIST") != 0) {
@@ -1247,25 +1392,25 @@ ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
 }
 
 
-
-ASTNode *create_list_function_call_node(ASTNode *list, const char *funcName, ASTNode *lambda) {
+ASTNode* create_list_function_call_node(ASTNode* list, const char* funcName, ASTNode* lambda) {
     ASTNode *node = malloc(sizeof(ASTNode));
-    node->type = strdup("LIST_FUNC_CALL");
-    node->id = strdup(funcName);
-    node->left = list;    // lista original
-    node->right = lambda; // lambda
+    node->type = strdup("FILTER_CALL");  // o "MAP_CALL" si luego extiendes
+    node->id = strdup(funcName);         // "filter"
+    node->left = list;
+    node->right = lambda;
     node->next = NULL;
     return node;
 }
 
-ASTNode *create_lambda_node(const char *argName, ASTNode *body) {
-    ASTNode *lambda = malloc(sizeof(ASTNode));
-    lambda->type = strdup("LAMBDA");
-    lambda->id = strdup(argName);
-    lambda->left = body;
-    lambda->right = NULL;
-    lambda->str_value = NULL;
-    return lambda;
+
+ASTNode* create_lambda_node(const char* argName, ASTNode* body) {
+    ASTNode *node = malloc(sizeof(ASTNode));
+    node->type = strdup("LAMBDA");
+    node->id = strdup(argName);  // el nombre de la variable (ej. p)
+    node->left = body;           // cuerpo
+    node->right = NULL;
+    node->next = NULL;
+    return node;
 }
 
 

@@ -14,7 +14,7 @@ class Producto {
 }
 
 let producto = new Producto("Fruta", 1);
-producto.Mostrar();
+//producto.Mostrar();
 
 let productos = [
     new Producto("Pan", 1),
@@ -22,9 +22,9 @@ let productos = [
     new Producto("Latte", 3)
 ];
 
-let filtrados = filter(productos, p => p.precio > 1);
+//let filtrados = filter(productos, p => p.precio > 1);
 
-for (let item in filtrados) {
+for (let item in productos) {
     print("Producto: ");
     item.Mostrar();
 }
