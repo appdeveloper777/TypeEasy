@@ -1201,6 +1201,73 @@ ObjectNode* clone_object(ObjectNode *original) {
     return clone;
 }
 
+#include <stdio.h>
+#include <string.h>
+
+ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
+    FILE* fp = fopen(filename, "r");
+    if (!fp) {
+        printf("Error: No se pudo abrir el archivo '%s'\n", filename);
+        return NULL;
+    }
+
+    //printf("[DEBUG] Leyendo archivo CSV: %s\n", filename);
+
+    char line[512];
+    fgets(line, sizeof(line), fp); // omitir encabezado
+
+    ASTNode* first = NULL;
+    ASTNode* last = NULL;
+    int count = 0;
+
+    while (fgets(line, sizeof(line), fp)) {
+        char* nombre = strtok(line, ",");
+        char* precio_str = strtok(NULL, ",");
+
+        if (!nombre || !precio_str) {
+            printf("[DEBUG] Línea inválida en CSV.\n");
+            continue;
+        }
+
+        char* nl = strchr(precio_str, '\n');
+        if (nl) *nl = '\0';
+
+        ASTNode* arg1 = create_string_node(nombre);
+        ASTNode* arg2 = create_int_node(atoi(precio_str));
+
+        ASTNode* args = add_argument(NULL, arg1);
+        args = add_argument(args, arg2);
+
+        ASTNode* obj = create_object_with_args(cls, args);
+        obj->next = NULL;
+
+        if (!first) {
+            first = obj;
+            last = obj;
+        } else {
+            last->next = obj;
+            last = obj;
+        }
+
+        count++;
+    }
+
+    fclose(fp);
+    //("[DEBUG] Total objetos cargados desde CSV: %d\n", count);
+
+    ASTNode* listNode = malloc(sizeof(ASTNode));
+    listNode->type = strdup("LIST");
+    listNode->left = first;
+    listNode->right = NULL;
+    listNode->next = NULL;
+    listNode->id = NULL;
+    listNode->str_value = NULL;
+    listNode->value = 0;
+
+    return listNode;
+}
+
+
 
 static void interpret_var_decl(ASTNode *node) {
 

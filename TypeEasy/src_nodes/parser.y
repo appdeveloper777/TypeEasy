@@ -160,6 +160,7 @@ var_decl:
   | INT IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
   | IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
   | THIS DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,"this"); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
+  
   ;
 
 statement:
@@ -191,6 +192,16 @@ statement:
   | LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON  { $$ = create_layer_node($2, $4, $6); }
   | TRAIN LPAREN IDENTIFIER COMMA IDENTIFIER COMMA train_options RPAREN SEMICOLON  { $$ = create_train_node($3, $5, $7); }
   | IDENTIFIER ASSIGN NUMBER                                    { $$ = create_train_option_node($1, $3); }
+  | LET IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER SEMICOLON {
+    ClassNode* cls = find_class($7);
+        if (!cls) {
+            printf("Clase '%s' no encontrada.\n", $7);
+            $$ = NULL;
+        } else {
+            ASTNode* list = from_csv_to_list($5, cls);
+            $$ = create_var_decl_node($2, list);
+        }
+    }
   ;
 
 statement_list:

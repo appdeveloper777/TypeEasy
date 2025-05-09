@@ -1,35 +1,21 @@
 class Producto {
-    nombre : string;
-    precio : int;
+  nombre : string;
+  precio : int;
 
-    __constructor(_nombre : string, _precio : int) {
-        this.nombre = _nombre;
-        this.precio = _precio;
-    }
+  __constructor(nombre : string, precio : int) {
+    this.nombre = nombre;
+    this.precio = precio;
+  }
 
-    Mostrar() {
-        print(this.nombre);
-        print(this.precio);
-    }
+  Mostrar() {
+    print(this.nombre);
+    print(this.precio);
+  }
 }
 
-let producto = new Producto("Fruta", 1);
+let productos = from "productos.csv", Producto;
 
-let productos = [
-    new Producto("Chocolate", 1),
-    new Producto("Panetón", 2),
-    new Producto("Empanada", 3),
-    new Producto("Flan", 2),
-    new Producto("Ceviche", 2)
-];
-
-let filtrados = filter(productos, p => p.precio > 1);
-
-for (let item in filtrados) {
-    print("Producto: ");
+for (let item in productos) {
+    print("Producto:");
     item.Mostrar();
 }
-
-
-//producto.Mostrar();
-//print(productos);

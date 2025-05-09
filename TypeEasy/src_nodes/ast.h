@@ -90,6 +90,8 @@ typedef struct ParameterNode {
     struct ParameterNode *next;
 } ParameterNode;
 
+ASTNode* from_csv_to_list(const char* filename, ClassNode* cls);
+
 ASTNode *create_list_node(ASTNode *items);
 ASTNode *append_to_list(ASTNode *list, ASTNode *item);
 ASTNode *create_list_function_call_node(ASTNode *list, const char *funcName, ASTNode *lambda);
