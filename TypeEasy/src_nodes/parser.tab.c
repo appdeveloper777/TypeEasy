@@ -570,19 +570,19 @@ static const yytype_int8 yytranslate[] =
 
 #if YYDEBUG
 /* YYRLINE[YYN] -- Source line where rule number YYN was defined.  */
-static const yytype_int16 yyrline[] =
+static const yytype_uint8 yyrline[] =
 {
        0,    61,    61,    62,    63,    64,    68,    68,    73,    74,
       75,    79,    80,    83,    84,    85,    86,    90,    91,    95,
       99,   100,   101,   102,   103,   104,   108,   109,   110,   111,
-     112,   116,   117,   122,   126,   146,   149,   150,   155,   156,
-     157,   158,   159,   160,   161,   162,   163,   164,   165,   166,
-     167,   168,   169,   170,   171,   172,   173,   186,   197,   198,
-     199,   200,   201,   202,   206,   210,   211,   212,   213,   214,
-     215,   216,   217,   218,   219,   220,   221,   222,   223,   224,
-     225,   226,   227,   228,   229,   230,   231,   232,   233,   234,
-     235,   236,   240,   241,   245,   246,   250,   251,   260,   261,
-     272,   284,   289,   294
+     112,   116,   117,   122,   126,   127,   128,   129,   130,   131,
+     132,   133,   134,   135,   136,   137,   138,   139,   140,   141,
+     142,   143,   144,   145,   146,   147,   148,   154,   155,   156,
+     157,   158,   159,   160,   164,   165,   166,   167,   168,   169,
+     170,   171,   172,   173,   174,   175,   176,   177,   178,   179,
+     180,   181,   182,   183,   184,   185,   186,   187,   188,   189,
+     190,   191,   195,   196,   200,   201,   205,   206,   215,   216,
+     227,   239,   244,   249
 };
 #endif
 
@@ -1596,439 +1596,397 @@ yyreduce:
     break;
 
   case 34: /* expression: IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN  */
-#line 127 "parser.y"
-      {
-
-        printf(" [DEBUG] PERU Reconocido FUNCTION_CALL: %s(%s)\n", (yyvsp[-5].sval), (yyvsp[-3].node));
-
-        /*$$ = create_list_function_call_node(
-            create_identifier_node($1),  // filter
-            $3,                          // lista
-            $5                           // lambda
-        );*/
-
-        ASTNode *listExpr = create_identifier_node((yyvsp[-5].sval));                // productos
-        ASTNode *filterCall = create_list_function_call_node(
-            listExpr,  // filter
-            (yyvsp[-3].node),                          // lista
-            (yyvsp[-1].node)                           // lambda
-        );
-        (yyval.node) = create_var_decl_node((yyvsp[-5].sval), filterCall);                    // let filtrados = ...
-
-      }
-#line 1620 "parser.tab.c"
+#line 126 "parser.y"
+                                                               { printf(" [DEBUG] PERU Reconocido FUNCTION_CALL: %s(%s)\n", (yyvsp[-5].sval), (yyvsp[-3].node)); ASTNode *listExpr = create_identifier_node((yyvsp[-5].sval)); ASTNode *filterCall = create_list_function_call_node(listExpr, (yyvsp[-3].node), (yyvsp[-1].node)); (yyval.node) = create_var_decl_node((yyvsp[-5].sval), filterCall); }
+#line 1602 "parser.tab.c"
     break;
 
   case 35: /* expression: LSBRACKET object_list RSBRACKET  */
-#line 146 "parser.y"
-                                     {
-       // printf(" [DEBUG] Reconocido OBJECT_LIST\n");
-       (yyval.node) = (yyvsp[-1].node); }
-#line 1628 "parser.tab.c"
+#line 127 "parser.y"
+                                                        { /* printf(" [DEBUG] Reconocido OBJECT_LIST\n"); */ (yyval.node) = (yyvsp[-1].node); }
+#line 1608 "parser.tab.c"
     break;
 
   case 36: /* expression: expression DOT IDENTIFIER LPAREN lambda RPAREN  */
-#line 149 "parser.y"
-                                                  {  if (strcmp((yyvsp[-3].sval), "filter")==0) { (yyval.node) = create_list_function_call_node((yyvsp[-5].node), (yyvsp[-3].sval), (yyvsp[-1].node)); } else { (yyval.node) = create_method_call_node((yyvsp[-5].node), (yyvsp[-3].sval), NULL); } free((yyvsp[-3].sval)); }
-#line 1634 "parser.tab.c"
+#line 128 "parser.y"
+                                                        {  if (strcmp((yyvsp[-3].sval), "filter")==0) { (yyval.node) = create_list_function_call_node((yyvsp[-5].node), (yyvsp[-3].sval), (yyvsp[-1].node)); } else { (yyval.node) = create_method_call_node((yyvsp[-5].node), (yyvsp[-3].sval), NULL); } free((yyvsp[-3].sval)); }
+#line 1614 "parser.tab.c"
     break;
 
   case 37: /* expression: LSBRACKET expr_list RSBRACKET  */
-#line 150 "parser.y"
-                                                 { 
-    
-    //$$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1);
-    (yyval.node) = create_list_node((yyvsp[-1].node)); 
-}
-#line 1644 "parser.tab.c"
+#line 129 "parser.y"
+                                                        { /* printf(" [DEBUG] Reconocido EXPR_LIST\n"); */ (yyval.node) = create_ast_leaf("IDENTIFIER", 0, NULL, (yyvsp[-2].sval)); (yyval.node) = create_list_node((yyvsp[-1].node)); }
+#line 1620 "parser.tab.c"
     break;
 
   case 38: /* expression: PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN  */
-#line 155 "parser.y"
+#line 130 "parser.y"
                                                      { ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i"); (yyval.node) = create_method_call_node(obj, (yyvsp[-3].sval), NULL); }
-#line 1650 "parser.tab.c"
+#line 1626 "parser.tab.c"
     break;
 
   case 39: /* expression: IDENTIFIER DOT IDENTIFIER LPAREN RPAREN  */
-#line 156 "parser.y"
-                                                  { ASTNode *obj = create_ast_leaf("ID", 0, NULL, (yyvsp[-4].sval)); (yyval.node) = create_method_call_node(obj, (yyvsp[-2].sval), NULL); }
-#line 1656 "parser.tab.c"
+#line 131 "parser.y"
+                                                    { ASTNode *obj = create_ast_leaf("ID", 0, NULL, (yyvsp[-4].sval)); (yyval.node) = create_method_call_node(obj, (yyvsp[-2].sval), NULL); }
+#line 1632 "parser.tab.c"
     break;
 
   case 40: /* expression: IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN  */
-#line 157 "parser.y"
+#line 132 "parser.y"
                                                            { ASTNode *obj = create_ast_leaf("ID", 0, NULL, (yyvsp[-5].sval)); (yyval.node) = create_method_call_node(obj, (yyvsp[-3].sval), (yyvsp[-1].node)); }
-#line 1662 "parser.tab.c"
+#line 1638 "parser.tab.c"
     break;
 
   case 41: /* expression: IDENTIFIER DOT IDENTIFIER  */
-#line 158 "parser.y"
+#line 133 "parser.y"
                                                    { ASTNode *obj = create_ast_leaf("ID", 0, NULL, (yyvsp[-2].sval)); ASTNode *attr = create_ast_leaf("ID", 0, NULL, (yyvsp[0].sval)); (yyval.node) = create_ast_node("ACCESS_ATTR", obj, attr); }
-#line 1668 "parser.tab.c"
+#line 1644 "parser.tab.c"
     break;
 
   case 42: /* expression: expression DOT IDENTIFIER LPAREN RPAREN  */
-#line 159 "parser.y"
+#line 134 "parser.y"
                                                    { printf(" [DEBUG] Reconocido METHOD_CALL: %s.%s()\n", (yyvsp[-4].node), (yyvsp[-2].sval)); (yyval.node) = create_method_call_node((yyvsp[-4].node), (yyvsp[-2].sval), NULL); }
-#line 1674 "parser.tab.c"
+#line 1650 "parser.tab.c"
     break;
 
   case 43: /* expression: expression DOT IDENTIFIER LPAREN expression_list RPAREN  */
-#line 160 "parser.y"
+#line 135 "parser.y"
                                                            { (yyval.node) = create_method_call_node((yyvsp[-5].node), (yyvsp[-3].sval), (yyvsp[-1].node)); }
-#line 1680 "parser.tab.c"
+#line 1656 "parser.tab.c"
     break;
 
   case 44: /* expression: THIS DOT IDENTIFIER  */
-#line 161 "parser.y"
+#line 136 "parser.y"
                                                    { (yyval.node) = create_ast_node("ACCESS_ATTR", create_ast_leaf("ID", 0, NULL, "this"), create_ast_leaf("ID", 0, NULL, (yyvsp[0].sval))); }
-#line 1686 "parser.tab.c"
+#line 1662 "parser.tab.c"
     break;
 
   case 45: /* expression: THIS DOT IDENTIFIER LPAREN RPAREN  */
-#line 162 "parser.y"
+#line 137 "parser.y"
                                                    { (yyval.node) = create_method_call_node(create_ast_leaf("ID", 0, NULL, "this"), (yyvsp[-2].sval), NULL); }
-#line 1692 "parser.tab.c"
+#line 1668 "parser.tab.c"
     break;
 
   case 46: /* expression: IDENTIFIER  */
-#line 163 "parser.y"
+#line 138 "parser.y"
                                                   { (yyval.node) = create_ast_leaf("IDENTIFIER", 0, NULL, (yyvsp[0].sval)); }
-#line 1698 "parser.tab.c"
+#line 1674 "parser.tab.c"
     break;
 
   case 47: /* expression: NUMBER  */
-#line 164 "parser.y"
+#line 139 "parser.y"
                                                   { (yyval.node) = create_ast_leaf("NUMBER", (yyvsp[0].ival), NULL, NULL); }
-#line 1704 "parser.tab.c"
+#line 1680 "parser.tab.c"
     break;
 
   case 48: /* expression: STRING_LITERAL  */
-#line 165 "parser.y"
+#line 140 "parser.y"
                                                   { (yyval.node) = create_ast_leaf("STRING", 0, (yyvsp[0].sval), NULL); }
-#line 1710 "parser.tab.c"
+#line 1686 "parser.tab.c"
     break;
 
   case 49: /* expression: CONCAT LPAREN expression_list RPAREN  */
-#line 166 "parser.y"
+#line 141 "parser.y"
                                                   { printf(" [DEBUG] Reconocido FUNCTION_CALL: %s(%s)\n", "concat", (yyvsp[-1].node)); (yyval.node) = create_function_call_node("concat", (yyvsp[-1].node)); }
-#line 1716 "parser.tab.c"
+#line 1692 "parser.tab.c"
     break;
 
   case 50: /* expression: expression PLUS expression  */
-#line 167 "parser.y"
+#line 142 "parser.y"
                                                   { (yyval.node) = create_ast_node("ADD", (yyvsp[-2].node), (yyvsp[0].node)); }
-#line 1722 "parser.tab.c"
+#line 1698 "parser.tab.c"
     break;
 
   case 51: /* expression: expression MINUS expression  */
-#line 168 "parser.y"
+#line 143 "parser.y"
                                                   { (yyval.node) = create_ast_node("SUB", (yyvsp[-2].node), (yyvsp[0].node)); }
-#line 1728 "parser.tab.c"
+#line 1704 "parser.tab.c"
     break;
 
   case 52: /* expression: expression MULTIPLY expression  */
-#line 169 "parser.y"
+#line 144 "parser.y"
                                                   { (yyval.node) = create_ast_node("MUL", (yyvsp[-2].node), (yyvsp[0].node)); }
-#line 1734 "parser.tab.c"
+#line 1710 "parser.tab.c"
     break;
 
   case 53: /* expression: expression DIVIDE expression  */
-#line 170 "parser.y"
+#line 145 "parser.y"
                                                   { (yyval.node) = create_ast_node("DIV", (yyvsp[-2].node), (yyvsp[0].node)); }
-#line 1740 "parser.tab.c"
+#line 1716 "parser.tab.c"
     break;
 
   case 54: /* expression: LPAREN expression RPAREN  */
-#line 171 "parser.y"
+#line 146 "parser.y"
                                                   { (yyval.node) = (yyvsp[-1].node); }
-#line 1746 "parser.tab.c"
+#line 1722 "parser.tab.c"
     break;
 
   case 55: /* expression: NEW IDENTIFIER LPAREN RPAREN  */
-#line 172 "parser.y"
+#line 147 "parser.y"
                                                   { ClassNode *cls = find_class((yyvsp[-2].sval)); if (!cls) { printf("Error: Clase '%s' no definida.\n", (yyvsp[-2].sval)); (yyval.node) = NULL; } else { (yyval.node) = (ASTNode *)create_object_with_args(cls, (yyvsp[-2].sval)); } }
-#line 1752 "parser.tab.c"
+#line 1728 "parser.tab.c"
     break;
 
   case 56: /* expression: NEW IDENTIFIER LPAREN expr_list RPAREN  */
-#line 173 "parser.y"
-                                         {    
-      ClassNode *cls = find_class((yyvsp[-3].sval));
-        if (!cls) {
-            fprintf(stderr, "Error: clase '%s' no encontrada\n", (yyvsp[-3].sval));
-            exit(1);
-        }
-        (yyval.node) = create_object_with_args(cls, (yyvsp[-1].node));
-        free((yyvsp[-3].sval));
-}
-#line 1766 "parser.tab.c"
+#line 148 "parser.y"
+                                         { ClassNode *cls = find_class((yyvsp[-3].sval)); if (!cls) { fprintf(stderr, "Error: clase '%s' no encontrada\n", (yyvsp[-3].sval)); exit(1); } (yyval.node) = create_object_with_args(cls, (yyvsp[-1].node)); free((yyvsp[-3].sval)); }
+#line 1734 "parser.tab.c"
     break;
 
   case 57: /* var_decl: LET IDENTIFIER ASSIGN IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN SEMICOLON  */
-#line 187 "parser.y"
-      {
-        printf(" [DEBUG] Reconocido FILTER_CALL: let %s = %s(...)\n", (yyvsp[-8].sval), (yyvsp[-6].sval));
-
-        ASTNode *listExpr = (yyvsp[-4].node);
-        ASTNode *lambda = (yyvsp[-2].node);
-        ASTNode *filterCall = create_list_function_call_node(listExpr, (yyvsp[-6].sval), lambda);
-        filterCall->type = strdup("FILTER_CALL"); 
-    
-        (yyval.node) = create_var_decl_node((yyvsp[-8].sval), filterCall);
-      }
-#line 1781 "parser.tab.c"
+#line 154 "parser.y"
+                                                                                                 { printf(" [DEBUG] Reconocido FILTER_CALL: let %s = %s(...)\n", (yyvsp[-8].sval), (yyvsp[-6].sval)); ASTNode *listExpr = (yyvsp[-4].node); ASTNode *lambda = (yyvsp[-2].node); ASTNode *filterCall = create_list_function_call_node(listExpr, (yyvsp[-6].sval), lambda); filterCall->type = strdup("FILTER_CALL"); (yyval.node) = create_var_decl_node((yyvsp[-8].sval), filterCall); }
+#line 1740 "parser.tab.c"
     break;
 
   case 58: /* var_decl: LET IDENTIFIER ASSIGN expression SEMICOLON  */
-#line 197 "parser.y"
+#line 155 "parser.y"
                                                 { (yyval.node) = create_var_decl_node((yyvsp[-3].sval), (yyvsp[-1].node)); }
-#line 1787 "parser.tab.c"
+#line 1746 "parser.tab.c"
     break;
 
   case 59: /* var_decl: STRING IDENTIFIER ASSIGN expression SEMICOLON  */
-#line 198 "parser.y"
+#line 156 "parser.y"
                                                    { (yyval.node) = create_var_decl_node((yyvsp[-3].sval), (yyvsp[-1].node)); }
-#line 1793 "parser.tab.c"
+#line 1752 "parser.tab.c"
     break;
 
   case 60: /* var_decl: VAR IDENTIFIER ASSIGN expression SEMICOLON  */
-#line 199 "parser.y"
+#line 157 "parser.y"
                                                 { printf("IMPRIMIENDO VAR \n"); (yyval.node) = create_var_decl_node((yyvsp[-3].sval), (yyvsp[-1].node)); }
-#line 1799 "parser.tab.c"
+#line 1758 "parser.tab.c"
     break;
 
   case 61: /* var_decl: INT IDENTIFIER ASSIGN expression SEMICOLON  */
-#line 200 "parser.y"
+#line 158 "parser.y"
                                                 { (yyval.node) = create_var_decl_node((yyvsp[-3].sval), (yyvsp[-1].node)); }
-#line 1805 "parser.tab.c"
+#line 1764 "parser.tab.c"
     break;
 
   case 62: /* var_decl: IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON  */
-#line 201 "parser.y"
+#line 159 "parser.y"
                                                            { ASTNode *obj = create_ast_leaf("ID",0,NULL,(yyvsp[-5].sval)); ASTNode *attr = create_ast_leaf("ID",0,NULL,(yyvsp[-3].sval)); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); (yyval.node) = create_ast_node("ASSIGN_ATTR", access, (yyvsp[-1].node)); }
-#line 1811 "parser.tab.c"
+#line 1770 "parser.tab.c"
     break;
 
   case 63: /* var_decl: THIS DOT IDENTIFIER ASSIGN expression SEMICOLON  */
-#line 202 "parser.y"
+#line 160 "parser.y"
                                                      { ASTNode *obj = create_ast_leaf("ID",0,NULL,"this"); ASTNode *attr = create_ast_leaf("ID",0,NULL,(yyvsp[-3].sval)); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); (yyval.node) = create_ast_node("ASSIGN_ATTR", access, (yyvsp[-1].node)); }
-#line 1817 "parser.tab.c"
+#line 1776 "parser.tab.c"
     break;
 
   case 64: /* statement: FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  */
-#line 207 "parser.y"
-{     
-    (yyval.node) = create_for_in_node((yyvsp[-6].sval), (yyvsp[-4].node), (yyvsp[-1].node)); }
-#line 1824 "parser.tab.c"
+#line 164 "parser.y"
+                                                                                     { (yyval.node) = create_for_in_node((yyvsp[-6].sval), (yyvsp[-4].node), (yyvsp[-1].node)); }
+#line 1782 "parser.tab.c"
     break;
 
   case 65: /* statement: LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  */
-#line 210 "parser.y"
+#line 165 "parser.y"
                                                                              { printf(" [DEBUG] Reconocido LET con acceso a atributo: %s.%s\n", (yyvsp[-7].sval), (yyvsp[-5].sval)); (yyval.node) = create_var_decl_node((yyvsp[-7].sval), (yyvsp[-5].sval)); }
-#line 1830 "parser.tab.c"
+#line 1788 "parser.tab.c"
     break;
 
   case 66: /* statement: RETURN expression SEMICOLON  */
-#line 211 "parser.y"
+#line 166 "parser.y"
                                  { (yyval.node) = create_return_node((yyvsp[-1].node)); }
-#line 1836 "parser.tab.c"
+#line 1794 "parser.tab.c"
     break;
 
   case 68: /* statement: STRING STRING expression SEMICOLON  */
-#line 213 "parser.y"
+#line 168 "parser.y"
                                                                 { printf(" [DEBUG] Declaración de variable s: ¿"); char buffer[2048]; sprintf(buffer,"#include \"easyspark/dataframe.hpp\"\n..."); generate_code(buffer); }
-#line 1842 "parser.tab.c"
+#line 1800 "parser.tab.c"
     break;
 
   case 69: /* statement: IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  */
-#line 214 "parser.y"
+#line 169 "parser.y"
                                                        { ASTNode *obj = create_ast_leaf("ID",0,NULL,(yyvsp[-5].sval)); (yyval.node) = create_method_call_node(obj, (yyvsp[-3].sval), NULL); }
-#line 1848 "parser.tab.c"
+#line 1806 "parser.tab.c"
     break;
 
   case 70: /* statement: IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  */
-#line 215 "parser.y"
+#line 170 "parser.y"
                                                                        { ASTNode *obj = create_ast_leaf("ID",0,NULL,(yyvsp[-6].sval)); (yyval.node) = create_method_call_node(obj, (yyvsp[-4].sval), (yyvsp[-2].node)); }
-#line 1854 "parser.tab.c"
+#line 1812 "parser.tab.c"
     break;
 
   case 71: /* statement: THIS DOT IDENTIFIER LPAREN RPAREN SEMICOLON  */
-#line 216 "parser.y"
+#line 171 "parser.y"
                                                                 { ASTNode *thisObj = create_ast_leaf("ID",0,NULL,"this"); (yyval.node) = create_method_call_node(thisObj, (yyvsp[-3].sval), NULL); }
-#line 1860 "parser.tab.c"
+#line 1818 "parser.tab.c"
     break;
 
   case 72: /* statement: STRING IDENTIFIER ASSIGN STRING_LITERAL SEMICOLON  */
-#line 217 "parser.y"
+#line 172 "parser.y"
                                                                 { (yyval.node) = create_var_decl_node((yyvsp[-3].sval), create_string_node((yyvsp[-1].sval))); }
-#line 1866 "parser.tab.c"
+#line 1824 "parser.tab.c"
     break;
 
   case 73: /* statement: INT IDENTIFIER ASSIGN expression SEMICOLON  */
-#line 218 "parser.y"
+#line 173 "parser.y"
                                                                 { (yyval.node) = create_var_decl_node((yyvsp[-3].sval), create_int_node((yyvsp[-1].node)->value)); }
-#line 1872 "parser.tab.c"
+#line 1830 "parser.tab.c"
     break;
 
   case 74: /* statement: FLOAT IDENTIFIER ASSIGN expression SEMICOLON  */
-#line 219 "parser.y"
+#line 174 "parser.y"
                                                                 { (yyval.node) = create_var_decl_node((yyvsp[-3].sval), create_float_node((yyvsp[-1].node)->value)); }
-#line 1878 "parser.tab.c"
+#line 1836 "parser.tab.c"
     break;
 
   case 75: /* statement: VAR IDENTIFIER ASSIGN expression SEMICOLON  */
-#line 220 "parser.y"
+#line 175 "parser.y"
                                                                 { (yyval.node) = create_ast_node("DECLARE", create_ast_leaf("IDENTIFIER", 0, NULL, (yyvsp[-3].sval)), (yyvsp[-1].node)); }
-#line 1884 "parser.tab.c"
+#line 1842 "parser.tab.c"
     break;
 
   case 76: /* statement: IDENTIFIER ASSIGN expression SEMICOLON  */
-#line 221 "parser.y"
+#line 176 "parser.y"
                                                                 { (yyval.node) = create_ast_node("ASSIGN", create_ast_leaf("VAR",0,NULL,(yyvsp[-3].sval)), (yyvsp[-1].node)); }
-#line 1890 "parser.tab.c"
+#line 1848 "parser.tab.c"
     break;
 
   case 77: /* statement: PRINT LPAREN expression RPAREN SEMICOLON  */
-#line 222 "parser.y"
+#line 177 "parser.y"
                                                                 { (yyval.node) = create_ast_node("PRINT", (yyvsp[-2].node), NULL); }
-#line 1896 "parser.tab.c"
+#line 1854 "parser.tab.c"
     break;
 
   case 78: /* statement: PRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON  */
-#line 223 "parser.y"
+#line 178 "parser.y"
                                                                 { ASTNode *obj = create_ast_leaf("ID",0,NULL,(yyvsp[-4].sval)); ASTNode *attr = create_ast_leaf("ID",0,NULL,(yyvsp[-2].sval)); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); (yyval.node) = create_ast_node("PRINT", access, NULL); }
-#line 1902 "parser.tab.c"
+#line 1860 "parser.tab.c"
     break;
 
   case 79: /* statement: FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET  */
-#line 224 "parser.y"
+#line 179 "parser.y"
                                                                                                                            { (yyval.node) = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,(yyvsp[-10].sval)), create_ast_leaf("NUMBER",(yyvsp[-8].ival),NULL,NULL), (yyvsp[-6].node), (yyvsp[-4].node), (yyvsp[-1].node)); }
-#line 1908 "parser.tab.c"
+#line 1866 "parser.tab.c"
     break;
 
   case 80: /* statement: NEW IDENTIFIER LPAREN RPAREN SEMICOLON  */
-#line 225 "parser.y"
+#line 180 "parser.y"
                                                                     { ClassNode *cls = find_class((yyvsp[-3].sval)); if (!cls) { printf("Error: Clase '%s' no definida.\n", (yyvsp[-3].sval)); (yyval.node) = NULL; } else { (yyval.node) = (ASTNode *)create_object_with_args(cls, NULL); printf("[DEBUG] Creación de objeto: %s\n", (yyvsp[-3].sval)); } }
-#line 1914 "parser.tab.c"
+#line 1872 "parser.tab.c"
     break;
 
   case 81: /* statement: LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN RPAREN SEMICOLON  */
-#line 226 "parser.y"
+#line 181 "parser.y"
                                                                     { ClassNode *cls = find_class((yyvsp[-3].sval)); if (!cls) { printf("Error: Clase '%s' no definida.\n", (yyvsp[-3].sval)); (yyval.node) = NULL; } else { (yyval.node) = create_var_decl_node((yyvsp[-6].sval), create_object_with_args(cls, NULL)); } }
-#line 1920 "parser.tab.c"
+#line 1878 "parser.tab.c"
     break;
 
   case 82: /* statement: LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  */
-#line 227 "parser.y"
+#line 182 "parser.y"
                                                                                   { ClassNode *cls = find_class((yyvsp[-4].sval)); if (!cls) { printf("Error: Clase '%s' no definida.\n", (yyvsp[-4].sval)); (yyval.node) = NULL; } else { (yyval.node) = create_var_decl_node((yyvsp[-7].sval), create_object_with_args(cls, (yyvsp[-2].node))); } }
-#line 1926 "parser.tab.c"
+#line 1884 "parser.tab.c"
     break;
 
   case 83: /* statement: DATASET IDENTIFIER FROM STRING_LITERAL SEMICOLON  */
-#line 228 "parser.y"
+#line 183 "parser.y"
                                                                     { printf(" [DEBUG] Reconocido DATASET\n"); (yyval.node) = create_dataset_node((yyvsp[-3].sval), (yyvsp[-1].sval)); }
-#line 1932 "parser.tab.c"
+#line 1890 "parser.tab.c"
     break;
 
   case 84: /* statement: PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON  */
-#line 229 "parser.y"
+#line 184 "parser.y"
                                                                     { printf(" [DEBUG] Reconocido PREDICT\n"); (yyval.node) = create_predict_node((yyvsp[-4].sval), (yyvsp[-2].sval)); }
-#line 1938 "parser.tab.c"
+#line 1896 "parser.tab.c"
     break;
 
   case 85: /* statement: VAR IDENTIFIER ASSIGN PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON  */
-#line 230 "parser.y"
+#line 185 "parser.y"
                                                                                       { printf(" [DEBUG] Reconocido PREDICT\n"); ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i"); (yyval.node) = create_method_call_node(obj, "predict", NULL); (yyval.node) = create_predict_node((yyvsp[-4].sval), (yyvsp[-2].sval)); }
-#line 1944 "parser.tab.c"
+#line 1902 "parser.tab.c"
     break;
 
   case 86: /* statement: DATASET IDENTIFIER FROM STRING_LITERAL SEMICOLON  */
-#line 231 "parser.y"
+#line 186 "parser.y"
                                                                 { (yyval.node) = create_dataset_node((yyvsp[-3].sval), (yyvsp[-1].sval)); }
-#line 1950 "parser.tab.c"
+#line 1908 "parser.tab.c"
     break;
 
   case 87: /* statement: PLOT LPAREN expression_list RPAREN SEMICOLON  */
-#line 232 "parser.y"
+#line 187 "parser.y"
                                                                 { (yyval.node) = create_ast_node("PLOT", (yyvsp[-2].node), NULL); }
-#line 1956 "parser.tab.c"
+#line 1914 "parser.tab.c"
     break;
 
   case 88: /* statement: MODEL IDENTIFIER LBRACKET layer_list RBRACKET  */
-#line 233 "parser.y"
+#line 188 "parser.y"
                                                                 { printf("[DEBUG] Reconocido MODEL\n"); printf("[DEBUG] Nombre del modelo: %s\n", (yyvsp[-3].sval)); ASTNode *layer = (yyvsp[-1].node); int capa_index = 0; while (layer) { if (strcmp(layer->type, "LAYER") == 0) { printf("[DEBUG] Capa #%d: tipo=%s, unidades=%d, activación=%s\n", capa_index++, layer->id, layer->value, layer->str_value); } layer = layer->right; } ASTNode *modelNode = create_model_node((yyvsp[-3].sval), (yyvsp[-1].node)); printf("[DEBUG] Nodo de modelo creado: type=%s, id=%s\n", modelNode->type, modelNode->id); }
-#line 1962 "parser.tab.c"
+#line 1920 "parser.tab.c"
     break;
 
   case 89: /* statement: LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON  */
-#line 234 "parser.y"
+#line 189 "parser.y"
                                                                       { (yyval.node) = create_layer_node((yyvsp[-6].sval), (yyvsp[-4].ival), (yyvsp[-2].sval)); }
-#line 1968 "parser.tab.c"
+#line 1926 "parser.tab.c"
     break;
 
   case 90: /* statement: TRAIN LPAREN IDENTIFIER COMMA IDENTIFIER COMMA train_options RPAREN SEMICOLON  */
-#line 235 "parser.y"
+#line 190 "parser.y"
                                                                                    { (yyval.node) = create_train_node((yyvsp[-6].sval), (yyvsp[-4].sval), (yyvsp[-2].node)); }
-#line 1974 "parser.tab.c"
+#line 1932 "parser.tab.c"
     break;
 
   case 91: /* statement: IDENTIFIER ASSIGN NUMBER  */
-#line 236 "parser.y"
+#line 191 "parser.y"
                                                                 { (yyval.node) = create_train_option_node((yyvsp[-2].sval), (yyvsp[0].ival)); }
-#line 1980 "parser.tab.c"
+#line 1938 "parser.tab.c"
     break;
 
   case 92: /* statement_list: statement_list statement  */
-#line 240 "parser.y"
+#line 195 "parser.y"
                               { (yyval.node) = create_ast_node("STATEMENT_LIST", (yyvsp[-1].node), (yyvsp[0].node)); }
-#line 1986 "parser.tab.c"
+#line 1944 "parser.tab.c"
     break;
 
   case 93: /* statement_list: statement  */
-#line 241 "parser.y"
+#line 196 "parser.y"
                              { (yyval.node) = (yyvsp[0].node); }
-#line 1992 "parser.tab.c"
+#line 1950 "parser.tab.c"
     break;
 
   case 94: /* expression_list: expression  */
-#line 245 "parser.y"
+#line 200 "parser.y"
                                               { (yyval.node) = (yyvsp[0].node); }
-#line 1998 "parser.tab.c"
+#line 1956 "parser.tab.c"
     break;
 
   case 95: /* expression_list: expression_list COMMA expression  */
-#line 246 "parser.y"
+#line 201 "parser.y"
                                               { (yyval.node) = add_statement((yyvsp[-2].node), (yyvsp[0].node)); }
-#line 2004 "parser.tab.c"
+#line 1962 "parser.tab.c"
     break;
 
   case 96: /* expr_list: expression  */
-#line 250 "parser.y"
+#line 205 "parser.y"
                              { (yyval.node) = (yyvsp[0].node); }
-#line 2010 "parser.tab.c"
+#line 1968 "parser.tab.c"
     break;
 
   case 97: /* expr_list: expr_list COMMA expression  */
-#line 251 "parser.y"
+#line 206 "parser.y"
                                { (yyval.node) = append_to_list((yyvsp[-2].node), (yyvsp[0].node)); }
-#line 2016 "parser.tab.c"
+#line 1974 "parser.tab.c"
     break;
 
   case 98: /* lambda: IDENTIFIER ARROW  */
-#line 260 "parser.y"
+#line 215 "parser.y"
                                     { printf(" [DEBUG] Reconocido LAMBDA\n"); }
-#line 2022 "parser.tab.c"
+#line 1980 "parser.tab.c"
     break;
 
   case 99: /* lambda: LPAREN IDENTIFIER RPAREN ARROW expression  */
-#line 261 "parser.y"
+#line 216 "parser.y"
                                                { (yyval.node) = create_lambda_node((yyvsp[-3].sval), (yyvsp[0].node)); free((yyvsp[-3].sval)); }
-#line 2028 "parser.tab.c"
+#line 1986 "parser.tab.c"
     break;
 
   case 100: /* object_expression: NEW IDENTIFIER LPAREN expression_list RPAREN  */
-#line 273 "parser.y"
+#line 228 "parser.y"
   {
         ClassNode *cls = find_class((yyvsp[-3].sval));
         if (!cls) {
@@ -2038,34 +1996,34 @@ yyreduce:
             (yyval.node) = create_object_with_args(cls, (yyvsp[-1].node));
         }
   }
-#line 2042 "parser.tab.c"
+#line 2000 "parser.tab.c"
     break;
 
   case 101: /* object_list: object_expression  */
-#line 285 "parser.y"
+#line 240 "parser.y"
       {
         printf(" [DEBUG] eeeee Reconocido OBJECT_EXPRESSION\n");
          (yyval.node) = create_list_node((yyvsp[0].node)); 
     }
-#line 2051 "parser.tab.c"
+#line 2009 "parser.tab.c"
     break;
 
   case 102: /* object_list: object_list COMMA object_expression  */
-#line 290 "parser.y"
+#line 245 "parser.y"
       { (yyval.node) = append_to_list((yyvsp[-2].node), (yyvsp[0].node)); }
-#line 2057 "parser.tab.c"
+#line 2015 "parser.tab.c"
     break;
 
   case 103: /* lambda_expression: IDENTIFIER ARROW expression  */
-#line 295 "parser.y"
+#line 250 "parser.y"
       {
         (yyval.node) = create_lambda_node((yyvsp[-2].sval), (yyvsp[0].node)); // crea un nodo tipo LAMBDA
       }
-#line 2065 "parser.tab.c"
+#line 2023 "parser.tab.c"
     break;
 
 
-#line 2069 "parser.tab.c"
+#line 2027 "parser.tab.c"
 
       default: break;
     }
@@ -2258,7 +2216,7 @@ yyreturnlab:
   return yyresult;
 }
 
-#line 305 "parser.y"
+#line 260 "parser.y"
 
 
 void clean_generated_code() {    

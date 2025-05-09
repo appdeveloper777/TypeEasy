@@ -123,37 +123,12 @@ expression GT expression
       {
         $$ = create_ast_node("GT", $1, $3);
       }
-| IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN
-      {
-
-        printf(" [DEBUG] PERU Reconocido FUNCTION_CALL: %s(%s)\n", $1, $3);
-
-        /*$$ = create_list_function_call_node(
-            create_identifier_node($1),  // filter
-            $3,                          // lista
-            $5                           // lambda
-        );*/
-
-        ASTNode *listExpr = create_identifier_node($1);                // productos
-        ASTNode *filterCall = create_list_function_call_node(
-            listExpr,  // filter
-            $3,                          // lista
-            $5                           // lambda
-        );
-        $$ = create_var_decl_node($1, filterCall);                    // let filtrados = ...
-
-      }
-|    LSBRACKET object_list RSBRACKET {
-       // printf(" [DEBUG] Reconocido OBJECT_LIST\n");
-       $$ = $2; }
-| expression DOT IDENTIFIER LPAREN lambda RPAREN  {  if (strcmp($3, "filter")==0) { $$ = create_list_function_call_node($1, $3, $5); } else { $$ = create_method_call_node($1, $3, NULL); } free($3); }
-| LSBRACKET expr_list RSBRACKET                  { 
-    
-    //$$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1);
-    $$ = create_list_node($2); 
-}
+| IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN  { printf(" [DEBUG] PERU Reconocido FUNCTION_CALL: %s(%s)\n", $1, $3); ASTNode *listExpr = create_identifier_node($1); ASTNode *filterCall = create_list_function_call_node(listExpr, $3, $5); $$ = create_var_decl_node($1, filterCall); }
+| LSBRACKET object_list RSBRACKET                       { /* printf(" [DEBUG] Reconocido OBJECT_LIST\n"); */ $$ = $2; }
+| expression DOT IDENTIFIER LPAREN lambda RPAREN        {  if (strcmp($3, "filter")==0) { $$ = create_list_function_call_node($1, $3, $5); } else { $$ = create_method_call_node($1, $3, NULL); } free($3); }
+| LSBRACKET expr_list RSBRACKET                         { /* printf(" [DEBUG] Reconocido EXPR_LIST\n"); */ $$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1); $$ = create_list_node($2); }
 | PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN  { ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i"); $$ = create_method_call_node(obj, $3, NULL); }
-| IDENTIFIER DOT IDENTIFIER LPAREN RPAREN         { ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1); $$ = create_method_call_node(obj, $3, NULL); }
+| IDENTIFIER DOT IDENTIFIER LPAREN RPAREN           { ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1); $$ = create_method_call_node(obj, $3, NULL); }
 | IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN  { ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1); $$ = create_method_call_node(obj, $3, $5); }
 | IDENTIFIER DOT IDENTIFIER                        { ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1); ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3); $$ = create_ast_node("ACCESS_ATTR", obj, attr); }
 | expression DOT IDENTIFIER LPAREN RPAREN          { printf(" [DEBUG] Reconocido METHOD_CALL: %s.%s()\n", $1, $3); $$ = create_method_call_node($1, $3, NULL); }
@@ -170,30 +145,13 @@ expression GT expression
 | expression DIVIDE expression                    { $$ = create_ast_node("DIV", $1, $3); }
 | LPAREN expression RPAREN                        { $$ = $2; }
 | NEW IDENTIFIER LPAREN RPAREN                    { ClassNode *cls = find_class($2); if (!cls) { printf("Error: Clase '%s' no definida.\n", $2); $$ = NULL; } else { $$ = (ASTNode *)create_object_with_args(cls, $2); } }
-| NEW IDENTIFIER LPAREN expr_list RPAREN {    
-      ClassNode *cls = find_class($2);
-        if (!cls) {
-            fprintf(stderr, "Error: clase '%s' no encontrada\n", $2);
-            exit(1);
-        }
-        $$ = create_object_with_args(cls, $4);
-        free($2);
-}
+| NEW IDENTIFIER LPAREN expr_list RPAREN { ClassNode *cls = find_class($2); if (!cls) { fprintf(stderr, "Error: clase '%s' no encontrada\n", $2); exit(1); } $$ = create_object_with_args(cls, $4); free($2); }
+
 ;
 
 
 var_decl:
-LET IDENTIFIER ASSIGN IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN SEMICOLON
-      {
-        printf(" [DEBUG] Reconocido FILTER_CALL: let %s = %s(...)\n", $2, $4);
-
-        ASTNode *listExpr = $6;
-        ASTNode *lambda = $8;
-        ASTNode *filterCall = create_list_function_call_node(listExpr, $4, lambda);
-        filterCall->type = strdup("FILTER_CALL"); 
-    
-        $$ = create_var_decl_node($2, filterCall);
-      }
+    LET IDENTIFIER ASSIGN IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN SEMICOLON  { printf(" [DEBUG] Reconocido FILTER_CALL: let %s = %s(...)\n", $2, $4); ASTNode *listExpr = $6; ASTNode *lambda = $8; ASTNode *filterCall = create_list_function_call_node(listExpr, $4, lambda); filterCall->type = strdup("FILTER_CALL"); $$ = create_var_decl_node($2, filterCall); }
   | LET IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
   | STRING IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
   | VAR IDENTIFIER ASSIGN expression SEMICOLON  { printf("IMPRIMIENDO VAR \n"); $$ = create_var_decl_node($2, $4); }
@@ -203,10 +161,7 @@ LET IDENTIFIER ASSIGN IDENTIFIER LPAREN expression COMMA lambda_expression RPARE
   ;
 
 statement:
-FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET
-{     
-    $$ = create_for_in_node($4, $6, $9); }
-
+    FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_for_in_node($4, $6, $9); }
   | LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { printf(" [DEBUG] Reconocido LET con acceso a atributo: %s.%s\n", $2, $4); $$ = create_var_decl_node($2, $4); }
   | RETURN expression SEMICOLON  { $$ = create_return_node($2); }
   | var_decl
