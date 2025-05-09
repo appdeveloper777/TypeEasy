@@ -55,7 +55,7 @@
 %type <node> attribute_decl method_decl
 
 %right ARROW
-%nonassoc GT LT EQ /* tus operadores relacionales */
+%nonassoc GT LT EQ GT_EQ LT_EQ, DIFF/* tus operadores relacionales */
 
 %%
 
@@ -121,14 +121,12 @@ method_decl:
 
 expression:
 
-expression GT expression
-      {
-        $$ = create_ast_node("GT", $1, $3);
-      }
-    | expression LT expression
-      {
-        $$ = create_ast_node("LT", $1, $3);
-      }    
+    expression GT expression    { $$ = create_ast_node("GT", $1, $3); }
+| expression LT expression      { $$ = create_ast_node("LT", $1, $3); }
+| expression EQ expression      { $$ = create_ast_node("EQ", $1, $3); }
+| expression GT_EQ expression    { $$ = create_ast_node("GT_EQ", $1, $3); }
+| expression LT_EQ expression    { $$ = create_ast_node("LT_EQ", $1, $3); }
+| expression DIFF expression    { $$ = create_ast_node("DIFF", $1, $3); }
 | IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN  { printf(" [DEBUG] PERU Reconocido FUNCTION_CALL: %s(%s)\n", $1, $3); ASTNode *listExpr = create_identifier_node($1); ASTNode *filterCall = create_list_function_call_node(listExpr, $3, $5); $$ = create_var_decl_node($1, filterCall); }
 | LSBRACKET object_list RSBRACKET                       { /* printf(" [DEBUG] Reconocido OBJECT_LIST\n"); */ $$ = $2; }
 | expression DOT IDENTIFIER LPAREN lambda RPAREN        {  if (strcmp($3, "filter")==0) { $$ = create_list_function_call_node($1, $3, $5); } else { $$ = create_method_call_node($1, $3, NULL); } free($3); }

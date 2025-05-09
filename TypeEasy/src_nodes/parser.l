@@ -42,7 +42,11 @@
 "string"                { return STRING; }
 
 ">"                     { return GT; }  
-"<"                     { return LT; }
+"<"                     { return LT; } 
+"<="                    { return GT_EQ; }
+">="                    { return LT_EQ; }
+"=="                    { return EQ; }
+"!="                    { return DIFF; }
 "=>"                    { return ARROW; }
 "["                     { return LSBRACKET;}
 "]"                     { return RSBRACKET;}

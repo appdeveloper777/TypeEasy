@@ -665,7 +665,15 @@ int evaluate_expression(ASTNode *node) {
     if (strcmp(node->type, "EQ") == 0) {
         return evaluate_expression(node->left) == evaluate_expression(node->right);
     }
-    
+    if (strcmp(node->type, "GT_EQ") == 0) {
+        return evaluate_expression(node->left) <= evaluate_expression(node->right);
+    }
+    if (strcmp(node->type, "LT_EQ") == 0) {
+        return evaluate_expression(node->left) >= evaluate_expression(node->right);
+    }
+    if (strcmp(node->type, "DIFF") == 0) {
+        return evaluate_expression(node->left) != evaluate_expression(node->right);
+    }
     
     // Operaciones matemáticas
     if (strcmp(node->type, "ADD") == 0) {

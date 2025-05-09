@@ -14,7 +14,7 @@ class Producto {
 }
 
 let productos = from "productos.csv", Producto;
-let filtrados = filter(productos, p => p.precio < 3); // LINQ
+let filtrados = filter(productos, p => p.precio != 2); // LINQ
 for (let item in filtrados) {
     print("Producto:");
     item.Mostrar();

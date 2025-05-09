@@ -97,7 +97,10 @@ extern int yydebug;
     NUMBER = 298,                  /* NUMBER  */
     GT = 299,                      /* GT  */
     LT = 300,                      /* LT  */
-    EQ = 301                       /* EQ  */
+    EQ = 301,                      /* EQ  */
+    GT_EQ = 302,                   /* GT_EQ  */
+    LT_EQ = 303,                   /* LT_EQ  */
+    DIFF = 304                     /* DIFF  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -113,7 +116,7 @@ union YYSTYPE
     ASTNode *node;
     ParameterNode *pnode;
 
-#line 117 "parser.tab.h"
+#line 120 "parser.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;
