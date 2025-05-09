@@ -14,8 +14,8 @@ class Producto {
 }
 
 let productos = from "productos.csv", Producto;
-
-for (let item in productos) {
+let filtrados = filter(productos, p => p.precio > 1); // LINQ
+for (let item in filtrados) {
     print("Producto:");
     item.Mostrar();
 }
