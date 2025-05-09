@@ -200,8 +200,8 @@ void declare_variable(char *id, ASTNode *value) {
         int i = 0;
         while (cur) {
             if (strcmp(cur->type, "OBJECT") != 0) {
-                printf("Error: Solo se permiten objetos en una lista de objetos.\n");
-                return;  // ⚠️ Esto ya no cancela el incremento de var_count
+                //printf("Error: Solo se permiten objetos en una lista de objetos.\n");
+                return;  // Esto ya no cancela el incremento de var_count
             }
 
             ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
@@ -909,48 +909,7 @@ void interpret_ast(ASTNode *node) {
     if (!node || return_flag) return;
 
     if (strcmp(node->type, "FOR") == 0)                interpret_for(node);
-    else if (strcmp(node->type, "FOR_IN") == 0)        interpret_for_in(node);
-    else if (strcmp(node->type, "FILTER_CALL") == 0) {
-        printf("[DEBUG] FILTER_CALL ejecutando sape\n");
-        ASTNode *listExpr = node->left;
-        ASTNode *lambda = node->right;
-
-        Variable *v = find_variable(listExpr->id);
-        if (!v || v->vtype != VAL_OBJECT || strcmp(v->type, "LIST") != 0) {
-            printf("Error: '%s' no es una lista válida para filtrar.\n", listExpr->id);
-            return;
-        }
-
-        ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
-        ASTNode *items = listNode->left;
-        ASTNode *filteredList = NULL;
-        int count = 0;
-        for (ASTNode *item = items; item; item = item->next) {
-            if (item->type && strcmp(item->type, "OBJECT") == 0) {
-                ObjectNode *obj = (ObjectNode *)(intptr_t)item->value;
-
-                ASTNode *wrapper = malloc(sizeof(ASTNode));
-                wrapper->type = strdup("OBJECT");
-                wrapper->id = strdup(lambda->id); // variable de la lambda (ej: p)
-                wrapper->left = wrapper->right = NULL;
-                wrapper->value = (int)(intptr_t)obj;
-
-                add_or_update_variable(lambda->id, wrapper);
-
-                int result = evaluate_expression(lambda->left);
-                
-                if (result) {
-                    filteredList = append_to_list(filteredList, create_object_node(obj));  // ✅ solo OBJECT
-
-                    count++;
-                }
-            }
-        }
-        printf("[DEBUG] Total filtrados: %d\n", count);
-       
-        ASTNode *finalList = create_list_node(filteredList);
-        declare_variable(node->id, finalList);
-    }
+    else if (strcmp(node->type, "FOR_IN") == 0)        interpret_for_in(node);  
     else if (strcmp(node->type, "LIST_FUNC_CALL") == 0) interpret_list_func_call(node);
     else if (strcmp(node->type, "DATASET") == 0)        interpret_dataset(node);
     else if (strcmp(node->type, "MODEL") == 0 || strcmp(node->type, "OBJECT") == 0) interpret_model_object(node);
@@ -1188,6 +1147,36 @@ static void interpret_call_method(ASTNode *node) {
         return_node = NULL;
     }
 }
+ObjectNode* clone_object(ObjectNode *original) {
+    if (!original || !original->class) {
+        printf("[DEBUG] clone_object: objeto original inválido\n");
+        return NULL;
+    }
+
+    ObjectNode *clone = malloc(sizeof(ObjectNode));
+    clone->class = original->class;  // apunta a la misma clase
+
+    // Copiar los atributos
+    for (int i = 0; i < original->class->attr_count; i++) {
+        // Copiar metadata del atributo
+        clone->attributes[i].id = strdup(original->class->attributes[i].id);
+        clone->attributes[i].type = strdup(original->class->attributes[i].type);
+
+        // Copiar valor
+        clone->attributes[i].vtype = original->attributes[i].vtype;
+
+        if (clone->attributes[i].vtype == VAL_STRING) {
+            const char *src = original->attributes[i].value.string_value;
+            clone->attributes[i].value.string_value = src ? strdup(src) : strdup("");
+        } else if (clone->attributes[i].vtype == VAL_INT) {
+            clone->attributes[i].value.int_value = original->attributes[i].value.int_value;
+        } else {
+            printf("[DEBUG] clone_object: tipo de dato no soportado para atributo '%s'\n", clone->attributes[i].id);
+        }
+    }
+
+    return clone;
+}
 
 static void interpret_var_decl(ASTNode *node) {
 
@@ -1227,7 +1216,9 @@ static void interpret_var_decl(ASTNode *node) {
         
                     int result = evaluate_expression(lambda->left);
                     if (result) {
-                        filteredList = append_to_list(filteredList, create_object_node(obj));  // ✅ solo OBJECT
+                        //filteredList = append_to_list(filteredList, create_object_node(clone_object(obj)));
+                        filteredList = append_to_list(filteredList, create_object_node(obj));
+
 
                         count++;
                     }
@@ -1235,7 +1226,44 @@ static void interpret_var_decl(ASTNode *node) {
             }
         
             printf("[DEBUG] Total filtrados: %d\n", count);
-            ASTNode *finalList = create_list_node(filteredList);
+            ASTNode *finalList = NULL;
+            if (filteredList && strcmp(filteredList->type, "LIST") == 0) {
+                printf("[DEBUG]  Evitando doble create_list_node\n");
+                finalList = filteredList;
+            } else {
+                finalList = create_list_node(filteredList);
+            }
+            
+
+           /* printf("[DEBUG] Visualizando finalList:\n");
+
+            ASTNode *cur = finalList->left;
+            int index = 0;
+            while (cur) {
+                printf("  [ITEM %d] type = %s\n", index, cur->type);
+                if (strcmp(cur->type, "OBJECT") == 0) {
+                    ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
+                    printf("    -> clase: %s\n", obj->class->name);
+            
+                    for (int i = 0; i < obj->class->attr_count; i++) {
+                        const char *attrName = obj->class->attributes[i].id;
+                        Variable value = obj->attributes[i];
+            
+                        if (value.vtype == VAL_STRING) {
+                            printf("      - %s = \"%s\"\n", attrName, value.value.string_value);
+                        } else if (value.vtype == VAL_INT) {
+                            printf("      - %s = %d\n", attrName, value.value.int_value);
+                        } else {
+                            printf("      - %s = [tipo no soportado]\n", attrName);
+                        }
+                    }
+                }
+                cur = cur->next;
+                index++;
+            }*/
+            
+
+
             declare_variable(node->id, finalList);
             return;
         }
@@ -1325,22 +1353,22 @@ ASTNode *create_list_node(ASTNode *items) {
         return node;  // Permitir listas vacías si quieres
     }
     
-    if (strcmp(cur->type, "LIST") == 0) {
+    /*if (strcmp(cur->type, "LIST") == 0) {
         printf("Error: No se puede anidar un nodo LIST dentro de otro LIST.\n");
         return NULL;
-    }
+    }*/
     
-    if (strcmp(cur->type, "OBJECT") != 0) {
+    /*if (strcmp(cur->type, "OBJECT") != 0) {
         printf("Error: Solo se permiten objetos en una lista de objetos. Se recibió tipo: %s\n", cur->type);
         return NULL;
-    }
+    }*/
     
     while (cur) {
-        printf("[DEBUG] Nodo #%d en lista: tipo=%s\n", index, cur->type);
-        if (strcmp(cur->type, "OBJECT") != 0) {
-            printf("Error: Solo se permiten objetos en una lista de objetos.\n");
-            return NULL;
-        }
+        //rintf("[DEBUG] Nodo #%d en lista: tipo=%s\n", index, cur->type);
+       // if (strcmp(cur->type, "OBJECT") != 0) {
+       //     printf("Error: Solo se permiten objetos en una lista de objetos.\n");
+      //      return NULL;
+       // }
         cur = cur->next;
         index++;
     }
@@ -1362,26 +1390,55 @@ ASTNode *append_argument_raw(ASTNode *list, ASTNode *arg) {
 ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
     if (!item) return list;
 
+    // Protección contra LIST anidados
     if (strcmp(item->type, "LIST") == 0) {
         printf("Error: No se puede insertar un nodo LIST dentro de una lista.\n");
         return list;
     }
 
-    if (!list) {
-        item->next = NULL;
-        return create_list_node(item);
+    // Protección contra self-insertion
+    if (list == item) {
+        printf("Error: Intento de insertar la misma lista dentro de sí misma.\n");
+        return list;
     }
 
+    // Si la lista está vacía, crea una nueva
+    if (!list) {
+        // Validar que item no sea tipo LIST
+        if (strcmp(item->type, "LIST") == 0) {
+            printf("Error: No se puede crear lista con nodo LIST como item.\n");
+            return NULL;
+        }
+        item->next = NULL;
+        ASTNode *listNode = malloc(sizeof(ASTNode));
+        listNode->type = strdup("LIST");
+        listNode->left = item;
+        listNode->right = NULL;
+        listNode->next = NULL;
+        listNode->id = NULL;
+        listNode->str_value = NULL;
+        listNode->value = 0;
+        return listNode;
+    }
+    
+
+    // Validar que es una lista real
     if (strcmp(list->type, "LIST") != 0) {
         printf("Error: Se esperaba una lista de tipo LIST.\n");
         return NULL;
     }
 
+    // Encadenar correctamente
     ASTNode* current = list->left;
     if (!current) {
         list->left = item;
     } else {
+        int safety = 0;
         while (current->next) {
+            if (++safety > 1000) {
+                printf("Error: Bucle infinito detectado en append_to_list()\n");
+                break;
+            }
             current = current->next;
         }
         current->next = item;

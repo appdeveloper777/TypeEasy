@@ -19,12 +19,14 @@ let producto = new Producto("Fruta", 1);
 let productos = [
     new Producto("Pan", 1),
     new Producto("Leche", 2),
-    new Producto("Latte", 3)
+    new Producto("Latte", 3),
+    new Producto("Leche", 2),
+    new Producto("Leche", 2)
 ];
 
-//let filtrados = filter(productos, p => p.precio > 1);
-
-for (let item in productos) {
+let filtrados = filter(productos, p => p.precio > 1);
+//print(productos);
+for (let item in filtrados) {
     print("Producto: ");
     item.Mostrar();
 }
