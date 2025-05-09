@@ -42,6 +42,7 @@
 "string"                { return STRING; }
 
 ">"                     { return GT; }  
+"<"                     { return LT; }
 "=>"                    { return ARROW; }
 "["                     { return LSBRACKET;}
 "]"                     { return RSBRACKET;}
