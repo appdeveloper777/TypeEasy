@@ -123,6 +123,7 @@ void add_method_to_class(ClassNode *cls, char *method, ParameterNode *params, AS
     m->next = cls->methods;
     cls->methods = m;
 }
+ObjectNode* clone_object(ObjectNode *original);
 
 void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *body) {
     MethodNode *ctor = malloc(sizeof(MethodNode));
@@ -185,7 +186,6 @@ void declare_variable(char *id, ASTNode *value) {
 
     vars[my_index].id = strdup(id);
     vars[my_index].type = strdup(value->type);
-   // printf("[DEBUG] Lista declarada: id=%s, tipo=%s (posición %d)\n", id, value->type, my_index);
 
     if (strcmp(value->type, "STRING") == 0) {
         vars[my_index].vtype = VAL_STRING;
@@ -195,27 +195,40 @@ void declare_variable(char *id, ASTNode *value) {
         vars[my_index].vtype = VAL_OBJECT;
         vars[my_index].value.object_value = (void *)(intptr_t)value;
 
-        // Recorre la lista y llama a __constructor si hay objetos
         ASTNode *cur = value->left;
-        int i = 0;
         while (cur) {
             if (strcmp(cur->type, "OBJECT") != 0) {
-                //printf("Error: Solo se permiten objetos en una lista de objetos.\n");
-                return;  // Esto ya no cancela el incremento de var_count
+                return;
             }
 
-            ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
-            MethodNode *m = obj->class->methods;
-            while (m && strcmp(m->name, "__constructor") != 0) m = m->next;
+            // 1. Clonar el objeto original
+            ObjectNode *obj_original = (ObjectNode *)(intptr_t)cur->value;
+            ObjectNode *obj_clonado = clone_object(obj_original);
+
+            // 2. Obtener los argumentos antes de limpiar
+            ASTNode *arg = cur->left;
+
+            // 3. Reemplazar el objeto en el ASTNode
+            cur->value = (int)(intptr_t)obj_clonado;
+
+            // 4. Buscar el constructor
+            MethodNode *m = obj_clonado->class->methods;
+            while (m && strcmp(m->name, "__constructor") != 0) {
+                m = m->next;
+            }
+
             if (m) {
                 ParameterNode *p = m->params;
-                ASTNode *arg = cur->left;
+
+                // 5. Enlazar los argumentos
                 while (p && arg) {
                     ASTNode *vn = NULL;
+
                     if (arg->type && strcmp(arg->type, "STRING") == 0) {
                         vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
-                    } else if (arg->type &&
-                               (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+                    } 
+                    else if (arg->type && 
+                             (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
                         Variable *v = find_variable(arg->id);
                         if (!v) {
                             printf("Error: Variable '%s' no encontrada.\n", arg->id);
@@ -226,7 +239,8 @@ void declare_variable(char *id, ASTNode *value) {
                         } else {
                             vn = create_ast_leaf_number("INT", v->value.int_value, NULL, NULL);
                         }
-                    } else {
+                    } 
+                    else {
                         int val = evaluate_expression(arg);
                         vn = create_ast_leaf_number("INT", val, NULL, NULL);
                     }
@@ -236,8 +250,17 @@ void declare_variable(char *id, ASTNode *value) {
                     arg = arg->right;
                 }
 
-                call_method(obj, "__constructor");
+                // 6. Llamar el constructor sobre el clon
+                call_method(obj_clonado, "__constructor");
+
+               /* printf("[DEBUG] Inicializado objeto: %s = %d\n", 
+                    obj_clonado->attributes[0].value.string_value, 
+                    obj_clonado->attributes[1].value.int_value);*/
             }
+
+            // 7. Ahora que ya se usaron, limpiar los argumentos
+            cur->left = NULL;
+
             cur = cur->next;
         }
     }
@@ -250,6 +273,7 @@ void declare_variable(char *id, ASTNode *value) {
         vars[my_index].value.int_value = value->value;
     }
 }
+
 
 void add_or_update_variable(char *id, ASTNode *value) {
     if (!value) return;
@@ -1154,17 +1178,16 @@ ObjectNode* clone_object(ObjectNode *original) {
     }
 
     ObjectNode *clone = malloc(sizeof(ObjectNode));
-    clone->class = original->class;  // apunta a la misma clase
+    clone->class = original->class;
+    clone->attributes = malloc(original->class->attr_count * sizeof(Variable));
 
-    // Copiar los atributos
     for (int i = 0; i < original->class->attr_count; i++) {
-        // Copiar metadata del atributo
-        clone->attributes[i].id = strdup(original->class->attributes[i].id);
-        clone->attributes[i].type = strdup(original->class->attributes[i].type);
-
-        // Copiar valor
+        // Inicializa memoria de los metadatos
+        clone->attributes[i].id = strdup(original->attributes[i].id);
+        clone->attributes[i].type = strdup(original->attributes[i].type);
         clone->attributes[i].vtype = original->attributes[i].vtype;
 
+        // Copia valores correctamente
         if (clone->attributes[i].vtype == VAL_STRING) {
             const char *src = original->attributes[i].value.string_value;
             clone->attributes[i].value.string_value = src ? strdup(src) : strdup("");
@@ -1178,12 +1201,13 @@ ObjectNode* clone_object(ObjectNode *original) {
     return clone;
 }
 
+
 static void interpret_var_decl(ASTNode *node) {
 
     //printf("[DEBUG] interpret_var_decl para '%s'\n", node->id);
 
     if (node->left && node->left->type)
-        printf("[DEBUG] interpret_var_decl: '%s' = tipo '%s'\n", node->id, node->left->type);
+        //printf("[DEBUG] interpret_var_decl: '%s' = tipo '%s'\n", node->id, node->left->type);
 
 
         if (node->left && strcmp(node->left->type, "FILTER_CALL") == 0) {
@@ -1216,8 +1240,9 @@ static void interpret_var_decl(ASTNode *node) {
         
                     int result = evaluate_expression(lambda->left);
                     if (result) {
-                        //filteredList = append_to_list(filteredList, create_object_node(clone_object(obj)));
-                        filteredList = append_to_list(filteredList, create_object_node(obj));
+                        ObjectNode *clone = clone_object(obj);
+                        filteredList = append_to_list(filteredList, create_object_node(clone));
+                        //filteredList = append_to_list(filteredList, create_object_node(obj));
 
 
                         count++;
@@ -1225,10 +1250,10 @@ static void interpret_var_decl(ASTNode *node) {
                 }
             }
         
-            printf("[DEBUG] Total filtrados: %d\n", count);
+            //printf("[DEBUG] Total filtrados: %d\n", count);
             ASTNode *finalList = NULL;
             if (filteredList && strcmp(filteredList->type, "LIST") == 0) {
-                printf("[DEBUG]  Evitando doble create_list_node\n");
+                //printf("[DEBUG]  Evitando doble create_list_node\n");
                 finalList = filteredList;
             } else {
                 finalList = create_list_node(filteredList);
@@ -1264,7 +1289,12 @@ static void interpret_var_decl(ASTNode *node) {
             
 
 
-            declare_variable(node->id, finalList);
+            vars[var_count].id = strdup(node->id);
+            vars[var_count].type = strdup("LIST");
+            vars[var_count].vtype = VAL_OBJECT;
+            vars[var_count].value.object_value = (void *)(intptr_t)finalList;
+            var_count++;
+
             return;
         }
         
@@ -1334,7 +1364,7 @@ static void interpret_var_decl(ASTNode *node) {
 }
 
 ASTNode *create_list_node(ASTNode *items) {
-    printf("[DEBUG] create_list_node\n");
+   
     ASTNode *node = malloc(sizeof(ASTNode));
     node->type = strdup("LIST");
     node->left = items;
@@ -1388,6 +1418,7 @@ ASTNode *append_argument_raw(ASTNode *list, ASTNode *arg) {
 
 
 ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
+    
     if (!item) return list;
 
     // Protección contra LIST anidados
@@ -1441,6 +1472,19 @@ ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
             }
             current = current->next;
         }
+        //printf("[DEBUG] append_to_list: agregando item de tipo %s\n", item->type);
+        /*if (item->type && strcmp(item->type, "OBJECT") == 0) {
+            ObjectNode *obj = (ObjectNode *)(intptr_t)item->value;
+            for (int i = 0; i < obj->class->attr_count; i++) {
+                if (strcmp(obj->attributes[i].id, "nombre") == 0) {
+                    printf("         → nombre = %s\n", obj->attributes[i].value.string_value);
+                }
+                if (strcmp(obj->attributes[i].id, "precio") == 0) {
+                    printf("         → precio = %d\n", obj->attributes[i].value.int_value);
+                }
+            }S
+        }*/
+
         current->next = item;
     }
 

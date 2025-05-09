@@ -1,7 +1,13 @@
 %{
+
+    #ifdef _WIN32
+    #include <windows.h>
+    #endif
+
     #include <stdio.h>
     #include <stdlib.h>
     #include "ast.h"
+    #include <locale.h>
 
     ASTNode *root;
     extern int yylineno;
@@ -151,7 +157,7 @@ expression GT expression
 
 
 var_decl:
-    LET IDENTIFIER ASSIGN IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN SEMICOLON  { printf(" [DEBUG] Reconocido FILTER_CALL: let %s = %s(...)\n", $2, $4); ASTNode *listExpr = $6; ASTNode *lambda = $8; ASTNode *filterCall = create_list_function_call_node(listExpr, $4, lambda); filterCall->type = strdup("FILTER_CALL"); $$ = create_var_decl_node($2, filterCall); }
+    LET IDENTIFIER ASSIGN IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN SEMICOLON  { /*printf(" [DEBUG] Reconocido FILTER_CALL: let %s = %s(...)\n", $2, $4);*/ ASTNode *listExpr = $6; ASTNode *lambda = $8; ASTNode *filterCall = create_list_function_call_node(listExpr, $4, lambda); filterCall->type = strdup("FILTER_CALL"); $$ = create_var_decl_node($2, filterCall); }
   | LET IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
   | STRING IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
   | VAR IDENTIFIER ASSIGN expression SEMICOLON  { printf("IMPRIMIENDO VAR \n"); $$ = create_var_decl_node($2, $4); }
@@ -238,7 +244,7 @@ arg_list:
 object_list
     : object_expression
       {
-        printf(" [DEBUG] eeeee Reconocido OBJECT_EXPRESSION\n");
+        /*printf(" [DEBUG] Reconocido OBJECT_EXPRESSION\n");*/
          $$ = create_list_node($1); 
     } 
     | object_list COMMA object_expression
@@ -288,6 +294,13 @@ void yyerror(const char *s) {
 int main(int argc, char *argv[]) {
 
     //yydebug = 1;
+    setlocale(LC_ALL, "");
+
+    #ifdef _WIN32
+    // Forzar consola a modo UTF-8
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    #endif
 
     // Flags para el modo de ejecución
     int interpret_mode = 0;
@@ -347,3 +360,4 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
+
