@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-
+#include "bytecode.h"
 // ====================== CONSTANTES Y ESTRUCTURAS GLOBALES ======================
 #define MAX_CLASSES 50
 #define MAX_VARS 100
@@ -496,9 +496,9 @@ ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *c
     update_body->right = body;
     
     node->right->right = update_body;
-    
     return node;
 }
+
 
 ASTNode* create_layer_node(const char* layer_type, int units, const char* activation) {
     ASTNode* node = malloc(sizeof(ASTNode));
@@ -937,10 +937,19 @@ ASTNode *create_object_node(ObjectNode *obj) {
 }
 
 
-void interpret_ast(ASTNode *node) {
+void interpret_ast(ASTNode *node) {    
     if (!node || return_flag) return;
 
-    if (strcmp(node->type, "FOR") == 0)                interpret_for(node);
+    if (strcmp(node->type, "FOR") == 0)               {
+        
+        interpret_for(node);
+        //printf("[DEBUG] Ejecutando FOR con BYTECODE\n");
+
+        /*clear_bytecode();                // limpia el array de instrucciones
+        compile(node);                   // compila ese FOR y sus FOR anidados
+        emit(OP_HALT, 0, NULL, NULL);    // marca el fin del bytecode
+        run_bytecode(); */
+    }
     else if (strcmp(node->type, "FOR_IN") == 0)        interpret_for_in(node);  
     else if (strcmp(node->type, "LIST_FUNC_CALL") == 0) interpret_list_func_call(node);
     else if (strcmp(node->type, "DATASET") == 0)        interpret_dataset(node);
@@ -1530,7 +1539,7 @@ ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
 
     // Validar que es una lista real
     if (strcmp(list->type, "LIST") != 0) {
-        printf("Error: Se esperaba una lista de tipo LIST.\n");
+        //printf("Error: Se esperaba una lista de tipo LIST.\n");
         return NULL;
     }
 
@@ -1541,7 +1550,7 @@ ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
     } else {
         int safety = 0;
         while (current->next) {
-            if (++safety > 1000) {
+            if (++safety > 1000000) {
                 printf("Error: Bucle infinito detectado en append_to_list()\n");
                 break;
             }
@@ -1648,7 +1657,7 @@ static void interpret_assign(ASTNode *node) {
     ASTNode *var_node = node->left;
     ASTNode *expr_node = node->right;
     if (!var_node || !expr_node) { printf("Error: Asignación inválida.\n"); return; }
-    printf("Declaring interpret_assign: '%s'\n", var_node->id);
+    //printf("Declaring interpret_assign: '%s'\n", var_node->id);
     int result = evaluate_expression(expr_node);    
     ASTNode *value_node = create_ast_leaf("INT", result, NULL, NULL);
     add_or_update_variable(var_node->id, value_node);

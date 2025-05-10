@@ -11,6 +11,8 @@ FLEX_C = lex.yy.c
 BISON_OBJ = parser.tab.o
 FLEX_OBJ = lex.yy.o
 AST_OBJ = ast.o
+BYTECODE_OBJ = bytecode.o 
+STRVARS_OBJ = strvars.o
 
 # Motor EasySpark
 SPARK_DIR = src_nodes/easyspark
@@ -29,7 +31,7 @@ all: $(EXEC)
 
 # Compilador TypeEasy
 $(BISON_C) $(BISON_H): $(BISON_FILE)
-	bison -d -o $(BISON_C) $(BISON_FILE)
+	bison -d -o $(BISON_C) $(BISON_FILE) --warnings=none
 
 $(FLEX_C): $(FLEX_FILE)
 	flex -o $(FLEX_C) $(FLEX_FILE)
@@ -41,10 +43,11 @@ $(FLEX_OBJ): $(FLEX_C)
 	$(CC) $(CFLAGS) -c $(FLEX_C) -o $(FLEX_OBJ)
 
 $(AST_OBJ): $(AST_FILE)
-	$(CC) $(CFLAGS) -c $(AST_FILE) -o $(AST_OBJ)
+	$(CC) $(CFLAGS) -fno-semantic-interposition -c $(AST_FILE) -o $(AST_OBJ)
 
-$(EXEC): $(BISON_OBJ) $(FLEX_OBJ) $(AST_OBJ)
-	$(CC) $(CFLAGS) -o $(EXEC) $(BISON_OBJ) $(FLEX_OBJ) $(AST_OBJ)
+$(EXEC): $(BISON_OBJ) $(FLEX_OBJ) $(AST_OBJ) $(BYTECODE_OBJ) $(STRVARS_OBJ)
+	$(CC) $(CFLAGS) -o $(EXEC) $(BISON_OBJ) $(FLEX_OBJ) $(AST_OBJ) $(BYTECODE_OBJ) $(STRVARS_OBJ) 
+
 
 # EasySpark - compilar una vez
 $(SPARK_OBJ): $(SPARK_DIR)/dataframe.cpp $(SPARK_DIR)/dataframe.hpp

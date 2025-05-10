@@ -4,6 +4,7 @@
     #include <stdlib.h>
     #include "ast.h"
     #include <locale.h>
+    #include <time.h>
 
     ASTNode *root;
     extern int yylineno;
@@ -181,7 +182,9 @@ statement:
   | IDENTIFIER ASSIGN expression SEMICOLON                      { $$ = create_ast_node("ASSIGN", create_ast_leaf("VAR",0,NULL,$1), $3); }
   | PRINT LPAREN expression RPAREN SEMICOLON                    { $$ = create_ast_node("PRINT", $3, NULL); }
   | PRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON     { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("PRINT", access, NULL); }
-  | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf("NUMBER",$5,NULL,NULL), $7, $9, $12); }
+  | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET  { 
+    printf("[DEBUG] Reconocido FOR de %s\n", $3);
+    $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf("NUMBER",$5,NULL,NULL), $7, $9, $12); }
   | NEW IDENTIFIER LPAREN RPAREN SEMICOLON                          { ClassNode *cls = find_class($2); if (!cls) { printf("Error: Clase '%s' no definida.\n", $2); $$ = NULL; } else { $$ = (ASTNode *)create_object_with_args(cls, NULL); printf("[DEBUG] Creación de objeto: %s\n", $2); } }
   | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN RPAREN SEMICOLON    { ClassNode *cls = find_class($5); if (!cls) { printf("Error: Clase '%s' no definida.\n", $5); $$ = NULL; } else { $$ = create_var_decl_node($2, create_object_with_args(cls, NULL)); } }
   | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  { ClassNode *cls = find_class($5); if (!cls) { printf("Error: Clase '%s' no definida.\n", $5); $$ = NULL; } else { $$ = create_var_decl_node($2, create_object_with_args(cls, $7)); } }
@@ -299,14 +302,51 @@ void yyerror(const char *s) {
     fprintf(stderr, "Error: %s en la línea %d (token: '%s')\n", s, yylineno, yytext);
 }
 
+void print_ast(ASTNode *node, int indent) {
+    if (!node) return;
+
+    for (int i = 0; i < indent; i++) printf("  ");
+
+    if (node->type && strcmp(node->type, "FOR") == 0) {
+        printf(">>> FOR DETECTADO <<<\n");
+    }
+    
+
+    if (node->type) {
+        printf("Node type: %s", node->type);
+    } else {
+        printf("Node");
+    }
+
+   // if (node->varname)
+      //  printf(", varname: %s", node->varname);
+
+    if (node->value)
+        printf(", value: %d", node->value);
+
+    if (node->str_value)
+        printf(", str: %s", node->str_value);
+
+    if (node->id)
+        printf(", id: %s", node->id);
+
+    printf("\n");
+
+    print_ast(node->left, indent + 1);
+    print_ast(node->right, indent + 1);
+}
+
 
 int main(int argc, char *argv[]) {
 
     //yydebug = 1;
   
+    clock_t inicio = clock();
+    
 
     // Flags para el modo de ejecución
     int interpret_mode = 0;
+    int use_bytecode = 0;
     if (argc < 2) {
         printf("Uso: %s <archivo.te> [--interpret]\n", argv[0]);
         return 1;
@@ -315,6 +355,10 @@ int main(int argc, char *argv[]) {
     // Verificar si se pasó el flag --interpret
     if (argc == 3 && strcmp(argv[2], "--run") == 0) {
         interpret_mode = 1;
+    }
+
+    if (argc == 3 && strcmp(argv[2], "--bytecode") == 0) {
+        use_bytecode = 1;
     }
 
     FILE *file = fopen(argv[1], "r");
@@ -326,6 +370,9 @@ int main(int argc, char *argv[]) {
     yyin = file;
     int parse_result = yyparse();
     fclose(file);
+
+    printf("[DEBUG] AST construido:\n");
+    //print_ast(root, 0);  // <- muestra el árbol
 
     if (parse_result != 0) {
         printf(" Error al parsear el archivo.\n");
@@ -349,17 +396,35 @@ int main(int argc, char *argv[]) {
 
     }
 
-
-    //if (interpret_mode) {
-        //  Ejecutar directamente el AST
+    
+    if (use_bytecode) {
+        printf("[DEBUG] Ejecutando en modo Bytecode\n");
+        compile_to_bytecode(root);
+        run_bytecode();
+    } else {
+        printf("[DEBUG] Ejecutando con AST normal\n");
         if (root) {
             interpret_ast(root);
             free_ast(root);
         }
+    }
+
+
+    //if (interpret_mode) {
+        //  Ejecutar directamente el AST
+     //   if (root) {
+      //      interpret_ast(root);
+      //      free_ast(root);
+      //  }
    // } else {
         // Compilar y ejecutar el código generado
 
    // }
+
+    clock_t fin = clock();
+    double tiempo = (double)(fin - inicio) / CLOCKS_PER_SEC;
+    printf("Tiempo de ejecución: %.6f segundos\n", tiempo);
+
 
     return 0;
 }
