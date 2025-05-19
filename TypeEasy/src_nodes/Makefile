@@ -11,7 +11,6 @@ FLEX_C = lex.yy.c
 BISON_OBJ = parser.tab.o
 FLEX_OBJ = lex.yy.o
 AST_OBJ = ast.o
-BYTECODE_OBJ = bytecode.o 
 STRVARS_OBJ = strvars.o
 
 # Motor EasySpark
@@ -45,9 +44,8 @@ $(FLEX_OBJ): $(FLEX_C)
 $(AST_OBJ): $(AST_FILE)
 	$(CC) $(CFLAGS) -fno-semantic-interposition -c $(AST_FILE) -o $(AST_OBJ)
 
-$(EXEC): $(BISON_OBJ) $(FLEX_OBJ) $(AST_OBJ) $(BYTECODE_OBJ) $(STRVARS_OBJ)
-	$(CC) $(CFLAGS) -o $(EXEC) $(BISON_OBJ) $(FLEX_OBJ) $(AST_OBJ) $(BYTECODE_OBJ) $(STRVARS_OBJ) 
-
+$(EXEC): $(BISON_OBJ) $(FLEX_OBJ) $(AST_OBJ) $(STRVARS_OBJ)
+	$(CC) $(CFLAGS) -o $(EXEC) $(BISON_OBJ) $(FLEX_OBJ) $(AST_OBJ) $(STRVARS_OBJ)
 
 # EasySpark - compilar una vez
 $(SPARK_OBJ): $(SPARK_DIR)/dataframe.cpp $(SPARK_DIR)/dataframe.hpp
@@ -68,4 +66,4 @@ full: $(EXEC)
 
 clean:
 	rm -f $(EXEC) $(GEN_BIN) $(GEN_CPP) $(BISON_C) $(BISON_H) $(FLEX_C) \
-	      $(BISON_OBJ) $(FLEX_OBJ) $(AST_OBJ) $(SPARK_OBJ)
+	      $(BISON_OBJ) $(FLEX_OBJ) $(AST_OBJ) $(STRVARS_OBJ) $(SPARK_OBJ)

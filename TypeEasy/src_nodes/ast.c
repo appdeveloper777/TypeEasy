@@ -1550,7 +1550,7 @@ ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
     } else {
         int safety = 0;
         while (current->next) {
-            if (++safety > 1000000) {
+            if (++safety > 10000000) {
                 printf("Error: Bucle infinito detectado en append_to_list()\n");
                 break;
             }

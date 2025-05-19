@@ -8,7 +8,7 @@
 
     ASTNode *root;
     extern int yylineno;
-    FILE *yyin;
+    extern FILE *yyin;
     void yyerror(const char *s);
     ClassNode *last_class = NULL;
     int yylex();
@@ -399,8 +399,8 @@ int main(int argc, char *argv[]) {
     
     if (use_bytecode) {
         printf("[DEBUG] Ejecutando en modo Bytecode\n");
-        compile_to_bytecode(root);
-        run_bytecode();
+       // compile_to_bytecode(root);
+       // run_bytecode();
     } else {
         printf("[DEBUG] Ejecutando con AST normal\n");
         if (root) {
