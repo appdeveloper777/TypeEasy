@@ -1,0 +1,11 @@
+version: '2.3'
+
+services:
+  typeeasy:
+    build:
+      context: .
+      dockerfile: src_nodes/Dockerfile
+    volumes:
+      - ./typeeasycode:/code
+    working_dir: /code
+    entrypoint: ["/typeeasy/typeeasy"]
