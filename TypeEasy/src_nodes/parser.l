@@ -8,7 +8,8 @@
 
 %%
 
-[ \t\r\n]+              ;    
+[ \t\r]+                ;
+\n                      { yylineno++; }    
 
 "//".*                  {  }
 "/*"([^*]|\*+[^*/])*\*+"/"  {  }
@@ -75,6 +76,10 @@
 [0-9]+                  {
                             yylval.ival = atoi(yytext);
                             return NUMBER;
+                        }
+[0-9]+\.[0-9]+          {
+                            yylval.sval = strdup(yytext);
+                            return FLOAT_LITERAL;
                         }
 
 

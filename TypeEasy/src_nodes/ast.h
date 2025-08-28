@@ -48,6 +48,7 @@ typedef struct ASTNode {
 typedef enum {
     VAL_INT,
     VAL_STRING,
+    VAL_FLOAT,
     VAL_OBJECT
 } ValueType;
 
@@ -60,6 +61,7 @@ typedef struct Variable {
     union {
         int int_value;
         char *string_value;
+        double float_value;
         ObjectNode *object_value;
     } value; // << este nombre ES IMPORTANTE
 } Variable;
@@ -156,5 +158,17 @@ void add_method_to_class(ClassNode *class,
 ObjectNode *create_object(ClassNode *class);
 void call_method(ObjectNode *obj, char *method);
 ClassNode *find_class(char *name);
+
+// Funciones que faltaban en las declaraciones
+ASTNode *create_var_decl_node(char *id, ASTNode *value);
+ASTNode *create_string_node(char *value);
+ASTNode *create_int_node(int value);
+ASTNode *create_float_node(int value);
+ASTNode *create_train_node(const char *model_name, const char *dataset_name, ASTNode *options);
+ASTNode *create_train_option_node(const char *option_name, int value);
+
+// Funciones adicionales que faltan
+double evaluate_expression(ASTNode *node);
+void generate_plot(double *values, int count);
 
 #endif
