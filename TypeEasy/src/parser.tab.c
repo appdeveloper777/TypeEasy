@@ -123,30 +123,30 @@ enum yysymbol_kind_t
   YYSYMBOL_YYerror = 1,                    /* error  */
   YYSYMBOL_YYUNDEF = 2,                    /* "invalid token"  */
   YYSYMBOL_NUMBER = 3,                     /* NUMBER  */
-  YYSYMBOL_IDENTIFIER = 4,                 /* IDENTIFIER  */
-  YYSYMBOL_VAR = 5,                        /* VAR  */
-  YYSYMBOL_PRINT = 6,                      /* PRINT  */
-  YYSYMBOL_ASSIGN = 7,                     /* ASSIGN  */
-  YYSYMBOL_LPAREN = 8,                     /* LPAREN  */
-  YYSYMBOL_RPAREN = 9,                     /* RPAREN  */
-  YYSYMBOL_SEMICOLON = 10,                 /* SEMICOLON  */
-  YYSYMBOL_PLUS = 11,                      /* PLUS  */
-  YYSYMBOL_MINUS = 12,                     /* MINUS  */
-  YYSYMBOL_MUL = 13,                       /* MUL  */
-  YYSYMBOL_DIV = 14,                       /* DIV  */
-  YYSYMBOL_GREATERTHAN = 15,               /* GREATERTHAN  */
-  YYSYMBOL_FLOAT = 16,                     /* FLOAT  */
-  YYSYMBOL_FLOAT_LITERAL = 17,             /* FLOAT_LITERAL  */
+  YYSYMBOL_FLOAT_LITERAL = 4,              /* FLOAT_LITERAL  */
+  YYSYMBOL_IDENTIFIER = 5,                 /* IDENTIFIER  */
+  YYSYMBOL_STRING_LITERAL = 6,             /* STRING_LITERAL  */
+  YYSYMBOL_VAR = 7,                        /* VAR  */
+  YYSYMBOL_PRINT = 8,                      /* PRINT  */
+  YYSYMBOL_ASSIGN = 9,                     /* ASSIGN  */
+  YYSYMBOL_LPAREN = 10,                    /* LPAREN  */
+  YYSYMBOL_RPAREN = 11,                    /* RPAREN  */
+  YYSYMBOL_SEMICOLON = 12,                 /* SEMICOLON  */
+  YYSYMBOL_PLUS = 13,                      /* PLUS  */
+  YYSYMBOL_MINUS = 14,                     /* MINUS  */
+  YYSYMBOL_MUL = 15,                       /* MUL  */
+  YYSYMBOL_DIV = 16,                       /* DIV  */
+  YYSYMBOL_GREATERTHAN = 17,               /* GREATERTHAN  */
   YYSYMBOL_LBRACKET = 18,                  /* LBRACKET  */
   YYSYMBOL_RBRACKET = 19,                  /* RBRACKET  */
   YYSYMBOL_COMMA = 20,                     /* COMMA  */
   YYSYMBOL_STRING = 21,                    /* STRING  */
-  YYSYMBOL_STRING_LITERAL = 22,            /* STRING_LITERAL  */
-  YYSYMBOL_FOR = 23,                       /* FOR  */
+  YYSYMBOL_FOR = 22,                       /* FOR  */
+  YYSYMBOL_FLOAT = 23,                     /* FLOAT  */
   YYSYMBOL_YYACCEPT = 24,                  /* $accept  */
   YYSYMBOL_program = 25,                   /* program  */
-  YYSYMBOL_statement = 26,                 /* statement  */
-  YYSYMBOL_statement_body = 27,            /* statement_body  */
+  YYSYMBOL_statement_list = 26,            /* statement_list  */
+  YYSYMBOL_statement = 27,                 /* statement  */
   YYSYMBOL_expression = 28                 /* expression  */
 };
 typedef enum yysymbol_kind_t yysymbol_kind_t;
@@ -473,7 +473,7 @@ union yyalloc
 #endif /* !YYCOPY_NEEDED */
 
 /* YYFINAL -- State number of the termination state.  */
-#define YYFINAL  2
+#define YYFINAL  16
 /* YYLAST -- Last index in YYTABLE.  */
 #define YYLAST   87
 
@@ -533,7 +533,7 @@ static const yytype_int8 yytranslate[] =
 
 #if YYDEBUG
 /* YYRLINE[YYN] -- Source line where rule number YYN was defined.  */
-static const yytype_uint8 yyrline[] =
+static const yytype_int8 yyrline[] =
 {
        0,    53,    53,    54,    58,    62,    66,    70,    79,   100,
      116,   122,   128,   134,   140,   148,   152,   166,   167,   168,
@@ -553,11 +553,11 @@ static const char *yysymbol_name (yysymbol_kind_t yysymbol) YY_ATTRIBUTE_UNUSED;
    First, the terminals, then, starting at YYNTOKENS, nonterminals.  */
 static const char *const yytname[] =
 {
-  "\"end of file\"", "error", "\"invalid token\"", "NUMBER", "IDENTIFIER",
-  "VAR", "PRINT", "ASSIGN", "LPAREN", "RPAREN", "SEMICOLON", "PLUS",
-  "MINUS", "MUL", "DIV", "GREATERTHAN", "FLOAT", "FLOAT_LITERAL",
-  "LBRACKET", "RBRACKET", "COMMA", "STRING", "STRING_LITERAL", "FOR",
-  "$accept", "program", "statement", "statement_body", "expression", YY_NULLPTR
+  "\"end of file\"", "error", "\"invalid token\"", "NUMBER",
+  "FLOAT_LITERAL", "IDENTIFIER", "STRING_LITERAL", "VAR", "PRINT",
+  "ASSIGN", "LPAREN", "RPAREN", "SEMICOLON", "PLUS", "MINUS", "MUL", "DIV",
+  "GREATERTHAN", "LBRACKET", "RBRACKET", "COMMA", "STRING", "FOR", "FLOAT",
+  "$accept", "program", "statement_list", "statement", "expression", YY_NULLPTR
 };
 
 static const char *

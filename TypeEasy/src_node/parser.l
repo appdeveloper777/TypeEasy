@@ -1,10 +1,9 @@
 %{
-#include "variables.h"
-#include "parser.tab.h"
 #include <stdio.h>
 #include <stdlib.h>
-
-
+#include <string.h>   
+#include "ast.h"
+#include "parser.tab.h"
 %}
 
 %%

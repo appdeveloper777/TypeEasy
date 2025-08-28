@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C" 
 #endif
 
 #define CSV_MAJOR 3
