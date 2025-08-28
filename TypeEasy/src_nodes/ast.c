@@ -696,8 +696,8 @@ double evaluate_expression(ASTNode *node) {
     } else if (strcmp(node->type, "MUL") == 0) {
         return evaluate_expression(node->left) * evaluate_expression(node->right);
     } else if (strcmp(node->type, "DIV") == 0) {
-        int right = evaluate_expression(node->right);
-        if (right == 0) {
+        double right = evaluate_expression(node->right);
+        if (right == 0.0) {
             printf("Error: División por cero.\n");
             return 0;
         }
