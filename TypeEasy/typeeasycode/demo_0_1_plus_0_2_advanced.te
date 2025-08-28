@@ -1,0 +1,6 @@
+float a = 0.1;
+float b = 0.2;
+print(a);
+print(b);
+float suma = a + b;
+print(suma);

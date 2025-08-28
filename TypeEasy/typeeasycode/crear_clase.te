@@ -1,0 +1,42 @@
+/* ***********************
+Esta es mi clase DE LOS DIOSES
+**************************/
+class Person {
+    edad : int;  
+    nombre : string;
+    company : string;
+    __constructor(_edad : int, _nombre : string, _company : string) {        
+        this.company = _company;                 
+        this.edad = _edad;
+        this.nombre = _nombre;        
+    }
+    Imprimir(p_edad : int) {          
+        print("MI EDAD ES: ");
+        print(this.edad);
+        print("MI NOMBRE ES: ");
+        print(this.nombre);
+        print("MI EMPRESA ES: ");
+        print(this.company);
+    }  
+    
+    Saludar() {           
+        string test = "hola";
+        return test;   
+    }
+
+    Contar(){
+        int numero = 2 * 2  / 2 + 1 + 1 + 1 - 1 ;
+        return numero;
+    }
+}
+int mi_edad = 36;
+string mi_nombre = "Fernando Ingunza";
+string mi_empresa = "Google";
+let obj = new Person(mi_edad, mi_nombre, mi_empresa);
+string saludarResult = obj.Saludar();
+int contarResult = obj.Contar();
+//print(obj.nombre);
+obj.Imprimir(12);
+//print(saludarResult);
+//print(contarResult);
+

@@ -1,0 +1,6 @@
+// Este archivo tiene errores de sintaxis graves
+string nombre = "Hola mundo";
+print(nombre)  // Falta punto y coma
+var numero = 42;  // Error: debería ser var numero = 42
+float decimal = 0.1;
+print(decimal);

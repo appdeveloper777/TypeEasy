@@ -83,15 +83,16 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 16 "parser.y"
+#line 25 "parser.y"
 
-    int   ival;   
-    float fval;  
-    char* id;     
-    char* sval;   
-    Node* node;   
+    int num;
+    float fval;
+    char* sval;
+    char* id;
+    Statement stmt; // Nuevo tipo para declaraciones
+    StatementBody body; // Nuevo tipo para cuerpos de declaraciones
 
-#line 95 "parser.tab.h"
+#line 96 "parser.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

@@ -1,0 +1,14 @@
+
+dataset train_data from "train.csv";
+
+model myModel { 
+    layer Dense(129, relu);
+    layer Dense(10, softmax);
+}
+
+train(myModel, train_data, epochs=25);
+
+
+/*var sample_input = "entrada";
+predict(myModel, sample_input);
+print(sample_input);*/
