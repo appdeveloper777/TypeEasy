@@ -264,6 +264,17 @@ void declare_variable(char *id, ASTNode *value) {
             cur = cur->next;
         }
     }
+    else if (strcmp(value->type, "FLOAT") == 0) {
+        vars[my_index].vtype = VAL_FLOAT;
+        vars[my_index].value.float_value = atof(value->str_value);
+    }
+    else if (strcmp(value->type, "ADD") == 0 || strcmp(value->type, "SUB") == 0 || 
+             strcmp(value->type, "MUL") == 0 || strcmp(value->type, "DIV") == 0) {
+        // Evaluar la expresión y almacenar como float
+        double result = evaluate_expression(value);
+        vars[my_index].vtype = VAL_FLOAT;
+        vars[my_index].value.float_value = result;
+    }
     else if (strcmp(value->type, "OBJECT") == 0) {
         vars[my_index].vtype = VAL_OBJECT;
         vars[my_index].value.object_value = (ObjectNode *)(intptr_t)value->value;
@@ -634,7 +645,7 @@ ParameterNode *add_parameter(ParameterNode *list, char *name, char *type) {
 
 // ====================== INTERPRETACIÓN DEL AST ======================
 
-int evaluate_expression(ASTNode *node) {
+double evaluate_expression(ASTNode *node) {
     if (!node) return 0;
 
     // Variable
@@ -643,8 +654,10 @@ int evaluate_expression(ASTNode *node) {
         if (var) {
             if (var->vtype == VAL_INT) {
                 return var->value.int_value;
+            } else if (var->vtype == VAL_FLOAT) {
+                return var->value.float_value;
             } else if (var->vtype == VAL_STRING) {
-                printf("Error: Variable '%s' es ddd string, no se puede evaluar como número.\n", node->id);
+                printf("Error: Variable '%s' es string, no se puede evaluar como número.\n", node->id);
                 return 0;
             } else {
                 printf("Error: Variable '%s' es un objeto, no se puede evaluar como número.\n", node->id);
@@ -683,8 +696,8 @@ int evaluate_expression(ASTNode *node) {
     } else if (strcmp(node->type, "MUL") == 0) {
         return evaluate_expression(node->left) * evaluate_expression(node->right);
     } else if (strcmp(node->type, "DIV") == 0) {
-        int right = evaluate_expression(node->right);
-        if (right == 0) {
+        double right = evaluate_expression(node->right);
+        if (right == 0.0) {
             printf("Error: División por cero.\n");
             return 0;
         }
@@ -715,7 +728,7 @@ int evaluate_expression(ASTNode *node) {
     
 
     // Número literal
-    return node->value;
+    return (double)node->value;
 }
 
 void call_method(ObjectNode *obj, char *method) {
@@ -991,7 +1004,7 @@ double evaluate_number(ASTNode *node) {
     }
 
     if (strcmp(node->type, "FLOAT") == 0) {
-        return node->value;
+        return atof(node->str_value);
     }
 
     if (strcmp(node->type, "EXPRESSION") == 0) {
@@ -1740,6 +1753,8 @@ static void interpret_print(ASTNode *node) {
         printf("Output: %s\n", v->value.string_value);
     else if (v->vtype == VAL_INT)
         printf("Output: %d\n", v->value.int_value);
+    else if (v->vtype == VAL_FLOAT)
+        printf("Output: %f\n", v->value.float_value);
     else
         printf("Output: Objeto de clase: %s\n", v->value.object_value->class->name);
 }

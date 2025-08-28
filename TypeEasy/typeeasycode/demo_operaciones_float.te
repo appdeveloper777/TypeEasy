@@ -1,0 +1,29 @@
+// Prueba de todas las operaciones matemáticas con float
+float a = 0.1;
+float b = 0.2;
+float c = 0.3;
+
+// Operaciones básicas
+print(a);  // 0.1
+print(b);  // 0.2
+print(c);  // 0.3
+
+// Suma
+float suma = a + b;
+print(suma);  // 0.1 + 0.2 = 0.3
+
+// Resta
+float resta = c - a;
+print(resta);  // 0.3 - 0.1 = 0.2
+
+// Multiplicación
+float multiplicacion = a * b;
+print(multiplicacion);  // 0.1 * 0.2 = 0.02
+
+// División
+float division = c / a;
+print(division);  // 0.3 / 0.1 = 3.0
+
+// Operaciones combinadas
+float combinada = a + b * c;
+print(combinada);  // 0.1 + (0.2 * 0.3) = 0.1 + 0.06 = 0.16

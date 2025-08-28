@@ -57,50 +57,51 @@ extern int yydebug;
     INT = 258,                     /* INT  */
     STRING = 259,                  /* STRING  */
     FLOAT = 260,                   /* FLOAT  */
-    LAYER = 261,                   /* LAYER  */
-    LSBRACKET = 262,               /* LSBRACKET  */
-    RSBRACKET = 263,               /* RSBRACKET  */
-    DATASET = 264,                 /* DATASET  */
-    MODEL = 265,                   /* MODEL  */
-    TRAIN = 266,                   /* TRAIN  */
-    PREDICT = 267,                 /* PREDICT  */
-    FROM = 268,                    /* FROM  */
-    PLOT = 269,                    /* PLOT  */
-    ARROW = 270,                   /* ARROW  */
-    IN = 271,                      /* IN  */
-    LAMBDA = 272,                  /* LAMBDA  */
-    VAR = 273,                     /* VAR  */
-    ASSIGN = 274,                  /* ASSIGN  */
-    PRINT = 275,                   /* PRINT  */
-    FOR = 276,                     /* FOR  */
-    LPAREN = 277,                  /* LPAREN  */
-    RPAREN = 278,                  /* RPAREN  */
-    SEMICOLON = 279,               /* SEMICOLON  */
-    CONCAT = 280,                  /* CONCAT  */
-    PLUS = 281,                    /* PLUS  */
-    MINUS = 282,                   /* MINUS  */
-    MULTIPLY = 283,                /* MULTIPLY  */
-    DIVIDE = 284,                  /* DIVIDE  */
-    LBRACKET = 285,                /* LBRACKET  */
-    RBRACKET = 286,                /* RBRACKET  */
-    CLASS = 287,                   /* CLASS  */
-    CONSTRUCTOR = 288,             /* CONSTRUCTOR  */
-    THIS = 289,                    /* THIS  */
-    NEW = 290,                     /* NEW  */
-    LET = 291,                     /* LET  */
-    COLON = 292,                   /* COLON  */
-    COMMA = 293,                   /* COMMA  */
-    DOT = 294,                     /* DOT  */
-    RETURN = 295,                  /* RETURN  */
-    IDENTIFIER = 296,              /* IDENTIFIER  */
-    STRING_LITERAL = 297,          /* STRING_LITERAL  */
-    NUMBER = 298,                  /* NUMBER  */
-    GT = 299,                      /* GT  */
-    LT = 300,                      /* LT  */
-    EQ = 301,                      /* EQ  */
-    GT_EQ = 302,                   /* GT_EQ  */
-    LT_EQ = 303,                   /* LT_EQ  */
-    DIFF = 304                     /* DIFF  */
+    FLOAT_LITERAL = 261,           /* FLOAT_LITERAL  */
+    LAYER = 262,                   /* LAYER  */
+    LSBRACKET = 263,               /* LSBRACKET  */
+    RSBRACKET = 264,               /* RSBRACKET  */
+    DATASET = 265,                 /* DATASET  */
+    MODEL = 266,                   /* MODEL  */
+    TRAIN = 267,                   /* TRAIN  */
+    PREDICT = 268,                 /* PREDICT  */
+    FROM = 269,                    /* FROM  */
+    PLOT = 270,                    /* PLOT  */
+    ARROW = 271,                   /* ARROW  */
+    IN = 272,                      /* IN  */
+    LAMBDA = 273,                  /* LAMBDA  */
+    VAR = 274,                     /* VAR  */
+    ASSIGN = 275,                  /* ASSIGN  */
+    PRINT = 276,                   /* PRINT  */
+    FOR = 277,                     /* FOR  */
+    LPAREN = 278,                  /* LPAREN  */
+    RPAREN = 279,                  /* RPAREN  */
+    SEMICOLON = 280,               /* SEMICOLON  */
+    CONCAT = 281,                  /* CONCAT  */
+    PLUS = 282,                    /* PLUS  */
+    MINUS = 283,                   /* MINUS  */
+    MULTIPLY = 284,                /* MULTIPLY  */
+    DIVIDE = 285,                  /* DIVIDE  */
+    LBRACKET = 286,                /* LBRACKET  */
+    RBRACKET = 287,                /* RBRACKET  */
+    CLASS = 288,                   /* CLASS  */
+    CONSTRUCTOR = 289,             /* CONSTRUCTOR  */
+    THIS = 290,                    /* THIS  */
+    NEW = 291,                     /* NEW  */
+    LET = 292,                     /* LET  */
+    COLON = 293,                   /* COLON  */
+    COMMA = 294,                   /* COMMA  */
+    DOT = 295,                     /* DOT  */
+    RETURN = 296,                  /* RETURN  */
+    IDENTIFIER = 297,              /* IDENTIFIER  */
+    STRING_LITERAL = 298,          /* STRING_LITERAL  */
+    NUMBER = 299,                  /* NUMBER  */
+    GT = 300,                      /* GT  */
+    LT = 301,                      /* LT  */
+    EQ = 302,                      /* EQ  */
+    GT_EQ = 303,                   /* GT_EQ  */
+    LT_EQ = 304,                   /* LT_EQ  */
+    DIFF = 305                     /* DIFF  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -116,7 +117,7 @@ union YYSTYPE
     ASTNode *node;
     ParameterNode *pnode;
 
-#line 120 "parser.tab.h"
+#line 121 "parser.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;
