@@ -71,7 +71,7 @@ docker compose run --rm typeeasy main.te
 Ejemplo: `typeeasycode/hola.te`
 
 ```te
-imprimir("¡Hola, mundo!")
+print("¡Hola, mundo!");
 ```
 
 > Asegúrate de guardar el archivo con extensión `.te`
