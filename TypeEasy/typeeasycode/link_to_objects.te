@@ -13,129 +13,22 @@ class Producto {
   }
 }
 
-int i = 0;
-let productos = from "productos_1000000.csv", Producto;
-let productos2 = productos;
-//let productos3 = from "productos_1000000.csv", Producto;
-//let productos4 = from "productos_1000000.csv", Producto;
-//let productos5 = from "productos_1000000.csv", Producto;
-//let productos6 = from "productos_1000000.csv", Producto;
+let productos_del_papa_leon = [
+    new Producto("Chocolate", 1),
+    new Producto("Panetón", 2),
+    new Producto("Empanada", 3),
+    new Producto("Flan", 2),
+    new Producto("Ceviche", 2)
+];
 
-/*let productos1 = from "productos_10000.csv", Producto;
-let productos2 = from "productos_10000.csv", Producto;
-let productos3 = from "productos_10000.csv", Producto;
-let productos4 = from "productos_10000.csv", Producto;
-let productos5 = from "productos_10000.csv", Producto;
-let productos6 = from "productos_10000.csv", Producto;
-let productos7 = from "productos_10000.csv", Producto;
-let productos8 = from "productos_10000.csv", Producto;
-let productos9 = from "productos_10000.csv", Producto;
-let productos10 = from "productos_10000.csv", Producto;
-let productos11 = from "productos_10000.csv", Producto;
-let productos12 = from "productos_10000.csv", Producto;
-let productos13 = from "productos_10000.csv", Producto;
-let productos14 = from "productos_10000.csv", Producto;
-let productos15 = from "productos_10000.csv", Producto;
-let productos16 = from "productos_10000.csv", Producto;
-let productos17 = from "productos_10000.csv", Producto;
-let productos18 = from "productos_10000.csv", Producto;
-let productos19 = from "productos_10000.csv", Producto;
-let productos20 = from "productos_10000.csv", Producto;
-let productos21 = from "productos_10000.csv", Producto;
-let productos22 = from "productos_10000.csv", Producto;
-let productos23 = from "productos_10000.csv", Producto;
-let productos24 = from "productos_10000.csv", Producto;
-let productos25 = from "productos_10000.csv", Producto;
-let productos26 = from "productos_10000.csv", Producto;
-let productos27 = from "productos_10000.csv", Producto;
-let productos28 = from "productos_10000.csv", Producto;
-let productos29 = from "productos_10000.csv", Producto;
-let productos30 = from "productos_10000.csv", Producto;
-let productos31 = from "productos_10000.csv", Producto;
-let productos32 = from "productos_10000.csv", Producto;
-let productos33 = from "productos_10000.csv", Producto;
-let productos34 = from "productos_10000.csv", Producto;
-let productos35 = from "productos_10000.csv", Producto;
-let productos36 = from "productos_10000.csv", Producto;
-let productos37 = from "productos_10000.csv", Producto;
-let productos38 = from "productos_10000.csv", Producto;
-let productos39 = from "productos_10000.csv", Producto;
-let productos40 = from "productos_10000.csv", Producto;
-let productos41 = from "productos_10000.csv", Producto;
-let productos42 = from "productos_10000.csv", Producto;
-let productos43 = from "productos_10000.csv", Producto;
-let productos44 = from "productos_10000.csv", Producto;
-let productos45 = from "productos_10000.csv", Producto;
-let productos46 = from "productos_10000.csv", Producto;
-let productos47 = from "productos_10000.csv", Producto;
-let productos48 = from "productos_10000.csv", Producto;
-let productos49 = from "productos_10000.csv", Producto;
-let productos50 = from "productos_10000.csv", Producto;
-let productos51 = from "productos_10000.csv", Producto;
-let productos52 = from "productos_10000.csv", Producto;
-let productos53 = from "productos_10000.csv", Producto;
-let productos54 = from "productos_10000.csv", Producto;
-let productos55 = from "productos_10000.csv", Producto;
-let productos56 = from "productos_10000.csv", Producto;
-let productos57 = from "productos_10000.csv", Producto;
-let productos58 = from "productos_10000.csv", Producto;
-let productos59 = from "productos_10000.csv", Producto;
-let productos60 = from "productos_10000.csv", Producto;
-let productos61 = from "productos_10000.csv", Producto;
-let productos62 = from "productos_10000.csv", Producto;
-let productos63 = from "productos_10000.csv", Producto;
-let productos64 = from "productos_10000.csv", Producto;
-let productos65 = from "productos_10000.csv", Producto;
-let productos66 = from "productos_10000.csv", Producto;
-let productos67 = from "productos_10000.csv", Producto;
-let productos68 = from "productos_10000.csv", Producto;
-let productos69 = from "productos_10000.csv", Producto;
-let productos70 = from "productos_10000.csv", Producto;
-let productos71 = from "productos_10000.csv", Producto;
-let productos72 = from "productos_10000.csv", Producto;
-let productos73 = from "productos_10000.csv", Producto;
-let productos74 = from "productos_10000.csv", Producto;
-let productos75 = from "productos_10000.csv", Producto;
-let productos76 = from "productos_10000.csv", Producto;
-let productos77 = from "productos_10000.csv", Producto;
-let productos78 = from "productos_10000.csv", Producto;
-let productos79 = from "productos_10000.csv", Producto;
-let productos80 = from "productos_10000.csv", Producto;
-let productos81 = from "productos_10000.csv", Producto;
-let productos82 = from "productos_10000.csv", Producto;
-let productos83 = from "productos_10000.csv", Producto;
-let productos84 = from "productos_10000.csv", Producto;
-let productos85 = from "productos_10000.csv", Producto;
-let productos86 = from "productos_10000.csv", Producto;
-let productos87 = from "productos_10000.csv", Producto;
-let productos88 = from "productos_10000.csv", Producto;
-let productos89 = from "productos_10000.csv", Producto;
-let productos90 = from "productos_10000.csv", Producto;
-let productos91 = from "productos_10000.csv", Producto;
-let productos92 = from "productos_10000.csv", Producto;
-let productos93 = from "productos_10000.csv", Producto;
-let productos94 = from "productos_10000.csv", Producto;
-let productos95 = from "productos_10000.csv", Producto;
-let productos96 = from "productos_10000.csv", Producto;
-let productos97 = from "productos_10000.csv", Producto;
-let productos98 = from "productos_10000.csv", Producto;
-let productos99 = from "productos_10000.csv", Producto;
-let productos100 = from "productos_10000.csv", Producto;*/
-
-
-
-
-
-//let filtrados = filter(productos, p => p.precio != 2); // LINQ
-/*for (let item in productos_del_papa_leon) {
-    //print("Producto de papa leon:");
-    //item.Mostrar();
-    i = i + 1;
+let productos = from "productos.csv", Producto;
+let filtrados = filter(productos, p => p.precio != 2); // LINQ
+for (let item in productos_del_papa_leon) {
+    print("Producto de papa leon:");
+    item.Mostrar();
 }
-*/
-for (let _item in productos) {
+
+/*for (let _item in filtrados) {
     print("Producto:");
     _item.Mostrar();
-    i = i + 1;
-}
-print(i);
+}*/

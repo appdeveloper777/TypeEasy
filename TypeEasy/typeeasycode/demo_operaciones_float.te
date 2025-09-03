@@ -9,21 +9,26 @@ print(b);  // 0.2
 print(c);  // 0.3
 
 // Suma
+print("Suma:");
 float suma = a + b;
 print(suma);  // 0.1 + 0.2 = 0.3
 
 // Resta
 float resta = c - a;
+print("Resta:");
 print(resta);  // 0.3 - 0.1 = 0.2
 
 // Multiplicación
 float multiplicacion = a * b;
+print("Multiplicación:");
 print(multiplicacion);  // 0.1 * 0.2 = 0.02
 
 // División
 float division = c / a;
+print("División:");
 print(division);  // 0.3 / 0.1 = 3.0
 
 // Operaciones combinadas
 float combinada = a + b * c;
+print("Combinada:");
 print(combinada);  // 0.1 + (0.2 * 0.3) = 0.1 + 0.06 = 0.16
