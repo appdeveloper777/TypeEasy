@@ -13,7 +13,7 @@ Imagina un futuro donde: <br>
 
 Para modificar y correr el código .te: 
 
-1. Abrir con el terminal la carpeta src_nodes
+1. Abrir con el terminal la carpeta src
 2. Hacer los cambios que consideres
 3. Ejecutar en el terminal:
    

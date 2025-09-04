@@ -6,7 +6,7 @@ RUN apt-get update && \
 
 WORKDIR /typeeasy
 
-COPY src_nodes/ .                 
+COPY src/ .                 
 COPY typeeasycode /typeeasy/typeeasycode
 
 RUN make clean && make

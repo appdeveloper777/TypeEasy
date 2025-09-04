@@ -2,16 +2,31 @@
 
 
 #include <fcntl.h>
-#include <unistd.h>
+
 #include <string.h>
 #include "variables.h"
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
 #include <stdbool.h>
+#include <time.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 
+#define CHUNK_SIZE (1024 * 1024 * 1024) // 1 GB
+#define MAX_VARIABLES 100
+#define MAX_LINE_LENGTH 1024
+#define MAX_FIELDS 100 // Máximo número de campos por línea
+#define MAX_FIELD_LENGTH 100 // Longitud máxima de un campo
+
+#define INITIAL_CAPACITY 1048575
+struct Row {
+    char *data;
+};
+
+
+
+// Definiciones globales
 Variable variables[MAX_VARIABLES];
-static char* variable_names[MAX_VARIABLES];
+char* variable_names[MAX_VARIABLES];
 int variable_count = 0;
 
 
@@ -19,6 +34,9 @@ int variable_count = 0;
 int row_count = 0;
 
 #define BUFFER_SIZE 1024 * 1024 // 1 MB de buffer
+
+
+
 
 // Estructura para representar una fila de datos CSV
 typedef struct {
@@ -392,17 +410,13 @@ void open_csv(const char *filename) {
 
 
 Variable get_variable(const char* name) {
-    int idx = get_variable_index(name);
-    if (idx < 0) {
-        Variable v;
-        v.type  = UNDEFINED;
-        v.num   = 0;
-        v.fnum  = 0.0f;
-        v.str   = NULL;
-        v.bval  = false;
-        return v;
+    for (int i = 0; i < variable_count; i++) {
+        if (strcmp(variable_names[i], name) == 0) {
+            return variables[i];
+        }
     }
-    return variables[idx];
+    Variable null_variable = {0};
+    return null_variable;  // Devuelve una variable vacía si no se encuentra
 }
 
 int get_variable_index(const char* name) {
@@ -456,9 +470,6 @@ void set_variable_float(int index, float value) {
 
 void set_variable_string(int index, const char* value) {
     if (index >= 0 && index < variable_count && variables[index].type == STRING_TYPE) {
-        if (variables[index].str != NULL) {
-            free(variables[index].str);
-        }
         variables[index].str = strdup(value);
     }
 }
@@ -489,6 +500,10 @@ void print_variable(Variable var) {
     }
 }
 
-void filter_csv(const char *filename, const char *filter_column, const char *filter_value) {
+int add_variable(const char* name, VariableType type) {
+    if (variable_count >= MAX_VARIABLES) return -1;
 
+    variable_names[variable_count] = strdup(name);
+    variables[variable_count].type = type;
+    return variable_count++;
 }

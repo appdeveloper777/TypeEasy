@@ -1,289 +1,436 @@
-%{
+%{   
+
     #include <stdio.h>
     #include <stdlib.h>
-    #include <string.h>
-    #include "variables.h"
-    #include <stdbool.h>
+    #include "ast.h"
+    #include <locale.h>
     #include <time.h>
-    #include "csvparser.h"
-    
-    #define MAX_LINE_LENGTH 1024
-    #define MAX_STATEMENTS 100
-    
-    // Declaraciones de funciones
-    extern int yylex();
+
+    ASTNode *root;
+    extern int yylineno;
+    extern FILE *yyin;
     void yyerror(const char *s);
-    FILE *yyin;
-    void execute_statement_body(StatementBody body);
-    void execute_statement(Statement stmt);
-    void print_variable(Variable var);
-    void set_variable(char *name, int value);
-    void set_variable_float(int index, float value);   
+    ClassNode *last_class = NULL;
+    int yylex();
+    void generate_code(const char* code);
+    void clean_generated_code();
 
 %}
-    
+
 %union {
-    int num;
-    float fval;
-    char* sval;
-    char* id;
-    Statement stmt; // Nuevo tipo para declaraciones
-    StatementBody body; // Nuevo tipo para cuerpos de declaraciones
+    int ival;
+    char *sval;
+    ASTNode *node;
+    ParameterNode *pnode;
 }
-    
-%token <num> NUMBER
-%token <id> IDENTIFIER
-%token VAR PRINT ASSIGN
-%token LPAREN RPAREN SEMICOLON
-%token PLUS MINUS MUL DIV GREATERTHAN
-%token <fval> FLOAT FLOAT_LITERAL
-%token LBRACKET RBRACKET COMMA
-%token <sval> STRING STRING_LITERAL
-%token FOR
-    
-%type <num> expression
-%type <stmt> statement
-%type <body> statement_body
 
-%type <node> expr_list arg_list arg_list_opt
+%token <sval> INT STRING FLOAT FLOAT_LITERAL LAYER LSBRACKET RSBRACKET
+%token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA
+%token       VAR ASSIGN PRINT FOR LPAREN RPAREN SEMICOLON CONCAT
+%token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
+%token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN
+%token <sval> IDENTIFIER STRING_LITERAL
+%token <ival> NUMBER
 
-    
-%left PLUS MINUS
-%left MUL DIV
-    
+%type <sval> method_name
+%type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args lambda_expression
+%type <pnode> parameter_decl parameter_list list_literal
+%type <node> object_expression object_list
+
+%type <node> dataset_decl
+%type <node> model_decl
+%type <node> layer_list
+%type <node> layer_decl
+%type <node> train_stmt
+%type <node> train_options
+%type <node> predict_stmt
+%type <node> lambda
+%type <node> expr_list
+
+
+%define parse.trace
+%type <node> class_member
+
+
+%type <node> statement expression program statement_list class_decl class_body
+%type <node> attribute_decl method_decl
+
+%right ARROW
+%nonassoc GT LT EQ GT_EQ LT_EQ, DIFF/* tus operadores relacionales */
+
 %%
-    
+
 program:
-    | program statement
-    ;
-    
-statement:
-    VAR IDENTIFIER ASSIGN expression {
-        int index = add_variable($2, INT_TYPE);
-        set_variable_int(index, $4);      
-    }
-    | FLOAT IDENTIFIER ASSIGN expression {
-        int index = add_variable($2, FLOAT_TYPE);
-        set_variable_float(index, $4);      
-    }
-    | STRING IDENTIFIER ASSIGN STRING_LITERAL {
-        int index = add_variable($2, STRING_TYPE);
-        set_variable_string(index, $4);       
-    }
-    | IDENTIFIER ASSIGN expression {
-        Variable var = get_variable($1);        
-        if (var.type != UNDEFINED) {
-            set_variable($1, $3);
-        } else {
-            printf("Error: La variable %s no está declarada\n", $1);
-        }       
-    }
-    
-    | FOR LPAREN IDENTIFIER SEMICOLON IDENTIFIER SEMICOLON IDENTIFIER RPAREN LBRACKET statement_body RBRACKET {
-        printf("Iniciando ciclo for...\n");
+        program statement       { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; }
+        | program class_decl      { $$ = $1; /* Ignora definición de clase */ root = $$; }
+        | statement               { $$ = $1; root = $$; }
+        | class_decl              { $$ = NULL; /* Ignora definición de clase */ }
 
-        // Obtener las variables
-        Variable var_init = get_variable($3);
-        Variable var_cond = get_variable($5);
-        Variable var_inc = get_variable($7);
 
-        if (var_init.type == UNDEFINED || var_cond.type == UNDEFINED || var_inc.type == UNDEFINED ||
-            var_init.type != INT_TYPE || var_cond.type != INT_TYPE || var_inc.type != INT_TYPE) {
-            fprintf(stderr, "Error: Variables del ciclo for no definidas o tipo incorrecto.\n");
-            exit(1);
-        }
-
-       // Ejecutar el ciclo for
-        for (int i = var_init.num; i <= var_cond.num; i += var_inc.num) {            
-            // Ejecutar el cuerpo del ciclo (statement_body)
-            execute_statement_body($10);
-        }
-    } 
-    |
-    IDENTIFIER ASSIGN IDENTIFIER PLUS expression {
-        $$.type = STMT_ADD;
-        strcpy($$.identifier, $1);
-        $$.operand1 = $3;
-        $$.operand2 = $5;
-        Variable var = get_variable($1);
-        if (var.type == INT_TYPE) {
-            int value = var.num + $5;  // $5 es el valor de la expresión
-            set_variable($1, value);            
-        } else if (var.type == FLOAT_TYPE) {
-            float value = var.fnum + $5;  // $5 es el valor de la expresión
-            set_variable_float(get_variable_index($1), value);           
-        } else {
-            yyerror("Tipo de variable inválido para la acumulación.");
-        }
-    }
-    | PRINT IDENTIFIER {
-        $$.type = STMT_PRINT;
-        strcpy($$.identifier, $2);
-        printf("Imprimiendo %s: ", $2);
-        print_variable(get_variable($2));
-    }
-    | IDENTIFIER ASSIGN IDENTIFIER PLUS expression {        
-        $$.type = STMT_ACCUMULATE;
-        strcpy($$.identifier, $1);
-        strcpy($$.operand2, $3);
-        $$.operand1 = $5;
-    }
-    | IDENTIFIER ASSIGN expression PLUS expression {       
-        $$.type = STMT_ADD;
-        strcpy($$.identifier, $1);
-        $$.operand1 = $3;
-        $$.operand2 = $5;
-    }
-    | IDENTIFIER ASSIGN expression MINUS expression {        
-        $$.type = STMT_SUBTRACT;
-        strcpy($$.identifier, $1);
-        $$.operand1 = $3;
-        $$.operand2 = $5;
-    }
-    | IDENTIFIER ASSIGN expression MUL expression {
-        $$.type = STMT_MULTIPLY;
-        strcpy($$.identifier, $1);
-        $$.operand1 = $3;
-        $$.operand2 = $5;
-    };
-    
-statement_body:
-    statement {
-        $$.statements[0] = $1;
-        $$.count = 1;
-    }
-    | statement_body statement {
-        if ($1.count < MAX_STATEMENTS) {
-            $1.statements[$1.count] = $2;
-            $1.count++;
-        } else {
-            fprintf(stderr, "Error: Demasiadas declaraciones en el cuerpo del ciclo.\n");
-            exit(1);
-        }
-        $$ = $1;
-       
-    }
+class_decl:
+        CLASS IDENTIFIER { last_class = create_class($2); add_class(last_class); } 
+        LBRACKET class_body RBRACKET { $$ = NULL; }
 ;
-    
+
+class_member:
+        attribute_decl
+        | constructor_decl
+        | method_decl
+        ;
+
+class_body:
+        { $$ = NULL; }
+        | class_body class_member { $$ = $1; }
+        ;
+
+train_options: IDENTIFIER ASSIGN NUMBER { $$ = create_train_option_node($1, $3); };
+layer_list: layer_decl                          { $$ = $1; };
+layer_list: layer_list layer_decl               { $$ = append_layer_to_list($1, $2); };
+layer_decl: LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON { $$ = create_layer_node($2, $4, $6); };
+
+
+attribute_decl:
+    IDENTIFIER COLON INT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "int"); } else { printf("Error: No hay clase definida para el atributo '%s'.\n", $1); } }
+  | IDENTIFIER COLON STRING SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "string"); } else { printf("Error: No hay clase definida para el atributo '%s'.\n", $1); } }
+  ;
+
+constructor_decl:
+    CONSTRUCTOR LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET  { if (last_class) { add_constructor_to_class(last_class, $3, $6); } else { printf("Error: No hay clase definida para el constructor.\n"); } $$ = NULL; }
+  ;
+
+parameter_decl:
+    IDENTIFIER COLON INT        { $$ = create_parameter_node($1, $3); }
+  | INT IDENTIFIER             { $$ = create_parameter_node($2, $1); }
+  | IDENTIFIER COLON STRING    { $$ = create_parameter_node($1, $3); }
+  | STRING IDENTIFIER          { $$ = create_parameter_node($2, $1); }
+  | IDENTIFIER COLON FLOAT     { $$ = create_parameter_node($1, $3); }
+  | FLOAT IDENTIFIER           { $$ = create_parameter_node($2, $1); }
+  ;
+
+parameter_list:
+    /* vacío */                                    { $$ = NULL; }
+  | IDENTIFIER COLON IDENTIFIER                    { $$ = create_parameter_node($1, $3); }
+  | parameter_list COMMA IDENTIFIER COLON IDENTIFIER { $$ = add_parameter($1, $3, $5); }
+  | parameter_decl                                 { $$ = $1; }
+  | parameter_list COMMA parameter_decl            { $$ = add_parameter($1, $3->name, $3->type); }
+  ;
+
+method_decl:
+    IDENTIFIER LPAREN RPAREN LBRACKET statement_list RBRACKET  { if (!last_class) { printf("Error interno: no hay clase activa para añadir método '%s'.\n", $1); } else { add_method_to_class(last_class, $1, NULL, $5); } $$ = NULL; }
+  | IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET  { if (!last_class) { printf("Error interno: no hay clase activa para añadir método '%s'.\n", $1); } else { add_method_to_class(last_class, $1, $3, $6); } $$ = NULL; }
+  ;
+
 expression:
-    NEW IDENTIFIER LPAREN arg_list_opt RPAREN { $$ = create_object_with_args(find_class($2), $4); }
-    |
-    NUMBER {   $$ = $1; }
-    | FLOAT_LITERAL { $$ = $1; }
-    | IDENTIFIER {
-        Variable var = get_variable($1);
-        if (var.type == INT_TYPE) $$ = var.num;
-        else if (var.type == FLOAT_TYPE) $$ = var.fnum;
-        else {
-            yyerror("Tipo de variable inválido en la expresión.");
-            $$ = 0;
-        }
-    }
-    | expression PLUS expression {  $$ = $1 + $3; }
-    | expression MINUS expression { $$ = $1 - $3; }
-    | expression MUL expression { $$ = $1 * $3; }
-    | expression DIV expression {
-        if ($3 == 0) {
-            yyerror("Error: división por cero");
-            $$ = 0;
-        } else {
-            $$ = $1 / $3;
-        }
-    }
-    | expression GREATERTHAN expression { $$ = $1 < $3; };
 
-    arg_list_opt:
-    /* vacío */ { $$ = NULL; }
-  | arg_list   { $$ = $1; }
+    expression GT expression    { $$ = create_ast_node("GT", $1, $3); }
+| expression LT expression      { $$ = create_ast_node("LT", $1, $3); }
+| expression EQ expression      { $$ = create_ast_node("EQ", $1, $3); }
+| expression GT_EQ expression    { $$ = create_ast_node("GT_EQ", $1, $3); }
+| expression LT_EQ expression    { $$ = create_ast_node("LT_EQ", $1, $3); }
+| expression DIFF expression    { $$ = create_ast_node("DIFF", $1, $3); }
+| IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN  { printf(" [DEBUG] PERU Reconocido FUNCTION_CALL: %s\n", $1); ASTNode *listExpr = create_identifier_node($1); ASTNode *filterCall = create_list_function_call_node(listExpr, "filter", $5); $$ = create_var_decl_node($1, filterCall); }
+| LSBRACKET object_list RSBRACKET                       { /* printf(" [DEBUG] Reconocido OBJECT_LIST\n"); */ $$ = $2; }
+| expression DOT IDENTIFIER LPAREN lambda RPAREN        {  if (strcmp($3, "filter")==0) { $$ = create_list_function_call_node($1, $3, $5); } else { $$ = create_method_call_node($1, $3, NULL); } free($3); }
+| LSBRACKET expr_list RSBRACKET                         { /* printf(" [DEBUG] Reconocido EXPR_LIST\n"); */ $$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1); $$ = create_list_node($2); }
+| PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN  { ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i"); $$ = create_method_call_node(obj, $3, NULL); }
+| IDENTIFIER DOT IDENTIFIER LPAREN RPAREN           { ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1); $$ = create_method_call_node(obj, $3, NULL); }
+| IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN  { ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1); $$ = create_method_call_node(obj, $3, $5); }
+| IDENTIFIER DOT IDENTIFIER                        { ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1); ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3); $$ = create_ast_node("ACCESS_ATTR", obj, attr); }
+| expression DOT IDENTIFIER LPAREN RPAREN          { printf(" [DEBUG] Reconocido METHOD_CALL: %s.%s()\n", $1, $3); $$ = create_method_call_node($1, $3, NULL); }
+| expression DOT IDENTIFIER LPAREN expression_list RPAREN  { $$ = create_method_call_node($1, $3, $5); }
+| THIS DOT IDENTIFIER                              { $$ = create_ast_node("ACCESS_ATTR", create_ast_leaf("ID", 0, NULL, "this"), create_ast_leaf("ID", 0, NULL, $3)); }
+| THIS DOT IDENTIFIER LPAREN RPAREN                { $$ = create_method_call_node(create_ast_leaf("ID", 0, NULL, "this"), $3, NULL); }
+| IDENTIFIER                                      { $$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1); }
+| NUMBER                                          { $$ = create_ast_leaf("NUMBER", $1, NULL, NULL); }
+| FLOAT_LITERAL                                   { $$ = create_ast_leaf("FLOAT", 0, $1, NULL); }
+| STRING_LITERAL                                  { $$ = create_ast_leaf("STRING", 0, $1, NULL); }
+| CONCAT LPAREN expression_list RPAREN            { printf(" [DEBUG] Reconocido FUNCTION_CALL: %s(%s)\n", "concat", $3); $$ = create_function_call_node("concat", $3); }
+| expression PLUS expression                      { $$ = create_ast_node("ADD", $1, $3); }
+| expression MINUS expression                     { $$ = create_ast_node("SUB", $1, $3); }
+| expression MULTIPLY expression                  { $$ = create_ast_node("MUL", $1, $3); }
+| expression DIVIDE expression                    { $$ = create_ast_node("DIV", $1, $3); }
+| LPAREN expression RPAREN                        { $$ = $2; }
+| NEW IDENTIFIER LPAREN RPAREN                    { ClassNode *cls = find_class($2); if (!cls) { printf("Error: Clase '%s' no definida.\n", $2); $$ = NULL; } else { $$ = (ASTNode *)create_object_with_args(cls, NULL); } }
+| NEW IDENTIFIER LPAREN expr_list RPAREN { ClassNode *cls = find_class($2); if (!cls) { fprintf(stderr, "Error: clase '%s' no encontrada\n", $2); exit(1); } $$ = create_object_with_args(cls, $4); free($2); }
+
 ;
+
+
+var_decl:
+    LET IDENTIFIER ASSIGN IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN SEMICOLON  { /*printf(" [DEBUG] Reconocido FILTER_CALL: let %s = %s(...)\n", $2, $4);*/ ASTNode *listExpr = $6; ASTNode *lambda = $8; ASTNode *filterCall = create_list_function_call_node(listExpr, $4, lambda); filterCall->type = strdup("FILTER_CALL"); $$ = create_var_decl_node($2, filterCall); }
+  | LET IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
+  | STRING IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
+  | VAR IDENTIFIER ASSIGN expression SEMICOLON  { printf("IMPRIMIENDO VAR \n"); $$ = create_var_decl_node($2, $4); }
+  | INT IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
+  | IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
+  | THIS DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,"this"); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
+  
+  ;
+
+statement:
+    FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_for_in_node($4, $6, $9); }
+  | LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { printf(" [DEBUG] Reconocido LET con acceso a atributo: %s.%s\n", $2, $4); ASTNode *obj = create_ast_leaf("ID",0,NULL,$4); $$ = create_var_decl_node($2, obj); }
+  | RETURN expression SEMICOLON  { $$ = create_return_node($2); }
+  | var_decl
+  | STRING STRING expression SEMICOLON                          { printf(" [DEBUG] Declaración de variable s: ¿"); char buffer[2048]; sprintf(buffer,"#include \"easyspark/dataframe.hpp\"\n..."); generate_code(buffer); }
+  | IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); $$ = create_method_call_node(obj, $3, NULL); }
+  | IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); $$ = create_method_call_node(obj, $3, $5); }
+  | THIS DOT IDENTIFIER LPAREN RPAREN SEMICOLON                 { ASTNode *thisObj = create_ast_leaf("ID",0,NULL,"this"); $$ = create_method_call_node(thisObj, $3, NULL); }
+  | STRING IDENTIFIER ASSIGN STRING_LITERAL SEMICOLON           { $$ = create_var_decl_node($2, create_string_node($4)); }
+  | INT IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_var_decl_node($2, create_int_node($4->value)); }
+  | FLOAT IDENTIFIER ASSIGN expression SEMICOLON                { $$ = create_var_decl_node($2, $4); }
+  | VAR IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_ast_node("DECLARE", create_ast_leaf("IDENTIFIER", 0, NULL, $2), $4); }
+  | IDENTIFIER ASSIGN expression SEMICOLON                      { $$ = create_ast_node("ASSIGN", create_ast_leaf("VAR",0,NULL,$1), $3); }
+  | PRINT LPAREN expression RPAREN SEMICOLON                    { $$ = create_ast_node("PRINT", $3, NULL); }
+  | PRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON     { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("PRINT", access, NULL); }
+  | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET  { 
+    printf("[DEBUG] Reconocido FOR de %s\n", $3);
+    $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf("NUMBER",$5,NULL,NULL), $7, $9, $12); }
+  | NEW IDENTIFIER LPAREN RPAREN SEMICOLON                          { ClassNode *cls = find_class($2); if (!cls) { printf("Error: Clase '%s' no definida.\n", $2); $$ = NULL; } else { $$ = (ASTNode *)create_object_with_args(cls, NULL); printf("[DEBUG] Creación de objeto: %s\n", $2); } }
+  | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN RPAREN SEMICOLON    { ClassNode *cls = find_class($5); if (!cls) { printf("Error: Clase '%s' no definida.\n", $5); $$ = NULL; } else { $$ = create_var_decl_node($2, create_object_with_args(cls, NULL)); } }
+  | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  { ClassNode *cls = find_class($5); if (!cls) { printf("Error: Clase '%s' no definida.\n", $5); $$ = NULL; } else { $$ = create_var_decl_node($2, create_object_with_args(cls, $7)); } }
+  | DATASET IDENTIFIER FROM STRING_LITERAL SEMICOLON                { printf(" [DEBUG] Reconocido DATASET\n"); $$ = create_dataset_node($2, $4); }
+  | PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON     { printf(" [DEBUG] Reconocido PREDICT\n"); $$ = create_predict_node($3, $5); }
+  | VAR IDENTIFIER ASSIGN PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON { printf(" [DEBUG] Reconocido PREDICT\n"); ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i"); $$ = create_method_call_node(obj, "predict", NULL); $$ = create_predict_node($6, $8); }
+  | DATASET IDENTIFIER FROM STRING_LITERAL SEMICOLON            { $$ = create_dataset_node($2, $4); }
+  | PLOT LPAREN expression_list RPAREN SEMICOLON                { $$ = create_ast_node("PLOT", $3, NULL); }
+  | MODEL IDENTIFIER LBRACKET layer_list RBRACKET               { printf("[DEBUG] Reconocido MODEL\n"); printf("[DEBUG] Nombre del modelo: %s\n", $2); ASTNode *layer = $4; int capa_index = 0; while (layer) { if (strcmp(layer->type, "LAYER") == 0) { printf("[DEBUG] Capa #%d: tipo=%s, unidades=%d, activación=%s\n", capa_index++, layer->id, layer->value, layer->str_value); } layer = layer->right; } ASTNode *modelNode = create_model_node($2, $4); printf("[DEBUG] Nodo de modelo creado: type=%s, id=%s\n", modelNode->type, modelNode->id); }
+  | LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON  { $$ = create_layer_node($2, $4, $6); }
+  | TRAIN LPAREN IDENTIFIER COMMA IDENTIFIER COMMA train_options RPAREN SEMICOLON  { $$ = create_train_node($3, $5, $7); }
+  | IDENTIFIER ASSIGN NUMBER                                    { $$ = create_train_option_node($1, $3); }
+  | LET IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER SEMICOLON {
+    ClassNode* cls = find_class($7);
+        if (!cls) {
+            printf("Clase '%s' no encontrada.\n", $7);
+            $$ = NULL;
+        } else {
+            ASTNode* list = from_csv_to_list($5, cls);
+            $$ = create_var_decl_node($2, list);
+        }
+    }
+  ;
+
+statement_list:
+    statement_list statement  { $$ = create_ast_node("STATEMENT_LIST", $1, $2); }
+  | statement                { $$ = $1; }
+  ;
+
+expression_list:
+    expression                                { $$ = $1; }
+  | expression_list COMMA expression          { $$ = add_statement($1, $3); }
+  ;
+
+expr_list:
+    expression               { $$ = $1; }
+  | expr_list COMMA expression { $$ = append_to_list($1, $3); }
+  ;
+
+list_literal:
+    LSBRACKET expr_list RSBRACKET  {        
+        $$ = create_list_node($2); }
+  ;
+
+lambda:
+    IDENTIFIER ARROW                { printf(" [DEBUG] Reconocido LAMBDA\n"); }
+  | LPAREN IDENTIFIER RPAREN ARROW expression  { $$ = create_lambda_node($2, $5); free($2); }
+  ;
 
 arg_list:
-    expression               { $$ = $1; }
-  | arg_list COMMA expression { printf(" [DEBUG] Reconocido COMMA\n"); $$ = add_argument($1, $3); }
+    expression
+  | arg_list COMMA expression  {  $$ = append_argument_raw($1, $3); }
+  | /* vacío */                { $$ = NULL; }
+  
+  ;
+
+  object_expression
+  : NEW IDENTIFIER LPAREN expression_list RPAREN
+  {
+        ClassNode *cls = find_class($2);
+        if (!cls) {
+            printf("Error: Clase '%s' no encontrada.\n", $2);
+            $$ = NULL;
+        } else {
+            $$ = create_object_with_args(cls, $4);
+        }
+  }
+;
+object_list
+    : object_expression
+      {
+        /*printf(" [DEBUG] Reconocido OBJECT_EXPRESSION\n");*/
+         $$ = create_list_node($1); 
+    } 
+    | object_list COMMA object_expression
+      { $$ = append_to_list($1, $3); }
 ;
 
-    
+lambda_expression
+    : IDENTIFIER ARROW expression
+      {
+        $$ = create_lambda_node($1, $3); // crea un nodo tipo LAMBDA
+      }
+;
+
+more_args:
+    /* vacío */               { $$ = NULL; }
+  | COMMA expression more_args  { $$ = add_argument($2, $3); }
+  ;
+
 %%
-void execute_statement_body(StatementBody body) {
-    // Ejecutar cada declaración en el cuerpo del ciclo
-    for (int i = 0; i < body.count; i++) {
-        execute_statement(body.statements[i]);
+
+void clean_generated_code() {    
+    FILE* out = fopen("generated.cpp", "w"); // limpia completamente
+    if (out != NULL) {
+        fprintf(out, "");
+        fclose(out);
     }
 }
 
-void execute_statement(Statement stmt) {
-    switch (stmt.type) {
-        case STMT_PRINT:           
-            print_variable(get_variable(stmt.identifier));
-            break;
-        case STMT_ASSIGN:
-            set_variable(stmt.identifier, stmt.value);
-            break;
-        case STMT_ADD: {
-            Variable val = get_variable(stmt.identifier);
-            int result = val.num + stmt.operand2;
-            set_variable(stmt.identifier, result);          
-            break;
-        }
-        case STMT_SUBTRACT: {
-            Variable val = get_variable(stmt.identifier);
-            int result = val.num - stmt.operand2;
-            set_variable(stmt.identifier, result);            
-            break;
-        }
-        case STMT_MULTIPLY: {
-            int result = stmt.operand1 * stmt.operand2;
-            set_variable(stmt.identifier, result);            
-            break;
-        }
-        case STMT_ACCUMULATE: {
-            Variable var = get_variable(stmt.identifier);
-            if (var.type == INT_TYPE) {
-                int result = var.num + stmt.operand1;
-                set_variable(stmt.identifier, result);
-                
-            } else if (var.type == FLOAT_TYPE) {
-                float result = var.fnum + stmt.operand1;
-                set_variable_float(get_variable_index(stmt.identifier), result);
-                
-            } else {
-                fprintf(stderr, "Error: Tipo de variable no soportado para la acumulación.\n");
-            }
-            break;
-        }
-        default:            
-            fprintf(stderr, "Error: Tipo de declaración no soportado.\n");
-            break;
+
+
+void generate_code(const char* code) {
+    FILE* out = fopen("generated.cpp", "w"); // modo 'a' agrega contenido
+    if (out != NULL) {
+        fprintf(out, "%s\n", code);
+        fclose(out);
     }
 }
 
-void set_variable(char *name, int value) {
-    int index = get_variable_index(name);
-    if (index != -1) {       
-        set_variable_int(index, value);
+
+
+void yyerror(const char *s) {
+    extern char *yytext;
+    printf("Error de sintaxis en linea %d: %s\n", yylineno, s);
+    
+    if (yytext) {
+        printf("Cerca de: '%s'\n", yytext);
+    }
+}
+
+void print_ast(ASTNode *node, int indent) {
+    if (!node) return;
+
+    for (int i = 0; i < indent; i++) printf("  ");
+
+    if (node->type && strcmp(node->type, "FOR") == 0) {
+        printf(">>> FOR DETECTADO <<<\n");
+    }
+    
+
+    if (node->type) {
+        printf("Node type: %s", node->type);
     } else {
-        fprintf(stderr, "Error: Variable '%s' no definida.\n", name);
-        exit(1);
+        printf("Node");
     }
+
+   // if (node->varname)
+      //  printf(", varname: %s", node->varname);
+
+    if (node->value)
+        printf(", value: %d", node->value);
+
+    if (node->str_value)
+        printf(", str: %s", node->str_value);
+
+    if (node->id)
+        printf(", id: %s", node->id);
+
+    printf("\n");
+
+    print_ast(node->left, indent + 1);
+    print_ast(node->right, indent + 1);
 }
+
 
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        printf("Uso: %s <archivo de entrada>\n", argv[0]);
+
+    //yydebug = 1;
+  
+    clock_t inicio = clock();
+    
+
+    // Flags para el modo de ejecución
+    int interpret_mode = 0;
+    int use_bytecode = 0;
+    if (argc < 2) {
+        printf("Uso: %s <archivo.te> [--interpret]\n", argv[0]);
         return 1;
     }
+
+    // Verificar si se pasó el flag --interpret
+    if (argc == 3 && strcmp(argv[2], "--run") == 0) {
+        interpret_mode = 1;
+    }
+
+    if (argc == 3 && strcmp(argv[2], "--bytecode") == 0) {
+        use_bytecode = 1;
+    }
+
     FILE *file = fopen(argv[1], "r");
     if (!file) {
         printf("Error abriendo el archivo %s\n", argv[1]);
         return 1;
     }
+
     yyin = file;
-    yyparse();
+    int parse_result = yyparse();
     fclose(file);
+
+    printf("[DEBUG] AST construido:\n");
+    //print_ast(root, 0);  // <- muestra el árbol
+
+    if (parse_result != 0) {
+        printf(" Error al parsear el archivo.\n");
+        return 1;
+    }
+
+
+    if(interpret_mode){
+
+        int compile_status = system("g++ generated.cpp easyspark/dataframe.cpp -o typeeasy_output");
+        if (compile_status != 0) {
+            printf("Error al compilar el programa generado.\n");
+            return 1;
+        }
+
+        int run_status = system("typeeasy_output.exe");
+        if (run_status != 0) {
+            printf("Error al ejecutar el programa generado.\n");
+            return 1;
+        }
+
+    }
+
+    
+    if (use_bytecode) {
+        printf("[DEBUG] Ejecutando en modo Bytecode\n");
+       // compile_to_bytecode(root);
+       // run_bytecode();
+    } else {
+        printf("[DEBUG] Ejecutando con AST normal\n");
+        if (root) {
+            interpret_ast(root);
+            free_ast(root);
+        }
+    }
+
+
+    //if (interpret_mode) {
+        //  Ejecutar directamente el AST
+     //   if (root) {
+      //      interpret_ast(root);
+      //      free_ast(root);
+      //  }
+   // } else {
+        // Compilar y ejecutar el código generado
+
+   // }
+
+    clock_t fin = clock();
+    double tiempo = (double)(fin - inicio) / CLOCKS_PER_SEC;
+    printf("Tiempo de ejecución: %.6f segundos\n", tiempo);
+
+
     return 0;
 }
 
-void yyerror(const char *s) {
-    printf("Error de sintaxis: %s\n", s);
-    fprintf(stderr, "Error de sintaxis: %s\n", s);
-}

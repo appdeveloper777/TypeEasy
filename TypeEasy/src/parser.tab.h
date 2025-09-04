@@ -39,7 +39,7 @@
 # define YY_YY_PARSER_TAB_H_INCLUDED
 /* Debug traces.  */
 #ifndef YYDEBUG
-# define YYDEBUG 0
+# define YYDEBUG 1
 #endif
 #if YYDEBUG
 extern int yydebug;
@@ -54,27 +54,54 @@ extern int yydebug;
     YYEOF = 0,                     /* "end of file"  */
     YYerror = 256,                 /* error  */
     YYUNDEF = 257,                 /* "invalid token"  */
-    NUMBER = 258,                  /* NUMBER  */
-    FLOAT_LITERAL = 259,           /* FLOAT_LITERAL  */
-    IDENTIFIER = 260,              /* IDENTIFIER  */
-    STRING_LITERAL = 261,          /* STRING_LITERAL  */
-    VAR = 262,                     /* VAR  */
-    PRINT = 263,                   /* PRINT  */
-    ASSIGN = 264,                  /* ASSIGN  */
-    LPAREN = 265,                  /* LPAREN  */
-    RPAREN = 266,                  /* RPAREN  */
-    SEMICOLON = 267,               /* SEMICOLON  */
-    PLUS = 268,                    /* PLUS  */
-    MINUS = 269,                   /* MINUS  */
-    MUL = 270,                     /* MUL  */
-    DIV = 271,                     /* DIV  */
-    GREATERTHAN = 272,             /* GREATERTHAN  */
-    LBRACKET = 273,                /* LBRACKET  */
-    RBRACKET = 274,                /* RBRACKET  */
-    COMMA = 275,                   /* COMMA  */
-    STRING = 276,                  /* STRING  */
+    INT = 258,                     /* INT  */
+    STRING = 259,                  /* STRING  */
+    FLOAT = 260,                   /* FLOAT  */
+    FLOAT_LITERAL = 261,           /* FLOAT_LITERAL  */
+    LAYER = 262,                   /* LAYER  */
+    LSBRACKET = 263,               /* LSBRACKET  */
+    RSBRACKET = 264,               /* RSBRACKET  */
+    DATASET = 265,                 /* DATASET  */
+    MODEL = 266,                   /* MODEL  */
+    TRAIN = 267,                   /* TRAIN  */
+    PREDICT = 268,                 /* PREDICT  */
+    FROM = 269,                    /* FROM  */
+    PLOT = 270,                    /* PLOT  */
+    ARROW = 271,                   /* ARROW  */
+    IN = 272,                      /* IN  */
+    LAMBDA = 273,                  /* LAMBDA  */
+    VAR = 274,                     /* VAR  */
+    ASSIGN = 275,                  /* ASSIGN  */
+    PRINT = 276,                   /* PRINT  */
     FOR = 277,                     /* FOR  */
-    FLOAT = 278                    /* FLOAT  */
+    LPAREN = 278,                  /* LPAREN  */
+    RPAREN = 279,                  /* RPAREN  */
+    SEMICOLON = 280,               /* SEMICOLON  */
+    CONCAT = 281,                  /* CONCAT  */
+    PLUS = 282,                    /* PLUS  */
+    MINUS = 283,                   /* MINUS  */
+    MULTIPLY = 284,                /* MULTIPLY  */
+    DIVIDE = 285,                  /* DIVIDE  */
+    LBRACKET = 286,                /* LBRACKET  */
+    RBRACKET = 287,                /* RBRACKET  */
+    CLASS = 288,                   /* CLASS  */
+    CONSTRUCTOR = 289,             /* CONSTRUCTOR  */
+    THIS = 290,                    /* THIS  */
+    NEW = 291,                     /* NEW  */
+    LET = 292,                     /* LET  */
+    COLON = 293,                   /* COLON  */
+    COMMA = 294,                   /* COMMA  */
+    DOT = 295,                     /* DOT  */
+    RETURN = 296,                  /* RETURN  */
+    IDENTIFIER = 297,              /* IDENTIFIER  */
+    STRING_LITERAL = 298,          /* STRING_LITERAL  */
+    NUMBER = 299,                  /* NUMBER  */
+    GT = 300,                      /* GT  */
+    LT = 301,                      /* LT  */
+    EQ = 302,                      /* EQ  */
+    GT_EQ = 303,                   /* GT_EQ  */
+    LT_EQ = 304,                   /* LT_EQ  */
+    DIFF = 305                     /* DIFF  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -83,16 +110,14 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 25 "parser.y"
+#line 20 "parser.y"
 
-    int num;
-    float fval;
-    char* sval;
-    char* id;
-    Statement stmt; // Nuevo tipo para declaraciones
-    StatementBody body; // Nuevo tipo para cuerpos de declaraciones
+    int ival;
+    char *sval;
+    ASTNode *node;
+    ParameterNode *pnode;
 
-#line 96 "parser.tab.h"
+#line 121 "parser.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

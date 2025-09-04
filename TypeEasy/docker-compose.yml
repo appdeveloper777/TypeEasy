@@ -4,7 +4,7 @@ services:
   typeeasy:
     build:
       context: .
-      dockerfile: src_nodes/Dockerfile
+      dockerfile: src/Dockerfile
     volumes:
       - ./typeeasycode:/code
     working_dir: /code
