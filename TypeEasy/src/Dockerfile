@@ -33,9 +33,11 @@ RUN openssl version
 
 # Compilamos con la versión correcta de OpenSSL API
 # Para OpenSSL 3.x usa OPENSSL_API_1_1, para versiones anteriores usa OPENSSL_API_1_0
+# Corrected line for your Dockerfile
 RUN gcc -Iapi_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 \
-    api_server/servidor_test.c api_server/civetweb.c \
+    api_server/servidor_api.c api_server/civetweb.c \
     -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto
+
 
 
 # Si la versión anterior falla, prueba con OPENSSL_API_1_0

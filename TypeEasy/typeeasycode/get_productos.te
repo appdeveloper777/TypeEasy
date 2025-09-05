@@ -1,0 +1,48 @@
+/*
+ * Este script de TypeEasy define una lista de productos
+ * y la imprime en formato JSON en la salida estándar.
+ * El servidor C lo ejecutará para obtener los datos de la API.
+ */
+
+class Producto {
+  id : int;
+  nombre : string; 
+  stock : int;
+
+  __constructor(id : int, nombre : string, stock : int) {
+    this.id = id;
+    this.nombre = nombre;    
+    this.stock = stock;
+  }
+}
+
+// Crear la lista de productos
+let productos = [
+    new Producto(101, "Teclado Mecánico RGB", 79.99, 50),
+    new Producto(102, "Mouse Gamer Inalámbrico", 49.50, 120),
+    new Producto(205, "Monitor Curvo 27 pulgadas", 299.00, 35)
+];
+
+// --- Generador de JSON ---
+// Este código asume que TypeEasy puede concatenar strings con '+'
+// y que la función print() convierte números a string automáticamente.
+
+print("[");
+/*let i = 0;
+let total_productos = 3; // Asumimos que no hay una función len() por ahora
+
+for (let p in productos) {
+    print("  {\n");
+    print("    \"id\": "); print(p.id); print(",\n");
+    print("    \"nombre\": \""); print(p.nombre); print("\",\n");
+    print("    \"precio\": "); print(p.precio); print(",\n");
+    print("    \"stock\": "); print(p.stock); print("\n");
+    print("  }");
+    
+    i = i + 1;
+    if (i < total_productos) {
+        print(",\n");
+    }
+}*/
+
+print("]");

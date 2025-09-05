@@ -1,77 +1,162 @@
-#include "civetweb.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-
+#include <signal.h>
 #ifdef _WIN32
 #include <windows.h>
-#define sleep(x) Sleep(x * 1000) // Windows usa Sleep() en milisegundos
 #else
-#include <unistd.h> // Para Linux/macOS
+#include <unistd.h>
+#endif
+#include "civetweb.h"
+
+// Esta función ejecuta un comando en la consola y devuelve su salida.
+// IMPORTANTE: La cadena devuelta debe ser liberada con free() por quien la llama.
+char* ejecutarScript(const char* comando) {
+    char buffer[256];
+    char* resultado = NULL;    
+
+#ifdef _WIN32
+    FILE* pipe = _popen(comando, "r");
+#else
+    FILE* pipe = popen(comando, "r");
 #endif
 
-// NUEVO: Handler específico para /api/productos
-// ===============================================
-int handle_productos_request(struct mg_connection *conn, void *cbdata) {
-    (void)cbdata; // Ignorar parámetro no usado
+    if (!pipe) {
+        fprintf(stderr, "Error al ejecutar el comando.\n");
+        return NULL;    
+    }
 
-    // Preparamos una respuesta en formato JSON
-    const char *json_body = "[{\"id\": 1, \"nombre\": \"Laptop\"}, {\"id\": 2, \"nombre\": \"Mouse Inalámbrico\"}]";
+    // Usar un buffer temporal para acumular la salida
+    size_t temp_capacity = 1024;
+    resultado = (char*)malloc(temp_capacity);
+    size_t resultado_size = 0;
 
-    // Enviamos la respuesta con la cabecera "Content-Type" correcta para JSON
-    mg_printf(conn,
-              "HTTP/1.1 200 OK\r\n"
-              "Content-Type: application/json\r\n"
-              "Content-Length: %d\r\n"
-              "\r\n"
-              "%s",
-              (int)strlen(json_body), json_body);
+    if (!resultado) {
+        fprintf(stderr, "Error de asignación de memoria.\n");
+#ifdef _WIN32
+        _pclose(pipe);
+#else
+        pclose(pipe);
+#endif
+        return NULL;
+    }
+    resultado[0] = '\0';
+
+    while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+        size_t buffer_len = strlen(buffer);
+        if (resultado_size + buffer_len + 1 > temp_capacity) {
+            temp_capacity *= 2;
+            char* new_temp = (char*)realloc(resultado, temp_capacity);
+            if (!new_temp) {
+                fprintf(stderr, "Error de reasignación de memoria.\n");
+                free(resultado);
+#ifdef _WIN32
+                _pclose(pipe);
+#else
+                pclose(pipe);
+#endif
+                return NULL;
+            }
+            resultado = new_temp;
+        }
+        memcpy(resultado + resultado_size, buffer, buffer_len);
+        resultado_size += buffer_len;
+    }
+    resultado[resultado_size] = '\0';
+
+#ifdef _WIN32
+    _pclose(pipe);
+#else
+    pclose(pipe);
+#endif
+
+    return resultado;
+}
+
+// Nuevo manejador genérico para todas las rutas de la API
+static int apiRouterHandler(struct mg_connection *conn, void *cbdata) {
+    (void)cbdata; // Marcar como no utilizado para evitar warnings
+
+    const struct mg_request_info *req_info = mg_get_request_info(conn);
+    const char *uri = req_info->local_uri;
+
+    char comando[512];
+    // Construimos el comando para ejecutar el enrutador, pasándole la URI solicitada.
+    snprintf(comando, sizeof(comando), "./typeeasy apis/get_productos.te %s", uri);
+
+    char* respuesta_json = ejecutarScript(comando);
+
+    if (respuesta_json) {
+        mg_send_http_ok(conn, "application/json", strlen(respuesta_json));
+        mg_write(conn, respuesta_json, strlen(respuesta_json));
+        free(respuesta_json);
+    } else {
+        mg_send_http_error(conn, 500, "Error al ejecutar el script del enrutador.");
+    }
+
     return 1;
 }
 
-// Handler original para la ruta raíz "/"
-// =====================================
-int handle_root_request(struct mg_connection *conn, void *cbdata) {
-    (void)cbdata; // Ignorar el parámetro no usado
+// Variable global para indicar que debemos salir.
+volatile int exit_flag = 0;
 
-    const char *body = "<h1>Servidor principal funcionando sape?</h1><p>Prueba el endpoint <a href='/api/productos'>/api/productos</a></p>";
+// Manejador de señales para detener el servidor de forma segura con Ctrl+C.
+void signal_handler(int sig_num) {
+    (void)sig_num;
+    exit_flag = 1;
+}
+
+// Nuevo manejador para la ruta raíz ("/")
+static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
+    (void)cbdata; // Marcar como no utilizado para evitar warnings
 
     mg_printf(conn,
               "HTTP/1.1 200 OK\r\n"
-              "Content-Type: text/html\r\n"
-              "Content-Length: %d\r\n"
+              "Content-Type: text/html; charset=utf-8\r\n"
+              "Connection: close\r\n"
               "\r\n"
-              "%s",
-              (int)strlen(body), body);
+              "<html><body>"
+              "<h1>¡TypeEasy APIs!</h1>"
+              "<p>El servidor está funcionando correctamente.</p>"
+              "<p>Prueba el endpoint de la API en: <a href=\"/api/productos\">/api/productos</a></p>"
+              "</body></html>");
     return 1;
 }
 
 int main(void) {
-    const char *options[] = {"listening_ports", "8080", NULL};
     struct mg_context *ctx;
+    // Opciones del servidor. Escuchará en el puerto 8080.
+    const char *options[] = {"listening_ports", "8080", NULL};
 
-    mg_init_library(0); // Inicializar la biblioteca
+    // Registrar el manejador de señales para Ctrl+C
+    signal(SIGINT, signal_handler);
 
-    ctx = mg_start(NULL, 0, options);
+    // Inicia la biblioteca CivetWeb
+    mg_init_library(0);
+
+    // Inicia el servidor
+    ctx = mg_start(NULL, NULL, options);
     if (ctx == NULL) {
         printf("Error al iniciar el servidor.\n");
         return 1;
     }
 
-    // --- REGISTRO DE RUTAS ---
-    // Registramos un manejador para la ruta raíz "/"
-    mg_set_request_handler(ctx, "/", handle_root_request, NULL);
+    printf("Servidor iniciado en http://localhost:8080\n");
 
-    // NUEVO: Registramos el manejador para la nueva ruta de API
-    mg_set_request_handler(ctx, "/api/productos", handle_productos_request, NULL);
+    // --- ¡Paso Clave! Registra los manejadores para cada ruta ---
+    mg_set_request_handler(ctx, "/", manejadorRaiz, NULL);
+    // Registramos el manejador genérico para cualquier ruta que empiece con /api/
+    mg_set_request_handler(ctx, "/api/**", apiRouterHandler, NULL);
 
-    printf("Servidor escuchando en http://localhost:8080/\n");
-    printf("Endpoint de API disponible en http://localhost:8080/api/productos\n");
-    printf("Presiona Ctrl+C para detener.\n");
-
-    while (1) {
-        sleep(1);
+    // Bucle principal del servidor. Se ejecuta hasta que exit_flag sea 1.
+    while (exit_flag == 0) {
+        mg_sleep(1000);
     }
 
+    // Detiene el servidor de forma segura.
+    printf("\nDeteniendo el servidor...\n");
     mg_stop(ctx);
     mg_exit_library();
+
     return 0;
 }

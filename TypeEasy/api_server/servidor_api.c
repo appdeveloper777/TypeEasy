@@ -73,45 +73,36 @@ char* ejecutarScript(const char* comando) {
     return resultado;
 }
 
-// Manejador para la ruta /api/productos
-static int manejadorProductos(struct mg_connection *conn, void *cbdata) {
+// Nuevo manejador genérico para todas las rutas de la API
+static int apiRouterHandler(struct mg_connection *conn, void *cbdata) {
     (void)cbdata; // Marcar como no utilizado para evitar warnings
 
-    // --- Ejecutar el script de TypeEasy ---
-    //const char* comando = "./typeeasy apis/scripts/get_productos.te";
-    //char* respuesta_json = ejecutarScript(comando);
+    const struct mg_request_info *req_info = mg_get_request_info(conn);
+    const char *uri = req_info->local_uri;
 
-    const char* respuesta_json =
-        "[\n"
-        "  {\n"
-        "    \"id\": 101,\n"
-        "    \"nombre\": \"Teclado Mecánico RGB\",\n"
-        "    \"precio\": 79.99,\n"
-        "    \"stock\": 50\n"
-        "  },\n"
-        "  {\n"
-        "    \"id\": 102,\n"
-        "    \"nombre\": \"Mouse Gamer Inalámbrico\",\n"
-        "    \"precio\": 49.50,\n"
-        "    \"stock\": 120\n"
-        "  },\n"
-        "  {\n"
-        "    \"id\": 205,\n"
-        "    \"nombre\": \"Monitor Curvo 27 pulgadas\",\n"
-        "    \"precio\": 299.00,\n"
-        "    \"stock\": 35\n"
-        "  }\n"
-        "]";
+    // LOG: Imprimir la URI recibida para depuración.
+    fprintf(stderr, "[LOG] apiRouterHandler: URI recibida: %s\n", uri);
+
+    char comando[512];
+    // Construimos el comando para ejecutar el enrutador, pasándole la URI solicitada.
+    // CORRECCIÓN: Usar 'router.te' en lugar de 'get_productos.te' para que el enrutamiento funcione.
+    snprintf(comando, sizeof(comando), "./typeeasy apis/router.te %s", uri);
+
+    // LOG: Imprimir el comando que se va a ejecutar.
+    fprintf(stderr, "[LOG] apiRouterHandler: Ejecutando comando: %s\n", comando);
+
+    char* respuesta_json = ejecutarScript(comando);
 
     if (respuesta_json) {
+        // LOG: Imprimir la respuesta JSON obtenida del script.
+        fprintf(stderr, "[LOG] apiRouterHandler: Respuesta del script:\n---\n%s\n---\n", respuesta_json);
         mg_send_http_ok(conn, "application/json", strlen(respuesta_json));
         mg_write(conn, respuesta_json, strlen(respuesta_json));
-        // No se debe liberar 'respuesta_json' aquí porque ahora es una cadena literal (stack/static).
-        // La llamada a free() solo es necesaria cuando la memoria es asignada dinámicamente
-        // con malloc/calloc/realloc, como lo hacía la función 'ejecutarScript'.
-        // free(respuesta_json);
+        free(respuesta_json);
     } else {
-        mg_send_http_error(conn, 500, "Error al ejecutar el script del servidor.");
+        // LOG: Indicar que el script no devolvió ninguna respuesta.
+        fprintf(stderr, "[LOG-ERROR] apiRouterHandler: El script no devolvió ninguna respuesta (respuesta_json es NULL).\n");
+        mg_send_http_error(conn, 500, "Error al ejecutar el script del enrutador.");
     }
 
     return 1;
@@ -148,6 +139,9 @@ int main(void) {
     // Opciones del servidor. Escuchará en el puerto 8080.
     const char *options[] = {"listening_ports", "8080", NULL};
 
+    // Registrar el manejador de señales para Ctrl+C
+    signal(SIGINT, signal_handler);
+
     // Inicia la biblioteca CivetWeb
     mg_init_library(0);
 
@@ -161,15 +155,22 @@ int main(void) {
     printf("Servidor iniciado en http://localhost:8080\n");
 
     // --- ¡Paso Clave! Registra los manejadores para cada ruta ---
-    mg_set_request_handler(ctx, "/", manejador_raiz, NULL);
-    mg_set_request_handler(ctx, "/api/productos", manejadorProductos, NULL);
+    mg_set_request_handler(ctx, "/", manejadorRaiz, NULL);
+    // Registramos el manejador genérico para cualquier ruta que empiece con /api/
+    mg_set_request_handler(ctx, "/api/**", apiRouterHandler, NULL);
 
-    // Espera indefinidamente (en un programa real, aquí iría un bucle o manejo de señales)
-    while (1) {
-        mg_sleep(1000);
+    // Bucle principal del servidor. Se ejecuta hasta que exit_flag sea 1.
+    while (exit_flag == 0) {
+        // Pausa de 1 segundo. Usamos la función correcta para cada sistema operativo.
+#if defined(_WIN32)
+        Sleep(1000);
+#else
+        sleep(1);
+#endif
     }
 
-    // Detiene el servidor (este código no se alcanzará en este ejemplo simple)
+    // Detiene el servidor de forma segura.
+    printf("\nDeteniendo el servidor...\n");
     mg_stop(ctx);
     mg_exit_library();
 
