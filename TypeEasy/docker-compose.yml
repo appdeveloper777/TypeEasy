@@ -1,6 +1,20 @@
 version: '2.3'
 
 services:
+  # --- SERVICIO DE LA API WEB ---
+  # Este es el servidor que se mantiene corriendo para aceptar peticiones.
+  # Se levanta con: docker compose up api
+  api:
+    build:
+      context: .
+      dockerfile: src/Dockerfile
+      target: api
+    image: typeeasy-api
+    ports:
+      - "8080:8080"
+  # --- SERVICIO DEL INTÉRPRETE TYPEEASY ---
+  # Este servicio es para usar tu compilador como una herramienta de línea de comandos.
+  # Se usa con: docker compose run --rm typeeasy <argumentos>
   typeeasy:
     build:
       context: .
