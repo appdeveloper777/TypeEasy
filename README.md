@@ -102,8 +102,12 @@ Si necesitas limpiar contenedores antiguos manualmente:
 ```bash
 docker container prune
 ```
+Para corre los endpoints el código se encuentra en TypeEasy/typeeasycode/apis: http://localhost:8080/
 
----
+```bash
+docker compose up -d --build api
+docker compose logs -f api
+```
 
 ## 🧠 Consejos útiles
 
