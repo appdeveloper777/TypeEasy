@@ -14,6 +14,8 @@
     int yylex();
     void generate_code(const char* code);
     void clean_generated_code();
+    int g_debug_mode = 0;
+
 
 %}
 
@@ -26,7 +28,7 @@
 
 %token <sval> INT STRING FLOAT FLOAT_LITERAL LAYER LSBRACKET RSBRACKET
 %token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA
-%token       VAR ASSIGN PRINT FOR LPAREN RPAREN SEMICOLON CONCAT
+%token       VAR ASSIGN PRINT PRINTLN FOR LPAREN RPAREN SEMICOLON CONCAT
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
 %token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN
 %token <sval> IDENTIFIER STRING_LITERAL
@@ -181,6 +183,12 @@ statement:
   | FLOAT IDENTIFIER ASSIGN expression SEMICOLON                { $$ = create_var_decl_node($2, $4); }
   | VAR IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_ast_node("DECLARE", create_ast_leaf("IDENTIFIER", 0, NULL, $2), $4); }
   | IDENTIFIER ASSIGN expression SEMICOLON                      { $$ = create_ast_node("ASSIGN", create_ast_leaf("VAR",0,NULL,$1), $3); }
+  
+  
+  | PRINTLN LPAREN expression RPAREN SEMICOLON                    { $$ = create_ast_node("PRINTLN", $3, NULL); }
+  | PRINTLN LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON     { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("PRINTLN", access, NULL); }
+
+  
   | PRINT LPAREN expression RPAREN SEMICOLON                    { $$ = create_ast_node("PRINT", $3, NULL); }
   | PRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON     { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("PRINT", access, NULL); }
   | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET  { 
@@ -345,6 +353,13 @@ void print_ast(ASTNode *node, int indent) {
 int main(int argc, char *argv[]) {
 
     //yydebug = 1;
+
+    // --- INICIO: Código para activar el modo de depuración ---
+    const char* debug_env = getenv("TYPEEASY_DEBUG");
+    if (debug_env != NULL && strcmp(debug_env, "1") == 0) {
+        g_debug_mode = 1;
+        printf("[INFO] Modo de depuración activado.\n");
+    }
   
     clock_t inicio = clock();
     
@@ -375,8 +390,11 @@ int main(int argc, char *argv[]) {
     yyin = file;
     int parse_result = yyparse();
     fclose(file);
+    
+    if (g_debug_mode) {
+        printf("[DEBUG] AST construido\n");
+    }
 
-    printf("[DEBUG] AST construido:\n");
     //print_ast(root, 0);  // <- muestra el árbol
 
     if (parse_result != 0) {
@@ -407,28 +425,22 @@ int main(int argc, char *argv[]) {
        // compile_to_bytecode(root);
        // run_bytecode();
     } else {
-        printf("[DEBUG] Ejecutando con AST normal\n");
+        if (g_debug_mode) {
+            printf("[DEBUG] Ejecutando con AST normal\n");
+        }
         if (root) {
             interpret_ast(root);
             free_ast(root);
         }
     }
+   
+    if (g_debug_mode) {
+        clock_t fin = clock();
+        double tiempo = (double)(fin - inicio) / CLOCKS_PER_SEC;
+        printf("Tiempo de ejecución: %.6f segundos\n", tiempo);
+    }
 
-
-    //if (interpret_mode) {
-        //  Ejecutar directamente el AST
-     //   if (root) {
-      //      interpret_ast(root);
-      //      free_ast(root);
-      //  }
-   // } else {
-        // Compilar y ejecutar el código generado
-
-   // }
-
-    clock_t fin = clock();
-    double tiempo = (double)(fin - inicio) / CLOCKS_PER_SEC;
-    printf("Tiempo de ejecución: %.6f segundos\n", tiempo);
+    
 
 
     return 0;

@@ -64,45 +64,126 @@ char* ejecutarScript(const char* comando) {
     }
     resultado[resultado_size] = '\0';
 
+    int status;
 #ifdef _WIN32
-    _pclose(pipe);
+    status = _pclose(pipe);
 #else
-    pclose(pipe);
+    status = pclose(pipe);
 #endif
+
+    // Comprueba si el script se ejecutó correctamente.
+    if (status != 0) {
+        fprintf(stderr, "[LOG-ERROR] ejecutarScript: El script terminó con un código de estado no cero: %d\n", status);
+        // La salida puede estar incompleta o contener mensajes de error, así que la descartamos.
+        free(resultado);
+        return NULL;
+    }
 
     return resultado;
 }
 
-// Nuevo manejador genérico para todas las rutas de la API
-static int apiRouterHandler(struct mg_connection *conn, void *cbdata) {
+// Manejador para la ruta /api/productos
+static int manejadorProductos(struct mg_connection *conn, void *cbdata) {
     (void)cbdata; // Marcar como no utilizado para evitar warnings
 
     const struct mg_request_info *req_info = mg_get_request_info(conn);
     const char *uri = req_info->local_uri;
 
     // LOG: Imprimir la URI recibida para depuración.
-    fprintf(stderr, "[LOG] apiRouterHandler: URI recibida: %s\n", uri);
+    fprintf(stderr, "[LOG] manejadorProductos: URI recibida: %s\n", uri);
 
     char comando[512];
     // Construimos el comando para ejecutar el enrutador, pasándole la URI solicitada.
     // CORRECCIÓN: Usar 'router.te' en lugar de 'get_productos.te' para que el enrutamiento funcione.
-    snprintf(comando, sizeof(comando), "./typeeasy apis/router.te %s", uri);
+    snprintf(comando, sizeof(comando), "./typeeasy apis/product_endpoint.te");
 
     // LOG: Imprimir el comando que se va a ejecutar.
-    fprintf(stderr, "[LOG] apiRouterHandler: Ejecutando comando: %s\n", comando);
+    fprintf(stderr, "[LOG] manejadorProductos: Ejecutando comando: %s\n", comando);
 
     char* respuesta_json = ejecutarScript(comando);
 
     if (respuesta_json) {
         // LOG: Imprimir la respuesta JSON obtenida del script.
-        fprintf(stderr, "[LOG] apiRouterHandler: Respuesta del script:\n---\n%s\n---\n", respuesta_json);
+        fprintf(stderr, "[LOG] manejadorProductos: Respuesta del script:\n---\n%s\n---\n", respuesta_json);
         mg_send_http_ok(conn, "application/json", strlen(respuesta_json));
         mg_write(conn, respuesta_json, strlen(respuesta_json));
         free(respuesta_json);
     } else {
         // LOG: Indicar que el script no devolvió ninguna respuesta.
-        fprintf(stderr, "[LOG-ERROR] apiRouterHandler: El script no devolvió ninguna respuesta (respuesta_json es NULL).\n");
-        mg_send_http_error(conn, 500, "Error al ejecutar el script del enrutador.");
+        fprintf(stderr, "[LOG-ERROR] manejadorProductos: El script no devolvió ninguna respuesta (respuesta_json es NULL).\n");
+        mg_send_http_error(conn, 500, "Error al ejecutar el script de productos.");
+    }
+
+    return 1;
+}
+
+// Nuevo manejador para la ruta /api/usuarios
+static int manejadorUsuarios(struct mg_connection *conn, void *cbdata) {
+    (void)cbdata; // Marcar como no utilizado para evitar warnings
+
+    char comando[512];
+    // Con la estructura de archivos simplificada, la ruta dentro del contenedor será 'apis/user_endpoint.te'.
+    snprintf(comando, sizeof(comando), "./typeeasy apis/user_endpoint.te");
+
+    fprintf(stderr, "[LOG] manejadorUsuarios: Ejecutando comando: %s\n", comando);
+    char* respuesta_json = ejecutarScript(comando);
+
+    if (respuesta_json) {
+        fprintf(stderr, "[LOG] manejadorUsuarios: Respuesta del script:\n---\n%s\n---\n", respuesta_json);
+        mg_send_http_ok(conn, "application/json", strlen(respuesta_json));
+        mg_write(conn, respuesta_json, strlen(respuesta_json));
+        free(respuesta_json);
+    } else {
+        fprintf(stderr, "[LOG-ERROR] manejadorUsuarios: El script no devolvió ninguna respuesta (respuesta_json es NULL).\n");
+        mg_send_http_error(conn, 500, "Error al ejecutar el script de usuarios.");
+    }
+
+    return 1;
+}
+
+// Nuevo manejador para la ruta /api/proveedores (XML)
+static int manejadorProveedores(struct mg_connection *conn, void *cbdata) {
+    (void)cbdata; // Marcar como no utilizado para evitar warnings
+
+    char comando[512];
+    snprintf(comando, sizeof(comando), "./typeeasy apis/proveedores_endpoint.te");
+
+    fprintf(stderr, "[LOG] manejadorProveedores: Ejecutando comando: %s\n", comando);
+    char* respuesta_xml = ejecutarScript(comando);
+
+    if (respuesta_xml) {
+        fprintf(stderr, "[LOG] manejadorProveedores: Respuesta del script:\n---\n%s\n---\n", respuesta_xml);
+        // Importante: Cambiar el Content-Type a "application/xml"
+        mg_send_http_ok(conn, "application/xml; charset=utf-8", strlen(respuesta_xml));
+        mg_write(conn, respuesta_xml, strlen(respuesta_xml));
+        free(respuesta_xml);
+    } else {
+        fprintf(stderr, "[LOG-ERROR] manejadorProveedores: El script no devolvió ninguna respuesta (respuesta_xml es NULL).\n");
+        mg_send_http_error(conn, 500, "Error al ejecutar el script de proveedores.");
+    }
+
+    return 1;
+}
+
+// Nuevo manejador para la ruta /api/facturas (XML)
+static int manejadorFacturas(struct mg_connection *conn, void *cbdata) {
+    (void)cbdata; // Marcar como no utilizado para evitar warnings
+
+    char comando[512];
+    snprintf(comando, sizeof(comando), "./typeeasy apis/facturas_endpoint.te");
+
+    fprintf(stderr, "[LOG] manejadorFacturas: Ejecutando comando: %s\n", comando);
+    char* respuesta_xml = ejecutarScript(comando);
+
+    if (respuesta_xml) {
+        fprintf(stderr, "[LOG] manejadorFacturas: Respuesta del script:\n---\n%s\n---\n", respuesta_xml);
+        // Importante: Cambiar el Content-Type a "application/xml"
+        mg_send_http_ok(conn, "application/xml; charset=utf-8", strlen(respuesta_xml));
+        mg_write(conn, respuesta_xml, strlen(respuesta_xml));
+        free(respuesta_xml);
+    } else {
+        fprintf(stderr, "[LOG-ERROR] manejadorFacturas: El script no devolvió ninguna respuesta (respuesta_xml es NULL).\n");
+        mg_send_http_error(conn, 500, "Error al ejecutar el script de facturas.");
     }
 
     return 1;
@@ -129,7 +210,11 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
               "<html><body>"
               "<h1>¡TypeEasy APIs!</h1>"
               "<p>El servidor está funcionando correctamente.</p>"
-              "<p>Prueba el endpoint de la API en: <a href=\"/api/productos\">/api/productos</a></p>"
+              "<p>Prueba el endpoint JSON de la API en: <a href=\"/api/productos\">/api/productos</a></p>"
+              "<p>Prueba el endpoint JSON de la API en: <a href=\"/api/usuario/perfil\">/api/usuario/perfil</a></p>"
+              "<p>Prueba el endpoint XML de la API en: <a href=\"/api/proveedores\">/api/proveedores</a></p>"
+              "<p>Prueba el endpoint XML de la API en: <a href=\"/api/facturas\">/api/facturas</a></p>"
+
               "</body></html>");
     return 1;
 }
@@ -156,8 +241,10 @@ int main(void) {
 
     // --- ¡Paso Clave! Registra los manejadores para cada ruta ---
     mg_set_request_handler(ctx, "/", manejadorRaiz, NULL);
-    // Registramos el manejador genérico para cualquier ruta que empiece con /api/
-    mg_set_request_handler(ctx, "/api/**", apiRouterHandler, NULL);
+    mg_set_request_handler(ctx, "/api/productos", manejadorProductos, NULL);
+    mg_set_request_handler(ctx, "/api/usuario/perfil", manejadorUsuarios, NULL);
+    mg_set_request_handler(ctx, "/api/proveedores", manejadorProveedores, NULL);
+    mg_set_request_handler(ctx, "/api/facturas", manejadorFacturas, NULL);
 
     // Bucle principal del servidor. Se ejecuta hasta que exit_flag sea 1.
     while (exit_flag == 0) {

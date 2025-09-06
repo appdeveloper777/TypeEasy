@@ -34,6 +34,7 @@
 "new"                   { return NEW; }
 "let"                   { return LET; }
 "print"                 { return PRINT; }
+"println"               { return PRINTLN; }
 "for"                   { return FOR; }
 "concat"                { return CONCAT; }
 "in"                    { return IN; }
@@ -66,11 +67,44 @@
 "="                     { return ASSIGN; }
 
 
-\"(\\.|[^\"])*\"        {
-                            yylval.sval = strdup(yytext + 1);
-                            yylval.sval[strlen(yylval.sval) - 1] = '\0';
-                            return STRING_LITERAL;
-                        }
+\"(\\.|[^\"])*\"      {
+                          // Asigna memoria para la nueva cadena procesada.
+                          // yytext - 2 es un tamaño seguro (quitando las 2 comillas de los extremos).
+                          yylval.sval = (char *) malloc(strlen(yytext) - 1);
+                          
+                          // Puntero de escritura 'w' para nuestra nueva cadena.
+                          char *w = yylval.sval;
+
+                          // Itera sobre el contenido de la cadena en yytext (saltando las comillas de los extremos).
+                          for (char *s = yytext + 1; *s != '"' || (*(s-1) == '\\' && *s == '"'); s++) {
+                              if (*s == '\\') { // Si encontramos una barra invertida...
+                                  s++; // ...avanzamos al siguiente carácter para ver qué es.
+                                  switch (*s) {
+                                      case 'n': // Secuencia de escape para nueva línea
+                                          *w++ = '\n';
+                                          break;
+                                      case 't': // Secuencia de escape para tabulación
+                                          *w++ = '\t';
+                                          break;
+                                      case '"': // Secuencia de escape para comillas dobles
+                                          *w++ = '"';
+                                          break;
+                                      case '\\': // Secuencia de escape para la propia barra invertida
+                                          *w++ = '\\';
+                                          break;
+                                      default: // Para cualquier otro carácter, simplemente lo copiamos
+                                          *w++ = *s;
+                                          break;
+                                  }
+                              } else {
+                                  // Si no es una secuencia de escape, solo copia el carácter.
+                                  *w++ = *s;
+                              }
+                          }
+                          // Asegúrate de terminar la cadena con el carácter nulo.
+                          *w = '\0';
+                          return STRING_LITERAL;
+                      }
 
 
 [0-9]+                  {

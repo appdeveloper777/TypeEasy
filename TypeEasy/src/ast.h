@@ -126,7 +126,6 @@ ASTNode *create_return_node(ASTNode *expr);
 void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *body);
 
 
-
 ASTNode *create_function_call_node(const char *funcName, ASTNode *args);
 
 

@@ -1,4 +1,3 @@
-version: '2.3'
 
 services:
   # --- SERVICIO DE LA API WEB ---
@@ -11,7 +10,10 @@ services:
       target: api
     image: typeeasy-api
     ports:
-      - "8080:8080"
+      - "8080:8080"  
+    environment:
+      # Activa los logs de depuración en el intérprete. Cambia a "0" para desactivarlos.
+      - TYPEEASY_DEBUG=0  
   # --- SERVICIO DEL INTÉRPRETE TYPEEASY ---
   # Este servicio es para usar tu compilador como una herramienta de línea de comandos.
   # Se usa con: docker compose run --rm typeeasy <argumentos>
@@ -19,7 +21,11 @@ services:
     build:
       context: .
       dockerfile: src/Dockerfile
+      target: typeeasy
     volumes:
       - ./typeeasycode:/code
+    environment:
+      # Activa los logs de depuración en el intérprete. Cambia a "0" para desactivarlos.
+      - TYPEEASY_DEBUG=0
     working_dir: /code
     entrypoint: ["/typeeasy/typeeasy"]

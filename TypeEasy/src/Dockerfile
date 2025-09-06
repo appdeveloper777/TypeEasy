@@ -21,7 +21,7 @@ COPY . .
 FROM base AS typeeasy_builder
 
 # Usamos el Makefile para construir el ejecutable "typeeasy"
-RUN make -C src clean && make -C src
+RUN make -C /app/src clean && make -C /app/src
 
 # =================================================================
 # ETAPA 3: COMPILAR EL SERVIDOR "typeeasy_api"
@@ -34,8 +34,8 @@ RUN openssl version
 # Compilamos con la versión correcta de OpenSSL API
 # Para OpenSSL 3.x usa OPENSSL_API_1_1, para versiones anteriores usa OPENSSL_API_1_0
 # Corrected line for your Dockerfile
-RUN gcc -Iapi_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 \
-    api_server/servidor_api.c api_server/civetweb.c \
+RUN gcc -I/app/api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 \
+    /app/api_server/servidor_api.c /app/api_server/civetweb.c \
     -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto
 
 
@@ -61,10 +61,17 @@ RUN apt-get update && \
 # Copia el ejecutable desde la etapa de construcción LOCAL api_builder
 COPY --from=api_builder /app/typeeasy_api .
 
+# Copia el ejecutable del INTÉRPRETE desde la etapa 'typeeasy_builder',
+# ya que el servidor lo necesita para ejecutar los scripts.
+COPY --from=typeeasy_builder /app/src/typeeasy .
+
+# Copia los scripts de la API desde la etapa 'base' donde se copiaron originalmente.
+COPY typeeasycode/apis ./apis
+
 EXPOSE 8080
 
 # Comando para iniciar el servidor
-CMD ["./typeeasy_api", "8080"]
+CMD ["./typeeasy_api"]
 
 # =================================================================
 # ETAPA 5: IMAGEN FINAL PARA EL INTÉRPRETE (Lista para producción)

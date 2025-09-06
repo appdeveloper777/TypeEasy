@@ -11,7 +11,7 @@ class Person {
         this.nombre = _nombre;        
     }
     Imprimir(p_edad : int) {          
-        print("MI EDAD ES: ");
+        println("MI EDAD ES2: ");
         print(this.edad);
         print("MI NOMBRE ES: ");
         print(this.nombre);

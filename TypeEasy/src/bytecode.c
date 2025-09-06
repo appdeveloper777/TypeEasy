@@ -204,7 +204,6 @@ void run_bytecode() {
     int ip = 0;
     while (1) {
         Instruction instr = bytecode[ip++];
-        printf("[BC] ip=%d opcode=%d operand=%d var=%s str=%s\n",
             ip - 1, instr.opcode, instr.operand,
             instr.varname ? instr.varname : "-", 
             instr.str_value ? instr.str_value : "-");

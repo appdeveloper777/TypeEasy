@@ -61,7 +61,7 @@ let item1 = new LineaItem("Producto Real 1", 1, 10);
 let item2 = new LineaItem("Producto Real 2", 5, 25);
 let lista_items_reales = [item1, item2];
 
-let mi_factura = new Factura("Cliente Retail S.A.", "2025-09-06");
+let mi_factura = new Factura("Cliente de Verdad S.A.", "2025-09-06");
 
 // Al llamar este método, se mostrará el XML con los datos del mock.
 mi_factura.generarXML();
