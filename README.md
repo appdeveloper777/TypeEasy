@@ -13,7 +13,7 @@ Imagina un futuro donde: <br>
 ✔️ Tu código se ejecuta más rápido que Python - Mejor que Pandas y casi igual que Polars. <br>
 ✔️ Tienes la libertad de crear tu propia sintaxis para adaptarla perfectamente a tu dominio o equipo. <br>
 ✔️ Puedes hacer "bridge" sin esfuerzo con otros lenguajes potentes como Java, Rust y C#, aprovechando lo mejor de cada ecosistema. <br>
-✔️ Crear tus endpoint como FastAPI
+✔️ Crear tus endpoint como FastAPI <br>
 ✔️ Crear tus scripting para Integraciones
 
 
