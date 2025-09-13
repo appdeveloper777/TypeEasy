@@ -46,13 +46,17 @@ Para modificar y correr el código .te:
 
 ### 🛠️ Cómo usar
 
-1. Clona el repositorio o descarga el proyecto:
-
+1. Clona el repositorio o descarga el proyecto, ejectute el siguiente comando en el VS Code:
+   
+- Para macOS, Linux o Window(Usando Git Bash)   
 ```bash
-git clone https://github.com/appdeveloper777/TypeEasy.git
-cd TypeEasy && code -r .
+git clone https://github.com/appdeveloper777/TypeEasy.git && cd TypeEasy && code -r .
 ```
-
+- Para Windows (usando PowerShell)
+```bash
+git clone https://github.com/appdeveloper7-777/TypeEasy.git; cd TypeEasy; code -r .
+```
+   
 Asegúrate de tener un archivo `.te` dentro de la carpeta `typeeasycode/`.  
 Por ejemplo: `TypeEeasy/typeeasycode/main.te`
 
