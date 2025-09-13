@@ -50,7 +50,7 @@ Clona el repositorio o descarga el proyecto:
 
 ```bash
 git clone https://github.com/appdeveloper777/TypeEasy.git
-cd TypeEasy code .
+cd TypeEasy && code -r .
 ```
 
 Asegúrate de tener un archivo `.te` dentro de la carpeta `typeeasycode/`.  
