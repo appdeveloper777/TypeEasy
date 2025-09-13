@@ -46,24 +46,23 @@ Para modificar y correr el código .te:
 
 ### 🛠️ Cómo usar
 
-Clona el repositorio o descarga el proyecto:
+1. Clona el repositorio o descarga el proyecto:
 
 ```bash
 git clone https://github.com/appdeveloper777/TypeEasy.git
 cd TypeEasy && code -r .
-cd TypeEasy
 ```
 
 Asegúrate de tener un archivo `.te` dentro de la carpeta `typeeasycode/`.  
-Por ejemplo: `typeeasycode/main.te`
+Por ejemplo: `TypeEeasy/typeeasycode/main.te`
 
-Construye la imagen de Docker:
+2. Construye la imagen de Docker:
 
 ```bash
 docker compose build
 ```
 
-Ejecuta un archivo `.te`:
+3. Ejecuta un archivo `.te`:
 
 ```bash
 docker compose run --rm typeeasy main.te
