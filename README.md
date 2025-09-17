@@ -18,21 +18,6 @@ Imagina un futuro donde: <br>
 ✔️ Crear tus endpoint como FastAPI <br>
 ✔️ Crear tus scripting para Integraciones
 
-
-Para modificar y correr el código .te: 
-
-1. Abrir con el terminal la carpeta src
-2. Hacer los cambios que consideres
-3. Ejecutar en el terminal:
-   
-* make clean
-* make
-*  ./typeeasy ../typeeasycode/main.te
-*  ./typeeasy ../typeeasycode/buble_for.te
-*  ./typeeasy ../typeeasycode/crear_clase.te
-*  ./typeeasy ../typeeasycode/machine_learning.te
-*  ./typeeasy ../typeeasycode/main.te
-*  ./typeeasy ../typeeasycode/link_to_objects.te
 ![image](https://github.com/user-attachments/assets/d4617ae8-71f0-4270-9e70-ad00bd6694ab)
 
 ## 🚀 Ejecutar TypeEasy con Docker Compose
