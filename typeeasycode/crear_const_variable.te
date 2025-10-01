@@ -1,5 +1,12 @@
+/*
+  * Archivo: crear_const_variable.te
+  * Descripcion: Ejemplo de creacion y uso de una variable constante.
+  * Autor: Fernando Ingunza
+  * Fecha: 2024-06-26
+  */
+
 const CONSTANTE_DE_LOS_DIOSES = "HOLA MUNDO";
-//CONSTANTE_DE_LOS_DIOSES = "SAPE";
+//CONSTANTE_DE_LOS_DIOSES = "SAPEEEE";
 
 println(CONSTANTE_DE_LOS_DIOSES);
 println("Hola Mundo");
