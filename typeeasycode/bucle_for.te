@@ -4,8 +4,8 @@
 // String
 string cadena = "ESTE ES UN STRING DE LOS DIOSES..";
 // Float
-float suma = 100 + 100 * 2;
-float pi = 3;
+float suma = 100.00;
+float pi = 3.00;
 float operacion = 100 + 2;
 // Int
 int contador = 0;

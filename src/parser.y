@@ -31,7 +31,7 @@
 %token       VAR ASSIGN PRINT PRINTLN FOR LPAREN RPAREN SEMICOLON CONCAT
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
 %token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN
-%token <sval> IDENTIFIER STRING_LITERAL
+%token <sval> IDENTIFIER STRING_LITERAL CONST
 %token <ival> NUMBER
 
 %type <sval> method_name
@@ -126,7 +126,11 @@ expression:
 
     expression GT expression    { $$ = create_ast_node("GT", $1, $3); }
 | expression LT expression      { $$ = create_ast_node("LT", $1, $3); }
-| expression EQ expression      { $$ = create_ast_node("EQ", $1, $3); }
+| expression EQ expression      { 
+    /* Aquí $1 y $3 son nodos ASTNode*. Puedes inspeccionar sus tipos si es necesario. */
+    /* Por ejemplo: if (strcmp($1->type, "STRING") == 0) { ... } */
+    $$ = create_ast_node("EQ", $1, $3); 
+}
 | expression GT_EQ expression    { $$ = create_ast_node("GT_EQ", $1, $3); }
 | expression LT_EQ expression    { $$ = create_ast_node("LT_EQ", $1, $3); }
 | expression DIFF expression    { $$ = create_ast_node("DIFF", $1, $3); }
@@ -161,9 +165,11 @@ expression:
 var_decl:
     LET IDENTIFIER ASSIGN IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN SEMICOLON  { /*printf(" [DEBUG] Reconocido FILTER_CALL: let %s = %s(...)\n", $2, $4);*/ ASTNode *listExpr = $6; ASTNode *lambda = $8; ASTNode *filterCall = create_list_function_call_node(listExpr, $4, lambda); filterCall->type = strdup("FILTER_CALL"); $$ = create_var_decl_node($2, filterCall); }
   | LET IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
-  | STRING IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
-  | VAR IDENTIFIER ASSIGN expression SEMICOLON  { printf("IMPRIMIENDO VAR \n"); $$ = create_var_decl_node($2, $4); }
-  | INT IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
+  | STRING IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("STRING"); $$ = decl; }
+  | VAR IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
+  | CONST INT IDENTIFIER ASSIGN expression SEMICOLON { ASTNode* decl = create_var_decl_node($3, $5); decl->value = 1; /* Marcar como const */ decl->str_value = strdup("INT"); $$ = decl; }
+  | CONST IDENTIFIER ASSIGN expression SEMICOLON { ASTNode* decl = create_var_decl_node($2, $4); decl->value = 1; /* Marcar como const */ $$ = decl; }
+  | INT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("INT"); $$ = decl; }
   | IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
   | THIS DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,"this"); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
   
@@ -175,14 +181,20 @@ statement:
   | RETURN expression SEMICOLON  { $$ = create_return_node($2); }
   | var_decl
   | STRING STRING expression SEMICOLON                          { printf(" [DEBUG] Declaración de variable s: ¿"); char buffer[2048]; sprintf(buffer,"#include \"easyspark/dataframe.hpp\"\n..."); generate_code(buffer); }
-  | IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); $$ = create_method_call_node(obj, $3, NULL); }
+  | IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$1); $$ = create_method_call_node(obj, $3, NULL); }
   | IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); $$ = create_method_call_node(obj, $3, $5); }
   | THIS DOT IDENTIFIER LPAREN RPAREN SEMICOLON                 { ASTNode *thisObj = create_ast_leaf("ID",0,NULL,"this"); $$ = create_method_call_node(thisObj, $3, NULL); }
   | STRING IDENTIFIER ASSIGN STRING_LITERAL SEMICOLON           { $$ = create_var_decl_node($2, create_string_node($4)); }
   | INT IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_var_decl_node($2, create_int_node($4->value)); }
-  | FLOAT IDENTIFIER ASSIGN expression SEMICOLON                { $$ = create_var_decl_node($2, $4); }
+  | FLOAT IDENTIFIER ASSIGN expression SEMICOLON                { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("FLOAT"); $$ = decl; }
   | VAR IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_ast_node("DECLARE", create_ast_leaf("IDENTIFIER", 0, NULL, $2), $4); }
-  | IDENTIFIER ASSIGN expression SEMICOLON                      { $$ = create_ast_node("ASSIGN", create_ast_leaf("VAR",0,NULL,$1), $3); }
+  | IDENTIFIER ASSIGN expression SEMICOLON       
+{ 
+    // El parser solo crea el nodo. El intérprete se encargará de la lógica.
+    // El nodo 'IDENTIFIER' guarda el nombre de la variable ($1).
+    // El nodo 'expression' guarda el valor a asignar ($3).
+    $$ = create_ast_node("ASSIGN", create_ast_leaf("IDENTIFIER",0,NULL,$1), $3); 
+}
   
   
   | PRINTLN LPAREN expression RPAREN SEMICOLON                    { $$ = create_ast_node("PRINTLN", $3, NULL); }
@@ -445,4 +457,3 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-

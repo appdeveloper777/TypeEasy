@@ -9,7 +9,7 @@ class Producto {
 
   Mostrar() {
     print(this.nombre);
-    print(this.precio);
+    println(this.precio);
   }
 }
 

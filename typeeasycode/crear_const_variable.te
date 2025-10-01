@@ -1,0 +1,5 @@
+const CONSTANTE_DE_LOS_DIOSES = "HOLA MUNDO";
+//CONSTANTE_DE_LOS_DIOSES = "SAPE";
+
+println(CONSTANTE_DE_LOS_DIOSES);
+println("Hola Mundo");

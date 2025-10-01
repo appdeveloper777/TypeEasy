@@ -16,7 +16,7 @@ class Person {
         print("MI NOMBRE ES: ");
         print(this.nombre);
         print("MI EMPRESA ES: ");
-        print(this.company);
+        println(this.company);
     }  
     
     Saludar() {           
@@ -29,14 +29,16 @@ class Person {
         return numero;
     }
 }
+var test = 3.4;
 int mi_edad = 36;
 string mi_nombre = "Fernando Ingunza";
-string mi_empresa = "Google";
+string mi_empresa = "Roussecloud";
 let obj = new Person(mi_edad, mi_nombre, mi_empresa);
 string saludarResult = obj.Saludar();
 int contarResult = obj.Contar();
 //print(obj.nombre);
-obj.Imprimir(12);
+obj.Imprimir(12);  
+println(test);
 //print(saludarResult);
 //print(contarResult);
 

@@ -34,6 +34,7 @@
 "new"                   { return NEW; }
 "let"                   { return LET; }
 "print"                 { return PRINT; }
+"const"                 { return CONST; }
 "println"               { return PRINTLN; }
 "for"                   { return FOR; }
 "concat"                { return CONCAT; }

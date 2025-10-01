@@ -151,14 +151,40 @@ ObjectNode *create_object(ClassNode *class) {
 
 // ====================== MANEJO DE VARIABLES ======================
 
-Variable *find_variable(char *id) {
+#include <stdio.h> // Asegúrate de tener esta línea al inicio de tu archivo
+#include <string.h>
+
+// Asumimos que la estructura Variable y el arreglo vars están definidos en otro lugar
+// typedef struct {
+//     char *id;
+//     // ... otros campos
+// } Variable;
+//
+// extern Variable vars[];
+// extern int var_count;
+
+#include <stdio.h> // Asegúrate de tener esta línea al inicio de tu archivo
+#include <string.h>
+
+// Asumimos que la estructura Variable y el arreglo vars están definidos en otro lugar
+// typedef struct {
+//     char *id;
+//     // ... otros campos
+// } Variable;
+//
+// extern Variable vars[];
+// extern int var_count;
+
+Variable *find_variable(char *id) {    
     for (int i = 0; i < var_count; i++) {
         if (vars[i].id) {
-            if (strcmp(vars[i].id, id) == 0) {
+            // Imprime el ID del elemento actual en el arreglo            
+            if (strcmp(vars[i].id, id) == 0) {                
                 return &vars[i];
             }
         }
     }
+    printf("El ID '%s' no fue encontrado.\n", id); // Mensaje si no se encuentra
     return NULL;
 }
 
@@ -171,7 +197,7 @@ Variable *find_variable_for(char *id) {
     return NULL;
 }
 
-void declare_variable(char *id, ASTNode *value) {
+void declare_variable(char *id, ASTNode *value, int is_const) {
     if (var_count >= MAX_VARS) {
         printf("Error: Demasiadas variables declaradas.\n");
         return;
@@ -181,7 +207,19 @@ void declare_variable(char *id, ASTNode *value) {
     var_count++;
 
     vars[my_index].id = strdup(id);
-    vars[my_index].type = strdup(value->type);
+    vars[my_index].is_const = is_const;
+
+    // Aseguramos que el tipo siempre sea una copia dinámica para poder liberarlo después
+    if (strcmp(value->type, "NUMBER") == 0) {
+        vars[my_index].type = strdup("INT");
+    } else if (strcmp(value->type, "STRING_LITERAL") == 0) {
+        vars[my_index].type = strdup("STRING");
+    } else if (strcmp(value->type, "FLOAT") == 0) {
+        vars[my_index].type = strdup("FLOAT");
+    } else {
+        // Para otros tipos como OBJECT, etc., que ya usan strdup en su creación.
+        vars[my_index].type = strdup(value->type);
+    }
 
     if (strcmp(value->type, "STRING") == 0) {
         vars[my_index].vtype = VAL_STRING;
@@ -284,7 +322,14 @@ void add_or_update_variable(char *id, ASTNode *value) {
 
     Variable *var = find_variable_for(id);
 
-    if (var) {
+    if (var) {        
+        // Verificamos si la variable es constante antes de actualizarla.
+        if (var->is_const) {
+            // Imprimimos un error profesional y detenemos la ejecución.
+            fprintf(stderr, "Error: No se puede asignar a la variable constante '%s'.\n", id);
+            exit(1); // Detiene el programa con un código de error.
+        }
+
         // Actualizar variable existente
         free(var->type);
         var->type = strdup(value->type);
@@ -308,6 +353,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
 
         vars[var_count].id = strdup(id);
         vars[var_count].type = strdup(value->type);
+        vars[var_count].is_const = 0; // Las variables creadas por asignación implícita no son const
 
 
         if (strcmp(value->type, "STRING") == 0) {
@@ -329,6 +375,10 @@ void add_or_update_variable(char *id, ASTNode *value) {
 
 ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
     ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    if (!node) {
+        fprintf(stderr, "Error fatal: No se pudo asignar memoria para ASTNode.\n");
+        exit(1);
+    }
     node->type = strdup(type);
     node->left = NULL;
     node->right = NULL;
@@ -429,6 +479,10 @@ ASTNode *create_identifier_node(const char* name) {
 
 ASTNode *create_var_decl_node(char *id, ASTNode *value) {
     ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    if (!node) {
+        fprintf(stderr, "Error fatal: No se pudo asignar memoria para VAR_DECL node.\n");
+        exit(1);
+    }
     node->type = strdup("VAR_DECL");
     node->id = strdup(id);
     node->left = value;
@@ -488,7 +542,8 @@ ASTNode *create_object_with_args(ClassNode *class, ASTNode *args) {
 
 ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *condition, ASTNode *update, ASTNode *body) {
     ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
-    node->type = strdup(type);
+    // CORRECCIÓN: El tipo debe ser una copia dinámica para poder ser liberado.
+    node->type = strdup("FOR");
     node->id = var->id;
     node->left = init;
     node->right = condition;
@@ -1271,9 +1326,41 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
 
 static void interpret_var_decl(ASTNode *node) {
 
+    int is_const_flag = node->value; // Recuperamos el flag de const
     //printf("[DEBUG] interpret_var_decl para '%s'\n", node->id);
+    const char* declared_type = node->str_value; // El tipo declarado, ej: "INT"
+    ASTNode* value_node = node->left;
 
-    if (node->left && node->left->type)
+    // --- ¡AQUÍ ESTÁ LA MAGIA DEL CHEQUEO DE TIPOS! ---
+    if (declared_type != NULL && value_node != NULL) {
+        // Mapeamos el tipo del valor a un tipo simple (INT, STRING, etc.)
+        const char* value_type_str;
+        if (strcmp(value_node->type, "NUMBER") == 0) {
+            value_type_str = "INT";
+        } else if (strcmp(value_node->type, "STRING_LITERAL") == 0 || strcmp(value_node->type, "STRING") == 0) {
+            value_type_str = "STRING";
+        } else if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0) {
+            // Si es una expresión matemática, su resultado será numérico (FLOAT o INT).
+            // Para la comprobación, lo consideramos compatible con FLOAT.
+            value_type_str = "FLOAT";
+        } else {
+            value_type_str = value_node->type; // Para otros tipos como FLOAT, OBJECT, etc.
+        }
+
+        // Comparamos el tipo declarado con el tipo del valor asignado
+        if (strcmp(declared_type, value_type_str) != 0) {
+            // EXCEPCIÓN: Permitir asignar un INT a un FLOAT.
+            int allow_int_to_float = (strcmp(declared_type, "FLOAT") == 0 && strcmp(value_type_str, "INT") == 0);
+
+            if (!allow_int_to_float) {
+                fprintf(stderr, "Error de tipo: No se puede asignar un valor de tipo '%s' a una variable de tipo '%s'.\n", value_type_str, declared_type);
+                exit(1); // Detenemos la ejecución por el error de tipo.
+            }
+            exit(1); // Detenemos la ejecución por el error de tipo.
+        }
+    }
+
+    if (node->left && node->left->type) {
         //printf("[DEBUG] interpret_var_decl: '%s' = tipo '%s'\n", node->id, node->left->type);
 
 
@@ -1341,8 +1428,9 @@ static void interpret_var_decl(ASTNode *node) {
         if (!r) { printf("Error: No se capturó valor de retorno.\n"); return; }
         ASTNode *lit = r->vtype==VAL_STRING
             ? create_ast_leaf("STRING",0,r->value.string_value,NULL)
+            // Pasamos el flag de const a declare_variable
             : create_ast_leaf_number("INT",r->value.int_value,NULL,NULL);
-        declare_variable(node->id, lit);
+        declare_variable(node->id, lit, is_const_flag);
         /* Limpieza */
         Variable *cleanup = find_variable("__ret__");
         if (cleanup) {
@@ -1351,7 +1439,8 @@ static void interpret_var_decl(ASTNode *node) {
         }
         return_flag=0; return_node=NULL; return;
     }
-    declare_variable(node->id, node->left);    
+    // Pasamos el flag de const a declare_variable
+    declare_variable(node->id, node->left, is_const_flag);
     /* Llamada al constructor si existe */
     if (node->left && strcmp(node->left->type, "OBJECT")==0) {
         Variable *var = find_variable(node->id);
@@ -1395,6 +1484,7 @@ static void interpret_var_decl(ASTNode *node) {
             }
             call_method(var->value.object_value, "__constructor");
         }
+    }
     }
 
 }
@@ -1581,11 +1671,24 @@ static void interpret_assign_attr(ASTNode *node) {
 
 static void interpret_assign(ASTNode *node) {
     ASTNode *var_node = node->left;
-    ASTNode *expr_node = node->right;
-    if (!var_node || !expr_node) { printf("Error: Asignación inválida.\n"); return; }
-    //printf("Declaring interpret_assign: '%s'\n", var_node->id);
-    int result = evaluate_expression(expr_node);    
-    ASTNode *value_node = create_ast_leaf("INT", result, NULL, NULL);
+    ASTNode *value_node = node->right; // El valor a asignar
+
+    if (!var_node || !var_node->id || !value_node) {
+        printf("Error: Asignación inválida.\n"); 
+        return; 
+    }
+
+    // Si el valor a asignar es una expresión matemática (ej: 5 + 3),
+    // la evaluamos primero para obtener el resultado final.
+    if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0) {
+        double result = evaluate_expression(value_node);
+        // Creamos un nodo temporal con el resultado para poder asignarlo.
+        // Usamos FLOAT para mantener la consistencia con el resultado de evaluate_expression.
+        value_node = create_ast_leaf("FLOAT", 0, int_to_string(result), NULL);
+    }
+
+    // Esta función se encarga de crear la variable si no existe, o de actualizarla si ya existe.
+    // ¡Es exactamente la lógica que querías!
     add_or_update_variable(var_node->id, value_node);
 }
 
@@ -1743,7 +1846,7 @@ static void interpret_println(ASTNode *node) {
             return;
         }
     }
-
+    
     // Escalares
     if (v->vtype == VAL_STRING)
         printf("%s\n", v->value.string_value);

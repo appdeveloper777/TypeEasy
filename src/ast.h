@@ -56,6 +56,7 @@ typedef struct ObjectNode ObjectNode;
 
 typedef struct Variable {
     char *id;
+    int is_const; // 1 si es constante, 0 si no
     ValueType vtype;
     char *type;
     union {
@@ -141,7 +142,7 @@ void add_or_update_variable(char *id, ASTNode *value);
 void add_variable_for(char *id, int value);
 void store_variable(char *id, ASTNode *value);
 Variable *find_variable(char *id);
-void declare_variable(char *id, ASTNode *value);
+void declare_variable(char *id, ASTNode *value, int is_const);
 void free_ast(ASTNode *node);
 int get_attribute_value(ObjectNode *obj, const char *attr_name);
 void set_attribute_value(ObjectNode *obj, const char *attr_name, int value);
