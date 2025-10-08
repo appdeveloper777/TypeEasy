@@ -99,6 +99,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls);
 ASTNode *create_list_node(ASTNode *items);
 ASTNode *append_to_list(ASTNode *list, ASTNode *item);
 ASTNode *create_list_function_call_node(ASTNode *list, const char *funcName, ASTNode *lambda);
+ASTNode *create_object_node(ObjectNode *obj);
 ASTNode *create_lambda_node(const char *argName, ASTNode *body);
 // Nuevo en ast.h
 ASTNode* create_for_in_node(const char *var_name, ASTNode *list_expr, ASTNode *body);
@@ -166,6 +167,9 @@ ASTNode *create_int_node(int value);
 ASTNode *create_float_node(int value);
 ASTNode *create_train_node(const char *model_name, const char *dataset_name, ASTNode *options);
 ASTNode *create_train_option_node(const char *option_name, int value);
+
+extern Variable __ret_var;
+extern int __ret_var_active;
 
 // Funciones adicionales que faltan
 double evaluate_expression(ASTNode *node);

@@ -11,6 +11,8 @@
 // Variables globales
 Variable vars[MAX_VARS];
 ClassNode *classes[MAX_CLASSES];
+Variable __ret_var; // Global variable for return values
+int __ret_var_active = 0; // Flag to indicate if __ret_var holds a valid value
 int var_count = 0;
 int class_count = 0;
 
@@ -26,6 +28,15 @@ static ASTNode *return_node = NULL;
 static char* int_to_string(int x) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%d", x);
+    return strdup(buf);
+}
+
+/**
+ * Convierte un double a string dinámico
+ */
+static char* double_to_string(double x) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%f", x);
     return strdup(buf);
 }
 
@@ -176,6 +187,10 @@ ObjectNode *create_object(ClassNode *class) {
 // extern int var_count;
 
 Variable *find_variable(char *id) {    
+    if (strcmp(id, "__ret__") == 0 && __ret_var_active) {
+        return &__ret_var;
+    }
+
     for (int i = 0; i < var_count; i++) {
         if (vars[i].id) {
             // Imprime el ID del elemento actual en el arreglo            
@@ -189,6 +204,10 @@ Variable *find_variable(char *id) {
 }
 
 Variable *find_variable_for(char *id) {
+    if (strcmp(id, "__ret__") == 0 && __ret_var_active) {
+        return &__ret_var;
+    }
+
     for (int i = 0; i < var_count; i++) {
         if (strcmp(vars[i].id, id) == 0) {
             return &vars[i];
@@ -301,10 +320,18 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
     }
     else if (strcmp(value->type, "ADD") == 0 || strcmp(value->type, "SUB") == 0 || 
              strcmp(value->type, "MUL") == 0 || strcmp(value->type, "DIV") == 0) {
-        // Evaluar la expresión y almacenar como float
+        // Evaluar la expresión
         double result = evaluate_expression(value);
-        vars[my_index].vtype = VAL_FLOAT;
-        vars[my_index].value.float_value = result;
+        // Check if the result is an integer
+        if (result == (int)result) {
+            vars[my_index].vtype = VAL_INT;
+            vars[my_index].value.int_value = (int)result;
+            vars[my_index].type = strdup("INT");
+        } else {
+            vars[my_index].vtype = VAL_FLOAT;
+            vars[my_index].value.float_value = result;
+            vars[my_index].type = strdup("FLOAT");
+        }
     }
     else if (strcmp(value->type, "OBJECT") == 0) {
         vars[my_index].vtype = VAL_OBJECT;
@@ -314,12 +341,50 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         vars[my_index].vtype = VAL_INT;
         vars[my_index].value.int_value = value->value;
     }
+    printf("[DEBUG] Declared variable '%s' with type %s and vtype %d\n", id, vars[my_index].type, vars[my_index].vtype);
 }
 
 
 void add_or_update_variable(char *id, ASTNode *value) {
     if (!value) return;
 
+        // Special handling for __ret__
+    if (strcmp(id, "__ret__") == 0) {
+        // Clean up previous __ret__ value if active
+        if (__ret_var_active) {
+            if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
+                free(__ret_var.value.string_value);
+            }
+            if (__ret_var.id) free(__ret_var.id);
+            if (__ret_var.type) free(__ret_var.type);
+            memset(&__ret_var, 0, sizeof(Variable)); // Clear the struct
+        }
+
+        __ret_var.id = strdup(id);
+        __ret_var.is_const = 0; // __ret__ is never const
+
+        if (strcmp(value->type, "STRING") == 0) {
+            __ret_var.vtype = VAL_STRING;
+            __ret_var.type = strdup("STRING");
+            __ret_var.value.string_value = strdup(value->str_value);
+        } else if (strcmp(value->type, "OBJECT") == 0) {
+            __ret_var.vtype = VAL_OBJECT;
+            __ret_var.type = strdup("OBJECT");
+            __ret_var.value.object_value = (ObjectNode *)(intptr_t)value->value;
+        } else if (strcmp(value->type, "FLOAT") == 0) {
+            __ret_var.vtype = VAL_FLOAT;
+            __ret_var.type = strdup("FLOAT");
+            __ret_var.value.float_value = atof(value->str_value);
+        } else {
+            __ret_var.vtype = VAL_INT;
+            __ret_var.type = strdup("INT");
+            __ret_var.value.int_value = value->value;
+        }
+        __ret_var_active = 1;
+        return; // Handled __ret__
+    }
+
+    // Original logic for other variables
     Variable *var = find_variable_for(id);
 
     if (var) {        
@@ -856,6 +921,53 @@ static void interpret_dataset(ASTNode *node) {
            node->str_value  /* asegúrate de que str_value almacena la ruta */);
 }
 
+static void interpret_filter_call(ASTNode *node) {
+    if (!node || !node->left || !node->right) return;
+
+    ASTNode *list_expr = node->left;
+    ASTNode *lambda = node->right;
+    ASTNode *list_node = NULL;
+    ASTNode *result_list_items = NULL;
+
+    // 1. Obtener la lista (ya sea una variable o una lista literal)
+    if (list_expr->type && (strcmp(list_expr->type, "ID") == 0 || strcmp(list_expr->type, "IDENTIFIER") == 0)) {
+        Variable *v = find_variable(list_expr->id);
+        if (!v || v->vtype != VAL_OBJECT || strcmp(v->type, "LIST") != 0) {
+            printf("Error: '%s' no es una lista válida para filter.\n", list_expr->id);
+            return;
+        }
+        list_node = (ASTNode *)(intptr_t)v->value.object_value;
+    } else if (list_expr->type && strcmp(list_expr->type, "LIST") == 0) {
+        list_node = list_expr;
+    } else {
+        printf("Error: Expresión no soportada para filter (tipo: %s).\n", list_expr->type);
+        return;
+    }
+
+    if (!list_node || strcmp(list_node->type, "LIST") != 0) {
+        printf("Error: El operando para filter no es una lista.\n");
+        return;
+    }
+
+    // 2. Iterar y aplicar el filtro
+    ASTNode *current_item_node = list_node->left;
+    while (current_item_node) {
+        // Crear un nodo temporal para el item actual y asignarlo a la variable de la lambda (ej. 'p')
+        add_or_update_variable(lambda->id, current_item_node);
+
+        // Evaluar la condición de la lambda
+        if (evaluate_expression(lambda->left)) {
+            // Si la condición es verdadera, clonamos el objeto y lo añadimos a la nueva lista
+            ObjectNode *original_obj = (ObjectNode *)(intptr_t)current_item_node->value;
+            ObjectNode *cloned_obj = clone_object(original_obj);
+            result_list_items = append_to_list(result_list_items, create_object_node(cloned_obj));
+        }
+        current_item_node = current_item_node->next;
+    }
+
+    // 3. Guardar la nueva lista filtrada en __ret__
+    add_or_update_variable("__ret__", result_list_items ? result_list_items : create_list_node(NULL));
+}
 
 void interpret_list_func_call(ASTNode *node) {
     if (!node || !node->left || !node->right) return;
@@ -995,6 +1107,7 @@ void interpret_ast(ASTNode *node) {
     }
     else if (strcmp(node->type, "FOR_IN") == 0)        interpret_for_in(node);  
     else if (strcmp(node->type, "LIST_FUNC_CALL") == 0) interpret_list_func_call(node);
+    else if (strcmp(node->type, "FILTER_CALL") == 0)    interpret_filter_call(node);
     else if (strcmp(node->type, "DATASET") == 0)        interpret_dataset(node);
     else if (strcmp(node->type, "MODEL") == 0 || strcmp(node->type, "OBJECT") == 0) interpret_model_object(node);
     else if (strcmp(node->type, "TRAIN") == 0)          interpret_train_node(node);
@@ -1131,6 +1244,18 @@ static void interpret_call_method(ASTNode *node) {
     Variable *v = find_variable(objNode->id);
     return_flag = 0;
     return_node = NULL;
+
+    // Limpiar __ret_var antes de ejecutar un nuevo método
+    if (__ret_var_active) {
+        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
+            free(__ret_var.value.string_value);
+        }
+        if (__ret_var.id) free(__ret_var.id);
+        if (__ret_var.type) free(__ret_var.type);
+        memset(&__ret_var, 0, sizeof(Variable));
+        __ret_var_active = 0;
+    }
+    
     if (!v || v->vtype != VAL_OBJECT) {
         printf("Error: '%s' no es un objeto válido.\n", objNode->id);
         return;
@@ -1190,22 +1315,28 @@ static void interpret_call_method(ASTNode *node) {
     interpret_ast(m->body);
     if (return_flag && return_node) {
         ASTNode *lit = NULL;
-        /* Manejo de retorno */
-        if (return_node->type && strcmp(return_node->type, "STRING") == 0)
+        if (return_node->type && strcmp(return_node->type, "STRING") == 0) {
             lit = create_ast_leaf("STRING", 0, return_node->str_value, NULL);
-        else if (return_node->id) {
+        } else if (return_node->id) {
             Variable *rv = find_variable(return_node->id);
-            if (rv && rv->vtype == VAL_STRING)
-                lit = create_ast_leaf("STRING", 0, strdup(rv->value.string_value), NULL);
-            else if (rv && rv->vtype == VAL_INT)
-                lit = create_ast_leaf_number("INT", rv->value.int_value, NULL, NULL);
-        }
-        else if (return_node->type && strcmp(return_node->type, "ACCESS_ATTR") == 0) {
+            if (rv) {
+                if (rv->vtype == VAL_STRING) {
+                    lit = create_ast_leaf("STRING", 0, strdup(rv->value.string_value), NULL);
+                } else if (rv->vtype == VAL_FLOAT) {
+                    lit = create_ast_leaf("FLOAT", 0, double_to_string(rv->value.float_value), NULL);
+                } else if (rv->vtype == VAL_INT) {
+                    lit = create_ast_leaf_number("INT", rv->value.int_value, NULL, NULL);
+                }
+            } else {
+                printf("Error: variable '%s' not found in return statement.\n", return_node->id);
+                return; // Exit, do not fallback
+            }
+        } else if (return_node->type && strcmp(return_node->type, "ACCESS_ATTR") == 0) {
             ASTNode *objN = return_node->left;
             ASTNode *attrN = return_node->right;
             Variable *ov = find_variable(objN->id);
             if (ov && ov->vtype == VAL_OBJECT) {
-                ObjectNode *oobj = ov->value.object_value;
+                ObjectNode *oobj = ov->value.object_value; int i;
                 int idx = -1;
                 for (int i=0; i<oobj->class->attr_count; i++) {
                     if (strcmp(oobj->class->attributes[i].id, attrN->id)==0) { idx=i; break; }
@@ -1213,16 +1344,24 @@ static void interpret_call_method(ASTNode *node) {
                 if (idx>=0) {
                     if (strcmp(oobj->class->attributes[idx].type,"string")==0)
                         lit = create_ast_leaf("STRING",0,oobj->attributes[idx].value.string_value,NULL);
+                    else if (strcmp(oobj->attributes[i].type,"float")==0)
+                        lit = create_ast_leaf("FLOAT",0,double_to_string(oobj->attributes[i].value.float_value),NULL);
                     else
                         lit = create_ast_leaf_number("INT",oobj->attributes[idx].value.int_value,NULL,NULL);
                 }
             }
+        } else { // Fallback for numeric expressions
+            double rv_double = evaluate_expression(return_node);
+            if (rv_double == (int)rv_double) {
+                lit = create_ast_leaf_number("INT", (int)rv_double, NULL, NULL);
+            } else {
+                lit = create_ast_leaf("FLOAT", 0, double_to_string(rv_double), NULL);
+            }
         }
-        if (!lit) {
-            int rv = evaluate_expression(return_node);
-            lit = create_ast_leaf_number("INT", rv, NULL, NULL);
+
+        if (lit) {
+            add_or_update_variable("__ret__", lit);
         }
-        add_or_update_variable("__ret__", lit);
         return_flag = 0;
         return_node = NULL;
     }
@@ -1331,116 +1470,102 @@ static void interpret_var_decl(ASTNode *node) {
     const char* declared_type = node->str_value; // El tipo declarado, ej: "INT"
     ASTNode* value_node = node->left;
 
-    // --- ¡AQUÍ ESTÁ LA MAGIA DEL CHEQUEO DE TIPOS! ---
-    if (declared_type != NULL && value_node != NULL) {
-        // Mapeamos el tipo del valor a un tipo simple (INT, STRING, etc.)
-        const char* value_type_str;
-        if (strcmp(value_node->type, "NUMBER") == 0) {
-            value_type_str = "INT";
-        } else if (strcmp(value_node->type, "STRING_LITERAL") == 0 || strcmp(value_node->type, "STRING") == 0) {
-            value_type_str = "STRING";
-        } else if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0) {
-            // Si es una expresión matemática, su resultado será numérico (FLOAT o INT).
-            // Para la comprobación, lo consideramos compatible con FLOAT.
-            value_type_str = "FLOAT";
-        } else {
-            value_type_str = value_node->type; // Para otros tipos como FLOAT, OBJECT, etc.
-        }
+    Variable *evaluated_value_var = NULL; // Almacenará el resultado de llamadas a método/predict/filter
 
-        // Comparamos el tipo declarado con el tipo del valor asignado
-        if (strcmp(declared_type, value_type_str) != 0) {
+    // --- Paso 1: Ejecutar método/predict/filter si value_node es uno ---
+    if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0 || strcmp(value_node->type, "FILTER_CALL") == 0)) {
+        interpret_ast(value_node); // Ejecutar la llamada
+        evaluated_value_var = find_variable("__ret__");
+        if (!evaluated_value_var) {
+            fprintf(stderr, "Error: No se capturó valor de retorno de la expresión '%s'.\n", value_node->type ? value_node->type : "desconocido");
+            exit(1);
+        }
+    }
+
+    // --- Paso 2: Determinar el tipo efectivo del valor a asignar ---
+    const char* effective_value_type_str = NULL;
+    if (evaluated_value_var != NULL) {
+        effective_value_type_str = evaluated_value_var->type;
+    } else if (value_node != NULL) {
+        if (strcmp(value_node->type, "NUMBER") == 0) {
+            effective_value_type_str = "INT";
+        } else if (strcmp(value_node->type, "STRING_LITERAL") == 0 || strcmp(value_node->type, "STRING") == 0) {
+            effective_value_type_str = "STRING";
+        } else if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0) {
+            // --- CORRECCIÓN ---
+            // Evaluar la expresión para determinar si el resultado es INT o FLOAT.
+            double result = evaluate_expression(value_node);
+            if (result == (int)result) {
+                effective_value_type_str = "INT";
+            } else {
+                effective_value_type_str = "FLOAT";
+            }
+        } else {
+            effective_value_type_str = value_node->type;
+        }
+    }
+
+    // --- Paso 3: Realizar la validación de tipos si se declaró un tipo ---
+    if (declared_type != NULL && effective_value_type_str != NULL) {
+        if (strcmp(declared_type, effective_value_type_str) != 0) {
             // EXCEPCIÓN: Permitir asignar un INT a un FLOAT.
-            int allow_int_to_float = (strcmp(declared_type, "FLOAT") == 0 && strcmp(value_type_str, "INT") == 0);
+            int allow_int_to_float = (strcmp(declared_type, "FLOAT") == 0 && strcmp(effective_value_type_str, "INT") == 0);
 
             if (!allow_int_to_float) {
-                fprintf(stderr, "Error de tipo: No se puede asignar un valor de tipo '%s' a una variable de tipo '%s'.\n", value_type_str, declared_type);
+                fprintf(stderr, "Error de tipo: No se puede asignar un valor de tipo '%s' a una variable de tipo '%s'.\n", effective_value_type_str, declared_type);
                 exit(1); // Detenemos la ejecución por el error de tipo.
             }
-            exit(1); // Detenemos la ejecución por el error de tipo.
         }
     }
 
-    if (node->left && node->left->type) {
-        //printf("[DEBUG] interpret_var_decl: '%s' = tipo '%s'\n", node->id, node->left->type);
-
-
-        if (node->left && strcmp(node->left->type, "FILTER_CALL") == 0) {
-            ASTNode *filterCall = node->left;
-        
-            ASTNode *listExpr = filterCall->left;
-            ASTNode *lambda = filterCall->right;
-        
-            Variable *v = find_variable(listExpr->id);
-            if (!v || v->vtype != VAL_OBJECT || strcmp(v->type, "LIST") != 0) {
-                printf("Error: '%s' no es una lista válida para filtrar.\n", listExpr->id);
-                return;
-            }
-        
-            ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
-            ASTNode *items = listNode->left;
-            ASTNode *filteredList = NULL;
-        
-            int count = 0;
-            for (ASTNode *item = items; item; item = item->next) {
-                if (item->type && strcmp(item->type, "OBJECT") == 0) {
-                    ObjectNode *obj = (ObjectNode *)(intptr_t)item->value;
-        
-                    ASTNode *wrapper = malloc(sizeof(ASTNode));
-                    wrapper->type = strdup("OBJECT");
-                    wrapper->id = strdup(lambda->id); // p
-                    wrapper->left = wrapper->right = NULL;
-                    wrapper->value = (int)(intptr_t)obj;
-                    add_or_update_variable(lambda->id, wrapper);
-        
-                    int result = evaluate_expression(lambda->left);
-                    if (result) {
-                        ObjectNode *clone = clone_object(obj);
-                        filteredList = append_to_list(filteredList, create_object_node(clone));
-                        //filteredList = append_to_list(filteredList, create_object_node(obj));
-
-
-                        count++;
-                    }
-                }
-            }        
-            
-            ASTNode *finalList = NULL;
-            if (filteredList && strcmp(filteredList->type, "LIST") == 0) {
-                //printf("[DEBUG]  Evitando doble create_list_node\n");
-                finalList = filteredList;
-            } else {
-                finalList = create_list_node(filteredList);
-            }
-            
-            vars[var_count].id = strdup(node->id);
-            vars[var_count].type = strdup("LIST");
-            vars[var_count].vtype = VAL_OBJECT;
-            vars[var_count].value.object_value = (void *)(intptr_t)finalList;
-            var_count++;
-
-            return;
+    // --- Paso 4: Crear un ASTNode temporal para el valor y asignarlo ---
+    ASTNode *value_to_assign_node = NULL;
+    if (evaluated_value_var != NULL) {
+        // Usar el valor de retorno almacenado de la llamada a método/predict/filter
+        if (evaluated_value_var->vtype == VAL_STRING) {
+            value_to_assign_node = create_ast_leaf("STRING", 0, strdup(evaluated_value_var->value.string_value), NULL);
+        } else if (evaluated_value_var->vtype == VAL_INT) {
+            value_to_assign_node = create_ast_leaf_number("INT", evaluated_value_var->value.int_value, NULL, NULL);
+        } else if (evaluated_value_var->vtype == VAL_FLOAT) {
+            char float_str[64];
+            snprintf(float_str, sizeof(float_str), "%f", evaluated_value_var->value.float_value);
+            value_to_assign_node = create_ast_leaf("FLOAT", 0, strdup(float_str), NULL);
+        } else if (evaluated_value_var->vtype == VAL_OBJECT) {
+            // Crear un ASTNode temporal de tipo OBJECT/LIST que apunte al object_value real.
+            value_to_assign_node = malloc(sizeof(ASTNode));
+            value_to_assign_node->type = strdup(evaluated_value_var->type); // Usar el tipo específico (ej. "LIST", "OBJECT")
+            value_to_assign_node->value = (int)(intptr_t)evaluated_value_var->value.object_value;
+            value_to_assign_node->id = evaluated_value_var->id ? strdup(evaluated_value_var->id) : NULL;
+            value_to_assign_node->str_value = evaluated_value_var->value.string_value ? strdup(evaluated_value_var->value.string_value) : NULL;
+            value_to_assign_node->left = NULL;
+            value_to_assign_node->right = NULL;
+            value_to_assign_node->next = NULL;
+            value_to_assign_node->extra = NULL;
+        } else {
+            fprintf(stderr, "Error interno: Tipo de retorno desconocido para asignación de variable '%s'.\n", node->id);
+            exit(1);
         }
-        
+        declare_variable(node->id, value_to_assign_node, is_const_flag);
+        free_ast(value_to_assign_node); // Liberar el ASTNode temporal
 
-    if (node->left && (strcmp(node->left->type, "CALL_METHOD") == 0 || strcmp(node->left->type, "PREDICT") == 0)) {
-        interpret_ast(node->left);
-        Variable *r = find_variable("__ret__");
-        if (!r) { printf("Error: No se capturó valor de retorno.\n"); return; }
-        ASTNode *lit = r->vtype==VAL_STRING
-            ? create_ast_leaf("STRING",0,r->value.string_value,NULL)
-            // Pasamos el flag de const a declare_variable
-            : create_ast_leaf_number("INT",r->value.int_value,NULL,NULL);
-        declare_variable(node->id, lit, is_const_flag);
-        /* Limpieza */
-        Variable *cleanup = find_variable("__ret__");
-        if (cleanup) {
-            free(cleanup->id); free(cleanup->type);
-            cleanup->id = strdup("__deleted__"); cleanup->type = strdup("deleted"); cleanup->vtype=VAL_INT; cleanup->value.int_value=0;
+        // Limpiar __ret__ para la siguiente llamada
+        if (__ret_var_active) {
+            if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
+                free(__ret_var.value.string_value);
+            }
+            if (__ret_var.id) free(__ret_var.id);
+            if (__ret_var.type) free(__ret_var.type);
+            memset(&__ret_var, 0, sizeof(Variable)); // Clear the struct
+            __ret_var_active = 0;
         }
-        return_flag=0; return_node=NULL; return;
+
+        return_flag = 0;
+        return_node = NULL;
+    } else {
+        // No es una llamada a método/predict/filter, asignar el value_node original
+        declare_variable(node->id, value_node, is_const_flag);
     }
-    // Pasamos el flag de const a declare_variable
-    declare_variable(node->id, node->left, is_const_flag);
+
     /* Llamada al constructor si existe */
     if (node->left && strcmp(node->left->type, "OBJECT")==0) {
         Variable *var = find_variable(node->id);
@@ -1485,8 +1610,6 @@ static void interpret_var_decl(ASTNode *node) {
             call_method(var->value.object_value, "__constructor");
         }
     }
-    }
-
 }
 
 ASTNode *create_list_node(ASTNode *items) {
@@ -1773,6 +1896,17 @@ static void interpret_print(ASTNode *node) {
         printf("%f", v->value.float_value);
     else
         printf("Objeto de clase: %s\n", v->value.object_value->class->name);
+
+    // Limpiar __ret__ si println lo usó indirectamente
+    if (__ret_var_active) {
+        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
+            free(__ret_var.value.string_value);
+        }
+        if (__ret_var.id) free(__ret_var.id);
+        if (__ret_var.type) free(__ret_var.type);
+        memset(&__ret_var, 0, sizeof(Variable));
+        __ret_var_active = 0;
+    }
 }
 
 static void interpret_println(ASTNode *node) {
@@ -1856,6 +1990,17 @@ static void interpret_println(ASTNode *node) {
         printf("%f\n", v->value.float_value);
     else
         printf("Objeto de clase: %s\n", v->value.object_value->class->name);
+
+    // Limpiar __ret__ si println lo usó indirectamente
+    if (__ret_var_active) {
+        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
+            free(__ret_var.value.string_value);
+        }
+        if (__ret_var.id) free(__ret_var.id);
+        if (__ret_var.type) free(__ret_var.type);
+        memset(&__ret_var, 0, sizeof(Variable));
+        __ret_var_active = 0;
+    }
 }
 
 

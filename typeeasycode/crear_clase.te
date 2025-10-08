@@ -11,7 +11,7 @@ class Person {
         this.nombre = _nombre;        
     }
     Imprimir(p_edad : int) {          
-        println("MI EDAD ES2: ");
+        println("MI EDAD ES: ");
         print(this.edad);
         print("MI NOMBRE ES: ");
         print(this.nombre);
@@ -20,25 +20,32 @@ class Person {
     }  
     
     Saludar() {           
-        string test = "hola";
-        return test;   
+        string test_local = "hola";
+        return test_local;   
+    }
+
+    ObtenerEdad() {
+        float edad_double = 3.4;
+        return edad_double;
     }
 
     Contar(){
-        int numero = 2 * 2  / 2 + 1 + 1 + 1 - 1 ;
+        int numero = 8 * 3;//2 * 2  / 2 + 1 + 1 + 1 - 1 ;
         return numero;
     }
 }
-var test = 3.4;
+
 int mi_edad = 36;
 string mi_nombre = "Fernando Ingunza";
 string mi_empresa = "Roussecloud";
 let obj = new Person(mi_edad, mi_nombre, mi_empresa);
 string saludarResult = obj.Saludar();
 int contarResult = obj.Contar();
-//print(obj.nombre);
+float edadResult = obj.ObtenerEdad();
 obj.Imprimir(12);  
-println(test);
-//print(saludarResult);
-//print(contarResult);
+
+
+println(saludarResult);
+println(contarResult);
+println(edadResult);
 
