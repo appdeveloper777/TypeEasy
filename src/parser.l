@@ -66,6 +66,8 @@
 "*"                     { return MULTIPLY; }
 "/"                     { return DIVIDE; }
 "="                     { return ASSIGN; }
+"if"                    { return IF; }    
+"else"                  { return ELSE; }  
 
 
 \"(\\.|[^\"])*\"      {

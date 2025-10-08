@@ -33,7 +33,7 @@
 %token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN
 %token <sval> IDENTIFIER STRING_LITERAL CONST
 %token <ival> NUMBER
-
+%token IF ELSE
 %type <sval> method_name
 %type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args lambda_expression
 %type <pnode> parameter_decl parameter_list list_literal
@@ -52,7 +52,7 @@
 
 %define parse.trace
 %type <node> class_member
-
+%type <node> if_statement
 
 %type <node> statement expression program statement_list class_decl class_body
 %type <node> attribute_decl method_decl
@@ -173,7 +173,9 @@ var_decl:
   | IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
   | THIS DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,"this"); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
   
-  ;
+;
+
+
 
 statement:
     FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_for_in_node($4, $6, $9); }
@@ -188,6 +190,7 @@ statement:
   | INT IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_var_decl_node($2, create_int_node($4->value)); }
   | FLOAT IDENTIFIER ASSIGN expression SEMICOLON                { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("FLOAT"); $$ = decl; }
   | VAR IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_ast_node("DECLARE", create_ast_leaf("IDENTIFIER", 0, NULL, $2), $4); }
+  | if_statement
   | IDENTIFIER ASSIGN expression SEMICOLON       
 { 
     // El parser solo crea el nodo. El intérprete se encargará de la lógica.
@@ -228,7 +231,20 @@ statement:
             $$ = create_var_decl_node($2, list);
         }
     }
-  ;
+; 
+
+
+if_statement:
+    IF LPAREN expression RPAREN LBRACKET statement_list RBRACKET
+    {
+        $$ = create_if_node($3, $6, NULL);
+    }
+    | IF LPAREN expression RPAREN LBRACKET statement_list RBRACKET 
+      ELSE LBRACKET statement_list RBRACKET
+    {
+        $$ = create_if_node($3, $6, $10);
+    }
+;
 
 statement_list:
     statement_list statement  { $$ = create_ast_node("STATEMENT_LIST", $1, $2); }
