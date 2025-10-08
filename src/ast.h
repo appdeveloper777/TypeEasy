@@ -50,7 +50,7 @@ typedef enum {
     VAL_STRING,
     VAL_FLOAT,
     VAL_OBJECT
-} ValueType;
+} ValueType; 
 
 typedef struct ObjectNode ObjectNode;
 
@@ -133,6 +133,7 @@ ASTNode *create_function_call_node(const char *funcName, ASTNode *args);
 
 ASTNode *add_statement(ASTNode *list, ASTNode *stmt);
 ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right);
+ASTNode *create_if_node(ASTNode* condition, ASTNode* if_branch, ASTNode* else_branch);
 ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id);
 ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
 ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *condition, ASTNode *update, ASTNode *body);

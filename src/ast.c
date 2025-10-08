@@ -643,6 +643,26 @@ ASTNode* create_predict_node(const char* model_name, const char* input_name) {
     return node;
 }
 
+// ====================== CREACIÓN DE NODOS IF ======================
+
+ASTNode* create_if_node(ASTNode* condition, ASTNode* if_branch, ASTNode* else_branch) {
+    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    if (!node) {
+        fprintf(stderr, "Error: No se pudo asignar memoria para el nodo if\n");
+        exit(1);
+    }
+    
+    node->type = strdup("IF");
+    node->id = NULL;
+    node->value = 0;
+    node->str_value = NULL;
+    node->left = condition;
+    node->right = if_branch;
+    node->next = else_branch;
+    
+    return node;
+}
+
 // ====================== MANEJO DE LISTAS ======================
 
 ASTNode *add_statement(ASTNode *list, ASTNode *stmt) {
@@ -981,7 +1001,7 @@ ASTNode *create_object_node(ObjectNode *obj) {
 
 
 void interpret_ast(ASTNode *node) {    
-    if (!node || return_flag) return;
+    if (!node || return_flag) return; 
 
     if (strcmp(node->type, "FOR") == 0)               {
         
@@ -993,6 +1013,7 @@ void interpret_ast(ASTNode *node) {
         emit(OP_HALT, 0, NULL, NULL);    // marca el fin del bytecode
         run_bytecode(); */
     }
+    else if (strcmp(node->type, "IF") == 0)            interpret_if(node);
     else if (strcmp(node->type, "FOR_IN") == 0)        interpret_for_in(node);  
     else if (strcmp(node->type, "LIST_FUNC_CALL") == 0) interpret_list_func_call(node);
     else if (strcmp(node->type, "DATASET") == 0)        interpret_dataset(node);
@@ -1045,6 +1066,40 @@ double evaluate_number(ASTNode *node) {
 
     fprintf(stderr, "Error: Tipo no soportado en evaluate_number: %s\n", node->type);
     return 0;
+}
+
+void interpret_if(ASTNode *node) {
+    if (!node || !node->left) return;  // condición es obligatoria
+    
+    int result = evaluate_condition(node->left); // Evaluar condición
+    
+    if (result) {
+        interpret_ast(node->right);     // Si es verdadero, ejecutar rama if
+    } else if (node->next) {           // Si hay else
+        interpret_ast(node->next); // Ejecutar rama else
+    }
+}
+
+
+
+int evaluate_condition(ASTNode* condition) {
+    if (!condition) return 0;
+
+    // Si es una comparación
+    if (strcmp(condition->type, "GT") == 0 ||
+        strcmp(condition->type, "LT") == 0 ||
+        strcmp(condition->type, "EQ") == 0) {
+        
+        int left_val = evaluate_expression(condition->left);
+        int right_val = evaluate_expression(condition->right);
+        
+        if (strcmp(condition->type, "GT") == 0) return left_val > right_val;
+        if (strcmp(condition->type, "LT") == 0) return left_val < right_val;
+        if (strcmp(condition->type, "EQ") == 0) return left_val == right_val;
+    }
+    
+    // Si es un valor booleano directo
+    return evaluate_expression(condition);
 }
 
 void generate_plot(double *values, int count) {
