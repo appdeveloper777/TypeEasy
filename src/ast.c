@@ -341,7 +341,7 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         vars[my_index].vtype = VAL_INT;
         vars[my_index].value.int_value = value->value;
     }
-    printf("[DEBUG] Declared variable '%s' with type %s and vtype %d\n", id, vars[my_index].type, vars[my_index].vtype);
+    //printf("[DEBUG] Declared variable '%s' with type %s and vtype %d\n", id, vars[my_index].type, vars[my_index].vtype);
 }
 
 

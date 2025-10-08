@@ -15,7 +15,7 @@ class Person {
         print(this.edad);
         print("MI NOMBRE ES: ");
         print(this.nombre);
-        print("MI EMPRESA ES: ");
+        println("MI EMPRESA ES: ");
         println(this.company);
     }  
     
