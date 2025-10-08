@@ -1,0 +1,31 @@
+/*
+  * Archivo: test_if
+  * Descripcion: Ejemplo básico de uso de if-else en TypeEasy
+  * Autor: Luis Howard
+  * Fecha: 2025-10-07
+*/
+
+// Declaración de variables
+let x = 10;
+let y = 5;
+
+// -------------------------------- Ejemplo de if-else------------------------------------------
+if(x > y) {
+    println("x es mayor que y");
+} else {
+    println("x es menor o igual que y");
+} 
+
+//---------------------------- Comprobamos si x es diferente de y ----------------------------
+if(x != y) {
+    println("x es diferente de y");
+}
+
+// Modificamos el valor de x
+x = 5;
+
+//---------------------------- Comprobamos si x es igual a y -----------------------------------
+if(x == y) {
+    println("x es igual a y");
+} 
+
