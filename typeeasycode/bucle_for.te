@@ -24,9 +24,9 @@ FOR ANIDADOS
 for(i = 0; 2; 1)   {  
     contador =  contador + 111;
     for(j = 0; 2; 1){ 
-        print(for_dos);
+        println(for_dos);
         for(x = 0; 2; 1){
-            print(for_tres);
+            println(for_tres);
         }           
     }
 }
