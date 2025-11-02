@@ -34,6 +34,8 @@
 %token <sval> IDENTIFIER STRING_LITERAL CONST
 %token <ival> NUMBER
 %token IF ELSE
+%token AGENT LISTENER BRIDGE STATE MATCH CASE
+%token NODE
 %type <sval> method_name
 %type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args lambda_expression
 %type <pnode> parameter_decl parameter_list list_literal
@@ -53,10 +55,15 @@
 %define parse.trace
 %type <node> class_member
 %type <node> if_statement
+%type <node> match_statement case_clause case_list
 
 %type <node> statement expression program statement_list class_decl class_body
 %type <node> attribute_decl method_decl
 
+%type <node> agent_decl agent_body listener_decl bridge_decl
+%type <node> object_literal key_value_list key_value_pair
+%type <node> node_decl
+%type <node> state_decl
 %right ARROW
 %nonassoc GT LT EQ GT_EQ LT_EQ, DIFF/* tus operadores relacionales */
 
@@ -65,14 +72,75 @@
 program:
         program statement       { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; }
         | program class_decl      { $$ = $1; /* Ignora definición de clase */ root = $$; }
+        | program agent_decl      { $$ = create_ast_node("AGENT_LIST", $1, $2); root = $$; }
+        | program bridge_decl     { $$ = $1; root = $$; }
         | statement               { $$ = $1; root = $$; }
         | class_decl              { $$ = NULL; /* Ignora definición de clase */ }
+        | agent_decl              { $$ = $1; root = $$; }
+        | bridge_decl             { $$ = NULL; /* Por ahora, no hagas nada con él */ }
 
-
+;
 class_decl:
         CLASS IDENTIFIER { last_class = create_class($2); add_class(last_class); } 
         LBRACKET class_body RBRACKET { $$ = NULL; }
 ;
+
+
+agent_decl:
+    AGENT IDENTIFIER LBRACKET agent_body RBRACKET
+        { $$ = create_agent_node($2, $4); }
+    ;
+
+agent_body:
+    /* NADA - Regla vacía para permitir {} */
+        { $$ = NULL; }
+    | listener_decl
+        { $$ = $1; }
+    | agent_body listener_decl
+        { $$ = create_ast_node("LISTENER_LIST", $1, $2); }
+    ;
+
+listener_decl:
+    LISTENER expression LBRACKET statement_list RBRACKET
+        { $$ = create_listener_node($2, $4); }
+    ;
+
+bridge_decl:
+    BRIDGE IDENTIFIER ASSIGN expression SEMICOLON
+        {
+            /* $4 es el nodo AST para "WhatsApp.connect(...)"
+               creado por tu regla 'expression' existente */
+            $$ = create_bridge_node($2, $4);
+        }
+    ;
+
+state_decl:
+    STATE IDENTIFIER ASSIGN expression SEMICOLON
+        { $$ = create_state_decl_node($2, $4); }
+    ;
+
+node_decl:
+    NODE IDENTIFIER ASSIGN expression SEMICOLON
+        { $$ = create_var_decl_node($2, $4); }
+    ;
+
+object_literal:
+    LBRACKET RBRACKET   { $$ = create_object_literal_node(NULL); } /* Objeto vacío {} */
+    | LBRACKET key_value_list RBRACKET
+        { $$ = create_object_literal_node($2); }
+    ;
+
+key_value_list:
+    key_value_pair
+        { $$ = $1; }
+    | key_value_list COMMA key_value_pair
+        { $$ = append_kv_pair($1, $3); }
+    ;
+
+key_value_pair:
+    IDENTIFIER COLON expression
+        { $$ = create_kv_pair_node($1, $3); }
+    ;
 
 class_member:
         attribute_decl
@@ -142,6 +210,13 @@ expression:
 | IDENTIFIER DOT IDENTIFIER LPAREN RPAREN           { ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1); $$ = create_method_call_node(obj, $3, NULL); }
 | IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN  { ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1); $$ = create_method_call_node(obj, $3, $5); }
 | IDENTIFIER DOT IDENTIFIER                        { ASTNode *obj = create_ast_leaf("ID", 0, NULL, $1); ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3); $$ = create_ast_node("ACCESS_ATTR", obj, attr); }
+
+| expression LSBRACKET expression RSBRACKET
+        { $$ = create_access_node($1, $3); }
+
+| object_literal
+        { $$ = $1; }
+
 | expression DOT IDENTIFIER LPAREN RPAREN          { printf(" [DEBUG] Reconocido METHOD_CALL: %s.%s()\n", $1, $3); $$ = create_method_call_node($1, $3, NULL); }
 | expression DOT IDENTIFIER LPAREN expression_list RPAREN  { $$ = create_method_call_node($1, $3, $5); }
 | THIS DOT IDENTIFIER                              { $$ = create_ast_node("ACCESS_ATTR", create_ast_leaf("ID", 0, NULL, "this"), create_ast_leaf("ID", 0, NULL, $3)); }
@@ -181,6 +256,8 @@ statement:
     FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_for_in_node($4, $6, $9); }
   | LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { printf(" [DEBUG] Reconocido LET con acceso a atributo: %s.%s\n", $2, $4); ASTNode *obj = create_ast_leaf("ID",0,NULL,$4); $$ = create_var_decl_node($2, obj); }
   | RETURN expression SEMICOLON  { $$ = create_return_node($2); }
+  | state_decl
+  | node_decl
   | var_decl
   | STRING STRING expression SEMICOLON                          { printf(" [DEBUG] Declaración de variable s: ¿"); char buffer[2048]; sprintf(buffer,"#include \"easyspark/dataframe.hpp\"\n..."); generate_code(buffer); }
   | IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$1); $$ = create_method_call_node(obj, $3, NULL); }
@@ -191,6 +268,7 @@ statement:
   | FLOAT IDENTIFIER ASSIGN expression SEMICOLON                { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("FLOAT"); $$ = decl; }
   | VAR IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_ast_node("DECLARE", create_ast_leaf("IDENTIFIER", 0, NULL, $2), $4); }
   | if_statement
+  | match_statement
   | IDENTIFIER ASSIGN expression SEMICOLON       
 { 
     // El parser solo crea el nodo. El intérprete se encargará de la lógica.
@@ -245,6 +323,21 @@ if_statement:
         $$ = create_if_node($3, $6, $10);
     }
 ;
+
+match_statement:
+    MATCH LPAREN expression RPAREN LBRACKET case_list RBRACKET
+        { $$ = create_match_node($3, $6); }
+    ;
+
+case_list:
+    /* empty */ { $$ = NULL; }
+    | case_list case_clause { $$ = append_case_clause($1, $2); }
+    ;
+
+case_clause:
+    CASE expression COLON statement_list
+        { $$ = create_case_node($2, $4); }
+    ;
 
 statement_list:
     statement_list statement  { $$ = create_ast_node("STATEMENT_LIST", $1, $2); }

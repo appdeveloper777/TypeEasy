@@ -35,6 +35,15 @@
 "let"                   { return LET; }
 "print"                 { return PRINT; }
 "const"                 { return CONST; }
+
+"agent"                 { return AGENT; }
+"listener"              { return LISTENER; }
+"bridge"                { return BRIDGE; }
+"state"                 { return STATE; }
+"match"                 { return MATCH; }
+"case"                  { return CASE; }
+"node"                  { return NODE; }
+
 "println"               { return PRINTLN; }
 "for"                   { return FOR; }
 "concat"                { return CONCAT; }

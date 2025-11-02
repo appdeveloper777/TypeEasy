@@ -203,6 +203,40 @@ Variable *find_variable(char *id) {
     return NULL;
 }
 
+ASTNode *create_agent_node(char *name, ASTNode *body) {
+    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    if (!node) {
+        fprintf(stderr, "Error fatal: No se pudo asignar memoria para AGENT node.\n");
+        exit(1);
+    }
+    node->type = strdup("AGENT");
+    node->id = strdup(name);
+    node->left = body; // 'body' es la lista de listeners
+    node->right = NULL;
+    node->next = NULL;
+    node->extra = NULL;
+    node->str_value = NULL;
+    node->value = 0;
+    return node;
+}
+
+ASTNode *create_listener_node(ASTNode *event_expr, ASTNode *body) {
+    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    if (!node) {
+        fprintf(stderr, "Error fatal: No se pudo asignar memoria para LISTENER node.\n");
+        exit(1);
+    }
+    node->type = strdup("LISTENER");
+    node->left = event_expr; // La expresión p.ej. Chat.onMessage(mensaje)
+    node->right = body;     // El bloque de código
+    node->id = NULL;
+    node->next = NULL;
+    node->extra = NULL;
+    node->str_value = NULL;
+    node->value = 0;
+    return node;
+}
+
 Variable *find_variable_for(char *id) {
     if (strcmp(id, "__ret__") == 0 && __ret_var_active) {
         return &__ret_var;
@@ -728,6 +762,52 @@ ASTNode* create_if_node(ASTNode* condition, ASTNode* if_branch, ASTNode* else_br
     return node;
 }
 
+ASTNode* create_match_node(ASTNode* condition, ASTNode* case_list) {
+    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    if (!node) {
+        fprintf(stderr, "Error: No se pudo asignar memoria para el nodo match\n");
+        exit(1);
+    }
+    
+    node->type = strdup("MATCH");
+    node->id = NULL;
+    node->value = 0;
+    node->str_value = NULL;
+    node->left = condition;
+    node->right = case_list;
+    node->next = NULL;
+    
+    return node;
+}
+
+ASTNode* create_case_node(ASTNode* condition, ASTNode* body) {
+    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    if (!node) {
+        fprintf(stderr, "Error: No se pudo asignar memoria para el nodo case\n");
+        exit(1);    }
+    
+    node->type = strdup("CASE");
+    node->id = NULL;
+    node->value = 0;
+    node->str_value = NULL;
+    node->left = condition;
+    node->right = body;
+    node->next = NULL;
+    
+    return node;
+}
+
+ASTNode* append_case_clause(ASTNode* list, ASTNode* case_clause) {
+    if (!list) return case_clause;
+    
+    ASTNode *current = list;
+    while (current->next) {
+        current = current->next;
+    }
+    current->next = case_clause;
+    return list;
+}
+
 // ====================== MANEJO DE LISTAS ======================
 
 ASTNode *add_statement(ASTNode *list, ASTNode *stmt) {
@@ -929,6 +1009,7 @@ static void interpret_print(ASTNode *node);
 static void interpret_println(ASTNode *node);
 static void interpret_statement_list(ASTNode *node);
 double evaluate_number(ASTNode *node);
+static void interpret_match(ASTNode *node);
 
 
 /* ─── DATASET ─────────────────────────────────────────────────────────── */
@@ -1111,11 +1192,192 @@ ASTNode *create_object_node(ObjectNode *obj) {
     return node;
 }
 
+void interpret_bridge_decl(ASTNode *node) {
+    char* bridge_name = node->id; // "Chat"
+    ASTNode* call_node = node->left; // El nodo "CALL_METHOD"
+
+    // Verificamos que sea una llamada a método
+    if (call_node == NULL || strcmp(call_node->type, "CALL_METHOD") != 0) {
+        fprintf(stderr, "Error: La declaración del bridge '%s' debe ser una llamada a método.\n", bridge_name);
+        return;
+    }
+
+    // Extraemos la información del nodo CALL_METHOD
+    // (Nota: tu 'CALL_METHOD' guarda el objeto en 'left' y el nombre en 'id')
+    char* lib_name = call_node->left->id; // "WhatsApp"
+    char* func_name = call_node->id;      // "connect"
+    // (Aquí iterarías call_node->right para obtener los argumentos)
+
+    printf("[TypeEasy Runtime] Registrando Bridge: '%s'\n", bridge_name);
+    printf("  -> Objetivo: Biblioteca '%s', Función '%s'\n", lib_name, func_name);
+
+    // LÓGICA REAL (Futuro):
+    // 1. Cargar dinámicamente la librería (ej: libwhatsapp.so)
+    // 2. Encontrar el puntero a la función (ej: "connect")
+    // 3. Almacenar ese puntero en una tabla hash global bajo el nombre "Chat".
+}
+
+ASTNode *create_bridge_node(char *name, ASTNode *call_expr_node) {
+    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    if (!node) {
+        fprintf(stderr, "Error fatal: No se pudo asignar memoria para BRIDGE node.\n");
+        exit(1);
+    }
+    node->type = strdup("BRIDGE_DECL");
+    node->id = strdup(name);    // El nombre del bridge, ej: "Chat"
+    node->left = call_expr_node; // El nodo "CALL_METHOD" para WhatsApp.connect
+    node->right = NULL;
+    node->next = NULL;
+    node->extra = NULL;
+    node->str_value = NULL;
+    node->value = 0;
+    return node;
+}
+
+/* === CÓDIGO NUEVO COMPLEJO (Concepto) === */
+
+// Esta función se llamaría desde interpret_ast
+// cuando encuentra un nodo "AGENT".
+void interpret_agent(ASTNode *agent_node) {
+    printf("[TypeEasy Runtime] Iniciando Agente '%s'...\n", agent_node->id);
+
+    // 1. EL PROBLEMA: Tu 'main' en parser.y termina.
+    //    Un agente NO PUEDE TERMINAR. Necesita un bucle infinito
+    //    para escuchar eventos (como un servidor web).
+    //    Necesitarías cambiar tu 'main' para que NO llame a 'interpret_ast'
+    //    directamente, sino que inicie un 'Runtime'.
+    
+    // 2. REGISTRAR LISTENERS:
+    //    Tendrías que iterar sobre los listeners del agente (agent_node->left)
+    ASTNode* listener = agent_node->left;
+    while(listener) {
+        if (listener && strcmp(listener->type, "LISTENER") == 0) {
+            // 3. ANALIZAR EL "BRIDGE":
+            //    Necesitas analizar 'listener->left' (la expresión 'Chat.onMessage')
+            //    para saber que esto es un webhook de "Chat".
+            //    Esto requiere un sistema de "Bridges" que aún no existe.
+
+            printf("[TypeEasy Runtime] Registrando listener para un evento de 'Chat'...\n");
+
+            // 4. REGISTRAR EL WEBHOOK:
+            //    (Pseudo-código usando una librería C de servidor web como civetweb)
+            //    my_server = server_start("8080");
+            //    server_add_webhook(my_server, "/whatsapp_hook", &on_message_callback);
+        }
+        listener = listener->right; // Asumiendo que es una lista
+    }
+
+    // 5. INICIAR EL BUCLE DEL SERVIDOR:
+    printf("[TypeEasy Runtime] Agente '%s' corriendo en puerto 8080. Esperando eventos...\n", agent_node->id);
+    // server_run_forever(my_server); // Esto bloquearía el hilo principal.
+}
+
+/*
+// 6. EL CALLBACK:
+//    Tendrías que escribir esta función que el servidor C llamaría.
+void on_message_callback(Request req, Response res) {
+    // A. Parsear el JSON de 'req.body' para obtener el mensaje.
+    // B. ¡CONECTAR A REDIS para obtener el 'state' de ese usuario!
+    // C. Encontrar el nodo AST 'statement_list' del listener (listener->right)
+    // D. ¡Finalmente, llamar a interpret_ast(listener->right) para ejecutar la lógica del chat!
+}
+*/
+/* === FIN DEL CONCEPTO === */
+
+ASTNode *create_access_node(ASTNode *base, ASTNode *index_expr) {
+    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    if (!node) {
+        fprintf(stderr, "Error fatal: No se pudo asignar memoria para ACCESS_EXPR node.\n");
+        exit(1);
+    }
+    node->type = strdup("ACCESS_EXPR");
+    node->left = base;         // El objeto/variable (ej. intencion.entidad)
+    node->right = index_expr;  // El índice (ej. "item")
+    node->id = NULL;
+    node->str_value = NULL;
+    node->value = 0;
+    node->next = NULL;
+    node->extra = NULL;
+    return node;
+}
+
+ASTNode *create_object_literal_node(ASTNode *kv_list) {
+    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    node->type = strdup("OBJECT_LITERAL");
+    node->left = kv_list; // Lista de nodos KV_PAIR
+    node->right = NULL;
+    /* ... inicializa los otros campos ... */
+    return node;
+}
+
+ASTNode *create_kv_pair_node(char *key, ASTNode *value) {
+    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    node->type = strdup("KV_PAIR");
+    node->id = strdup(key); // Usamos 'id' para la clave
+    node->left = value;     // Usamos 'left' para el valor
+    node->right = NULL;     // Usaremos 'right' como 'next' en la lista
+    /* ... inicializa los otros campos ... */
+    return node;
+}
+
+ASTNode *create_state_decl_node(char *name, ASTNode *value_expr) {
+    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    node->type = strdup("STATE_DECL");
+    node->id = strdup(name);    // "sesion"
+    node->left = value_expr; // El nodo "CALL_METHOD" para getSession
+    node->right = NULL;
+    /* ... inicializa los otros campos ... */
+    return node;
+}
+
+ASTNode *append_kv_pair(ASTNode *list, ASTNode *pair) {
+    if (!list) return pair;
+    ASTNode *current = list;
+    while (current->right) { // Iteramos usando 'right'
+        current = current->right;
+    }
+    current->right = pair; // Añadimos al final
+    return list;
+}
 
 void interpret_ast(ASTNode *node) {    
     if (!node || return_flag) return; 
 
-    if (strcmp(node->type, "FOR") == 0)               {
+    if (strcmp(node->type, "STATE_DECL") == 0) {
+        // Aquí iría tu lógica para 'getSession'
+        // Por ahora, solo lo interpretamos como una var_decl normal
+        printf("[TypeEasy Runtime] Obteniendo estado para: '%s'\n", node->id);
+        interpret_var_decl(node); // Reutiliza la lógica de var_decl
+    }
+    else if (strcmp(node->type, "BRIDGE_DECL") == 0) {
+        interpret_bridge_decl(node);
+    }
+    else if (strcmp(node->type, "AGENT") == 0) {
+        interpret_agent(node); // ¡Tenemos que crear esta función!
+    }
+    else if (strcmp(node->type, "ACCESS_EXPR") == 0) {
+        // Esta sintaxis es reconocida, pero aún no se "ejecuta".
+        // La lógica real para 'evaluar' esto iría en
+        // 'evaluate_expression' o en una nueva 'interpret_access_expr'.
+        // Por ahora, con que el parser lo reconozca es suficiente
+        // para que otras partes del código (como 'var_decl') lo usen.
+    }
+    else if (strcmp(node->type, "OBJECT_LITERAL") == 0) {
+        // Reconocido, pero la lógica de 'evaluación'
+        // se manejará dentro de 'CALL_METHOD' (sesion.pedido.add)
+    }
+    else if (strcmp(node->type, "KV_PAIR") == 0) {
+        // No se interpreta directamente
+    }
+    else if (strcmp(node->type, "AGENT_LIST") == 0) {
+        interpret_ast(node->left);  // Interpreta el agente/statement anterior
+        interpret_ast(node->right); // Interpreta el agente/statement actual
+    }
+    else if (strcmp(node->type, "LISTENER") == 0) {
+        // Normalmente, el 'interpret_agent' manejaría esto,
+        // pero por ahora lo dejamos vacío.
+    }
+    else if (strcmp(node->type, "FOR") == 0)               {
         
         interpret_for(node);
         //printf("[DEBUG] Ejecutando FOR con BYTECODE\n");
@@ -1126,6 +1388,7 @@ void interpret_ast(ASTNode *node) {
         run_bytecode(); */
     }
     else if (strcmp(node->type, "IF") == 0)            interpret_if(node);
+    else if (strcmp(node->type, "MATCH") == 0)         interpret_match(node);
     else if (strcmp(node->type, "FOR_IN") == 0)        interpret_for_in(node);  
     else if (strcmp(node->type, "LIST_FUNC_CALL") == 0) interpret_list_func_call(node);
     else if (strcmp(node->type, "FILTER_CALL") == 0)    interpret_filter_call(node);
@@ -1191,6 +1454,28 @@ void interpret_if(ASTNode *node) {
     } else if (node->next) {           // Si hay else
         interpret_ast(node->next); // Ejecutar rama else
     }
+}
+
+void interpret_match(ASTNode *node) {
+    if (!node || !node->left || !node->right) return;
+
+    // For now, we only support string matching
+    char* match_value = get_node_string(node->left);
+
+    ASTNode* case_node = node->right;
+    while (case_node) {
+        if (strcmp(case_node->type, "CASE") == 0) {
+            char* case_value = get_node_string(case_node->left);
+            if (strcmp(match_value, case_value) == 0) {
+                free(case_value);
+                interpret_ast(case_node->right);
+                break; // Exit after first match
+            }
+            free(case_value);
+        }
+        case_node = case_node->next;
+    }
+    free(match_value);
 }
 
 

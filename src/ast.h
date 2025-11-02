@@ -135,6 +135,9 @@ ASTNode *create_function_call_node(const char *funcName, ASTNode *args);
 ASTNode *add_statement(ASTNode *list, ASTNode *stmt);
 ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right);
 ASTNode *create_if_node(ASTNode* condition, ASTNode* if_branch, ASTNode* else_branch);
+ASTNode *create_match_node(ASTNode* condition, ASTNode* case_list);
+ASTNode *create_case_node(ASTNode* condition, ASTNode* body);
+ASTNode *append_case_clause(ASTNode* list, ASTNode* case_clause);
 ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id);
 ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
 ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *condition, ASTNode *update, ASTNode *body);
@@ -164,6 +167,18 @@ ClassNode *find_class(char *name);
 // Funciones que faltaban en las declaraciones
 ASTNode *create_var_decl_node(char *id, ASTNode *value);
 ASTNode *create_string_node(char *value);
+
+ASTNode *create_agent_node(char *name, ASTNode *body);
+ASTNode *create_listener_node(ASTNode *event_expr, ASTNode *body);
+
+ASTNode *create_bridge_node(char *name, ASTNode *call_expr_node);
+ASTNode *create_access_node(ASTNode *base, ASTNode *index_expr);
+
+ASTNode *create_object_literal_node(ASTNode *kv_list);
+ASTNode *create_kv_pair_node(char *key, ASTNode *value);
+ASTNode *append_kv_pair(ASTNode *list, ASTNode *pair);
+ASTNode *create_state_decl_node(char *name, ASTNode *value_expr);
+
 ASTNode *create_int_node(int value);
 ASTNode *create_float_node(int value);
 ASTNode *create_train_node(const char *model_name, const char *dataset_name, ASTNode *options);
