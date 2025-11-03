@@ -16,12 +16,13 @@ WORKDIR /app
 COPY . .
 
 # =================================================================
-# ETAPA 2: COMPILAR EL INTÉRPRETE "typeeasy"
+# ETAPA 2: COMPILAR EL "MOTOR" (typeeasy y servidor_agent)
 # =================================================================
 FROM base AS typeeasy_builder
 
-# Usamos el Makefile para construir el ejecutable "typeeasy"
-RUN make -C /app/src clean && make -C /app/src
+# 'make all' ahora construye AMBOS: 'typeeasy' y 'servidor_agent'
+# Asume que tu Makefile modificado está en /app/src/
+RUN make -C /app/src clean && make -C /app/src all
 
 # =================================================================
 # ETAPA 3: COMPILAR EL SERVIDOR "typeeasy_api"
@@ -32,19 +33,13 @@ FROM base AS api_builder
 RUN openssl version
 
 # Compilamos con la versión correcta de OpenSSL API
-# Para OpenSSL 3.x usa OPENSSL_API_1_1, para versiones anteriores usa OPENSSL_API_1_0
-# Corrected line for your Dockerfile
 RUN gcc -I/app/api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 \
     /app/api_server/servidor_api.c /app/api_server/civetweb.c \
     -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto
 
-
-
-# Si la versión anterior falla, prueba con OPENSSL_API_1_0
-# RUN gcc -Iapi_server -DUSE_OPENSSL -DOPENSSL_API_1_0 \
-#     api_server/servidor_test.c api_server/civetweb.c \
-#     -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto
-
+# =================================================================
+# ETAPA 4: IMAGEN FINAL PARA LA API (Lista para producción)
+# =================================================================
 # =================================================================
 # ETAPA 4: IMAGEN FINAL PARA LA API (Lista para producción)
 # =================================================================
@@ -52,15 +47,15 @@ FROM debian:12-slim AS api
 
 WORKDIR /app
 
-# Instala las librerías SSL de runtime
+# ¡¡ARREGLO AQUÍ!!
+# Instala las librerías SSL de runtime Y la librería de Flex (libfl2)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libssl3 && \
+    apt-get install -y --no-install-recommends libssl3 libfl2 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # Copia el ejecutable desde la etapa de construcción LOCAL api_builder
 COPY --from=api_builder /app/typeeasy_api .
-
 # Copia el ejecutable del INTÉRPRETE desde la etapa 'typeeasy_builder',
 # ya que el servidor lo necesita para ejecutar los scripts.
 COPY --from=typeeasy_builder /app/src/typeeasy .
@@ -80,9 +75,36 @@ FROM debian:12-slim AS typeeasy
 
 WORKDIR /typeeasy
 
-# Copia el ejecutable del intérprete desde la etapa de construcción.
-# Asumimos que el Makefile lo crea en 'src/typeeasy'.
-COPY --from=typeeasy_builder /app/src/typeeasy .
+# ¡¡ARREGLO AQUÍ!! Instala la librería 'libfl' que falta
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libfl2 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
+# Copia el ejecutable del intérprete desde la etapa de construcción.
+COPY --from=typeeasy_builder /app/src/typeeasy .
 # El punto de entrada es el propio intérprete.
 ENTRYPOINT ["./typeeasy"]
+
+# =================================================================
+# ETAPA 6: ¡NUEVA! IMAGEN FINAL PARA EL AGENTE
+# =================================================================
+FROM debian:12-slim AS agent
+
+WORKDIR /app
+# Instala solo las dependencias de runtime (civetweb necesita libssl)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libssl3 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copia el ejecutable 'servidor_agent' desde el builder
+COPY --from=typeeasy_builder /app/src/servidor_agent .
+
+# Copia el script del agente
+COPY typeeasycode/agente_chat_whatsapp.te .
+
+EXPOSE 8081
+
+# Comando para iniciar el servidor de agente
+CMD ["./servidor_agent", "agente_chat_whatsapp.te"]

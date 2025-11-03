@@ -5,6 +5,30 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+    YA NO INCLUIMOS civetweb.h NI windows.h/unistd.h AQUÍ.
+    Este archivo es ahora 100% independiente del servidor.
+*/
+
+/* --- 1. LA DEFINICIÓN DE ASTNode --- */
+typedef struct ASTNode {
+    char *type;
+    char *id;
+    int value;
+    char *str_value;
+    struct ASTNode *left;
+    struct ASTNode *right;
+    struct ASTNode *next;    
+    struct ASTNode *extra; 
+
+} ASTNode;
+
+/* --- 2. ELIMINAMOS RuntimeHost y ActiveBridge --- */
+/* ... (Se han ido a servidor_agent.c) ... */
+
+
+/* --- EL RESTO DE TUS DEFINICIONES (SIN CAMBIOS) --- */
+
 /* Definiciones de tipos - MACHINE LEARNING */
 typedef struct TensorNode {
     float* data;
@@ -32,18 +56,6 @@ typedef struct DatasetNode {
 
 
 typedef struct ParameterNode ParameterNode;
-
-typedef struct ASTNode {
-    char *type;
-    char *id;
-    int value;
-    char *str_value;
-    struct ASTNode *left;
-    struct ASTNode *right;
-    struct ASTNode *next;    
-    struct ASTNode *extra; 
-
-} ASTNode;
 
 typedef enum {
     VAL_INT,
@@ -94,6 +106,8 @@ typedef struct ParameterNode {
     struct ParameterNode *next;
 } ParameterNode;
 
+/* --- PROTOTIPOS DE TU "MOTOR" (PUROS) --- */
+
 ASTNode* from_csv_to_list(const char* filename, ClassNode* cls);
 
 ASTNode *create_list_node(ASTNode *items);
@@ -101,7 +115,6 @@ ASTNode *append_to_list(ASTNode *list, ASTNode *item);
 ASTNode *create_list_function_call_node(ASTNode *list, const char *funcName, ASTNode *lambda);
 ASTNode *create_object_node(ObjectNode *obj);
 ASTNode *create_lambda_node(const char *argName, ASTNode *body);
-// Nuevo en ast.h
 ASTNode* create_for_in_node(const char *var_name, ASTNode *list_expr, ASTNode *body);
 
 
@@ -115,23 +128,15 @@ ASTNode* create_identifier_node(const char* name);
 ParameterNode *create_parameter_node(char *name, char *type);
 ParameterNode *add_parameter(ParameterNode *list, char *name, char *type);
 ASTNode *create_object_with_args(ClassNode *class, ASTNode *args);
-// ast.h, justo después de create_object_with_args
 ASTNode *create_method_call_node(ASTNode *objectNode,
                                      const char *methodName,
                                      ASTNode *args);
 
 ASTNode *add_argument(ASTNode *list, ASTNode *expr);
-/* ast.h – justo tras tus otras creaciones de ASTNode */
 ASTNode *create_return_node(ASTNode *expr);
 
-// ast.h, justo después de add_method_to_class
 void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *body);
-
-
 ASTNode *create_function_call_node(const char *funcName, ASTNode *args);
-
-
-
 ASTNode *add_statement(ASTNode *list, ASTNode *stmt);
 ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right);
 ASTNode *create_if_node(ASTNode* condition, ASTNode* if_branch, ASTNode* else_branch);
@@ -168,17 +173,16 @@ ClassNode *find_class(char *name);
 ASTNode *create_var_decl_node(char *id, ASTNode *value);
 ASTNode *create_string_node(char *value);
 
+// Prototipos para el Agente (¡SÓLO los nodos de sintaxis!)
 ASTNode *create_agent_node(char *name, ASTNode *body);
 ASTNode *create_listener_node(ASTNode *event_expr, ASTNode *body);
-
 ASTNode *create_bridge_node(char *name, ASTNode *call_expr_node);
-ASTNode *create_access_node(ASTNode *base, ASTNode *index_expr);
+ASTNode *create_state_decl_node(char *name, ASTNode *value_expr);
 
+ASTNode *create_access_node(ASTNode *base, ASTNode *index_expr);
 ASTNode *create_object_literal_node(ASTNode *kv_list);
 ASTNode *create_kv_pair_node(char *key, ASTNode *value);
 ASTNode *append_kv_pair(ASTNode *list, ASTNode *pair);
-ASTNode *create_state_decl_node(char *name, ASTNode *value_expr);
-
 ASTNode *create_int_node(int value);
 ASTNode *create_float_node(int value);
 ASTNode *create_train_node(const char *model_name, const char *dataset_name, ASTNode *options);
@@ -190,5 +194,9 @@ extern int __ret_var_active;
 // Funciones adicionales que faltan
 double evaluate_expression(ASTNode *node);
 void generate_plot(double *values, int count);
+void interpret_if(ASTNode *node);
+int evaluate_condition(ASTNode* condition);
+ASTNode *append_to_list_parser(ASTNode *list, ASTNode *item);
+/* --- ELIMINADOS: Prototipos del Runtime (runtime_init, etc) --- */
 
 #endif

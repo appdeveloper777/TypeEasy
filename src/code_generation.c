@@ -1,3 +1,7 @@
+#include "symtab.h"
+#include <stdlib.h>
+#include <string.h>
+#include <stddef.h>
 #include "code_generation.h"
 
 /* main assembly code generation function */
@@ -56,7 +60,7 @@ void generate_data_declarations(FILE *fp){
 						if (l->inf_type == INT_TYPE){
 							fprintf(fp, "%s: .word ", l->st_name);
 							for(j = 0; j < l->array_size - 1; j++){
-								fprintf(fp, "%d, ", l->vals[j].ival);
+							//	fprintf(fp, "%d, ", ((ValueUnion*)l->vals)[j].ival);
 							}
 							fprintf(fp, "%d\n", l->vals[l->array_size - 1].ival);
 						}
@@ -332,7 +336,7 @@ void printVarArray(){
 	printf("\n");
 }
 
-void main_reg_allocation(AST_Node *node){
+void main_reg_allocation(ASTNode *node){
 	static int inst_num = 0;
 	
 	AST_Node_Declarations *temp_declarations;

@@ -25,9 +25,10 @@ agent PedidosBot {
             case "agregarItem":
                 node item = intencion.entidad["item"];
                 node cantidad = intencion.entidad["cantidad"];
-                //sesion.pedido.add({ item: item, cant: cantidad });
-                //Chat.reply(mensaje.user, "¡Añadido! ¿Algo más?");
+               // sesion.pedido.add({ item: item, cant: cantidad });
+                Chat.reply(mensaje.user, "¡Añadido! ¿Algo más?");
                 sesion.paso = "armando_pedido";
+                println("Item agregado al pedido:");
         }
     }
 }

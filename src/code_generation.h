@@ -1,3 +1,5 @@
+#include <stdio.h>
+#include "ast.h"
 
 /* main assembly code generation function */
 void generate_code();
@@ -44,4 +46,4 @@ int getVarIndex(char *name);
 void printVarArray();
 
 /* main function register allocation */
-void main_reg_allocation(AST_Node *node);
+void main_reg_allocation(ASTNode *node);

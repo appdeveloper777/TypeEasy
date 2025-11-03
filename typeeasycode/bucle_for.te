@@ -34,8 +34,8 @@ for(i = 0; 2; 1)   {
 /* ***********************
 Imprimiendo RESULTADOS:
 **************************/
-print(contador);
-print(cadena);
-print(pi);
-print(operacion);
-print(suma);
+println(contador);
+println(cadena);
+println(pi);
+println(operacion);
+println(suma);

@@ -78,6 +78,8 @@ void set_var_value(const char *name, int value) {
     bc_vars[bc_var_count++] = (VariableBC){strdup(name), value, NULL, 0};
 }
 
+void print_bytecode();
+
 
 void emit(Opcode op, int operand, const char *varname, const char *str_value) {
     bytecode[code_index++] = (Instruction){op, operand, varname ? strdup(varname) : NULL, str_value ? strdup(str_value) : NULL};
@@ -106,7 +108,7 @@ void compile(ASTNode *node) {
 
     else if (strcmp(node->type, "ASSIGN") == 0) {
         compile(node->right);
-        emit(OP_ASSIGN, 0, node->value, NULL);
+        emit(OP_ASSIGN, 0, node->left->id, NULL);
     }
 
     else if (strcmp(node->type, "PRINT") == 0) {
@@ -204,20 +206,29 @@ void run_bytecode() {
     int ip = 0;
     while (1) {
         Instruction instr = bytecode[ip++];
-            ip - 1, instr.opcode, instr.operand,
-            instr.varname ? instr.varname : "-", 
-            instr.str_value ? instr.str_value : "-");
+            //ip - 1, instr.opcode, instr.operand,
+          //  instr.varname ? instr.varname : "-", 
+          //  instr.str_value ? instr.str_value : "-");
      
         switch (instr.opcode) {
             case OP_LOAD_CONST: stack[++sp] = instr.operand; break;
-            case OP_LOAD_STRING: str_stack[++sp] = instr.str_value; break;
-            case OP_ADD: stack[sp-1] += stack[sp--]; break;
-            case OP_SUB: stack[sp-1] -= stack[sp--]; break;
-            case OP_MUL: stack[sp-1] *= stack[sp--]; break;
-            case OP_DIV: stack[sp-1] /= stack[sp--]; break;
-            case OP_LT: { int b = stack[sp--], a = stack[sp--]; stack[++sp] = a < b; } break;
-            case OP_GT: { int b = stack[sp--], a = stack[sp--]; stack[++sp] = a > b; } break;
-            case OP_EQ: { int b = stack[sp--], a = stack[sp--]; stack[++sp] = a == b; } break;
+            case OP_LOAD_STRING: str_stack[++sp] = (char*)instr.str_value; break;
+            case OP_ADD: { int b = stack[sp--]; int a = stack[sp--]; stack[++sp] = a + b; } break;
+            case OP_SUB: { int b = stack[sp--]; int a = stack[sp--]; stack[++sp] = a - b; } break;
+            case OP_MUL: { int b = stack[sp--]; int a = stack[sp--]; stack[++sp] = a * b; } break;
+            case OP_DIV: { 
+                int b = stack[sp--]; 
+                int a = stack[sp--]; 
+                if (b != 0) {
+                    stack[++sp] = a / b;
+                } else {
+                    printf("[Bytecode Error] Division by zero\n");
+                    return;
+                }
+            } break;
+            case OP_LT: { int b = stack[sp--]; int a = stack[sp--]; stack[++sp] = a < b; } break;
+            case OP_GT: { int b = stack[sp--]; int a = stack[sp--]; stack[++sp] = a > b; } break;
+            case OP_EQ: { int b = stack[sp--]; int a = stack[sp--]; stack[++sp] = a == b; } break;
             case OP_STORE_VAR:
                 if (instr.str_value)
                     set_var_string(instr.varname, instr.str_value);
@@ -229,7 +240,7 @@ void run_bytecode() {
                 break;
                 case OP_LOAD_VAR:
                 if (is_var_string(instr.varname)) {
-                    str_stack[++sp] = get_var_string(instr.varname);  
+                    str_stack[++sp] = (char*)get_var_string(instr.varname);  
                 } else {
                     stack[++sp] = get_var_value(instr.varname);
                 }

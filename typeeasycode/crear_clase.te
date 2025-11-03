@@ -11,6 +11,10 @@ class Person {
         this.nombre = _nombre;        
     }
     Imprimir(p_edad : int) {          
+       
+        const pi = 3.1416;
+        print("EL VALOR DE PI ES: ");
+        print(pi);  
         println("MI EDAD ES: ");
         print(this.edad);
         print("MI NOMBRE ES: ");
@@ -20,6 +24,17 @@ class Person {
     }  
     
     Saludar() {           
+
+      int x = 10;
+      int y = 5;
+
+      // -------------------------------- Ejemplo de if-else------------------------------------------
+      if(x > y) {
+          println("x es mayor que y");
+      } else {
+          println("x es menor o igual que y");
+      } 
+
         string test_local = "hola";
         return test_local;   
     }
@@ -39,13 +54,16 @@ int mi_edad = 36;
 string mi_nombre = "Fernando Ingunza";
 string mi_empresa = "Roussecloud";
 let obj = new Person(mi_edad, mi_nombre, mi_empresa);
-string saludarResult = obj.Saludar();
-int contarResult = obj.Contar();
-float edadResult = obj.ObtenerEdad();
-obj.Imprimir(12);  
+let persona = new Person(mi_edad, mi_nombre, mi_empresa);
 
+//int contarResult = obj.Contar();
+//float edadResult = obj.ObtenerEdad();
 
-println(saludarResult);
-println(contarResult);
-println(edadResult);
+string saludarResult1 = persona.Saludar();
+string saludarResult2 = obj.Saludar();
+obj.Imprimir(12);
+println(saludarResult1);
+println(saludarResult2);
+//println(contarResult);
+//println(edadResult);
 
