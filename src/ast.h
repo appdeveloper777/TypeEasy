@@ -197,6 +197,22 @@ void generate_plot(double *values, int count);
 void interpret_if(ASTNode *node);
 int evaluate_condition(ASTNode* condition);
 ASTNode *append_to_list_parser(ASTNode *list, ASTNode *item);
+void set_attribute_value_object(ObjectNode *obj, const char *attr_name, ObjectNode *value);
+
+// --- INICIO MEJORA: Desacoplamiento de Bridges ---
+// Estructura para registrar los manejadores de bridges nativos.
+// El motor (ast.c) llamará a estos punteros si no son NULL.
+typedef struct BridgeHandlers {
+    void (*handle_chat_bridge)(char* method_name, ASTNode* args);
+    void (*handle_nlu_bridge)(char* method_name, ASTNode* args);
+    void (*handle_api_bridge)(char* method_name, ASTNode* args);
+} BridgeHandlers;
+
+// Función para que el programa principal (servidor_agent o typeeasy_main)
+// registre sus manejadores.
+void runtime_register_bridge_handlers(BridgeHandlers handlers);
+// --- FIN MEJORA ---
+
 /* --- ELIMINADOS: Prototipos del Runtime (runtime_init, etc) --- */
 
 #endif

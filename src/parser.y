@@ -101,6 +101,8 @@ listener_decl:
 bridge_decl:
     BRIDGE IDENTIFIER ASSIGN expression SEMICOLON
         { $$ = create_bridge_node($2, $4); }
+    | BRIDGE IDENTIFIER ASSIGN NEW expression SEMICOLON
+        { $$ = create_bridge_node($2, $5); }
     ;
 
 state_decl:

@@ -92,9 +92,9 @@ ENTRYPOINT ["./typeeasy"]
 FROM debian:12-slim AS agent
 
 WORKDIR /app
-# Instala solo las dependencias de runtime (civetweb necesita libssl)
+# Instala las dependencias de runtime: libssl (para civetweb) y libfl2 (para flex)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libssl3 && \
+    apt-get install -y --no-install-recommends libssl3 libfl2 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

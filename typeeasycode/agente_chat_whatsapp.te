@@ -6,29 +6,41 @@ bridge API = Http.client("https://api.elsabor.com");
 // 2. Agente (OK)
 agent PedidosBot {
 
-    // 3. Listener (OK)
-    listener Chat.onMessage(mensaje) {
+    // 3. Listener 
+    listener Chat.onMessage(mensaje) { // Usamos 'mensaje' como nombre de variable de entrada
      
-        // 4. Declaraciones (OK)
-        state sesion = Chat.getSession(mensaje.userId);
-        node intencion = NLU.parse(mensaje.text);
+        // 4. Declaraciones 
+        //state sesion = Chat.getSession(mensaje.userId);
+      //  node intencion = NLU.parse(mensaje.text); // intencion.tipo será "agregarItem" en el stub
+
+        println("Mensaje recibido: ");
+        println(mensaje);
         
-        // 5. Lógica de 'match' (¡Esto causará el error!)
+        // 5. Lógica de 'match'       
         match (intencion.tipo) {
+            
             case "saludar":
-                Chat.reply(mensaje.user, "¡Hola!");
+              //  Chat.reply(mensaje.user, "¡Hola! ¿En qué puedo ayudarte?");
                 sesion.paso = "inicio";
+
             case "pedirMenu":
                 node menu = API.get("/menu");
-                Chat.reply(mensaje.user, "Claro, aquí está el menú: {menu.formato_texto}");
+               // Chat.reply(mensaje.user, concat("Claro, aquí está el menú: ", menu));
                 sesion.paso = "viendo_menu";
+
             case "agregarItem":
-                node item = intencion.entidad["item"];
-                node cantidad = intencion.entidad["cantidad"];
-               // sesion.pedido.add({ item: item, cant: cantidad });
-                Chat.reply(mensaje.user, "¡Añadido! ¿Algo más?");
-                sesion.paso = "armando_pedido";
-                println("Item agregado al pedido:");
+               // Acceso a entidades usando DOT (la sintaxis correcta)
+               node item = intencion.entidad.item; 
+               node cantidad = intencion.entidad.cantidad;
+
+               // ******* ESTA LÍNEA ES LA QUE FALLA EN C *******
+             //  Chat.reply(mensaje.user, concat("Añadido ", cantidad, " de ", item, ". ¿Algo más?"));
+               
+               // sesion.pedido.add({ item: item, cant: cantidad }); // (Lógica futura)
+               sesion.paso = "armando_pedido";
+               println("Item agregado al pedido sape:");
+            
+            // ... (otros casos) ...
         }
     }
 }

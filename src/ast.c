@@ -23,6 +23,17 @@ int class_count = 0;
 static int return_flag = 0;
 static ASTNode *return_node = NULL;
 
+// --- INICIO MEJORA: Punteros a los manejadores de bridges ---
+static BridgeHandlers g_bridge_handlers = {NULL, NULL, NULL};
+
+void runtime_register_bridge_handlers(BridgeHandlers handlers) {
+    g_bridge_handlers.handle_chat_bridge = handlers.handle_chat_bridge;
+    g_bridge_handlers.handle_nlu_bridge = handlers.handle_nlu_bridge;
+    g_bridge_handlers.handle_api_bridge = handlers.handle_api_bridge;
+}
+// --- FIN MEJORA ---
+
+
 /* --- ELIMINADAS: Las 5 funciones del Agente (webhook_handler, runtime_start_bridges, etc.) --- */
 /* --- (Ahora viven en servidor_agent.c) --- */
 
@@ -1098,6 +1109,24 @@ void interpret_bridge_decl(ASTNode *node) {
     char* func_name = call_node->id;
     printf("[TypeEasy] Registrando Bridge (simulado): '%s'\n", bridge_name);
     printf("  -> Objetivo: Biblioteca '%s', Función '%s'\n", lib_name, func_name);
+
+    // Create a generic class for all bridges if it doesn't exist
+    ClassNode* bridge_class = find_class("Bridge");
+    if (!bridge_class) {
+        bridge_class = create_class("Bridge");
+        add_class(bridge_class);
+    }
+
+    // Create an object for this specific bridge instance
+    ObjectNode* bridge_obj = create_object(bridge_class);
+
+    // Create a temporary ASTNode to wrap the object for the symbol table
+    ASTNode* obj_node = create_ast_leaf("OBJECT", (int)(intptr_t)bridge_obj, NULL, bridge_name);
+    
+    // Add the bridge object to the variables table
+    add_or_update_variable(bridge_name, obj_node);
+
+    free_ast(obj_node);
 }
 
 ASTNode *create_bridge_node(char *name, ASTNode *call_expr_node) {
@@ -1383,7 +1412,8 @@ static void interpret_call_method(ASTNode *node) {
     if (__ret_var_active) {
         if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
             free(__ret_var.value.string_value);
-        }        if (__ret_var.id) free(__ret_var.id);
+        }
+        if (__ret_var.id) free(__ret_var.id);
         if (__ret_var.type) free(__ret_var.type);
         memset(&__ret_var, 0, sizeof(Variable));
         __ret_var_active = 0;
@@ -1394,6 +1424,29 @@ static void interpret_call_method(ASTNode *node) {
         return;
     }
     ObjectNode *obj = v->value.object_value;
+
+    // === FIX START: Handle Bridge method calls ===
+    if (strcmp(obj->class->name, "Bridge") == 0) {
+        printf("[TypeEasy] Llamada a Bridge Nativo: %s.%s\n", v->id, node->id);
+        // Aquí es donde la magia ocurre. Delegamos al manejador específico del bridge.
+        if (strcmp(v->id, "Chat") == 0) {
+            if (g_bridge_handlers.handle_chat_bridge) g_bridge_handlers.handle_chat_bridge(node->id, node->right);
+        } else if (strcmp(v->id, "NLU") == 0) {
+            if (g_bridge_handlers.handle_nlu_bridge) g_bridge_handlers.handle_nlu_bridge(node->id, node->right);
+        } else if (strcmp(v->id, "API") == 0) {
+            if (g_bridge_handlers.handle_api_bridge) g_bridge_handlers.handle_api_bridge(node->id, node->right);
+        } else {
+            printf("Advertencia: Bridge '%s' desconocido o no implementado en este ejecutable.\n", v->id);
+        }
+        // Los bridges pueden o no devolver un valor. Si lo hacen, lo ponen en __ret_var.
+        // Por ahora, no necesitamos un valor de retorno falso.
+        // ASTNode* dummy_return = create_ast_leaf("STRING", 0, "dummy_return_from_bridge", NULL);
+        // add_or_update_variable("__ret__", dummy_return);
+        // free_ast(dummy_return);
+        return; // Skip normal method dispatch
+    }
+    // === FIX END ===
+
     MethodNode *m = obj->class->methods;
     while (m && strcmp(m->name, node->id) != 0) m = m->next;
     if (!m) {
