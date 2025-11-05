@@ -10,7 +10,7 @@
 // ====================== CONSTANTES Y ESTRUCTURAS GLOBALES ======================
 #define MAX_CLASSES 50
 #define MAX_VARS 100
-
+static int g_initial_var_count = 0;
 // Variables globales
 Variable vars[MAX_VARS];
 ClassNode *classes[MAX_CLASSES];
@@ -25,7 +25,40 @@ static ASTNode *return_node = NULL;
 
 // --- INICIO MEJORA: Punteros a los manejadores de bridges ---
 static BridgeHandlers g_bridge_handlers = {NULL, NULL, NULL};
+void runtime_save_initial_var_count() {
+    g_initial_var_count = var_count;
+    printf("[TypeEasy] Estado inicial guardado. %d variables globales (bridges) retenidas.\n", g_initial_var_count);
+}
 
+void runtime_reset_vars_to_initial_state() {
+    // Libera la memoria de todas las variables CREADAS DURANTE LA ÚLTIMA EJECUCIÓN
+    // (es decir, todas las variables DESPUÉS de los bridges)
+    for (int i = g_initial_var_count; i < var_count; i++) {
+        if (vars[i].id) free(vars[i].id);
+        if (vars[i].type) free(vars[i].type);
+        if (vars[i].vtype == VAL_STRING && vars[i].value.string_value) {
+            free(vars[i].value.string_value);
+        }
+        
+        // ¡Importante! Si la variable es un Objeto (como 'intencion')
+        // debemos liberar el objeto en sí (que está en 'extra')
+        // PERO 'declare_variable'  y 'add_or_update_variable' 
+        // copian el puntero, y los 'free_ast'  ya liberan los nodos.
+        // No necesitamos liberar 'extra' aquí, solo el contenedor de la variable.
+    }
+
+    // Resetea el contador de variables a su estado "limpio"
+    var_count = g_initial_var_count;
+
+    // También limpia la variable de retorno global
+    if (__ret_var_active) {
+        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
+        if (__ret_var.id) free(__ret_var.id);
+        if (__ret_var.type) free(__ret_var.type);
+        memset(&__ret_var, 0, sizeof(Variable));
+        __ret_var_active = 0;
+    }
+}
 void runtime_register_bridge_handlers(BridgeHandlers handlers) {
     g_bridge_handlers.handle_chat_bridge = handlers.handle_chat_bridge;
     g_bridge_handlers.handle_nlu_bridge = handlers.handle_nlu_bridge;
@@ -67,6 +100,9 @@ char* get_node_string(ASTNode *node) {
  
     printf("[DEBUG] get_node_string: Nodo tipo '%s'\n", node->type ? node->type : "NULL");
 
+    if (strcmp(node->type, "STRING_LITERAL") == 0) {
+        return strdup(node->str_value);
+    }
 
     if (strcmp(node->type, "IDENTIFIER") == 0) {
         Variable *v = find_variable(node->id);
@@ -2034,17 +2070,102 @@ static void interpret_assign(ASTNode *node) {
         printf("Error: Asignación inválida.\n"); 
         return; 
     }
-    if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0) {
+
+    // --- INICIO DE LA CORRECCIÓN ---
+
+    // ¿Es una llamada a función (como concat)?
+    if (strcmp(value_node->type, "CALL_FUNC") == 0 || strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0) {
+        
+        // 1. Ejecutar la función (ej. concat)
+        interpret_ast(value_node);
+        
+        // 2. Obtener el resultado de __ret_var
+        Variable *ret_val = find_variable("__ret__");
+        if (!ret_val) {
+            printf("Error: Función en asignación no devolvió nada.\n");
+            return;
+        }
+
+        // 3. Crear un nodo temporal para el valor
+        ASTNode *temp_node = NULL;
+        if (ret_val->vtype == VAL_STRING) {
+            temp_node = create_ast_leaf("STRING", 0, strdup(ret_val->value.string_value), NULL);
+        } else if (ret_val->vtype == VAL_INT) {
+            temp_node = create_ast_leaf_number("INT", ret_val->value.int_value, NULL, NULL);
+        } else if (ret_val->vtype == VAL_FLOAT) {
+            temp_node = create_ast_leaf("FLOAT", 0, double_to_string(ret_val->value.float_value), NULL);
+        } else if (ret_val->vtype == VAL_OBJECT) {
+            temp_node = malloc(sizeof(ASTNode));
+            memset(temp_node, 0, sizeof(ASTNode));
+            temp_node->type = strdup(ret_val->type);
+            temp_node->extra = (struct ASTNode*)ret_val->value.object_value;
+        }
+        
+        if (temp_node) {
+            // 4. Asignar el valor
+            add_or_update_variable(var_node->id, temp_node);
+            // 5. Limpiar el nodo temporal
+            free_ast(temp_node);
+        }
+
+        // 6. Limpiar __ret_var
+        if (__ret_var_active) {
+            if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
+            if (__ret_var.id) free(__ret_var.id);
+            if (__ret_var.type) free(__ret_var.type);
+            memset(&__ret_var, 0, sizeof(Variable));
+            __ret_var_active = 0;
+        }
+        return_flag = 0;
+        return_node = NULL;
+    }
+    // ¿Es un acceso a atributo (como intencion.item)?
+    else if (strcmp(value_node->type, "ACCESS_ATTR") == 0) {
+        // Esta lógica ya la escribimos para declare_variable, la usamos aquí
+        ASTNode *o = value_node->left, *a = value_node->right;
+        Variable *v = find_variable(o->id);
+        if (!v || v->vtype != VAL_OBJECT) {
+             printf("Error: Objeto '%s' no encontrado para asignación.\n", o->id);
+             return;
+        }
+        
+        ObjectNode *obj = v->value.object_value;
+        for (int i = 0; i < obj->class->attr_count; i++) {
+            if (strcmp(obj->attributes[i].id, a->id) == 0) {
+                // Encontramos el atributo. Creamos un nodo temporal y lo asignamos.
+                ASTNode* temp_node = NULL;
+                if (obj->attributes[i].vtype == VAL_STRING) {
+                    temp_node = create_ast_leaf("STRING", 0, strdup(obj->attributes[i].value.string_value), NULL);
+                } else if (obj->attributes[i].vtype == VAL_INT) {
+                    temp_node = create_ast_leaf_number("INT", obj->attributes[i].value.int_value, NULL, NULL);
+                } else if (obj->attributes[i].vtype == VAL_FLOAT) {
+                    temp_node = create_ast_leaf("FLOAT", 0, double_to_string(obj->attributes[i].value.float_value), NULL);
+                }
+                
+                if(temp_node) {
+                    add_or_update_variable(var_node->id, temp_node);
+                    free_ast(temp_node);
+                }
+                return; // ¡Asignación completada!
+            }
+        }
+        printf("Error: Atributo '%s' no encontrado en '%s'.\n", a->id, o->id);
+        return;
+    }
+    // ¿Es una expresión matemática?
+    else if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0) {
         double result = evaluate_expression(value_node);
-        // CORRECCIÓN: no podemos liberar el value_node original, creamos uno nuevo.
         char* str_res = double_to_string(result);
-        ASTNode* temp_node = create_ast_leaf("FLOAT", 0, str_res, NULL); // str_res es copiado por create_ast_leaf
+        ASTNode* temp_node = create_ast_leaf("FLOAT", 0, str_res, NULL);
         add_or_update_variable(var_node->id, temp_node);
-        free_ast(temp_node); // Liberamos el nodo temporal
-        free(str_res); // Liberamos el string temporal
-    } else {
+        free_ast(temp_node);
+        free(str_res);
+    } 
+    // Es un valor simple (literal, variable)
+    else {
         add_or_update_variable(var_node->id, value_node);
     }
+    // --- FIN DE LA CORRECCIÓN ---
 }
 
 static void interpret_print(ASTNode *node) {

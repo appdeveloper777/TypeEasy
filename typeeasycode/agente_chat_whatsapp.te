@@ -1,3 +1,5 @@
+// agente_chat_whatsapp.te
+
 bridge Chat = WhatsApp.connect("api_key_wa_001");
 bridge NLU = Rust.import("motor_nlu_local");
 bridge API = Http.client("https://api.elsabor.com");
@@ -7,36 +9,43 @@ agent PedidosBot {
     listener Chat.onMessage(mensaje) { 
      
         println("Mensaje recibido: ");
+        println(mensaje);
         
-        node intencion = NLU.parse(mensaje);
+        node intencion = NLU.parse(mensaje);       
         println("Intención detectada: SAPE ");
         
         // --- ¡SOLUCIÓN! ---
-        // Declara tus variables aquí, AFUERA del match,
-        // con valores por defecto.
-        //let item = "default_item";
-        //let cant = 0;
-        //let respuesta = "";
+        // Declara TODAS tus variables aquí arriba
+        let item = "";
+        let cant = 0;
+        let respuesta = "";
+        let menu = ""; // <-- AÑADE ESTA LÍNEA
 
+        // --- Match dinámico basado en el NLU ---
         match (intencion.tipo) { 
            
             case "agregarItem":
-                // Ahora esto es una ASIGNACIÓN, no una declaración
-                string item = "intencion.item";
-                string cant = "intencion.cantidad";
-                //string respuesta = "";
-
-                let respuesta = concat("¡Anotado! Agregando ", cant, " de ", item, " a tu pedido.");
+                item = intencion.item;
+                cant = intencion.cantidad;
+                
+                respuesta = concat("¡Anotado! Agregando ", cant, " de ", item, " a tu pedido.");
                 println(respuesta);
                 Chat.sendMessage(respuesta);
                 
             case "consultarMenu":
                 println("Intención detectada: consultarMenu");
-                // let menu = API.get("/menu"); // <-- Esto también fallaría
-                // Chat.sendMessage(concat("Claro, aquí tienes el menú: ", menu));
-
+                
+                // ¡Ahora esto es una ASIGNACIÓN y es válido!
+                menu = API.get("/menu"); 
+                
+                respuesta = concat("Claro, aquí tienes el menú: ", menu);
+                println(respuesta);
+                Chat.sendMessage(respuesta);
+                
             case "desconocido":
-                Chat.sendMessage("Lo siento, no entendí lo que quisiste decir.");
+                respuesta = "Lo siento, no entendí lo que quisiste decir.";
+                println(respuesta);
+                Chat.sendMessage(respuesta);
 
         }
     }

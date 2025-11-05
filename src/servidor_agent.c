@@ -70,47 +70,67 @@ void handle_chat_bridge(char* method_name, ASTNode* args) {
 /* --- Implementación del Bridge NLU (Simulado) --- */
 
 void handle_nlu_bridge(char* method_name, ASTNode* args) {
-    if (strcmp(method_name, "parse") == 0) {
-        printf("[Agente] Bridge NLU: Recibido 'parse'. Simulará 'agregarItem'.\n");
+    if (strcmp(method_name, "parse") != 0) return;
 
-        // 1. Encontrar la clase (¡ya no necesitamos EntityMap!)
-        ClassNode* result_class = find_class("NluResult");
+    // 1. Obtenemos el mensaje real
+    char* mensaje_usuario = get_node_string(args);
+    
+    // 2. Variables para simular la intención
+    //    (Ahora se asignan DENTRO de los 'if')
+    const char* tipo_simulado = NULL;
+    const char* item_simulado = "";
+    int cant_simulada = 0;
 
-        printf("[DEBUG] Buscando clase 'NluResult' SAPE 1...\n");
-        if (!result_class) { /* ... (error) ... */ return; }
-       
-        // 2. (Ya no creamos el objeto 'entidad')
+    printf("[Agente] SAPEEEE Bridge NLU: Analizando mensaje: '%s'\n", mensaje_usuario);
 
-        // 3. Crear el objeto 'NluResult' (PLANO)
-        ObjectNode* result_obj = create_object(result_class);
-        for(int i=0; i < result_obj->class->attr_count; i++) {
-            if(strcmp(result_obj->attributes[i].id, "tipo") == 0) {
-                result_obj->attributes[i].value.string_value = strdup("agregarItem");
-                result_obj->attributes[i].vtype = VAL_STRING;
-            }
-            // Asignar los atributos aplanados
-            if(strcmp(result_obj->attributes[i].id, "item") == 0) {
-                result_obj->attributes[i].value.string_value = strdup("Tacos al Pastor");
-                result_obj->attributes[i].vtype = VAL_STRING;
-            }
-            if(strcmp(result_obj->attributes[i].id, "cantidad") == 0) {
-                result_obj->attributes[i].value.int_value = 2;
-                result_obj->attributes[i].vtype = VAL_INT;
-            }
-        }
-        
-         // 4. Crear un nodo AST (sin cambios)
-         ASTNode* result_node = create_ast_leaf("OBJECT", 0, NULL, NULL);
-         result_node->type = strdup("OBJECT");   
-         result_node->extra = (struct ASTNode*)result_obj;
-        
-
-        // 5. Devolverlo al intérprete (sin cambios)
-        add_or_update_variable("__ret__", result_node);
-
-        // NO liberar result_node aquí. El intérprete lo necesita.
-        free_ast(result_node); // <-- ¡Este es el error!
+    // 3. Decidimos qué simular
+    if (strstr(mensaje_usuario, "menu") != NULL || strstr(mensaje_usuario, "carta") != NULL) {
+        printf("[Agente] Bridge NLU: Simulará 'consultarMenu'.\n");
+        tipo_simulado = "consultarMenu";
+    } 
+    else if (strstr(mensaje_usuario, "hola") != NULL || strstr(mensaje_usuario, "gracias") != NULL) {
+         printf("[Agente] Bridge NLU: Simulará 'desconocido'.\n");
+        tipo_simulado = "desconocido";
     }
+    else {
+        // Este es el caso por defecto
+        printf("[Agente] Bridge NLU: Simulará 'agregarItem'.\n");
+        tipo_simulado = "agregarItem";
+        item_simulado = "Tacos al Pastor";
+        cant_simulada = 2;
+    }
+
+    free(mensaje_usuario); 
+
+    // 4. Encontrar la clase (sin cambios)
+    ClassNode* result_class = find_class("NluResult");
+    if (!result_class) { /* ... */ return; }
+    
+    // 5. Crear el objeto 'NluResult' (sin cambios)
+    ObjectNode* result_obj = create_object(result_class);
+    for(int i=0; i < result_obj->class->attr_count; i++) {
+        
+        if(strcmp(result_obj->attributes[i].id, "tipo") == 0) {
+            result_obj->attributes[i].value.string_value = strdup(tipo_simulado);
+            result_obj->attributes[i].vtype = VAL_STRING;
+        }
+        if(strcmp(result_obj->attributes[i].id, "item") == 0) {
+            result_obj->attributes[i].value.string_value = strdup(item_simulado);
+            result_obj->attributes[i].vtype = VAL_STRING;
+        }
+        if(strcmp(result_obj->attributes[i].id, "cantidad") == 0) {
+            result_obj->attributes[i].value.int_value = cant_simulada;
+            result_obj->attributes[i].vtype = VAL_INT;
+        }
+    }
+    
+    // 6. Devolverlo (sin cambios)
+    ASTNode* result_node = create_ast_leaf("OBJECT", 0, NULL, NULL);
+    result_node->type = strdup("OBJECT");   
+    result_node->extra = (struct ASTNode*)result_obj;
+    
+    add_or_update_variable("__ret__", result_node);
+    free_ast(result_node); 
 }
 
 ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) {
@@ -150,7 +170,7 @@ void handle_api_bridge(char* method_name, ASTNode* args) {
         add_or_update_variable("__ret__", menu_node);
         
         // NO liberar menu_node aquí. El intérprete lo necesita.
-         free_ast(menu_node); // <-- ¡Este es el error!
+       //  free_ast(menu_node); // <-- ¡Este es el error!
     }
 }
 
@@ -162,6 +182,8 @@ void handle_api_bridge(char* method_name, ASTNode* args) {
 static int webhook_handler(struct mg_connection *conn, void *cbdata) {
     
     const struct mg_request_info *req_info = mg_get_request_info(conn);
+
+    runtime_reset_vars_to_initial_state();
 
     char post_data[2048] = {0};
     int read = 0;
@@ -353,6 +375,7 @@ int main(int argc, char *argv[]) {
     // 2. Inicia el Runtime del Agente (funciones en ESTE archivo)
     runtime_init(agent_ast);
     interpret_ast(agent_ast);    
+    runtime_save_initial_var_count();
     runtime_start_bridges(); 
 
     printf("[Servidor Agente] Runtime iniciado. Esperando eventos...\n");

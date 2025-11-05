@@ -106,6 +106,9 @@ typedef struct ParameterNode {
     struct ParameterNode *next;
 } ParameterNode;
 
+void runtime_save_initial_var_count();
+void runtime_reset_vars_to_initial_state();
+
 /* --- PROTOTIPOS DE TU "MOTOR" (PUROS) --- */
 
 ASTNode* from_csv_to_list(const char* filename, ClassNode* cls);
