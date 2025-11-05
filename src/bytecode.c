@@ -5,6 +5,13 @@
 #include "strvars.h"
 #include "bytecode.h"
 
+/* Debug-print macro: define TYPEEASY_DEBUG at compile time to enable these prints */
+#ifndef TYPEEASY_DEBUG
+#define DEBUG_PRINTF(...) do {} while(0)
+#else
+#define DEBUG_PRINTF(...) printf(__VA_ARGS__)
+#endif
+
 
 #define MAX_CODE 8192
 #define MAX_STACK 4096
@@ -61,7 +68,7 @@ int get_var_value(const char *name) {
         if (strcmp(bc_vars[i].name, name) == 0)
             return bc_vars[i].value;
     }
-    printf("[Bytecode Error] Variable '%s' no definida\n", name);
+    DEBUG_PRINTF("[Bytecode Error] Variable '%s' no definida\n", name);
     return 0;
 }
 
@@ -192,13 +199,15 @@ void compile_to_bytecode(ASTNode *node) {
 }
 
 void print_bytecode() {
-    printf("\n[DEBUG] Bytecode generado:\n");
+    /* Only print bytecode when debugging is enabled */
+    #ifdef TYPEEASY_DEBUG
     for (int i = 0; i < code_index; i++) {
         Instruction in = bytecode[i];
         printf("[%02d] %d %s %s\n", i, in.opcode,
                in.varname ? in.varname : "-",
                in.str_value ? in.str_value : "-");
     }
+    #endif
 }
 
 
@@ -222,7 +231,7 @@ void run_bytecode() {
                 if (b != 0) {
                     stack[++sp] = a / b;
                 } else {
-                    printf("[Bytecode Error] Division by zero\n");
+                    DEBUG_PRINTF("[Bytecode Error] Division by zero\n");
                     return;
                 }
             } break;
@@ -247,13 +256,13 @@ void run_bytecode() {
                 break;
             
             case OP_PRINT_INT:
-                printf("[Bytecode Output] %d\n", stack[sp--]);
+                DEBUG_PRINTF("[Bytecode Output] %d\n", stack[sp--]);
                 break;
                 case OP_PRINT_STR:
                 if (str_stack[sp] != NULL)
-                    printf("[Bytecode Output] %s\n", str_stack[sp]);
+                    DEBUG_PRINTF("[Bytecode Output] %s\n", str_stack[sp]);
                 else
-                    printf("[Bytecode Output] <null string>\n");
+                    DEBUG_PRINTF("[Bytecode Output] <null string>\n");
                 sp--;
                 break;
             
@@ -266,7 +275,7 @@ void run_bytecode() {
             case OP_HALT:
                 return;
             default:
-                printf("[Bytecode VM] Instrucción no soportada: %d\n", instr.opcode);
+                DEBUG_PRINTF("[Bytecode VM] Instrucción no soportada: %d\n", instr.opcode);
                 return;
         }
     }

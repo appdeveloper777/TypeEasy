@@ -20,7 +20,7 @@ int main(int argc, char *argv[]) {
     const char* debug_env = getenv("TYPEEASY_DEBUG");
     if (debug_env != NULL && strcmp(debug_env, "1") == 0) {
         g_debug_mode = 1;
-        printf("[INFO] Modo de depuración activado.\n");
+        /* Info log removed */
     }
   
     clock_t inicio = clock();
@@ -54,10 +54,10 @@ int main(int argc, char *argv[]) {
     // 2. Interpreta el script
     // (Tu lógica original de 'if (root)' e 'if (interpret_mode)') [cite: 215-223]
     if (g_debug_mode) {
-        printf("[DEBUG] Ejecutando con AST normal\n");
+        /* debug mode enabled - no extra debug prints */
     }
-    
-    interpret_ast(script_ast); // <-- Ejecuta la lógica
+
+    interpret_ast(script_ast); // execute the script
 
     if(interpret_mode){
         // (Tu lógica de system("g++ ...") y system("typeeasy_output.exe")) [cite: 217-220]

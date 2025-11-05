@@ -83,6 +83,9 @@ RUN apt-get update && \
 
 # Copia el ejecutable del intérprete desde la etapa de construcción.
 COPY --from=typeeasy_builder /app/src/typeeasy .
+# Copia los scripts del proyecto para que puedan ejecutarse dentro de la imagen
+# Esto evita tener que montar el directorio del host al ejecutar el contenedor.
+COPY --from=base /app/typeeasycode ./typeeasycode
 # El punto de entrada es el propio intérprete.
 ENTRYPOINT ["./typeeasy"]
 

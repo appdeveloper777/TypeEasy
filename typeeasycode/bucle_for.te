@@ -1,7 +1,4 @@
-/* ***********************
- Creación de variables
-**************************/
-// String
+
 string cadena = "ESTE ES UN STRING DE LOS DIOSES..";
 // Float
 float suma = 100.00;

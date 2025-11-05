@@ -64,12 +64,14 @@
 %%
 
 program:
-        program statement       { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; }
-        | program class_decl      { $$ = $1; root = $$; }
-        | program agent_decl      { $$ = create_ast_node("AGENT_LIST", $1, $2); root = $$; }
-        | program bridge_decl     { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; } /* <-- CORREGIDO */
-        | class_decl              { $$ = NULL; }        
-        | bridge_decl             { $$ = $1; root = $$; }
+    program statement       { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; }
+    | program class_decl      { $$ = $1; root = $$; }
+    | program agent_decl      { $$ = create_ast_node("AGENT_LIST", $1, $2); root = $$; }
+    | program bridge_decl     { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; } /* <-- CORREGIDO */
+    | class_decl              { $$ = NULL; }
+    | bridge_decl             { $$ = $1; root = $$; }
+    /* Allow a script that is a single statement (or starts with a statement) */
+    | statement               { $$ = $1; root = $$; }
         
 ;
 
@@ -296,10 +298,8 @@ statement:
     { ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i"); $$ = create_method_call_node(obj, "predict", NULL); $$ = create_predict_node($6, $8); }
   | PLOT LPAREN expression_list RPAREN SEMICOLON
     { $$ = create_ast_node("PLOT", $3, NULL); }
-  | MODEL IDENTIFIER LBRACKET layer_list RBRACKET
-    { ASTNode *layer = $4; int capa_index = 0;
-      while (layer) { if (strcmp(layer->type, "LAYER") == 0) { printf("[DEBUG] Capa #%d: tipo=%s, unidades=%d, activación=%s\n", capa_index++, layer->id, layer->value, layer->str_value); } layer = layer->right; } 
-      ASTNode *modelNode = create_model_node($2, $4); }
+        | MODEL IDENTIFIER LBRACKET layer_list RBRACKET
+        { ASTNode *layer = $4; (void)layer; ASTNode *modelNode = create_model_node($2, $4); }
   | LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON
     { $$ = create_layer_node($2, $4, $6); }
   | TRAIN LPAREN IDENTIFIER COMMA IDENTIFIER COMMA train_options RPAREN SEMICOLON

@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include "bytecode.h"
 
+/* Allow runtime debug mode controlled by TYPEEASY_DEBUG env var (set in main) */
+extern int g_debug_mode;
+
 /* --- ELIMINADOS: g_runtime y los prototipos del servidor --- */
 
 // ====================== CONSTANTES Y ESTRUCTURAS GLOBALES ======================
@@ -98,7 +101,7 @@ static char* double_to_string(double x) {
 char* get_node_string(ASTNode *node) {
     if (!node) return strdup("");
  
-    printf("[DEBUG] get_node_string: Nodo tipo '%s'\n", node->type ? node->type : "NULL");
+    /* get_node_string debug log removed */
 
     if (strcmp(node->type, "STRING_LITERAL") == 0) {
         return strdup(node->str_value);
@@ -135,7 +138,7 @@ char* get_node_string(ASTNode *node) {
         if (v && v->vtype == VAL_OBJECT) {
             ObjectNode *obj = v->value.object_value;
 
-            printf("[DEBUG] Puntero 'obj' = %p\n", (void*)obj);
+            /* debug: obj pointer log removed */
 
             // --- BÚSQUEDA ROBUSTA ---
             // Itera sobre los atributos de la INSTANCIA
@@ -352,19 +355,29 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         vars[my_index].value.string_value = strdup(value->str_value);
     }
     else if (strcmp(value->type, "LIST") == 0) {
+        /* debug print removed */
         vars[my_index].vtype = VAL_OBJECT;
         vars[my_index].value.object_value = (void *)(intptr_t)value;
 
         ASTNode *cur = value->left;
+        int list_count = 0;
         while (cur) {
+            list_count++;
+            /* debug print removed */
             if (strcmp(cur->type, "OBJECT") != 0) {
                 return;
             }
 
-            ObjectNode *obj_original = (ObjectNode *)(intptr_t)cur->value;
+            /* Read the original Object pointer from either 'extra' (preferred)
+               or 'value' (legacy). Then clone and store the cloned object in
+               both fields so future code can find it. */
+            ObjectNode *obj_original = NULL;
+            if (cur->extra) obj_original = (ObjectNode *)(cur->extra);
+            else obj_original = (ObjectNode *)(intptr_t)cur->value;
             ObjectNode *obj_clonado = clone_object(obj_original);
             ASTNode *arg = cur->left;
             cur->value = (int)(intptr_t)obj_clonado;
+            cur->extra = (struct ASTNode*)obj_clonado;
             MethodNode *m = obj_clonado->class->methods;
             while (m && strcmp(m->name, "__constructor") != 0) {
                 m = m->next;
@@ -398,10 +411,16 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
                     arg = arg->right;
                 }
                 call_method(obj_clonado, "__constructor");
+                /* Ensure constructor side-effects (like return_flag) don't block later AST execution */
+                return_flag = 0;
+                return_node = NULL;
+                /* debug print removed */
             }
             cur->left = NULL;
+            /* debug print removed */
             cur = cur->next;
         }
+    /* debug print removed */
     }
     else if (strcmp(value->type, "FLOAT") == 0) {
         vars[my_index].vtype = VAL_FLOAT;
@@ -710,7 +729,9 @@ ASTNode *create_object_with_args(ClassNode *class, ASTNode *args) {
     obj->left = args;
     obj->right = NULL;
     obj->id = strdup(class->name);
-    obj->value = (int)(intptr_t)real_obj;
+    // Store the actual ObjectNode pointer in 'extra' (used across the codebase)
+    obj->extra = (struct ASTNode*)real_obj;
+    obj->value = 0;
    
     return obj;
 }
@@ -1016,16 +1037,19 @@ double evaluate_expression(ASTNode *node) {
 }
 
 void call_method(ObjectNode *obj, char *method) {
+    /* debug print removed */
     ASTNode *thisNode = (ASTNode *)malloc(sizeof(ASTNode));
     thisNode->type = strdup("OBJECT");
     thisNode->id = strdup("this");
     thisNode->left = thisNode->right = NULL;
-    thisNode->value = (int)(intptr_t)obj;
+    thisNode->extra = (struct ASTNode*)obj; // store ObjectNode pointer in 'extra' (consistent with create_object_with_args)
+    thisNode->value = 0;
     add_or_update_variable("this", thisNode);
 
     MethodNode *m = obj->class->methods;
     while (m) {
         if (strcmp(m->name, method) == 0) {
+            /* method invocation traces removed */
             interpret_ast(m->body);
             return;
         }
@@ -1050,8 +1074,7 @@ void execute_predict(ASTNode* model_node, ASTNode* input_node) {
         printf("Error: Input '%s' no encontrado.\n", input_node->id);
         return;
     }
-    printf("[DEBUG] Ejecutando predict(%s, %s)\n", model_node->id, input_node->id);
-    printf("Predicción de '%s' sobre '%s': Resultado simulado 0.85\n", model_node->id, input_node->id);
+    /* predict debug logs removed */
     ASTNode *lit = create_ast_leaf_number("INT", 85, NULL, NULL);
     add_or_update_variable("__ret__", lit);
 }
@@ -1079,9 +1102,7 @@ static void interpret_match(ASTNode *node);
 /* ─── DATASET ─────────────────────────────────────────────────────────── */
 static void interpret_dataset(ASTNode *node) {
     add_or_update_variable(node->id, node);
-    printf("[DEBUG] Dataset '%s' cargado desde '%s'\n",
-           node->id,
-           node->str_value);
+    /* dataset load debug log removed */
 }
 
 static void interpret_filter_call(ASTNode *node) {
@@ -1155,9 +1176,10 @@ ASTNode* create_for_in_node(const char *var_name, ASTNode *list_expr, ASTNode *b
 
 static void interpret_for_in(ASTNode *node) {
     if (!node->right) {
-        printf("[DEBUG] El cuerpo del for-in está vacío (node->right == NULL)\n");
+        /* for-in empty body (debug log removed) */
         return;
     }
+    /* debug print removed */
     ASTNode *list_expr = node->left;
     ASTNode *listNode = NULL;
     if (list_expr->type && (
@@ -1165,7 +1187,7 @@ static void interpret_for_in(ASTNode *node) {
         strcmp(list_expr->type, "IDENTIFIER") == 0)) {
         Variable *v = find_variable(list_expr->id);
         if (!v) {
-            printf("[DEBUG] Variable '%s' no existe.\n", list_expr->id);
+            /* variable not found (debug log removed) */
             return;
         }       
         if (!v || v->vtype != VAL_OBJECT || strcmp(v->type, "LIST") != 0) {
@@ -1194,9 +1216,13 @@ static void interpret_for_in(ASTNode *node) {
                 wrapper->type = strdup("OBJECT");
                 wrapper->id = strdup(node->id);
                 wrapper->left = wrapper->right = NULL;
-                wrapper->value = (int)(intptr_t)obj;
+                /* Store pointer in 'extra' to be consistent with create_object_with_args()/declare_variable */
+                wrapper->extra = (struct ASTNode*)obj;
+                wrapper->value = 0;
+                /* debug print removed */
                 add_or_update_variable(node->id, wrapper);
             } 
+            /* debug print removed */
             interpret_ast(node->right);
         }
     }
@@ -1225,13 +1251,13 @@ void interpret_bridge_decl(ASTNode *node) {
     printf("  -> Objetivo: Biblioteca '%s', Función '%s'\n", lib_name, func_name);
 
     // Create a generic class for all bridges if it doesn't exist
-    printf("[DEBUG] Buscando clase 'Bridge'...\n");
+    /* bridge class search debug log removed */
     ClassNode* bridge_class = find_class("Bridge");
     
     // --- INICIO DE LA CORRECCIÓN (V10) ---
     // Si no se encuentra, la creamos "perezosamente"
     if (bridge_class == NULL) {
-        printf("[DEBUG] Clase 'Bridge' no encontrada. Creándola...\n");
+        /* bridge class not found — creation log removed */
         bridge_class = create_class("Bridge");
         add_class(bridge_class);
         
@@ -1329,6 +1355,7 @@ ASTNode *append_kv_pair(ASTNode *list, ASTNode *pair) {
 
 void interpret_ast(ASTNode *node) {    
     if (!node || return_flag) return; 
+    /* debug print removed */
 
     if (strcmp(node->type, "STATE_DECL") == 0) {
         printf("[TypeEasy] 'state' '%s' tratado como 'var' en modo script.\n", node->id);
@@ -1372,7 +1399,7 @@ void interpret_ast(ASTNode *node) {
     else if (strcmp(node->type, "PRINTLN") == 0)        interpret_println(node);
     else if (strcmp(node->type, "STATEMENT_LIST") == 0) interpret_statement_list(node);
     else if (strcmp(node->type, "PLOT") == 0) {
-        printf("[DEBUG] Generando gráfico...\n");
+    /* plot generation debug log removed */
         double values[100];
         int count = 0;
         ASTNode *child = node->left;
@@ -1416,13 +1443,9 @@ void interpret_if(ASTNode *node) {
 }
 
 void interpret_match(ASTNode *node) {
-    printf("\n[DEBUG] ¡¡¡ESTOY EJECUTANDO EL CÓDIGO NUEVO!!!\n\n"); // <-- AÑADE ESTA LÍNEA
-    printf("[DEBUG] Interpretando MATCH...SAPEEEE\n");
+    /* interpret_match debug logs removed */
     if (!node || !node->left || !node->right) return;
-     printf("[DEBUG] Interpretando MATCH...2 SAPEEEE\n");
     char* match_value = get_node_string(node->left);
-
-    printf("[DEBUG Match] Valor a comparar: '%s'\n", match_value);
 
     ASTNode* case_node = node->right;
     while (case_node) {
@@ -1595,9 +1618,11 @@ static void interpret_call_method(ASTNode *node) {
         return;
     }
     ASTNode *thisNode = malloc(sizeof(ASTNode));
-    thisNode->type = strdup("OBJECT"); thisNode->id = strdup("this");
+    thisNode->type = strdup("OBJECT");
+    thisNode->id = strdup("this");
     thisNode->left = thisNode->right = NULL;
-    thisNode->value = (int)(intptr_t)obj;
+    thisNode->extra = (struct ASTNode*)obj; /* store ObjectNode pointer in 'extra' for consistency */
+    thisNode->value = 0;
     add_or_update_variable("this", thisNode);
     ParameterNode *p = m->params;
     ASTNode      *arg = node->right; // CORRECCIÓN
@@ -1680,7 +1705,7 @@ static void interpret_call_method(ASTNode *node) {
 }
 ObjectNode* clone_object(ObjectNode *original) {
     if (!original || !original->class) {
-        printf("[DEBUG] clone_object: objeto original inválido\n");
+        /* clone_object debug log removed */
         return NULL;
     }
     ObjectNode *clone = malloc(sizeof(ObjectNode));
@@ -1737,6 +1762,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         count++;
     }
     fclose(fp);
+    /* debug print removed */
     ASTNode* listNode = malloc(sizeof(ASTNode));
     listNode->type = strdup("LIST");
     listNode->left = first;
@@ -1751,6 +1777,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
 
 
 static void interpret_var_decl(ASTNode *node) {
+    /* trace removed */
     int is_const_flag = node->value;
     const char* declared_type = node->str_value;
     ASTNode* value_node = node->left;
@@ -1827,12 +1854,12 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
             exit(1);
         }
         
-        declare_variable(node->id, value_to_assign_node, is_const_flag);
+    declare_variable(node->id, value_to_assign_node, is_const_flag);
         
-        // --- ¡¡CORRECCIÓN!! ---
-        // NO liberes este nodo. `declare_variable` ahora depende de él.
-        // Liberarlo causa el use-after-free (segfault).
-        free_ast(value_to_assign_node); // <-- ESTA LÍNEA CAUSA EL BUG
+    // NOTE: Do NOT free 'value_to_assign_node' here. The declared variable
+    // stores pointers into the node (or copies them) and freeing it here
+    // caused a use-after-free and intermittent segfaults (exit code 139).
+    // free_ast(value_to_assign_node); // removed intentionally
         
         // Limpia la variable de retorno
         if (__ret_var_active) {
@@ -2014,9 +2041,12 @@ ASTNode* create_lambda_node(const char* argName, ASTNode* body) {
 
 
 static void interpret_assign_attr(ASTNode *node) {
+    /* trace removed */
     ASTNode *access = node->left;
+    /* access internals trace removed */
     ASTNode *value_node = node->right;
     Variable *var = find_variable(access->left->id);
+    /* find_variable trace removed */
     if (!var || var->vtype!=VAL_OBJECT) {
         printf("Error: Objeto '%s' no definido o no es un objeto.\n", access->left->id); return;
     }
@@ -2028,6 +2058,8 @@ static void interpret_assign_attr(ASTNode *node) {
     }
     if(idx<0){ printf("Error: Atributo '%s' no encontrado en clase '%s'.\n", attr_name, obj->class->name); return; }
     const char *declared = obj->attributes[idx].type; 
+
+    /* detailed attribute assignment trace removed */
 
     if (declared == NULL) {
         printf("Error: El atributo '%s' no tiene tipo definido.\n", attr_name);
@@ -2064,6 +2096,7 @@ static void interpret_assign_attr(ASTNode *node) {
 }
 
 static void interpret_assign(ASTNode *node) {
+    /* trace removed */
     ASTNode *var_node = node->left;
     ASTNode *value_node = node->right;
     if (!var_node || !var_node->id || !value_node) {
