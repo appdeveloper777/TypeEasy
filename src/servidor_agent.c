@@ -27,37 +27,6 @@ char* get_node_string(ASTNode *node);
 // --- COPIADO DE ast.c PARA DESACOPLAR ---
 // Estas funciones son necesarias para que handle_chat_bridge pueda convertir
 // los argumentos del script a strings de C.
-static char* int_to_string_agent(int x) {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%d", x);
-    return strdup(buf);
-}
-
-static char* double_to_string_agent(double x) {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%f", x);
-    return strdup(buf);
-}
-
-char* get_node_string(ASTNode *node) {
-    if (!node) return strdup("");
-
-    if (strcmp(node->type, "STRING") == 0) {
-        return strdup(node->str_value);
-    }
-
-    if (strcmp(node->type, "ADD") == 0) {
-        char *s1 = get_node_string(node->left);
-        char *s2 = get_node_string(node->right);
-        size_t len = strlen(s1) + strlen(s2) + 1;
-        char *res = malloc(len);
-        snprintf(res, len, "%s%s", s1, s2);
-        free(s1);
-        free(s2);
-        return res;
-    }
-    return strdup("[unsupported value type]");
-}
 
 
 /* --- DEFINICIONES DEL SERVIDOR (Movidas de ast.h) --- */
@@ -98,6 +67,52 @@ void handle_chat_bridge(char* method_name, ASTNode* args) {
     }
 }
 
+/* --- Implementación del Bridge NLU (Simulado) --- */
+
+void handle_nlu_bridge(char* method_name, ASTNode* args) {
+    if (strcmp(method_name, "parse") == 0) {
+        printf("[Agente] Bridge NLU: Recibido 'parse'. Simulará 'agregarItem'.\n");
+
+        // 1. Encontrar la clase (¡ya no necesitamos EntityMap!)
+        ClassNode* result_class = find_class("NluResult");
+
+        printf("[DEBUG] Buscando clase 'NluResult' SAPE 1...\n");
+        if (!result_class) { /* ... (error) ... */ return; }
+       
+        // 2. (Ya no creamos el objeto 'entidad')
+
+        // 3. Crear el objeto 'NluResult' (PLANO)
+        ObjectNode* result_obj = create_object(result_class);
+        for(int i=0; i < result_obj->class->attr_count; i++) {
+            if(strcmp(result_obj->attributes[i].id, "tipo") == 0) {
+                result_obj->attributes[i].value.string_value = strdup("agregarItem");
+                result_obj->attributes[i].vtype = VAL_STRING;
+            }
+            // Asignar los atributos aplanados
+            if(strcmp(result_obj->attributes[i].id, "item") == 0) {
+                result_obj->attributes[i].value.string_value = strdup("Tacos al Pastor");
+                result_obj->attributes[i].vtype = VAL_STRING;
+            }
+            if(strcmp(result_obj->attributes[i].id, "cantidad") == 0) {
+                result_obj->attributes[i].value.int_value = 2;
+                result_obj->attributes[i].vtype = VAL_INT;
+            }
+        }
+        
+         // 4. Crear un nodo AST (sin cambios)
+         ASTNode* result_node = create_ast_leaf("OBJECT", 0, NULL, NULL);
+         result_node->type = strdup("OBJECT");   
+         result_node->extra = (struct ASTNode*)result_obj;
+        
+
+        // 5. Devolverlo al intérprete (sin cambios)
+        add_or_update_variable("__ret__", result_node);
+
+        // NO liberar result_node aquí. El intérprete lo necesita.
+        // free_ast(result_node); // <-- ¡Este es el error!
+    }
+}
+
 ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) {
     ASTNode* agent = g_runtime.agents;
     while (agent) {
@@ -121,68 +136,108 @@ ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) 
     return NULL;
 }
 
+/* --- Implementación del Bridge API (Simulado) --- */
+void handle_api_bridge(char* method_name, ASTNode* args) {
+    if (strcmp(method_name, "get") == 0) {
+        printf("[Agente] Bridge API: Recibido 'get'. Devolviendo menú simulado.\n");
+        
+        // 1. Simplemente creamos un nodo de string con el menú
+        ASTNode* menu_node = create_string_node(
+            "Menú del Día: Tacos (3€), Burritos (5€), Enchiladas (4€)"
+        );
+
+        // 2. Devolverlo al intérprete
+        add_or_update_variable("__ret__", menu_node);
+        
+        // NO liberar menu_node aquí. El intérprete lo necesita.
+         //free_ast(menu_node); // <-- ¡Este es el error!
+    }
+}
+
+/*
+ * WEBHOOK_HANDLER (Versión 10 - Corrección de compilación)
+ * - Arregla la llamada a mg_get_var (faltaba data_len)
+ * - Arregla el warning de printf (%ld -> %lld)
+ */
 static int webhook_handler(struct mg_connection *conn, void *cbdata) {
     
-const struct mg_request_info *req_info = mg_get_request_info(conn);
-    printf("[Agente DEBUG] Request Method: %s\n", req_info->request_method);
+    const struct mg_request_info *req_info = mg_get_request_info(conn);
 
     char post_data[2048] = {0};
-    long body_len = req_info->content_length;
     int read = 0;
 
-    // --- Lógica de Lectura Robusta ---
-    if (body_len > 0 && body_len < sizeof(post_data)) {
-        // Caso 1: Content-Length es conocido y positivo (lectura ideal)
-        read = mg_read(conn, post_data, body_len);
-        
-        if (read > 0) {
-            post_data[read] = '\0';
-            printf("[Agente DEBUG] Bytes leídos (Content-Length): %d\n", read);
+    // --- Diagnóstico (Corrección de warning %ld -> %lld) ---
+    printf("[Agente DEBUG] Content-Length reportado: %lld\n", (long long)req_info->content_length);
+    printf("[Agente DEBUG] Request Method: %s\n", req_info->request_method);
+
+    // --- CORRECCIÓN 1: Establecer la conexión global PRIMERO ---
+    g_current_conn = conn;
+
+    // --- CORRECCIÓN 2: LECTURA ROBUSTA (Intento 1: Leer Body BxB) ---
+    char c;
+    while (read < (sizeof(post_data) - 1)) {
+        int bytes_leidos_ahora = mg_read(conn, &c, 1);
+        if (bytes_leidos_ahora <= 0) {
+            break; 
         }
-    } else if (body_len == -1) {
-        // Caso 2: Content-Length es -1 (desconocido, común en Postman Raw)
-        // Intentamos leer el máximo del buffer para capturar el cuerpo.
-        read = mg_read(conn, post_data, sizeof(post_data) - 1);
-        if (read > 0) {
-            post_data[read] = '\0';
-            printf("[Agente DEBUG] Lectura máxima exitosa (Content-Length: -1). Bytes: %d\n", read);
-        } else {
-             printf("[Agente DEBUG] Lectura máxima devolvió 0. Cuerpo vacío.\n");
-        }
-    } else {
-        printf("[Agente DEBUG] Body vacío o demasiado grande (Content-Length: %ld)\n", body_len);
+        post_data[read] = c;
+        read++;
     }
-    // --- Fin Lógica de Lectura ---
+    post_data[read] = '\0'; // Aseguramos el fin de string
+    
+    if (read > 0) {
+        printf("[Agente DEBUG test] Bytes leídos (Bucle BxB): %d\n", read);
+    } else {
+        printf("[Agente DEBUG test] Bucle BxB devolvió 0. Cuerpo vacío.\n");
+        
+        // --- LECTURA ROBUSTA (Intento 2: Leer Query String) ---
+        // Si el body estaba vacío, probamos la URL (ej: ?message=Hola)
 
-    printf("[Agente] Webhook 'Chat.onMessage' recibido! Body: \"%s\"\n", post_data);
+        // --- CORRECCIÓN DE COMPILACIÓN (Añadido query_len) ---
+        const char *query = req_info->query_string;
+        size_t query_len = (query == NULL) ? 0 : strlen(query);
+        
+        read = mg_get_var(query, query_len, "message", post_data, sizeof(post_data) - 1);
+        // --- FIN DE CORRECCIÓN DE COMPILACIÓN ---
+
+        if (read > 0) {
+            printf("[Agente DEBUG test] Lectura de Query String exitosa.\n");
+        } else {
+            printf("[Agente DEBUG test] Query String también vacío.\n");
+        }
+    }
+    // --- Fin de la corrección de lectura ---
 
 
+    printf("[Agente test] Webhook 'Chat.onMessage' recibido! Body FINAL: \"%s\"\n", post_data);
+
+    // 2. Encontrar el listener (sin cambios)
     ASTNode* listener = runtime_find_listener("Chat", "onMessage");
     if (!listener) {
         fprintf(stderr, "[Agente] Error: No se encontró listener 'Chat.onMessage'\n");
         mg_send_http_error(conn, 500, "Listener no configurado");
-        g_current_conn = NULL;
+        g_current_conn = NULL; // Limpiar
         return 500;
     }
 
-    // El resto de la lógica no cambia.
+    // 3. Poner el body en la variable 'mensaje' (sin cambios)
     ASTNode* msg_node = create_string_node(post_data);
     add_or_update_variable("mensaje", msg_node);
-    free_ast(msg_node); // Liberamos el nodo temporal, ya que add_or_update_variable crea su propia copia.
+    free_ast(msg_node); 
 
+    // 4. Ejecutar el listener (sin cambios)
     printf("[Agente] Ejecutando lógica del listener...\n");
     interpret_ast(listener->right); // El 'Motor' interpreta el cuerpo
     printf("[Agente] Lógica del listener finalizada.\n");
 
-    g_current_conn = NULL; // Clear the global connection pointer
+    // --- CORRECCIÓN 1 (B): Limpiar la conexión global DESPUÉS ---
+    g_current_conn = NULL; 
     
-    // Si la respuesta no se envió desde el bridge, enviamos un 200 OK vacío.
-    // La forma más segura es no hacer nada si el bridge ya respondió.
-    // mg_printf enviará una respuesta OK por defecto si no se ha enviado nada.
+    // 5. Enviar 200 OK si el bridge no lo hizo (sin cambios)
     if (mg_get_response_info(conn) == NULL) {
         mg_printf(conn, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
     }
-    return 200; // Devolvemos 200 para que civetweb sepa que la petición fue manejada.
+    return 200; 
 }
 
 void runtime_start_bridges() {
@@ -190,7 +245,7 @@ void runtime_start_bridges() {
     const char *options[] = {
         "listening_ports", "8081",
         "request_timeout_ms", "30000",
-        "enable_keep_alive", "yes",
+        "enable_keep_alive", "no",
         NULL
     };
 
@@ -229,6 +284,8 @@ void runtime_init(ASTNode* ast_root) {
     }
 
     printf("[Agente] Registrando clases nativas de bridges...\n");
+    ClassNode* bridge_class = create_class("Bridge");
+    add_class(bridge_class);
 
     // --- AÑADIDO ---
     // Clase para el objeto 'entidad' (debe definirse ANTES de NluResult)
@@ -238,10 +295,15 @@ void runtime_init(ASTNode* ast_root) {
     add_class(entity_map_class);
     // --- FIN AÑADIDO ---
 
+    //printf("[Agente] Clase 'Bridge' registrada.\n");
+    //ClassNode* bridge_class = create_class("Bridge");
+    //add_class(bridge_class);
+
     // Clase para el resultado de NLU.parse()
     ClassNode* nlu_class = create_class("NluResult");
     add_attribute_to_class(nlu_class, "tipo", "string");
-    add_attribute_to_class(nlu_class, "entidad", "EntityMap");
+    add_attribute_to_class(nlu_class, "item", "string");
+    add_attribute_to_class(nlu_class, "cantidad", "int");
     add_class(nlu_class);
 
     // Clase para el resultado de Chat.getSession()
@@ -266,9 +328,10 @@ int main(int argc, char *argv[]) {
     // --- INICIO MEJORA: Registrar los manejadores de bridges ---
     BridgeHandlers agent_handlers = {
         .handle_chat_bridge = handle_chat_bridge,
-        .handle_nlu_bridge = NULL, // Aún no implementado
-        .handle_api_bridge = NULL  // Aún no implementado
+        .handle_nlu_bridge = handle_nlu_bridge, // Aún no implementado
+        .handle_api_bridge = handle_api_bridge  // Aún no implementado
     };
+    
     runtime_register_bridge_handlers(agent_handlers);
     // --- FIN MEJORA ---
 
@@ -289,6 +352,7 @@ int main(int argc, char *argv[]) {
 
     // 2. Inicia el Runtime del Agente (funciones en ESTE archivo)
     runtime_init(agent_ast);
+    interpret_ast(agent_ast);    
     runtime_start_bridges(); 
 
     printf("[Servidor Agente] Runtime iniciado. Esperando eventos...\n");

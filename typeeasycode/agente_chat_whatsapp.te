@@ -3,44 +3,18 @@ bridge Chat = WhatsApp.connect("api_key_wa_001");
 bridge NLU = Rust.import("motor_nlu_local");
 bridge API = Http.client("https://api.elsabor.com");
 
-// 2. Agente (OK)
 agent PedidosBot {
 
-    // 3. Listener 
-    listener Chat.onMessage(mensaje) { // Usamos 'mensaje' como nombre de variable de entrada
+    listener Chat.onMessage(mensaje) { 
      
-        // 4. Declaraciones 
-        //state sesion = Chat.getSession(mensaje.userId);
-      //  node intencion = NLU.parse(mensaje.text); // intencion.tipo será "agregarItem" en el stub
-
         println("Mensaje recibido: ");
-        println(mensaje);
-        
-        // 5. Lógica de 'match'       
-        match (intencion.tipo) {
-            
-            case "saludar":
-              //  Chat.reply(mensaje.user, "¡Hola! ¿En qué puedo ayudarte?");
-                sesion.paso = "inicio";
-
-            case "pedirMenu":
-                node menu = API.get("/menu");
-               // Chat.reply(mensaje.user, concat("Claro, aquí está el menú: ", menu));
-                sesion.paso = "viendo_menu";
-
-            case "agregarItem":
-               // Acceso a entidades usando DOT (la sintaxis correcta)
-               node item = intencion.entidad.item; 
-               node cantidad = intencion.entidad.cantidad;
-
-               // ******* ESTA LÍNEA ES LA QUE FALLA EN C *******
-             //  Chat.reply(mensaje.user, concat("Añadido ", cantidad, " de ", item, ". ¿Algo más?"));
-               
-               // sesion.pedido.add({ item: item, cant: cantidad }); // (Lógica futura)
-               sesion.paso = "armando_pedido";
-               println("Item agregado al pedido sape:");
-            
-            // ... (otros casos) ...
+        println(mensaje);     
+        node intencion = NLU.parse(mensaje);       
+        println("Intención detectada: SAPE ");
+      
+        match (intencion.tipo) {            
+            case "agregarItem":          
+               println("Item agregado al pedido.");           
         }
     }
 }

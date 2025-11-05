@@ -67,11 +67,10 @@ program:
         program statement       { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; }
         | program class_decl      { $$ = $1; root = $$; }
         | program agent_decl      { $$ = create_ast_node("AGENT_LIST", $1, $2); root = $$; }
-        | program bridge_decl     { $$ = $1; root = $$; }
-        | statement               { $$ = $1; root = $$; }
-        | class_decl              { $$ = NULL; }
-        | agent_decl              { $$ = $1; root = $$; }
-        | bridge_decl             { $$ = NULL; }
+        | program bridge_decl     { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; } /* <-- CORREGIDO */
+        | class_decl              { $$ = NULL; }        
+        | bridge_decl             { $$ = $1; root = $$; }
+        
 ;
 
 class_decl:
@@ -333,7 +332,9 @@ case_list:
 
 case_clause:
     CASE expression COLON statement_list
-        { $$ = create_case_node($2, $4); }
+        {             
+            $$ = create_case_node($2, $4); 
+        }
     ;
 
 statement_list:

@@ -61,49 +61,64 @@ static char* double_to_string(double x) {
 /**
  * Obtiene representación string de cualquier ASTNode
  */
-static char* get_node_string(ASTNode *node) {
+/* --- ELIMINADA LA PALABRA 'static' --- */
+char* get_node_string(ASTNode *node) {
     if (!node) return strdup("");
-
+ 
+    printf("[DEBUG] get_node_string: Nodo tipo '%s'\n", node->type ? node->type : "NULL");
     // Literal string
     if (strcmp(node->type, "STRING") == 0) {
         return strdup(node->str_value);
     }
 
-    // Acceso a atributo
+    // Acceso a atributo (VERSIÓN CORREGIDA Y ROBUSTA)
     if (strcmp(node->type, "ACCESS_ATTR") == 0) {
         ASTNode *o = node->left, *a = node->right;
-        Variable *v = find_variable(o->id);
+        Variable *v = find_variable(o->id); // Busca el objeto, ej: 'intencion'
+
         if (v && v->vtype == VAL_OBJECT) {
             ObjectNode *obj = v->value.object_value;
+
+            printf("[DEBUG] Puntero 'obj' = %p\n", (void*)obj);
+
+            // --- BÚSQUEDA ROBUSTA ---
+            // Itera sobre los atributos de la INSTANCIA
             for (int i = 0; i < obj->class->attr_count; i++) {
-                if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
-                    if (strcmp(obj->class->attributes[i].type, "string") == 0) {
+                // Compara el nombre del atributo (ej: "tipo")
+                if (strcmp(obj->attributes[i].id, a->id) == 0) { 
+                    // Si el tipo es string
+                    if (obj->attributes[i].vtype == VAL_STRING) {
+                        // Devuelve el VALOR de la INSTANCIA
                         return strdup(obj->attributes[i].value.string_value);
                     } else {
+                        // Devuelve el VALOR (int) de la INSTANCIA como string
                         return int_to_string(obj->attributes[i].value.int_value);
                     }
                 }
             }
+            // --- FIN BÚSQUEDA ROBUSTA ---
         }
-        return strdup("");
+        // Si no se encuentra el objeto o el atributo, devuelve esto
+        return strdup("[attr not found]");
     }
 
-    // Nodo ADD mixto o anidado
+    // Nodo ADD (sin cambios)
     if (strcmp(node->type, "ADD") == 0) {
-        char *s1 = get_node_string(node->left);
-        char *s2 = get_node_string(node->right);
-        size_t len = strlen(s1) + strlen(s2) + 1;
-        char *res = malloc(len);
-        strcpy(res, s1);
-        strcat(res, s2);
-        free(s1);
-        free(s2);
-        return res;
+        // ... (código sin cambios) ...
+    char *s1 = get_node_string(node->left);
+    char *s2 = get_node_string(node->right);
+    size_t len = strlen(s1) + strlen(s2) + 1;
+    char *res = malloc(len);
+    strcpy(res, s1);
+    strcat(res, s2);
+    free(s1);
+    free(s2);
+    return res;
     }
 
-    // Expresión numérica    
-    double v = evaluate_expression(node); // Cambiado a double
-    return double_to_string(v); // Usar double_to_string
+    // Expresión numérica (sin cambios)
+double v = evaluate_expression(node);
+return double_to_string(v);
 }
 
 // ====================== MANEJO DE CLASES Y OBJETOS ======================
@@ -351,7 +366,7 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
     }
     else if (strcmp(value->type, "OBJECT") == 0) {
         vars[my_index].vtype = VAL_OBJECT;
-        vars[my_index].value.object_value = (ObjectNode *)(intptr_t)value->value;
+        vars[my_index].value.object_value = (ObjectNode *)value->extra;
     }
     else {
         vars[my_index].vtype = VAL_INT;
@@ -379,7 +394,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
         } else if (strcmp(value->type, "OBJECT") == 0) {
             __ret_var.vtype = VAL_OBJECT;
             __ret_var.type = strdup("OBJECT");
-            __ret_var.value.object_value = (ObjectNode *)(intptr_t)value->value;
+            __ret_var.value.object_value = (ObjectNode *)value->extra;
         } else if (strcmp(value->type, "FLOAT") == 0) {
             __ret_var.vtype = VAL_FLOAT;
             __ret_var.type = strdup("FLOAT");
@@ -407,7 +422,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
             var->value.string_value = strdup(value->str_value);
         } else if (strcmp(value->type, "OBJECT") == 0) {
             var->vtype = VAL_OBJECT;
-            var->value.object_value = (ObjectNode *)(intptr_t)value->value;
+            var->value.object_value = (ObjectNode *)value->extra;
         } else {
             var->vtype = VAL_INT;
             var->value.int_value = value->value;
@@ -425,7 +440,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
             vars[var_count].value.string_value = strdup(value->str_value);
         } else if (strcmp(value->type, "OBJECT") == 0) {
             vars[var_count].vtype = VAL_OBJECT;
-            vars[var_count].value.object_value = (ObjectNode *)(intptr_t)value->value;
+            vars[var_count].value.object_value = (ObjectNode *)value->extra;
         } else {
             vars[var_count].vtype = VAL_INT;
             vars[var_count].value.int_value = value->value;
@@ -448,6 +463,10 @@ ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
     node->value = value;
     node->str_value = str_value ? strdup(str_value) : NULL;
     node->id = id ? strdup(id) : NULL;
+
+    node->next = NULL;
+    node->extra = NULL;
+
     return node;
 }
 
@@ -460,6 +479,10 @@ ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id
     node->value = value;
     node->str_value = str_value ? strdup(str_value) : NULL;
     node->id = id ? strdup(id) : NULL;
+
+    node->next = NULL;
+    node->extra = NULL;
+
     return node;
 }
 
@@ -1111,22 +1134,32 @@ void interpret_bridge_decl(ASTNode *node) {
     printf("  -> Objetivo: Biblioteca '%s', Función '%s'\n", lib_name, func_name);
 
     // Create a generic class for all bridges if it doesn't exist
+    printf("[DEBUG] Buscando clase 'Bridge'...\n");
     ClassNode* bridge_class = find_class("Bridge");
-    if (!bridge_class) {
+    
+    // --- INICIO DE LA CORRECCIÓN (V10) ---
+    // Si no se encuentra, la creamos "perezosamente"
+    if (bridge_class == NULL) {
+        printf("[DEBUG] Clase 'Bridge' no encontrada. Creándola...\n");
         bridge_class = create_class("Bridge");
         add_class(bridge_class);
+        
+        // (Ya no salimos con error)
+        // fprintf(stderr, "Error fatal de arquitectura: ...\n");
+        // exit(1);
     }
+    // --- FIN DE LA CORRECCIÓN ---
 
     // Create an object for this specific bridge instance
     ObjectNode* bridge_obj = create_object(bridge_class);
 
     // Create a temporary ASTNode to wrap the object for the symbol table
-    ASTNode* obj_node = create_ast_leaf("OBJECT", (int)(intptr_t)bridge_obj, NULL, bridge_name);
-    
-    // Add the bridge object to the variables table
+    ASTNode* obj_node = create_ast_leaf("OBJECT", 0, NULL, bridge_name);    
+    obj_node->extra = (struct ASTNode*)bridge_obj;
+    // Add the bridge object to the variables table  /*free_ast(obj_node);*/
     add_or_update_variable(bridge_name, obj_node);
 
-    free_ast(obj_node);
+   
 }
 
 ASTNode *create_bridge_node(char *name, ASTNode *call_expr_node) {
@@ -1292,8 +1325,14 @@ void interpret_if(ASTNode *node) {
 }
 
 void interpret_match(ASTNode *node) {
+    printf("\n[DEBUG] ¡¡¡ESTOY EJECUTANDO EL CÓDIGO NUEVO!!!\n\n"); // <-- AÑADE ESTA LÍNEA
+    printf("[DEBUG] Interpretando MATCH...SAPEEEE\n");
     if (!node || !node->left || !node->right) return;
+     printf("[DEBUG] Interpretando MATCH...2 SAPEEEE\n");
     char* match_value = get_node_string(node->left);
+
+    printf("[DEBUG Match] Valor a comparar: '%s'\n", match_value);
+
     ASTNode* case_node = node->right;
     while (case_node) {
         if (strcmp(case_node->type, "CASE") == 0) {
@@ -1432,7 +1471,9 @@ static void interpret_call_method(ASTNode *node) {
         if (strcmp(v->id, "Chat") == 0) {
             if (g_bridge_handlers.handle_chat_bridge) g_bridge_handlers.handle_chat_bridge(node->id, node->right);
         } else if (strcmp(v->id, "NLU") == 0) {
-            if (g_bridge_handlers.handle_nlu_bridge) g_bridge_handlers.handle_nlu_bridge(node->id, node->right);
+            printf("[TypeEasy] Llamada a NLU Bridge\n");
+            if (g_bridge_handlers.handle_nlu_bridge) 
+                g_bridge_handlers.handle_nlu_bridge(node->id, node->right);
         } else if (strcmp(v->id, "API") == 0) {
             if (g_bridge_handlers.handle_api_bridge) g_bridge_handlers.handle_api_bridge(node->id, node->right);
         } else {
@@ -1615,6 +1656,7 @@ static void interpret_var_decl(ASTNode *node) {
     ASTNode* value_node = node->left;
     Variable *evaluated_value_var = NULL;
 
+    // 1. Si el valor es una llamada a función, ejecútala primero
     if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0 || strcmp(value_node->type, "FILTER_CALL") == 0)) {
         interpret_ast(value_node);
         evaluated_value_var = find_variable("__ret__");
@@ -1624,6 +1666,7 @@ static void interpret_var_decl(ASTNode *node) {
         }
     }
 
+    // 2. Comprobación de tipos (Tu lógica es correcta)
     const char* effective_value_type_str = NULL;
     if (evaluated_value_var != NULL) {
         effective_value_type_str = evaluated_value_var->type;
@@ -1654,8 +1697,12 @@ static void interpret_var_decl(ASTNode *node) {
         }
     }
 
+    // 3. Asignación
     ASTNode *value_to_assign_node = NULL;
     if (evaluated_value_var != NULL) {
+        // ---- Si el valor vino de una función (como __ret_var) ----
+        
+        // Crea un nuevo nodo AST persistente para almacenar el valor
         if (evaluated_value_var->vtype == VAL_STRING) {
             value_to_assign_node = create_ast_leaf("STRING", 0, strdup(evaluated_value_var->value.string_value), NULL);
         } else if (evaluated_value_var->vtype == VAL_INT) {
@@ -1665,20 +1712,30 @@ static void interpret_var_decl(ASTNode *node) {
         } else if (evaluated_value_var->vtype == VAL_OBJECT) {
             value_to_assign_node = malloc(sizeof(ASTNode));
             value_to_assign_node->type = strdup(evaluated_value_var->type);
-            value_to_assign_node->value = (int)(intptr_t)evaluated_value_var->value.object_value;
+            value_to_assign_node->extra = (struct ASTNode*)evaluated_value_var->value.object_value; // <-- CORRECCIÓN
             value_to_assign_node->id = evaluated_value_var->id ? strdup(evaluated_value_var->id) : NULL;
-            value_to_assign_node->str_value = evaluated_value_var->value.string_value ? strdup(evaluated_value_var->value.string_value) : NULL;
-            value_to_assign_node->left = NULL;
+            value_to_assign_node->str_value = NULL;
+            if (strcmp(evaluated_value_var->type, "LIST") == 0) {
+                value_to_assign_node->left = ((ASTNode*)evaluated_value_var->value.object_value)->left;
+            } else {
+                value_to_assign_node->left = NULL;
+            }
             value_to_assign_node->right = NULL;
             value_to_assign_node->next = NULL;
-            value_to_assign_node->extra = NULL;
+           // value_to_assign_node->extra = NULL;
         } else {
             fprintf(stderr, "Error interno: Tipo de retorno desconocido para asignación de variable '%s'.\n", node->id);
             exit(1);
         }
+        
         declare_variable(node->id, value_to_assign_node, is_const_flag);
-        free_ast(value_to_assign_node);
-
+        
+        // --- ¡¡CORRECCIÓN!! ---
+        // NO liberes este nodo. `declare_variable` ahora depende de él.
+        // Liberarlo causa el use-after-free (segfault).
+        // free_ast(value_to_assign_node); // <-- ESTA LÍNEA CAUSA EL BUG
+        
+        // Limpia la variable de retorno
         if (__ret_var_active) {
             if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
             if (__ret_var.id) free(__ret_var.id);
@@ -1688,18 +1745,33 @@ static void interpret_var_decl(ASTNode *node) {
         }
         return_flag = 0;
         return_node = NULL;
+        // ¡OJO! No pongas un 'return' aquí, el código del constructor debe ejecutarse
+    
     } else {
+        // ---- Si el valor es un literal (ej. let x = 10) ----
         declare_variable(node->id, value_node, is_const_flag);
     }
 
+    // 4. Ejecutar el constructor (Tu lógica es correcta)
+    // (Este código se ejecuta para *ambos* casos, lo cual es correcto)
     if (node->left && strcmp(node->left->type, "OBJECT")==0) {
         Variable *var = find_variable(node->id);
         if (!var || var->vtype!=VAL_OBJECT) return;
+        
+        // (Corrección sutil: `value_node` puede no ser el correcto si vino de __ret_var)
+        // Obtener el ASTNode que *realmente* se usó para la declaración
+        ASTNode* object_node_for_constructor = (evaluated_value_var != NULL) ? value_to_assign_node : value_node;
+        
+        if (!object_node_for_constructor || !object_node_for_constructor->left) {
+             // Si no hay argumentos (ej. NLU.parse), no hay nada que hacer.
+             return;
+        }
+
         MethodNode *m = var->value.object_value->class->methods;
         while (m && strcmp(m->name,"__constructor")!=0) m=m->next;
         if (m) {
             ParameterNode *p = m->params;
-            ASTNode      *arg = node->left->left;
+            ASTNode      *arg = object_node_for_constructor->left; // Usar el nodo correcto
             while (p && arg) {
                 ASTNode *vn = NULL;
                 if (arg->type && strcmp(arg->type, "STRING") == 0) {
