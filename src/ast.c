@@ -66,6 +66,26 @@ char* get_node_string(ASTNode *node) {
     if (!node) return strdup("");
  
     printf("[DEBUG] get_node_string: Nodo tipo '%s'\n", node->type ? node->type : "NULL");
+
+
+    if (strcmp(node->type, "IDENTIFIER") == 0) {
+        Variable *v = find_variable(node->id);
+        if (!v) {
+            printf("Error: Variable '%s' no encontrada.\n", node->id);
+            return strdup("[variable no encontrada]");
+        }
+        if (v->vtype == VAL_STRING) {
+            return strdup(v->value.string_value);
+        }
+        if (v->vtype == VAL_INT) {
+            return int_to_string(v->value.int_value);
+        }
+        if (v->vtype == VAL_FLOAT) {
+            return double_to_string(v->value.float_value);
+        }
+        return strdup("[tipo de variable no imprimible]");
+    }
+
     // Literal string
     if (strcmp(node->type, "STRING") == 0) {
         return strdup(node->str_value);
@@ -291,10 +311,10 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         vars[my_index].type = strdup(value->type);
     }
 
-    if (strcmp(value->type, "STRING") == 0) {
+   if (strcmp(value->type, "STRING") == 0 || strcmp(value->type, "STRING_LITERAL") == 0) {
         vars[my_index].vtype = VAL_STRING;
         vars[my_index].value.string_value = strdup(value->str_value);
-    } 
+    }
     else if (strcmp(value->type, "LIST") == 0) {
         vars[my_index].vtype = VAL_OBJECT;
         vars[my_index].value.object_value = (void *)(intptr_t)value;
@@ -367,6 +387,41 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
     else if (strcmp(value->type, "OBJECT") == 0) {
         vars[my_index].vtype = VAL_OBJECT;
         vars[my_index].value.object_value = (ObjectNode *)value->extra;
+    }
+    else if (strcmp(value->type, "ACCESS_ATTR") == 0) {
+        // Esto maneja: let item = intencion.item;
+        ASTNode *o = value->left, *a = value->right;
+        Variable *v = find_variable(o->id);
+        
+        if (!v || v->vtype != VAL_OBJECT) {
+            printf("Error: Objeto '%s' no encontrado para asignación.\n", o->id);
+            vars[my_index].vtype = VAL_INT;
+            vars[my_index].value.int_value = 0; // Valor de error
+            return;
+        }
+        
+        ObjectNode *obj = v->value.object_value;
+        for (int i = 0; i < obj->class->attr_count; i++) {
+            if (strcmp(obj->attributes[i].id, a->id) == 0) {
+                // Encontramos el atributo. Copiamos su valor.
+                if (obj->attributes[i].vtype == VAL_STRING) {
+                    vars[my_index].vtype = VAL_STRING;
+                    vars[my_index].value.string_value = strdup(obj->attributes[i].value.string_value);
+                } else if (obj->attributes[i].vtype == VAL_INT) {
+                    vars[my_index].vtype = VAL_INT;
+                    vars[my_index].value.int_value = obj->attributes[i].value.int_value;
+                } else if (obj->attributes[i].vtype == VAL_FLOAT) {
+                    vars[my_index].vtype = VAL_FLOAT;
+                    vars[my_index].value.float_value = obj->attributes[i].value.float_value;
+                }
+                return; // ¡Asignación completada!
+            }
+        }
+        
+        printf("Error: Atributo '%s' no encontrado en '%s'.\n", a->id, o->id);
+        vars[my_index].vtype = VAL_INT;
+        vars[my_index].value.int_value = 0; // Valor de error
+        return;
     }
     else {
         vars[my_index].vtype = VAL_INT;
@@ -1156,9 +1211,9 @@ void interpret_bridge_decl(ASTNode *node) {
     // Create a temporary ASTNode to wrap the object for the symbol table
     ASTNode* obj_node = create_ast_leaf("OBJECT", 0, NULL, bridge_name);    
     obj_node->extra = (struct ASTNode*)bridge_obj;
-    // Add the bridge object to the variables table  /*free_ast(obj_node);*/
+    // Add the bridge object to the variables table  
     add_or_update_variable(bridge_name, obj_node);
-
+    free_ast(obj_node);
    
 }
 
@@ -1423,18 +1478,27 @@ static void interpret_predict_node(ASTNode *node) {
 
 static void interpret_call_func(ASTNode *node) {
     if (strcmp(node->id, "concat") != 0) return;
-    ASTNode *arg1 = node->left;
-    ASTNode *arg2 = arg1 ? arg1->right : NULL;
-    char *s1 = get_node_string(arg1);
-    char *s2 = get_node_string(arg2);
-    size_t len = strlen(s1) + strlen(s2) + 1;
-    char *res = malloc(len);
-    strcpy(res, s1);
-    strcat(res, s2);
-    free(s1);
-    free(s2);
-    ASTNode *lit = create_ast_leaf("STRING", 0, res, NULL);
+
+    char result_buffer[2048] = {0}; // Un búfer grande para construir el string
+    char *s_temp = NULL;
+    ASTNode *arg = node->left;
+
+    while (arg) {
+        // Usamos get_node_string para evaluar CADA argumento
+        // (esto maneja "string", 123, y var_string, var_int)
+        s_temp = get_node_string(arg); 
+        
+        // strncat es más seguro que strcat
+        strncat(result_buffer, s_temp, sizeof(result_buffer) - strlen(result_buffer) - 1);
+        
+        free(s_temp); // Liberamos la memoria temporal
+        arg = arg->right; // Avanzamos al siguiente argumento
+    }
+
+    // Devolvemos el resultado final
+    ASTNode *lit = create_ast_leaf("STRING", 0, result_buffer, NULL); // create_ast_leaf hace strdup
     add_or_update_variable("__ret__", lit);
+    free_ast(lit); // add_or_update_variable copia el valor
 }
 
 static void interpret_return_node(ASTNode *node) {
@@ -1657,8 +1721,7 @@ static void interpret_var_decl(ASTNode *node) {
     Variable *evaluated_value_var = NULL;
 
     // 1. Si el valor es una llamada a función, ejecútala primero
-    if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0 || strcmp(value_node->type, "FILTER_CALL") == 0)) {
-        interpret_ast(value_node);
+if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0 || strcmp(value_node->type, "FILTER_CALL") == 0 || strcmp(value_node->type, "CALL_FUNC") == 0)) {        interpret_ast(value_node);
         evaluated_value_var = find_variable("__ret__");
         if (!evaluated_value_var) {
             fprintf(stderr, "Error: No se capturó valor de retorno de la expresión '%s'.\n", value_node->type ? value_node->type : "desconocido");
@@ -1733,7 +1796,7 @@ static void interpret_var_decl(ASTNode *node) {
         // --- ¡¡CORRECCIÓN!! ---
         // NO liberes este nodo. `declare_variable` ahora depende de él.
         // Liberarlo causa el use-after-free (segfault).
-        // free_ast(value_to_assign_node); // <-- ESTA LÍNEA CAUSA EL BUG
+        free_ast(value_to_assign_node); // <-- ESTA LÍNEA CAUSA EL BUG
         
         // Limpia la variable de retorno
         if (__ret_var_active) {

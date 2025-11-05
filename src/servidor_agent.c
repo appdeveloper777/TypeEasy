@@ -109,7 +109,7 @@ void handle_nlu_bridge(char* method_name, ASTNode* args) {
         add_or_update_variable("__ret__", result_node);
 
         // NO liberar result_node aquí. El intérprete lo necesita.
-        // free_ast(result_node); // <-- ¡Este es el error!
+        free_ast(result_node); // <-- ¡Este es el error!
     }
 }
 
@@ -150,7 +150,7 @@ void handle_api_bridge(char* method_name, ASTNode* args) {
         add_or_update_variable("__ret__", menu_node);
         
         // NO liberar menu_node aquí. El intérprete lo necesita.
-         //free_ast(menu_node); // <-- ¡Este es el error!
+         free_ast(menu_node); // <-- ¡Este es el error!
     }
 }
 
