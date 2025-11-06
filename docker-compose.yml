@@ -33,9 +33,47 @@ services:
     image: typeeasy-agent
     ports:
       - "8081:8081" # Expone el puerto del agente
-    volumes:
-      # ARREGLO: Monta solo el script, no toda la carpeta /app
-      - ./typeeasycode/agente_chat_whatsapp.te:/app/agente_chat_whatsapp.te
     environment:
       - TYPEEASY_DEBUG=0
     # El CMD del Dockerfile ya es ["./servidor_agent", "agente_chat_whatsapp.te"]
+
+    depends_on:
+      - nlu
+      - api_mock
+
+  # --- MOCK NLU service (simple HTTP adapter) ---
+  nlu:
+    build:
+      context: ./tools/nlu_mock
+    image: typeeasy-nlu-mock
+    ports:
+      - "5000:5000"
+
+  # --- MOCK API service (menu provider) ---
+  api_mock:
+    build:
+      context: ./tools/api_mock
+    image: typeeasy-api-mock
+    ports:
+      - "5001:5001"
+
+  whatsapp_adapter:
+    build:
+      context: ./tools/whatsapp_adapter
+    image: typeeasy-whatsapp-adapter
+    ports:
+      - "5002:5002"
+    environment:
+      - AGENT_WEBHOOK=http://agent:8081/whatsapp_hook
+      # For Twilio integration, set these in your environment or compose overrides:
+      # - TWILIO_ACCOUNT_SID=your_sid
+      # - TWILIO_AUTH_TOKEN=your_token
+      # - TWILIO_FROM=whatsapp:+1415XXXXXXX
+      # For Meta (WhatsApp Cloud API): set META_WHATSAPP_TOKEN and META_WHATSAPP_PHONE_ID
+      # Optional Meta webhook verification and secret (set these in production)
+      # - META_VERIFY_TOKEN=your_verify_token
+      # - META_APP_SECRET=your_app_secret
+      # - META_WHATSAPP_TOKEN=your_graph_api_token
+      # - META_WHATSAPP_PHONE_ID=your_phone_id
+    depends_on:
+      - agent

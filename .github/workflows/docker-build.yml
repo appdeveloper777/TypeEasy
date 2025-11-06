@@ -1,0 +1,25 @@
+name: CI - Build agent image
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (optional cross-build support)
+        uses: docker/setup-qemu-action@v2
+
+      - name: Build agent Docker image (verifies shim build)
+        env:
+          DOCKER_BUILDKIT: 1
+        run: |
+          # Build the 'agent' target from src/Dockerfile. This will compile the Rust shim
+          # inside the multi-stage Dockerfile and fail the job if the shim or agent fails to build.
+          docker build -f src/Dockerfile --target agent -t typeeasy-agent:ci .

@@ -1595,8 +1595,17 @@ static void interpret_call_method(ASTNode *node) {
             if (g_bridge_handlers.handle_chat_bridge) g_bridge_handlers.handle_chat_bridge(node->id, node->right);
         } else if (strcmp(v->id, "NLU") == 0) {
             printf("[TypeEasy] Llamada a NLU Bridge\n");
-            if (g_bridge_handlers.handle_nlu_bridge) 
+            if (g_bridge_handlers.handle_nlu_bridge) {
                 g_bridge_handlers.handle_nlu_bridge(node->id, node->right);
+                // Diagnostic: did the bridge set __ret__? (only print when debug mode enabled)
+                if (g_debug_mode) {
+                    if (__ret_var_active) {
+                        printf("[TypeEasy DEBUG] After NLU bridge: __ret__ active=1 type='%s'\n", __ret_var.type ? __ret_var.type : "(null)");
+                    } else {
+                        printf("[TypeEasy DEBUG] After NLU bridge: __ret__ active=0\n");
+                    }
+                }
+            }
         } else if (strcmp(v->id, "API") == 0) {
             if (g_bridge_handlers.handle_api_bridge) g_bridge_handlers.handle_api_bridge(node->id, node->right);
         } else {
@@ -1787,7 +1796,7 @@ static void interpret_var_decl(ASTNode *node) {
 if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0 || strcmp(value_node->type, "FILTER_CALL") == 0 || strcmp(value_node->type, "CALL_FUNC") == 0)) {        interpret_ast(value_node);
         evaluated_value_var = find_variable("__ret__");
         if (!evaluated_value_var) {
-            fprintf(stderr, "Error: No se capturó valor de retorno de la expresión '%s'.\n", value_node->type ? value_node->type : "desconocido");
+            fprintf(stderr, "Error: No se capturó valor de retorno de la expresión '%s'. __ret_var_active=%d\n", value_node->type ? value_node->type : "desconocido", __ret_var_active);
             exit(1);
         }
     }

@@ -1,25 +1,29 @@
 // agente_chat_whatsapp.te
 
-bridge Chat = WhatsApp.connect("api_key_wa_001");
-bridge NLU = Rust.import("motor_nlu_local");
-bridge API = Http.client("https://api.elsabor.com");
+// For production with a real WhatsApp provider we use a small adapter service
+// that exposes a simple HTTP API. The adapter will forward incoming webhooks
+// to the agent and accept outgoing send requests.
+bridge Chat = Http.client("http://whatsapp_adapter:5002");
+// Use HTTP mocks for local testing
+bridge NLU = Http.client("http://nlu:5000");
+bridge API = Http.client("http://api_mock:5001");
 
 agent PedidosBot {
 
     listener Chat.onMessage(mensaje) { 
      
-        println("Mensaje recibido: ");
-        println(mensaje);
+    println("Mensaje recibido: ");
+    println(mensaje);
         
-        node intencion = NLU.parse(mensaje);       
-        println("Intención detectada: SAPE ");
+    // Call the NLU mock via HTTP POST with raw body (mock accepts JSON or raw text)
+    node intencion = NLU.post("/parse", mensaje);
+    println("Intención detectada: ");        
         
-        // --- ¡SOLUCIÓN! ---
         // Declara TODAS tus variables aquí arriba
         let item = "";
         let cant = 0;
         let respuesta = "";
-        let menu = ""; // <-- AÑADE ESTA LÍNEA
+        let menu = ""; 
 
         // --- Match dinámico basado en el NLU ---
         match (intencion.tipo) { 
@@ -30,7 +34,8 @@ agent PedidosBot {
                 
                 respuesta = concat("¡Anotado! Agregando ", cant, " de ", item, " a tu pedido.");
                 println(respuesta);
-                Chat.sendMessage(respuesta);
+                // send via adapter: POST /send with raw body or JSON
+                Chat.post("/send", respuesta);
                 
             case "consultarMenu":
                 println("Intención detectada: consultarMenu");
@@ -38,14 +43,14 @@ agent PedidosBot {
                 // ¡Ahora esto es una ASIGNACIÓN y es válido!
                 menu = API.get("/menu"); 
                 
-                respuesta = concat("Claro, aquí tienes el menú: ", menu);
+                respuesta = concat("Claro, aquí tienes menú: ", menu);
                 println(respuesta);
-                Chat.sendMessage(respuesta);
+                Chat.post("/send", respuesta);
                 
             case "desconocido":
                 respuesta = "Lo siento, no entendí lo que quisiste decir.";
                 println(respuesta);
-                Chat.sendMessage(respuesta);
+                Chat.post("/send", respuesta);
 
         }
     }

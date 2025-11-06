@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include "ast.h"      // Incluye tu "Motor" puro
 #include "civetweb.h" // Incluye la librería del servidor
+#include <stdarg.h>
 
 /* --- AÑADIDO PARA ARREGLAR WARNING --- */
 #ifdef _WIN32
@@ -48,6 +49,16 @@ RuntimeHost g_runtime;
 // Esto permite a los bridges interactuar con la petición HTTP actual.
 static struct mg_connection *g_current_conn = NULL;
 
+/* Logging helper to produce consistent "TypeEasy Agent" messages */
+static void te_log(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    printf("TypeEasy Agent: ");
+    vprintf(fmt, ap);
+    printf("\n");
+    va_end(ap);
+}
+
 // Implementación del manejador del bridge 'Chat'
 void handle_chat_bridge(char* method_name, ASTNode* args) {
     if (strcmp(method_name, "sendMessage") == 0 && args != NULL) {
@@ -70,10 +81,21 @@ void handle_chat_bridge(char* method_name, ASTNode* args) {
 /* --- Implementación del Bridge NLU (Simulado) --- */
 
 void handle_nlu_bridge(char* method_name, ASTNode* args) {
-    if (strcmp(method_name, "parse") != 0) return;
+    // Support both direct NLU.parse(mensaje) and HTTP-style NLU.post(path, mensaje)
+    if (strcmp(method_name, "parse") != 0 && strcmp(method_name, "post") != 0) return;
 
     // 1. Obtenemos el mensaje real
-    char* mensaje_usuario = get_node_string(args);
+    char* mensaje_usuario = NULL;
+    if (strcmp(method_name, "parse") == 0) {
+        mensaje_usuario = get_node_string(args);
+    } else {
+        // method == "post" -> args: first = path (string), second = message
+        if (args && args->right) {
+            mensaje_usuario = get_node_string(args->right);
+        } else {
+            mensaje_usuario = strdup("");
+        }
+    }
     
     // 2. Variables para simular la intención
     //    (Ahora se asignan DENTRO de los 'if')
@@ -81,20 +103,17 @@ void handle_nlu_bridge(char* method_name, ASTNode* args) {
     const char* item_simulado = "";
     int cant_simulada = 0;
 
-    printf("[Agente] SAPEEEE Bridge NLU: Analizando mensaje: '%s'\n", mensaje_usuario);
+    /* NLU bridge invoked; avoid verbose logging in production */
 
     // 3. Decidimos qué simular
     if (strstr(mensaje_usuario, "menu") != NULL || strstr(mensaje_usuario, "carta") != NULL) {
-        printf("[Agente] Bridge NLU: Simulará 'consultarMenu'.\n");
+        /* simulate consultarMenu */
         tipo_simulado = "consultarMenu";
-    } 
-    else if (strstr(mensaje_usuario, "hola") != NULL || strstr(mensaje_usuario, "gracias") != NULL) {
-         printf("[Agente] Bridge NLU: Simulará 'desconocido'.\n");
+    } else if (strstr(mensaje_usuario, "hola") != NULL || strstr(mensaje_usuario, "gracias") != NULL) {
+        /* simulate desconocido */
         tipo_simulado = "desconocido";
-    }
-    else {
-        // Este es el caso por defecto
-        printf("[Agente] Bridge NLU: Simulará 'agregarItem'.\n");
+    } else {
+        /* default: simulate agregarItem */
         tipo_simulado = "agregarItem";
         item_simulado = "Tacos al Pastor";
         cant_simulada = 2;
@@ -130,7 +149,10 @@ void handle_nlu_bridge(char* method_name, ASTNode* args) {
     result_node->extra = (struct ASTNode*)result_obj;
     
     add_or_update_variable("__ret__", result_node);
-    free_ast(result_node); 
+    // Do not free result_node here — the interpreter holds a reference to it via __ret__
+    // free_ast(result_node);
+
+    /* no verbose diagnostics here; interpreter logs cover lifecycle if needed */
 }
 
 ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) {
@@ -146,7 +168,7 @@ ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) 
                     expr->left && expr->left->id && strcmp(expr->left->id, bridge_name) == 0 &&
                     expr->id && strcmp(expr->id, event_name) == 0) {
 
-                    printf("[Agente] Listener encontrado para %s.%s\n", bridge_name, event_name);
+                                    te_log("Listener found for %s.%s", bridge_name, event_name);
                     return listener;
                 }
             }
@@ -159,7 +181,7 @@ ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) 
 /* --- Implementación del Bridge API (Simulado) --- */
 void handle_api_bridge(char* method_name, ASTNode* args) {
     if (strcmp(method_name, "get") == 0) {
-        printf("[Agente] Bridge API: Recibido 'get'. Devolviendo menú simulado.\n");
+        te_log("API.get invoked: returning simulated menu");
         
         // 1. Simplemente creamos un nodo de string con el menú
         ASTNode* menu_node = create_string_node(
@@ -188,55 +210,34 @@ static int webhook_handler(struct mg_connection *conn, void *cbdata) {
     char post_data[2048] = {0};
     int read = 0;
 
-    // --- Diagnóstico (Corrección de warning %ld -> %lld) ---
-    printf("[Agente DEBUG] Content-Length reportado: %lld\n", (long long)req_info->content_length);
-    printf("[Agente DEBUG] Request Method: %s\n", req_info->request_method);
-
-    // --- CORRECCIÓN 1: Establecer la conexión global PRIMERO ---
+    // Establish the global connection for bridges that may use it
     g_current_conn = conn;
 
-    // --- CORRECCIÓN 2: LECTURA ROBUSTA (Intento 1: Leer Body BxB) ---
+    // Read the request body (robust): first try body, otherwise query string ?message=
     char c;
     while (read < (sizeof(post_data) - 1)) {
         int bytes_leidos_ahora = mg_read(conn, &c, 1);
         if (bytes_leidos_ahora <= 0) {
-            break; 
+            break;
         }
         post_data[read] = c;
         read++;
     }
-    post_data[read] = '\0'; // Aseguramos el fin de string
-    
-    if (read > 0) {
-        printf("[Agente DEBUG test] Bytes leídos (Bucle BxB): %d\n", read);
-    } else {
-        printf("[Agente DEBUG test] Bucle BxB devolvió 0. Cuerpo vacío.\n");
-        
-        // --- LECTURA ROBUSTA (Intento 2: Leer Query String) ---
-        // Si el body estaba vacío, probamos la URL (ej: ?message=Hola)
+    post_data[read] = '\0';
 
-        // --- CORRECCIÓN DE COMPILACIÓN (Añadido query_len) ---
+    if (read == 0) {
         const char *query = req_info->query_string;
         size_t query_len = (query == NULL) ? 0 : strlen(query);
-        
         read = mg_get_var(query, query_len, "message", post_data, sizeof(post_data) - 1);
-        // --- FIN DE CORRECCIÓN DE COMPILACIÓN ---
-
-        if (read > 0) {
-            printf("[Agente DEBUG test] Lectura de Query String exitosa.\n");
-        } else {
-            printf("[Agente DEBUG test] Query String también vacío.\n");
-        }
     }
-    // --- Fin de la corrección de lectura ---
 
-
-    printf("[Agente test] Webhook 'Chat.onMessage' recibido! Body FINAL: \"%s\"\n", post_data);
+    // Minimal log for incoming messages
+    te_log("Incoming webhook received. Message: \"%s\"", post_data);
 
     // 2. Encontrar el listener (sin cambios)
     ASTNode* listener = runtime_find_listener("Chat", "onMessage");
     if (!listener) {
-        fprintf(stderr, "[Agente] Error: No se encontró listener 'Chat.onMessage'\n");
+        fprintf(stderr, "TypeEasy Agent: Error: listener 'Chat.onMessage' not configured\n");
         mg_send_http_error(conn, 500, "Listener no configurado");
         g_current_conn = NULL; // Limpiar
         return 500;
@@ -248,9 +249,9 @@ static int webhook_handler(struct mg_connection *conn, void *cbdata) {
     free_ast(msg_node); 
 
     // 4. Ejecutar el listener (sin cambios)
-    printf("[Agente] Ejecutando lógica del listener...\n");
+    te_log("Executing listener logic");
     interpret_ast(listener->right); // El 'Motor' interpreta el cuerpo
-    printf("[Agente] Lógica del listener finalizada.\n");
+    te_log("Listener logic finished");
 
     // --- CORRECCIÓN 1 (B): Limpiar la conexión global DESPUÉS ---
     g_current_conn = NULL; 
@@ -341,6 +342,8 @@ void runtime_init(ASTNode* ast_root) {
 int main(int argc, char *argv[]) {
     
     printf("[Servidor Agente] Iniciando...\n");
+    // Disable stdout buffering so logs are immediately visible in container logs
+    setbuf(stdout, NULL);
     
     if (argc < 2) {
         printf("Uso: %s <archivo_agente.te>\n", argv[0]);

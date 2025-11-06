@@ -1,0 +1,11 @@
+services:
+  agent:
+    volumes:
+      # Mount compiled native libs so Rust.import can load them without rebuilding image
+      - ./src/native_libs:/app/native_libs:ro
+    environment:
+      - AGENT_WEBHOOK=http://agent:8081/whatsapp_hook
+
+  whatsapp_adapter:
+    environment:
+      - AGENT_WEBHOOK=http://agent:8081/whatsapp_hook

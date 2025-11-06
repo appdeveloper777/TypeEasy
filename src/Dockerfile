@@ -25,6 +25,20 @@ FROM base AS typeeasy_builder
 RUN make -C /app/src clean && make -C /app/src all
 
 # =================================================================
+# ETAPA: COMPILAR EL SHIM RUST (motor_nlu_shim)
+# Esto permite construir la librería nativa dentro del flujo de build
+# y copiarla a las imágenes finales para que `Rust.import("motor_nlu_local")`
+# cargue un shim que forwardea al NLU HTTP adapter.
+# =================================================================
+FROM rust:1.83-slim AS shim_builder
+WORKDIR /shim
+# Copiamos sólo la carpeta del shim para mantener el contexto pequeño
+COPY tools/motor_nlu_shim ./motor_nlu_shim
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && \
+    cd motor_nlu_shim && \
+    cargo build --release
+
+# =================================================================
 # ETAPA 3: COMPILAR EL SERVIDOR "typeeasy_api"
 # =================================================================
 FROM base AS api_builder
@@ -106,6 +120,11 @@ COPY --from=typeeasy_builder /app/src/servidor_agent .
 
 # Copia el script del agente
 COPY typeeasycode/agente_chat_whatsapp.te .
+
+# Copia el shim Rust compilado (si existe) y lo renombra para que el runtime
+# lo encuentre como `motor_nlu_local` (libmotor_nlu_local.so)
+RUN mkdir -p /app/native_libs || true
+COPY --from=shim_builder /shim/motor_nlu_shim/target/release/libmotor_nlu_shim.so /app/native_libs/libmotor_nlu_local.so
 
 EXPOSE 8081
 
