@@ -5,6 +5,20 @@
 #include <stdio.h>
 #include "bytecode.h"
 
+#include <stdarg.h>
+
+/* Small helper to standardize TypeEasy logs inside ast.c */
+static void te_log_ast(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    const char *green = "\x1b[32m";
+    const char *reset = "\x1b[0m";
+    printf("%sTypeEasy Agent: ", green);
+    vprintf(fmt, ap);
+    printf("%s\n", reset);
+    va_end(ap);
+}
+
 /* Allow runtime debug mode controlled by TYPEEASY_DEBUG env var (set in main) */
 extern int g_debug_mode;
 
@@ -30,7 +44,7 @@ static ASTNode *return_node = NULL;
 static BridgeHandlers g_bridge_handlers = {NULL, NULL, NULL};
 void runtime_save_initial_var_count() {
     g_initial_var_count = var_count;
-    printf("[TypeEasy] Estado inicial guardado. %d variables globales (bridges) retenidas.\n", g_initial_var_count);
+    if (g_debug_mode) te_log_ast("Initial state saved. %d global variables retained.", g_initial_var_count);
 }
 
 void runtime_reset_vars_to_initial_state() {
@@ -1247,8 +1261,10 @@ void interpret_bridge_decl(ASTNode *node) {
     }
     char* lib_name = call_node->left->id;
     char* func_name = call_node->id;
-    printf("[TypeEasy] Registrando Bridge (simulado): '%s'\n", bridge_name);
-    printf("  -> Objetivo: Biblioteca '%s', Función '%s'\n", lib_name, func_name);
+    if (g_debug_mode) {
+        te_log_ast("Registering Bridge (simulated): '%s'", bridge_name);
+        te_log_ast(" -> Target: Library '%s', Function '%s'", lib_name, func_name);
+    }
 
     // Create a generic class for all bridges if it doesn't exist
     /* bridge class search debug log removed */
@@ -1297,7 +1313,7 @@ ASTNode *create_bridge_node(char *name, ASTNode *call_expr_node) {
 }
 
 void interpret_agent(ASTNode *agent_node) {
-    printf("[TypeEasy] Agente '%s' parseado (ignorado en modo script).\n", agent_node->id);
+    if (g_debug_mode) te_log_ast("Agent parsed: %s (ignored in script mode)", agent_node->id);
 }
 
 ASTNode *create_access_node(ASTNode *base, ASTNode *index_expr) {
@@ -1589,20 +1605,20 @@ static void interpret_call_method(ASTNode *node) {
 
     // === FIX START: Handle Bridge method calls ===
     if (strcmp(obj->class->name, "Bridge") == 0) {
-        printf("[TypeEasy] Llamada a Bridge Nativo: %s.%s\n", v->id, node->id);
+        if (g_debug_mode) te_log_ast("Calling native bridge: %s.%s", v->id, node->id);
         // Aquí es donde la magia ocurre. Delegamos al manejador específico del bridge.
         if (strcmp(v->id, "Chat") == 0) {
             if (g_bridge_handlers.handle_chat_bridge) g_bridge_handlers.handle_chat_bridge(node->id, node->right);
         } else if (strcmp(v->id, "NLU") == 0) {
-            printf("[TypeEasy] Llamada a NLU Bridge\n");
+            if (g_debug_mode) te_log_ast("Calling NLU bridge");
             if (g_bridge_handlers.handle_nlu_bridge) {
                 g_bridge_handlers.handle_nlu_bridge(node->id, node->right);
                 // Diagnostic: did the bridge set __ret__? (only print when debug mode enabled)
                 if (g_debug_mode) {
                     if (__ret_var_active) {
-                        printf("[TypeEasy DEBUG] After NLU bridge: __ret__ active=1 type='%s'\n", __ret_var.type ? __ret_var.type : "(null)");
+                        te_log_ast("[DEBUG] After NLU bridge: __ret__ active=1 type='%s'", __ret_var.type ? __ret_var.type : "(null)");
                     } else {
-                        printf("[TypeEasy DEBUG] After NLU bridge: __ret__ active=0\n");
+                        te_log_ast("[DEBUG] After NLU bridge: __ret__ active=0");
                     }
                 }
             }

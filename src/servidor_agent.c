@@ -1,6 +1,7 @@
 /* --- Archivo: src/servidor_agent.c --- */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "ast.h"      // Incluye tu "Motor" puro
 #include "civetweb.h" // Incluye la librería del servidor
 #include <stdarg.h>
@@ -48,15 +49,62 @@ RuntimeHost g_runtime;
 // --- INICIO MEJORA: Variable global para la conexión actual ---
 // Esto permite a los bridges interactuar con la petición HTTP actual.
 static struct mg_connection *g_current_conn = NULL;
+// Expose debug flag from ast.c so we can gate noisy logs
+extern int g_debug_mode;
 
 /* Logging helper to produce consistent "TypeEasy Agent" messages */
 static void te_log(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    printf("TypeEasy Agent: ");
+    const char *green = "\x1b[32m";
+    const char *reset = "\x1b[0m";
+    printf("%sTypeEasy Agent: ", green);
     vprintf(fmt, ap);
-    printf("\n");
+    printf("%s\n", reset);
     va_end(ap);
+}
+
+/* Print a decorative startup banner similar to the requested style */
+static void print_startup_banner(const char *port, const char *url) {
+    const char *blue = "\x1b[34m";
+    const char *reset = "\x1b[0m";
+    const char *title = "TypeEasy Agent";
+    char line1[256];
+    char line2[256];
+    snprintf(line1, sizeof(line1), "Runtime: %s", "started");
+    snprintf(line2, sizeof(line2), "Listening: %s%s%s", url ? url : "/whatsapp_hook", port ? ":" : "", port ? port : "8081");
+
+    int width = 60;
+    int pad;
+
+    printf("%s", blue);
+    // top border
+    for (int i = 0; i < width; i++) putchar('=');
+    putchar('\n');
+
+    // title centered
+    pad = (width - (int)strlen(title)) / 2;
+    for (int i = 0; i < pad; i++) putchar(' ');
+    printf("%s\n", title);
+
+    // separator
+    for (int i = 0; i < width; i++) putchar('-');
+    putchar('\n');
+
+    // line1
+    pad = (width - (int)strlen(line1)) / 2;
+    for (int i = 0; i < pad; i++) putchar(' ');
+    printf("%s\n", line1);
+
+    // line2
+    pad = (width - (int)strlen(line2)) / 2;
+    for (int i = 0; i < pad; i++) putchar(' ');
+    printf("%s\n", line2);
+
+    // bottom border
+    for (int i = 0; i < width; i++) putchar('=');
+    putchar('\n');
+    printf("%s", reset);
 }
 
 // Implementación del manejador del bridge 'Chat'
@@ -65,9 +113,7 @@ void handle_chat_bridge(char* method_name, ASTNode* args) {
         // Extraer el primer argumento (el mensaje a enviar)
         char* message_to_send = get_node_string(args); // Necesitarás una función auxiliar para esto
 
-        printf("\n--- Respuesta del Agente ---\n");
-        printf(">>> %s\n", message_to_send);
-        printf("--------------------------\n\n");
+    te_log("Chat.sendMessage called: %s", message_to_send);
 
         // Enviar el mensaje como respuesta HTTP
         if (g_current_conn) {
@@ -168,7 +214,7 @@ ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) 
                     expr->left && expr->left->id && strcmp(expr->left->id, bridge_name) == 0 &&
                     expr->id && strcmp(expr->id, event_name) == 0) {
 
-                                    te_log("Listener found for %s.%s", bridge_name, event_name);
+                                    if (g_debug_mode) te_log("Listener found for %s.%s", bridge_name, event_name);
                     return listener;
                 }
             }
@@ -181,7 +227,7 @@ ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) 
 /* --- Implementación del Bridge API (Simulado) --- */
 void handle_api_bridge(char* method_name, ASTNode* args) {
     if (strcmp(method_name, "get") == 0) {
-        te_log("API.get invoked: returning simulated menu");
+        if (g_debug_mode) te_log("API.get invoked: returning simulated menu");
         
         // 1. Simplemente creamos un nodo de string con el menú
         ASTNode* menu_node = create_string_node(
@@ -231,8 +277,8 @@ static int webhook_handler(struct mg_connection *conn, void *cbdata) {
         read = mg_get_var(query, query_len, "message", post_data, sizeof(post_data) - 1);
     }
 
-    // Minimal log for incoming messages
-    te_log("Incoming webhook received. Message: \"%s\"", post_data);
+    // Minimal log for incoming messages (only when debugging)
+    if (g_debug_mode) te_log("Incoming webhook received. Message: \"%s\"", post_data);
 
     // 2. Encontrar el listener (sin cambios)
     ASTNode* listener = runtime_find_listener("Chat", "onMessage");
@@ -248,8 +294,8 @@ static int webhook_handler(struct mg_connection *conn, void *cbdata) {
     add_or_update_variable("mensaje", msg_node);
     free_ast(msg_node); 
 
-    // 4. Ejecutar el listener (sin cambios)
-    te_log("Executing listener logic");
+    // 4. Ejecutar el listener (sin changes)
+    if (g_debug_mode) te_log("Executing listener logic");
     interpret_ast(listener->right); // El 'Motor' interpreta el cuerpo
     te_log("Listener logic finished");
 
@@ -264,7 +310,7 @@ static int webhook_handler(struct mg_connection *conn, void *cbdata) {
 }
 
 void runtime_start_bridges() {
-    printf("[Agente] Iniciando Bridges (Servidor Web)...\n");
+    te_log("Initializing bridges (web server)");
     const char *options[] = {
         "listening_ports", "8081",
         "request_timeout_ms", "30000",
@@ -274,7 +320,7 @@ void runtime_start_bridges() {
 
     struct mg_context *ctx = mg_start(NULL, 0, options);
     if (ctx == NULL) {
-        fprintf(stderr, "[Agente] Error fatal: No se pudo iniciar civetweb en 8081.\n");
+        fprintf(stderr, "TypeEasy Agent: Fatal error: could not start civetweb on 8081.\n");
         exit(1);
     }
     g_runtime.bridges = malloc(sizeof(ActiveBridge));
@@ -282,7 +328,7 @@ void runtime_start_bridges() {
     g_runtime.bridges->context = ctx;
     g_runtime.bridges->next = NULL;
     mg_set_request_handler(ctx, "/whatsapp_hook", webhook_handler, NULL);
-    printf("[Agente] Servidor 'Chat' escuchando en puerto 8081 (URL: /whatsapp_hook)\n");
+    te_log("Bridge server started: Chat listening on port 8081 (URL: /whatsapp_hook)");
 }
 
 void runtime_init(ASTNode* ast_root) {
@@ -300,13 +346,13 @@ void runtime_init(ASTNode* ast_root) {
             node = NULL;
         }
         if (current_stmt && current_stmt->type && strcmp(current_stmt->type, "AGENT") == 0) {
-            printf("[Agente] Agente registrado: %s\n", current_stmt->id);
+            te_log("Agent registered: %s", current_stmt->id);
             current_stmt->next = g_runtime.agents;
             g_runtime.agents = current_stmt;
         }
     }
 
-    printf("[Agente] Registrando clases nativas de bridges...\n");
+    if (g_debug_mode) te_log("Registering native bridge classes");
     ClassNode* bridge_class = create_class("Bridge");
     add_class(bridge_class);
 
@@ -341,9 +387,14 @@ void runtime_init(ASTNode* ast_root) {
  */
 int main(int argc, char *argv[]) {
     
-    printf("[Servidor Agente] Iniciando...\n");
+    print_startup_banner("8081", "/whatsapp_hook");
     // Disable stdout buffering so logs are immediately visible in container logs
     setbuf(stdout, NULL);
+    /* Allow toggling debug logs with TYPEEASY_DEBUG=1 */
+    const char *debug_env = getenv("TYPEEASY_DEBUG");
+    if (debug_env != NULL && strcmp(debug_env, "1") == 0) {
+        g_debug_mode = 1;
+    }
     
     if (argc < 2) {
         printf("Uso: %s <archivo_agente.te>\n", argv[0]);
@@ -381,7 +432,7 @@ int main(int argc, char *argv[]) {
     runtime_save_initial_var_count();
     runtime_start_bridges(); 
 
-    printf("[Servidor Agente] Runtime iniciado. Esperando eventos...\n");
+    te_log("Runtime started. Waiting for events...");
 
     // 3. Bucle de servidor infinito
     while(1) {
