@@ -1,4 +1,8 @@
+## ☕ Apoya el Proyecto
 
+¡Si TypeEasy te ha sido útil, considera apoyar su desarrollo!
+
+* [Dona a través de PayPal](https://paypal.me/FIngunza)
 ## 🚀 TypeEasy  
 
 <p align="center">
