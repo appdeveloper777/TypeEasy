@@ -205,6 +205,8 @@ C:\Windows\System32>curl -X POST "http://localhost:8081/whatsapp_hook?message=ho
 C:\Windows\System32>curl -X POST "http://localhost:8081/whatsapp_hook?message=ver+el+menu"
 ```
 <img width="1868" height="990" alt="agent logs typeeasy" src="https://github.com/user-attachments/assets/b2fee05a-19d7-46bb-9161-3fc32c839134" />
+agente_chat_whatsapp.te: <img width="1777" height="978" alt="agent logs typeeasy codigo" src="https://github.com/user-attachments/assets/139c8574-b234-4701-aae1-192c6413ec45" />
+
 
 Consejos adicionales:
 
