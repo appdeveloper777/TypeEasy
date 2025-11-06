@@ -171,6 +171,57 @@ Ejemplo:
 curl http://localhost:5002/history
 ```
 
+## Probar el Agente WhatsApp desde Windows: reconstruir sin cache y usar curl
+
+Si estás en Windows y quieres forzar una reconstrucción limpia de la imagen del agente y ejecutar el contenedor para pruebas locales, usa los siguientes pasos y ejemplos. Estos comandos están pensados para CMD o PowerShell según tu preferencia.
+
+- Reconstruir la imagen del agente sin usar cache:
+
+```bash
+docker compose build --no-cache agent
+```
+
+- Ejecutar el contenedor del agente exponiendo los puertos declarados (útil para pruebas locales):
+
+```bash
+docker compose run --rm --service-ports agent
+```
+
+Nota: `--service-ports` mapea los puertos del servicio tal como están declarados en `docker-compose` hacia el host (por ejemplo, el agente escucha en el puerto `8081`).
+
+Ejemplos de `curl` desde Windows (CMD o PowerShell). Puedes ejecutar exactamente estas líneas si el servicio está escuchando en `http://localhost:8081`:
+
+```powershell
+C:\Windows\System32>curl -X POST "http://localhost:8081/whatsapp_hook?message=ver+el+menu"
+
+C:\Windows\System32>curl -X POST "http://localhost:8081/whatsapp_hook?message=hola"
+
+C:\Windows\System32>curl -X POST "http://localhost:8081/whatsapp_hook?message=hola"
+
+C:\Windows\System32>curl -X POST "http://localhost:8081/whatsapp_hook?message=ver+el+menu"
+```
+
+Consejos adicionales:
+
+- Para ver logs más verbosos del agente al ejecutar con `docker compose run` añade la variable de entorno `TYPEEASY_DEBUG=1`:
+
+```bash
+docker compose run --rm -e TYPEEASY_DEBUG=1 --service-ports agent
+```
+
+- En PowerShell puedes exportar la variable antes de ejecutar el contenedor:
+
+```powershell
+$env:TYPEEASY_DEBUG = '1'; docker compose run --rm --service-ports agent
+```
+
+- Después de modificar código en `src/` recuerda reconstruir la imagen del agente con `--no-cache` si quieres asegurarte de que los binarios nativos se recompilan:
+
+```bash
+docker compose build --no-cache agent
+```
+
+
 ## Variables de entorno importantes
 
 - Twilio (opcional): `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`
