@@ -36,6 +36,12 @@
 "print"                 { return PRINT; }
 "const"                 { return CONST; }
 
+"HttpGet"               { return HTTPGET; }
+"HTTPGET"               { return HTTPGET; }
+"HttpPost"              { return HTTPPOST; }
+"xml"                   { return XML; }
+"json"                  { return JSON; }
+
 "agent"                 { return AGENT; }
 "listener"              { return LISTENER; }
 "bridge"                { return BRIDGE; }

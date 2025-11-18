@@ -25,7 +25,7 @@
 }
 
 %token <sval> INT STRING FLOAT FLOAT_LITERAL LAYER LSBRACKET RSBRACKET
-%token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA
+%token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA CONCAT JSON XML HTTPGET HTTPPOST
 %token       VAR ASSIGN PRINT PRINTLN FOR LPAREN RPAREN SEMICOLON CONCAT
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
 %token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN
@@ -35,12 +35,12 @@
 %token AGENT LISTENER BRIDGE STATE MATCH CASE
 %token NODE
 %type <sval> method_name
-%type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args lambda_expression
+%type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args lambda_expression httpget_method_decl
 %type <pnode> parameter_decl parameter_list
 %type <node> list_literal
 %type <node> object_expression object_list
 %type <node> dataset_decl
-%type <node> model_decl
+%type <node> model_decl func_call_expr
 %type <node> layer_list
 %type <node> layer_decl
 %type <node> train_stmt
@@ -64,16 +64,32 @@
 %%
 
 program:
-    program statement       { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; }
+    
+     program statement       { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; }  
     | program class_decl      { $$ = $1; root = $$; }
     | program agent_decl      { $$ = create_ast_node("AGENT_LIST", $1, $2); root = $$; }
     | program bridge_decl     { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; } /* <-- CORREGIDO */
-    | class_decl              { $$ = NULL; }
-    | bridge_decl             { $$ = $1; root = $$; }
-    /* Allow a script that is a single statement (or starts with a statement) */
+    | program httpget_method_decl   {   $$ = $1; root = $$; }  
+    | httpget_method_decl       {         $$ = NULL; }
+    | class_decl              {         $$ = NULL; }
+    | bridge_decl             { $$ = $1; root = $$; }   
     | statement               { $$ = $1; root = $$; }
         
 ;
+
+httpget_method_decl:
+     LSBRACKET HTTPGET RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
+    {
+            MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
+            m->name = strdup($4);
+            m->body = $9;
+            m->params = $6;
+            m->next = global_methods;
+            global_methods = m;            
+            $$ = NULL;           
+          
+     }
+    ;
 
 class_decl:
         CLASS IDENTIFIER { last_class = create_class($2); add_class(last_class); } 
@@ -189,47 +205,29 @@ expression:
   | expression GT_EQ expression   { $$ = create_ast_node("GT_EQ", $1, $3); }
   | expression LT_EQ expression   { $$ = create_ast_node("LT_EQ", $1, $3); }
   | expression DIFF expression   { $$ = create_ast_node("DIFF", $1, $3); }
-  | expression LSBRACKET expression RSBRACKET
-      { $$ = create_access_node($1, $3); }
-  | object_literal
-      { $$ = $1; }
-  | expression DOT IDENTIFIER LPAREN RPAREN
-      { /* ARREGLADO: El printf aquí causaba warnings. $1 es un ASTNode*, no un string. 
-        printf(" [DEBUG] Reconocido METHOD_CALL: %s.%s()\n", $1->id, $3); */
-        $$ = create_method_call_node($1, $3, NULL); }
-  | expression DOT IDENTIFIER LPAREN expression_list RPAREN
-      { $$ = create_method_call_node($1, $3, $5); }
-  | expression DOT IDENTIFIER LPAREN lambda RPAREN
-      {  if (strcmp($3, "filter")==0) { $$ = create_list_function_call_node($1, $3, $5); } 
+  | expression LSBRACKET expression RSBRACKET       { $$ = create_access_node($1, $3); }
+  | object_literal      { $$ = $1; }
+  | expression DOT IDENTIFIER LPAREN RPAREN     {         $$ = create_method_call_node($1, $3, NULL); }
+  | expression DOT IDENTIFIER LPAREN expression_list RPAREN       { $$ = create_method_call_node($1, $3, $5); }
+  | expression DOT IDENTIFIER LPAREN lambda RPAREN       {  
+         if (strcmp($3, "filter")==0) { $$ = create_list_function_call_node($1, $3, $5); } 
          else { $$ = create_method_call_node($1, $3, NULL); } free($3); }
   | expression DOT IDENTIFIER
       { ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3); 
         $$ = create_ast_node("ACCESS_ATTR", $1, attr); }
-  | THIS DOT IDENTIFIER
-      { $$ = create_ast_node("ACCESS_ATTR", create_ast_leaf("ID", 0, NULL, "this"), create_ast_leaf("ID", 0, NULL, $3)); }
-  | THIS DOT IDENTIFIER LPAREN RPAREN
-      { $$ = create_method_call_node(create_ast_leaf("ID", 0, NULL, "this"), $3, NULL); }
-  | IDENTIFIER
-      { $$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1); }
-  | NUMBER
-      { $$ = create_ast_leaf("NUMBER", $1, NULL, NULL); }
-  | FLOAT_LITERAL
-      { $$ = create_ast_leaf("FLOAT", 0, $1, NULL); }
-  | STRING_LITERAL
-      { $$ = create_ast_leaf("STRING", 0, $1, NULL); }
-  | CONCAT LPAREN expression_list RPAREN
-      { $$ = create_function_call_node("concat", $3); } /* ARREGLADO: printf eliminado */
-  | expression PLUS expression
-      { $$ = create_ast_node("ADD", $1, $3); }
-  | expression MINUS expression
-      { $$ = create_ast_node("SUB", $1, $3); }
-  | expression MULTIPLY expression
-      { $$ = create_ast_node("MUL", $1, $3); }
-  | expression DIVIDE expression
-      { $$ = create_ast_node("DIV", $1, $3); }
-  | LPAREN expression RPAREN
-      { $$ = $2; }
-  | NEW IDENTIFIER LPAREN RPAREN
+  | THIS DOT IDENTIFIER       { $$ = create_ast_node("ACCESS_ATTR", create_ast_leaf("ID", 0, NULL, "this"), create_ast_leaf("ID", 0, NULL, $3)); }
+  | THIS DOT IDENTIFIER LPAREN RPAREN       { $$ = create_method_call_node(create_ast_leaf("ID", 0, NULL, "this"), $3, NULL); }
+  | IDENTIFIER       { $$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1); }
+  | NUMBER       { $$ = create_ast_leaf("NUMBER", $1, NULL, NULL); }
+  | FLOAT_LITERAL       { $$ = create_ast_leaf("FLOAT", 0, $1, NULL); }
+  | STRING_LITERAL       { $$ = create_ast_leaf("STRING", 0, $1, NULL); }
+  | CONCAT LPAREN expression_list RPAREN       { $$ = create_function_call_node("concat", $3); } /* ARREGLADO: printf eliminado */
+  | expression PLUS expression       { $$ = create_ast_node("ADD", $1, $3); }
+  | expression MINUS expression       { $$ = create_ast_node("SUB", $1, $3); }
+  | expression MULTIPLY expression       { $$ = create_ast_node("MUL", $1, $3); }
+  | expression DIVIDE expression       { $$ = create_ast_node("DIV", $1, $3); }
+  | LPAREN expression RPAREN       { $$ = $2; }
+  | NEW IDENTIFIER LPAREN RPAREN 
       { ClassNode *cls = find_class($2);
         if (!cls) { printf("Error: Clase '%s' no definida.\n", $2); $$ = NULL; } 
         else { $$ = (ASTNode *)create_object_with_args(cls, NULL); } }
@@ -237,6 +235,8 @@ expression:
       { ClassNode *cls = find_class($2);
         if (!cls) { fprintf(stderr, "Error: clase '%s' no encontrada\n", $2); exit(1); } 
         $$ = create_object_with_args(cls, $4); free($2); }
+ | JSON LPAREN IDENTIFIER RPAREN  {       $$ = create_call_node_return_json($3, create_ast_leaf("json", 0, NULL, $3));}
+| XML LPAREN IDENTIFIER RPAREN  {      $$ = create_call_node_return_xml($3, create_ast_leaf("xml", 0, NULL, $3));}
 ;
 
 var_decl:
@@ -245,6 +245,9 @@ var_decl:
         ASTNode *filterCall = create_list_function_call_node(listExpr, $4, lambda); 
         filterCall->type = strdup("FILTER_CALL"); 
         $$ = create_var_decl_node($2, filterCall); }
+
+
+
   | LET IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
   | STRING IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("STRING"); $$ = decl; }
   | VAR IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
@@ -256,12 +259,25 @@ var_decl:
 ;
 
 statement:
-    FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_for_in_node($4, $6, $9); }
-  | LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$4); $$ = create_var_decl_node($2, obj); }
-  | RETURN expression SEMICOLON  { $$ = create_return_node($2); }
+RETURN JSON LPAREN RPAREN SEMICOLON { }
+
+|
+
+        FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_for_in_node($4, $6, $9); }
+    | LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$4); $$ = create_var_decl_node($2, obj); }
+    | RETURN func_call_expr SEMICOLON { $$ = create_return_node($2); }
+    | RETURN expression SEMICOLON  { $$ = create_return_node($2); }
+
+
+   |RETURN XML LPAREN expression RPAREN SEMICOLON { $$ = create_return_node(create_call_node("xml", $4)); }
+ 
+
+
   | state_decl
   | node_decl
   | var_decl
+
+   | IDENTIFIER LPAREN expression_list RPAREN SEMICOLON {           $$ = create_method_call_node_alone(NULL, $1, $3);        }
   | STRING STRING expression SEMICOLON                          { char buffer[2048]; sprintf(buffer,"#include \"easyspark/dataframe.hpp\"\n..."); generate_code(buffer); }
   | IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$1); $$ = create_method_call_node(obj, $3, NULL); }
   | IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); $$ = create_method_call_node(obj, $3, $5); }
@@ -272,45 +288,34 @@ statement:
   | VAR IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_ast_node("DECLARE", create_ast_leaf("IDENTIFIER", 0, NULL, $2), $4); }
   | if_statement
   | match_statement
-  | IDENTIFIER ASSIGN expression SEMICOLON       
-    { $$ = create_ast_node("ASSIGN", create_ast_leaf("IDENTIFIER",0,NULL,$1), $3); }
-  | PRINTLN LPAREN expression RPAREN SEMICOLON
-    { $$ = create_ast_node("PRINTLN", $3, NULL); }
-  | PRINTLN LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON
-    { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("PRINTLN", access, NULL); }
-  | PRINT LPAREN expression RPAREN SEMICOLON
-    { $$ = create_ast_node("PRINT", $3, NULL); }
-  | PRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON
-    { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("PRINT", access, NULL); }
-  | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET
-    { $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf("NUMBER",$5,NULL,NULL), $7, $9, $12); }
-  | NEW IDENTIFIER LPAREN RPAREN SEMICOLON
-    { ClassNode *cls = find_class($2); if (!cls) { printf("Error: Clase '%s' no definida.\n", $2); $$ = NULL; } else { $$ = (ASTNode *)create_object_with_args(cls, NULL); } }
-  | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN RPAREN SEMICOLON
-    { ClassNode *cls = find_class($5); if (!cls) { printf("Error: Clase '%s' no definida.\n", $5); $$ = NULL; } else { $$ = create_var_decl_node($2, create_object_with_args(cls, NULL)); } }
-  | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN expression_list RPAREN SEMICOLON
-    { ClassNode *cls = find_class($5); if (!cls) { printf("Error: Clase '%s' no definida.\n", $5); $$ = NULL; } else { $$ = create_var_decl_node($2, create_object_with_args(cls, $7)); } }
-  | DATASET IDENTIFIER FROM STRING_LITERAL SEMICOLON
-    { $$ = create_dataset_node($2, $4); }
-  | PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON
-    { $$ = create_predict_node($3, $5); }
-  | VAR IDENTIFIER ASSIGN PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON
-    { ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i"); $$ = create_method_call_node(obj, "predict", NULL); $$ = create_predict_node($6, $8); }
-  | PLOT LPAREN expression_list RPAREN SEMICOLON
-    { $$ = create_ast_node("PLOT", $3, NULL); }
-        | MODEL IDENTIFIER LBRACKET layer_list RBRACKET
-        { ASTNode *layer = $4; (void)layer; ASTNode *modelNode = create_model_node($2, $4); }
-  | LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON
-    { $$ = create_layer_node($2, $4, $6); }
-  | TRAIN LPAREN IDENTIFIER COMMA IDENTIFIER COMMA train_options RPAREN SEMICOLON
-    { $$ = create_train_node($3, $5, $7); }
-  | IDENTIFIER ASSIGN NUMBER
-    { $$ = create_train_option_node($1, $3); }
+  | IDENTIFIER ASSIGN expression SEMICOLON           { $$ = create_ast_node("ASSIGN", create_ast_leaf("IDENTIFIER",0,NULL,$1), $3); }
+  | PRINTLN LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node("PRINTLN", $3, NULL); }
+  | PRINTLN LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("PRINTLN", access, NULL); }
+  | PRINT LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node("PRINT", $3, NULL); }
+  | PRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("PRINT", access, NULL); }
+  | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET    { $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf("NUMBER",$5,NULL,NULL), $7, $9, $12); }
+  | NEW IDENTIFIER LPAREN RPAREN SEMICOLON    { ClassNode *cls = find_class($2); if (!cls) { printf("Error: Clase '%s' no definida.\n", $2); $$ = NULL; } else { $$ = (ASTNode *)create_object_with_args(cls, NULL); } }
+  | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN RPAREN SEMICOLON    { ClassNode *cls = find_class($5); if (!cls) { printf("Error: Clase '%s' no definida.\n", $5); $$ = NULL; } else { $$ = create_var_decl_node($2, create_object_with_args(cls, NULL)); } }
+  | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN expression_list RPAREN SEMICOLON    { ClassNode *cls = find_class($5); if (!cls) { printf("Error: Clase '%s' no definida.\n", $5); $$ = NULL; } else { $$ = create_var_decl_node($2, create_object_with_args(cls, $7)); } }
+  | DATASET IDENTIFIER FROM STRING_LITERAL SEMICOLON    { $$ = create_dataset_node($2, $4); }
+  | PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON    { $$ = create_predict_node($3, $5); }
+  | VAR IDENTIFIER ASSIGN PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i"); $$ = create_method_call_node(obj, "predict", NULL); $$ = create_predict_node($6, $8); }
+  | PLOT LPAREN expression_list RPAREN SEMICOLON    { $$ = create_ast_node("PLOT", $3, NULL); }
+  | MODEL IDENTIFIER LBRACKET layer_list RBRACKET        { ASTNode *layer = $4; (void)layer; ASTNode *modelNode = create_model_node($2, $4); }
+  | LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON     { $$ = create_layer_node($2, $4, $6); }
+  | TRAIN LPAREN IDENTIFIER COMMA IDENTIFIER COMMA train_options RPAREN SEMICOLON    { $$ = create_train_node($3, $5, $7); }
+  | IDENTIFIER ASSIGN NUMBER    { $$ = create_train_option_node($1, $3); }
   | LET IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER SEMICOLON 
     { ClassNode* cls = find_class($7);
       if (!cls) { printf("Clase '%s' no encontrada.\n", $7); $$ = NULL; } 
       else { ASTNode* list = from_csv_to_list($5, cls); $$ = create_var_decl_node($2, list); } }
 ; 
+
+func_call_expr:
+    IDENTIFIER LPAREN expression RPAREN { $$ = create_call_node($1, $3); }
+    | IDENTIFIER LPAREN expression_list RPAREN { $$ = create_call_node($1, $3); }
+    
+;
 
 if_statement:
     IF LPAREN expression RPAREN LBRACKET statement_list RBRACKET
@@ -339,7 +344,7 @@ case_clause:
 
 statement_list:
     statement_list statement  { $$ = create_ast_node("STATEMENT_LIST", $1, $2); }
-  | statement                { $$ = $1; }
+  | statement                { $$ = create_ast_node("STATEMENT_LIST", $1, NULL); $$->next = NULL; }
   ;
 
 expression_list:
@@ -356,6 +361,8 @@ list_literal:
     LSBRACKET RSBRACKET            { $$ = create_list_node(NULL); }
     | LSBRACKET expr_list RSBRACKET  { $$ = create_list_node($2); }
   ;
+
+
 
 lambda:
     IDENTIFIER ARROW                { /*printf(" [DEBUG] Reconocido LAMBDA\n");*/ }
@@ -442,8 +449,11 @@ void print_ast(ASTNode *node, int indent) {
 }
 
 ASTNode* parse_file(FILE* file) {
+   
     root = NULL;
     yyin = file;
+    // extern int yydebug;
+    //yydebug = 1; // Activa traza de Bison
     int parse_result = yyparse();
     if (parse_result != 0) {
         return NULL;

@@ -1,3 +1,10 @@
+// Serializa un objeto a JSON string dado su id y lo imprime
+// Serializa un objeto a XML string dado su id y lo imprime
+// Retorna un string XML serializado de un objeto dado su id
+char* get_object_xml_by_id(const char* id);
+void print_object_as_xml_by_id(const char* id);
+void print_object_as_json_by_id(const char* id);
+// Prototypes moved below ASTNode struct definition
 #ifndef AST_H
 #define AST_H
 
@@ -5,10 +12,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+
+typedef struct ParameterNode ParameterNode;
 /*
     YA NO INCLUIMOS civetweb.h NI windows.h/unistd.h AQUÍ.
     Este archivo es ahora 100% independiente del servidor.
 */
+
 
 /* --- 1. LA DEFINICIÓN DE ASTNode --- */
 typedef struct ASTNode {
@@ -54,8 +64,6 @@ typedef struct DatasetNode {
     int count;
 } DatasetNode;
 
-
-typedef struct ParameterNode ParameterNode;
 
 typedef enum {
     VAL_INT,
@@ -105,7 +113,7 @@ typedef struct ParameterNode {
     char *type;
     struct ParameterNode *next;
 } ParameterNode;
-
+extern MethodNode *global_methods;
 void runtime_save_initial_var_count();
 void runtime_reset_vars_to_initial_state();
 

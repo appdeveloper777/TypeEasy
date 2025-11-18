@@ -1,27 +1,24 @@
 // Mi código TypeEasy para manejar rutas y devolver JSON
 // Simulamos una petición a /api/usuario/perfil
+
 class Person {
-    edad : int;  
     nombre : string;
     company : string;
-    __constructor(_edad : int, _nombre : string, _company : string) {        
-        this.company = _company;                 
+    edad : int;
+    __constructor(_edad : int, _nombre : string, _company : string) {
         this.edad = _edad;
-        this.nombre = _nombre;        
+        this.nombre = _nombre;
+        this.company = _company;
     }
-    // GET endpoint /api/usuario/perfil
-    GetUserProfile(p_edad : int) {    
-        int edad = 37;       
-        println("{ ");
-        print("\"edad\": "); print(edad); println(", ");
-        println("\"nombre\": \"Fernando Ingunza\", ");       
-        println("\"empresa\": \"Roussecloud\"");
-        print("}");
-    }    
 }
 
-int mi_edad = 36;
-string mi_nombre = "Fernando Ingunza";
-string mi_empresa = "Roussecloud";
-let obj = new Person(mi_edad, mi_nombre, mi_empresa);
-obj.GetUserProfile(mi_edad);
+[HTTPGET] 
+GetUserProfile(p_edad : int) {
+
+    let usuario = new Person(36, "Fernando Ingunza", "Roussecloud");    
+    return json(usuario);
+}
+
+
+GetUserProfile(36);
+

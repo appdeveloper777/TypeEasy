@@ -11,53 +11,24 @@ class LineaItem {
     }
 }
 
-// CAMBIO: Renombramos la clase a 'OrdenDeCompra' para mayor claridad.
+// Otra clase para la orden de compra.
 class OrdenDeCompra {
-    proveedor: string; // CAMBIO: 'cliente' ahora es 'proveedor'.
+    proveedor: string; 
     fecha: string;
 
     __constructor(_proveedor: string, _fecha: string) {
         this.proveedor = _proveedor;
         this.fecha = _fecha;
-    }
-
-    // El método sigue la misma lógica, solo cambian las etiquetas XML.
-    generarXML() {
-        println("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-        println("<OrdenDeCompra>"); // CAMBIO: Etiqueta raíz.
-        
-        // Usamos la propiedad 'proveedor' del objeto.
-        print("  <Proveedor>"); print(this.proveedor); println("</Proveedor>"); // CAMBIO: Etiqueta de proveedor.
-        print("  <Fecha>"); print(this.fecha); println("</Fecha>");
-        
-        println("  <Items>");
-        // INICIO DEL MOCK: Datos de ejemplo para una orden de compra.
-        println("    <Item>");
-        println("      <Producto>Tornillos de Acero Inox (Mock)</Producto>");
-        println("      <Cantidad>5000</Cantidad>");
-        println("      <Precio>500</Precio>");
-        println("    </Item>");
-        println("    <Item>");
-        println("      <Producto>Planchas de Aluminio 2mm (Mock)</Producto>");
-        println("      <Cantidad>100</Cantidad>");
-        println("      <Precio>3500</Precio>");
-        println("    </Item>");
-        // FIN DEL MOCK
-        println("  </Items>");
-        
-        println("</OrdenDeCompra>"); // CAMBIO: Cierre de etiqueta raíz.
-    }
+    }   
+}
+// Endpoint para generar el XML de la orden de compra.
+[HTTPGET] 
+generarXML(p_edad : int) {  
+    
+    let mi_orden = new OrdenDeCompra("Suministros Industriales S.A.", "2025-09-06");
+    // Retorna el XML como string usando la función nativa
+    return xml(mi_orden);
 }
 
-// --- Uso del código para Proveedores ---
-
-// Los items ahora representan insumos o productos que compramos.
-let item_compra1 = new LineaItem("Insumo A", 100, 15);
-let item_compra2 = new LineaItem("Insumo B", 200, 40);
-let lista_insumos = [item_compra1, item_compra2]; // La lista no se usa en el mock, pero es buena práctica tenerla.
-
-// Creamos la orden de compra para un proveedor específico.
-let mi_orden = new OrdenDeCompra("Suministros Industriales S.A.", "2025-09-06");
-
 // Generamos el XML de la orden de compra.
-mi_orden.generarXML();
+generarXML(6);

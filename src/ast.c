@@ -1,3 +1,7 @@
+    // ...existing code...
+    // Si no hay objeto, buscar método global
+    // ...existing code...
+    // Si no hay objeto, buscar método global
 #include "ast.h"
 #include <stdint.h>
 #include <string.h>
@@ -5,7 +9,122 @@
 #include <stdio.h>
 #include "bytecode.h"
 
+#include "ast.h"
+#include <stdint.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include "bytecode.h"
+
+// --- Función nativa para serializar objeto a JSON y printf ---
+void native_json(ASTNode *arg) {
+    const char *var_id = NULL;
+   // printf("[DIAG] native_json: arg=%p\n", (void*)arg);
+    //if (!arg) { printf("[DIAG] native_json: arg is NULL\n"); return; }
+    if (arg->id) {
+        var_id = arg->id;
+    } else if (arg->type && (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0)) {
+        var_id = arg->str_value;
+    } else if (arg->left && arg->left->id) {
+        var_id = arg->left->id;
+    }
+   // printf("[DIAG] native_json: var_id=%s\n", var_id ? var_id : "(null)");
+    if (!var_id) { printf("[DIAG] native_json: var_id is NULL\n"); return; }
+    Variable *v = find_variable(var_id);
+    //printf("[DIAG] native_json: find_variable returned %p\n", (void*)v);
+    if (!v) { printf("[DIAG] native_json: variable not found\n"); return; }
+    if (v->vtype != VAL_OBJECT) { printf("[DIAG] native_json: variable is not VAL_OBJECT, vtype=%d\n", v->vtype); return; }
+    ObjectNode *obj = v->value.object_value;
+    if (!obj || !obj->class || obj->class->attr_count == 0) return;
+    printf("{\n");
+    for (int i = 0; i < obj->class->attr_count; i++) {
+        printf("  \"%s\": ", obj->class->attributes[i].id);
+        if (strcmp(obj->class->attributes[i].type, "string") == 0) {
+            printf("\"%s\"", obj->attributes[i].value.string_value);
+        } else if (strcmp(obj->class->attributes[i].type, "float") == 0) {
+            printf("%f", obj->attributes[i].value.float_value);
+        } else {
+            printf("%d", obj->attributes[i].value.int_value);
+        }
+        if (i < obj->class->attr_count - 1) printf(",\n");
+        else printf("\n");
+    }
+    printf("}\n");
+}
+// --- Hook para funciones nativas ---
+int call_native_function(const char *name, ASTNode *arg) {
+    if (strcmp(name, "json") == 0) {
+        native_json(arg);
+        return 1;
+    }
+    return 0;
+}
+
 #include <stdarg.h>
+MethodNode* global_methods = NULL;
+
+ASTNode* create_call_node(const char* funcName, ASTNode* args) {
+    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    node->type = strdup("CALL_FUNC");
+    node->id = strdup(funcName);
+    node->left = args;
+    node->right = NULL;
+    node->str_value = NULL;
+    node->value = 0;
+   // if (args) {
+    //    printf("[DEBUG] create_call_node: func=%s, args->type=%s, args->id=%s, args->str_value=%s\n", funcName, args->type ? args->type : "NULL", args->id ? args->id : "NULL", args->str_value ? args->str_value : "NULL");
+   // } else {
+   //     printf("[DEBUG] create_call_node: func=%s, args=NULL\n", funcName);
+    //}
+    return node;
+}
+
+ASTNode* create_call_node_return_json(const char* funcName, ASTNode* args) {
+    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    node->type = strdup("RETURN_JSON");
+    node->id = strdup(funcName);
+    node->left = args;
+    node->right = NULL;
+    node->str_value = NULL;
+    node->value = 0;
+    //if (args) {
+    //    printf("[DEBUG] create_call_node: func=%s, args->type=%s, args->id=%s, args->str_value=%s\n", funcName, args->type ? args->type : "NULL", args->id ? args->id : "NULL", args->str_value ? args->str_value : "NULL");
+    //} else {
+     //   printf("[DEBUG] create_call_node: func=%s, args=NULL\n", funcName);
+    //}
+    return node;
+}
+
+ASTNode* create_call_node_return_xml(const char* funcName, ASTNode* args) {
+    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    node->type = strdup("RETURN_XML");
+    node->id = strdup(funcName);
+    node->left = args;
+    node->right = NULL;
+    node->str_value = NULL;
+    node->value = 0;
+    //if (args) {
+    //    printf("[DEBUG] create_call_node: func=%s, args->type=%s, args->id=%s, args->str_value=%s\n", funcName, args->type ? args->type : "NULL", args->id ? args->id : "NULL", args->str_value ? args->str_value : "NULL");
+    //} else {
+     //   printf("[DEBUG] create_call_node: func=%s, args=NULL\n", funcName);
+    //}
+    return node;
+}
+
+ASTNode* create_method_call_node_alone(ASTNode* objectNode, const char* methodName, ASTNode* args) {
+    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    node->type = strdup("METHOD_CALL_ALONE");
+    node->left = objectNode;
+    node->right = args;
+    node->str_value = NULL;
+    node->value = 0;
+    if (methodName) {
+        node->id = strdup(methodName);
+    } else {
+        node->id = NULL;
+    }
+    return node;
+}
 
 /* Small helper to standardize TypeEasy logs inside ast.c */
 static void te_log_ast(const char *fmt, ...) {
@@ -456,6 +575,12 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
     else if (strcmp(value->type, "OBJECT") == 0) {
         vars[my_index].vtype = VAL_OBJECT;
         vars[my_index].value.object_value = (ObjectNode *)value->extra;
+        ObjectNode *obj_dbg = (ObjectNode *)value->extra;
+        //if (obj_dbg && obj_dbg->class && obj_dbg->class->name) {
+       //     printf("[DIAG] declare_variable: objeto '%s' de clase '%s' declarado\n", id, obj_dbg->class->name);
+       // } else {
+        //    printf("[DIAG] declare_variable: objeto '%s' declarado pero clase no encontrada\n", id);
+       // }
     }
     else if (strcmp(value->type, "ACCESS_ATTR") == 0) {
         // Esto maneja: let item = intencion.item;
@@ -1102,6 +1227,7 @@ static void interpret_predict_node(ASTNode *node);
 static void interpret_call_func(ASTNode *node);
 static void interpret_return_node(ASTNode *node);
 static void interpret_call_method(ASTNode *node);
+static void interpret_call_method_alone(ASTNode *node);
 static void interpret_var_decl(ASTNode *node);
 static void interpret_assign_attr(ASTNode *node);
 static void interpret_assign(ASTNode *node);
@@ -1371,7 +1497,7 @@ ASTNode *append_kv_pair(ASTNode *list, ASTNode *pair) {
 
 void interpret_ast(ASTNode *node) {    
     if (!node || return_flag) return; 
-    /* debug print removed */
+    /* debug print removed */    
 
     if (strcmp(node->type, "STATE_DECL") == 0) {
         printf("[TypeEasy] 'state' '%s' tratado como 'var' en modo script.\n", node->id);
@@ -1407,7 +1533,28 @@ void interpret_ast(ASTNode *node) {
     else if (strcmp(node->type, "PREDICT") == 0)        interpret_predict_node(node);
     else if (strcmp(node->type, "CALL_FUNC") == 0)      interpret_call_func(node);
     else if (strcmp(node->type, "RETURN") == 0)         interpret_return_node(node);
-    else if (strcmp(node->type, "CALL_METHOD") == 0)    interpret_call_method(node);
+    else if (strcmp(node->type, "CALL_METHOD") == 0) {
+      //  printf("[DIAG] interpret_ast: dispatching CALL_METHOD\n");
+        interpret_call_method(node);
+    }
+    else if (strcmp(node->type, "METHOD_CALL_ALONE") == 0) {
+      //  printf("[DIAG] interpret_ast: dispatching METHOD_CALL_ALONE\n");
+        MethodNode *m = global_methods;
+        while (m) {
+            if (strcmp(m->name, node->id) == 0) {
+                // ¡Encontramos la función global!
+                // Aquí iría la lógica para configurar los argumentos
+                // (node->right) antes de ejecutar el cuerpo.
+                
+                // (Lógica de argumentos omitida por brevedad...)
+
+                // Ejecutar el cuerpo de la función
+                interpret_ast(m->body);
+                break;
+            }
+            m = m->next;
+        }
+    }
     else if (strcmp(node->type, "VAR_DECL") == 0)       interpret_var_decl(node);
     else if (strcmp(node->type, "ASSIGN_ATTR") == 0)    interpret_assign_attr(node);
     else if (strcmp(node->type, "ASSIGN") == 0)         interpret_assign(node);
@@ -1552,6 +1699,77 @@ static void interpret_predict_node(ASTNode *node) {
 }
 
 static void interpret_call_func(ASTNode *node) {
+
+   // printf("[DIAG] SAPPPEEEEE interpret_call_func: llamado con node->id=%s\n", node->id ? node->id : "NULL");
+    if (strcmp(node->id, "json") == 0) {
+        // --- INICIO DE LA NUEVA LÓGICA PARA JSON ---
+        ASTNode *arg_node = node->left;
+
+        if (arg_node == NULL) {
+            // Caso: return json(); (sin argumentos)
+            ASTNode *result_node = create_ast_leaf("STRING", 0, "{}", NULL);
+            add_or_update_variable("__ret__", result_node);
+            free_ast(result_node);
+            return;
+        }
+
+        // 1. Verificar que el argumento es un identificador
+        if (arg_node->type == NULL || strcmp(arg_node->type, "IDENTIFIER") != 0) {
+            fprintf(stderr, "Error: El argumento de json() debe ser una variable de tipo objeto.\n");
+            return;
+        }
+
+        // 2. Buscar la variable en la tabla de símbolos
+        Variable *var = find_variable(arg_node->id);
+        if (!var) {
+            fprintf(stderr, "Error: Variable '%s' no encontrada para serializar a JSON.\n", arg_node->id);
+            return;
+        }
+
+        // 3. Verificar que la variable es un objeto
+        if (var->vtype != VAL_OBJECT || var->value.object_value == NULL) {
+            fprintf(stderr, "Error: La variable '%s' no es un objeto válido.\n", arg_node->id);
+            return;
+        }
+
+        ObjectNode *obj = var->value.object_value;
+        char json_buffer[2048] = "{"; // Empezamos a construir el string JSON
+        int first_attr = 1;
+
+        // 4. Iterar sobre los atributos del objeto para construir el JSON
+        for (int i = 0; i < obj->class->attr_count; i++) {
+            if (!first_attr) {
+                strcat(json_buffer, ",");
+            }
+
+            Variable *attr = &obj->attributes[i];
+            char attr_buffer[512];
+
+            // Formateamos cada atributo como "clave":valor
+            if (attr->vtype == VAL_STRING) {
+                snprintf(attr_buffer, sizeof(attr_buffer), "\"%s\":\"%s\"", attr->id, attr->value.string_value);
+            } else if (attr->vtype == VAL_INT) {
+                snprintf(attr_buffer, sizeof(attr_buffer), "\"%s\":%d", attr->id, attr->value.int_value);
+            } else if (attr->vtype == VAL_FLOAT) {
+                snprintf(attr_buffer, sizeof(attr_buffer), "\"%s\":%f", attr->id, attr->value.float_value);
+            } else {
+                // Omitir atributos no serializables por ahora
+                continue;
+            }
+
+            strncat(json_buffer, attr_buffer, sizeof(json_buffer) - strlen(json_buffer) - 1);
+            first_attr = 0;
+        }
+
+        strcat(json_buffer, "}"); // Cerramos el objeto JSON
+
+        // 5. Devolver el string JSON resultante
+        ASTNode *result_node = create_ast_leaf("STRING", 0, json_buffer, NULL);
+        add_or_update_variable("__ret__", result_node);
+        free_ast(result_node);
+        // --- FIN DE LA NUEVA LÓGICA ---
+    }
+
     if (strcmp(node->id, "concat") != 0) return;
 
     char result_buffer[2048] = {0}; // Un búfer grande para construir el string
@@ -1576,9 +1794,121 @@ static void interpret_call_func(ASTNode *node) {
     free_ast(lit); // add_or_update_variable copia el valor
 }
 
+// Serializa un objeto a JSON string dado su id y lo imprime
+// Serializa un objeto a XML string dado su id y lo imprime
+char* get_object_xml_by_id(const char* id) {
+    Variable *var = find_variable((char*)id);
+    if (!var || var->vtype != VAL_OBJECT || !var->value.object_value) {
+        return NULL;
+    }
+    ObjectNode *obj = var->value.object_value;
+    char *xml_buffer = malloc(2048);
+    if (!xml_buffer) return NULL;
+    snprintf(xml_buffer, 2048, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<%s>", obj->class->name);
+    for (int i = 0; i < obj->class->attr_count; i++) {
+        Variable *attr = &obj->attributes[i];
+        if (!attr || !attr->id) continue;
+        strcat(xml_buffer, "<");
+        strcat(xml_buffer, attr->id);
+        strcat(xml_buffer, ">");
+        if (attr->vtype == VAL_STRING) {
+            if (attr->value.string_value)
+                strcat(xml_buffer, attr->value.string_value);
+            else
+                strcat(xml_buffer, "");
+        } else if (attr->vtype == VAL_INT) {
+            char numbuf[32];
+            snprintf(numbuf, sizeof(numbuf), "%d", attr->value.int_value);
+            strcat(xml_buffer, numbuf);
+        } else if (attr->vtype == VAL_FLOAT) {
+            char numbuf[64];
+            snprintf(numbuf, sizeof(numbuf), "%f", attr->value.float_value);
+            strcat(xml_buffer, numbuf);
+        } else {
+            strcat(xml_buffer, "null");
+        }
+        strcat(xml_buffer, "</");
+        strcat(xml_buffer, attr->id);
+        strcat(xml_buffer, ">\n");
+    }
+    char end_tag[128];
+    snprintf(end_tag, sizeof(end_tag), "</%s>", obj->class->name);
+    strcat(xml_buffer, end_tag);
+    return xml_buffer;
+}
+
+void print_object_as_xml_by_id(const char* id) {
+    char* xml = get_object_xml_by_id(id);
+    if (xml) {
+        printf("%s\n", xml);
+        free(xml);
+    } else {
+        printf("Error: No se encontró objeto con id '%s' para serializar a XML.\n", id);
+    }
+}
+void print_object_as_json_by_id(const char* id) {
+        // Limpiar la consola al inicio  
+    Variable *var = find_variable((char*)id);
+    if (!var || var->vtype != VAL_OBJECT || !var->value.object_value) {
+        printf("Error: No se encontró objeto con id '%s' para serializar a JSON.\n", id);
+        return;
+    }
+    ObjectNode *obj = var->value.object_value;
+    char json_buffer[4096] = "{\n";
+    int first_attr = 1;
+    for (int i = 0; i < obj->class->attr_count; i++) {
+        if (!first_attr) strcat(json_buffer, ",\n");
+        first_attr = 0;
+        strcat(json_buffer, "    \"");
+        strcat(json_buffer, obj->attributes[i].id);
+        strcat(json_buffer, "\": ");
+        if (obj->attributes[i].vtype == VAL_STRING) {
+            strcat(json_buffer, "\"");
+            strcat(json_buffer, obj->attributes[i].value.string_value);
+            strcat(json_buffer, "\"");
+        } else if (obj->attributes[i].vtype == VAL_INT) {
+            char numbuf[32];
+            snprintf(numbuf, sizeof(numbuf), "%d", obj->attributes[i].value.int_value);
+            strcat(json_buffer, numbuf);
+        } else if (obj->attributes[i].vtype == VAL_FLOAT) {
+            char numbuf[64];
+            snprintf(numbuf, sizeof(numbuf), "%f", obj->attributes[i].value.float_value);
+            strcat(json_buffer, numbuf);
+        } else {
+            strcat(json_buffer, "null");
+        }
+    }
+    strcat(json_buffer, "\n}");
+    printf("%s\n", json_buffer);
+}
+
 static void interpret_return_node(ASTNode *node) {
+  //  printf("[DIAG] interpret_return_node: llamado con node->type=%s node->id=%s\n", node->type ? node->type : "NULL", node->id ? node->id : "NULL");
+    //if (node->left) {
+   //     printf("[DIAG] sape1 RETURN left->type=%s, left->id=%s, left=%s\n", node->left->type ? node->left->type : "NULL", node->left->id ? node->left->id : "NULL", node->left);
+    //} else {
+   //     printf("[DIAG] sape2 RETURN left is NULL\n");
+   // }
     return_node = node->left;
     return_flag = 1;
+ //   printf("[DIAG] interpret_return_node: sape3 set return_flag=%d, return_node=%p\n", return_flag, (void*)return_node);
+    if (return_node) {
+
+        if(return_node->type && strcmp(return_node->type, "RETURN_XML") == 0  && return_node->id) {
+            print_object_as_xml_by_id(return_node->id);
+        }
+        if(return_node->type && strcmp(return_node->type, "RETURN_JSON") == 0  && return_node->id) {
+            print_object_as_json_by_id(return_node->id);
+        }
+
+      
+        /*printf("[DIAG] sape 4 interpret_return_node: return_node type=%s, id=%s, left=%s, right=%s, str_value=%s\n",
+            return_node->type ? return_node->type : "NULL",
+            return_node->id ? return_node->id : "NULL",
+            return_node->left,
+            return_node->right,
+            return_node->str_value ? return_node->str_value : "NULL");*/
+    }
 }
 
 static void interpret_call_method(ASTNode *node) {
@@ -1676,6 +2006,403 @@ static void interpret_call_method(ASTNode *node) {
     }
 
     interpret_ast(m->body);
+   // printf("[DIAG] interpret_call_method: después de interpretar cuerpo de método, return_flag=%d\n", return_flag);
+        if (return_flag && return_node) {
+            // If the return is a call to json, print the JSON output
+            if (return_node && return_node->type && strcmp(return_node->type, "CALL_FUNC") == 0 && return_node->id && strcmp(return_node->id, "json") == 0) {
+            //    printf("[DIAG] Entrando a native_json desde interpret_call_method\n");
+                native_json(return_node->left);
+            } else {
+                ASTNode *lit = NULL;
+                if (return_node->type && strcmp(return_node->type, "STRING") == 0) {
+                    lit = create_ast_leaf("STRING", 0, return_node->str_value, NULL);
+                } else if (return_node->id) {
+                    Variable *rv = find_variable(return_node->id);
+                    if (rv) {
+                        if (rv->vtype == VAL_STRING) {
+                            lit = create_ast_leaf("STRING", 0, strdup(rv->value.string_value), NULL);
+                        } else if (rv->vtype == VAL_FLOAT) {
+                            lit = create_ast_leaf("FLOAT", 0, double_to_string(rv->value.float_value), NULL);
+                        } else if (rv->vtype == VAL_INT) {
+                            lit = create_ast_leaf_number("INT", rv->value.int_value, NULL, NULL);
+                        }
+                    } else {
+                        printf("Error: variable '%s' not found in return statement.\n", return_node->id);
+                        return;
+                    }
+                } else if (return_node->type && strcmp(return_node->type, "ACCESS_ATTR") == 0) {
+                    ASTNode *objN = return_node->left;
+                    ASTNode *attrN = return_node->right;
+                    Variable *ov = find_variable(objN->id);
+                    if (ov && ov->vtype == VAL_OBJECT) {
+                        ObjectNode *oobj = ov->value.object_value; int i = -1;
+                        int idx = -1;
+                        for (i=0; i<oobj->class->attr_count; i++) { // Inicializa 'i'
+                            if (strcmp(oobj->class->attributes[i].id, attrN->id)==0) { idx=i; break; }
+                        }
+                        if (idx>=0) {
+                            if (strcmp(oobj->class->attributes[idx].type,"string")==0)
+                                lit = create_ast_leaf("STRING",0,strdup(oobj->attributes[idx].value.string_value),NULL);
+                            else if (strcmp(oobj->attributes[idx].type,"float")==0)
+                                lit = create_ast_leaf("FLOAT",0,double_to_string(oobj->attributes[idx].value.float_value),NULL); // Usar idx
+                            else
+                                lit = create_ast_leaf_number("INT",oobj->attributes[idx].value.int_value,NULL,NULL);
+                        }
+                    }
+                } else {
+                    double rv_double = evaluate_expression(return_node);
+                    if (rv_double == (int)rv_double) {
+                        lit = create_ast_leaf_number("INT", (int)rv_double, NULL, NULL);
+                    } else {
+                        lit = create_ast_leaf("FLOAT", 0, double_to_string(rv_double), NULL);
+                    }
+                }
+                if (lit) {
+                    add_or_update_variable("__ret__", lit);
+                }
+            }
+            return_flag = 0;
+            return_node = NULL;
+        }
+}
+
+static void interpret_call_method_alone(ASTNode *node) {
+    // ...al final del manejo de return para método global...
+    // Si el método es una función nativa, ejecutarla
+    if (call_native_function(node->id, node->right)) {
+        return_flag = 0;
+        return_node = NULL;
+        return;
+    }
+    // ...existing code...
+    // Si node->left (objeto) existe, buscar método de clase
+    if (node->left) {
+        ObjectNode *obj = (ObjectNode*)node->left;
+        MethodNode *m = obj->class->methods;
+        while (m && strcmp(m->name, node->id) != 0) m = m->next;
+        if (m) {
+            // Ejecutar método de clase normalmente
+            ParameterNode *p_class = m->params;
+            ASTNode *arg_class = node->right;
+            while (p_class && arg_class) {
+                ASTNode *vn = NULL;
+                if (arg_class->type && strcmp(arg_class->type, "STRING") == 0) {
+                    vn = create_ast_leaf("STRING", 0, arg_class->str_value, NULL);
+                } else if (arg_class->type && (strcmp(arg_class->type,"ID")==0 || strcmp(arg_class->type,"IDENTIFIER")==0)) {
+                    Variable *v_arg = find_variable(arg_class->id);
+                    if (!v_arg) {
+                        printf("Error: Variable '%s' no encontrada.\n", arg_class->id);
+                        return;
+                    }
+                    if (v_arg->vtype == VAL_STRING) {
+                        vn = create_ast_leaf("STRING", 0, strdup(v_arg->value.string_value), NULL);
+                    } else {
+                        vn = create_ast_leaf_number("INT", v_arg->value.int_value, NULL, NULL);
+                    }
+                } else {
+                    int val = evaluate_expression(arg_class);
+                    vn = create_ast_leaf_number("INT", val, NULL, NULL);
+                }
+                add_or_update_variable(p_class->name, vn);
+                p_class   = p_class->next;
+                arg_class = arg_class->right;
+            }
+            interpret_ast(m->body);
+          //  printf("[DIAG] interpret_call_method_alone: después de interpretar cuerpo de método, return_flag=%d\n", return_flag);
+            // ...manejo de return para método de clase si aplica...
+            if (return_flag && return_node) {
+                if (return_node && return_node->type && strcmp(return_node->type, "CALL_FUNC") == 0 && return_node->id && strcmp(return_node->id, "json") == 0) {
+              //     printf("[DIAG] Entrando a native_json desde interpret_call_method_alone\n");
+                    native_json(return_node->left);
+                }
+            }
+            return;
+        }
+    }
+    // Si no hay objeto, buscar método global
+    MethodNode *gm = global_methods;
+    while (gm && strcmp(gm->name, node->id) != 0) gm = gm->next;
+    if (!gm) {
+        printf("Error: Método '%s' no encontrado como método global.\n", node->id);
+        return;
+    }
+    if (g_debug_mode) te_log_ast("[LOG] Ejecutando método global: %s", node->id);
+    ParameterNode *p_global = gm->params;
+    ASTNode *arg_global = node->right;
+    while (p_global && arg_global) {
+        ASTNode *vn = NULL;
+        if (arg_global->type && strcmp(arg_global->type, "STRING") == 0) {
+            vn = create_ast_leaf("STRING", 0, arg_global->str_value, NULL);
+        } else if (arg_global->type && (strcmp(arg_global->type,"ID")==0 || strcmp(arg_global->type,"IDENTIFIER")==0)) {
+            Variable *v_arg = find_variable(arg_global->id);
+            if (!v_arg) {
+                printf("Error: Variable '%s' no encontrada.\n", arg_global->id);
+                return;
+            }
+            if (v_arg->vtype == VAL_STRING) {
+                vn = create_ast_leaf("STRING", 0, strdup(v_arg->value.string_value), NULL);
+            } else {
+                vn = create_ast_leaf_number("INT", v_arg->value.int_value, NULL, NULL);
+            }
+        } else {
+            int val = evaluate_expression(arg_global);
+            vn = create_ast_leaf_number("INT", val, NULL, NULL);
+        }
+        add_or_update_variable(p_global->name, vn);
+        p_global   = p_global->next;
+        arg_global = arg_global->right;
+    }
+    interpret_ast(gm->body);
+   // printf("[DIAG] interpret_call_method_alone: after interpret_ast(gm->body), about to check return_flag and return_node\n");
+   // printf("[DIAG] interpret_call_method: después de interpretar gm->body, return_flag=%d, return_node=%p\n", return_flag, (void*)return_node);
+   // if (return_node) {
+    //    printf("[DIAG] return_node: type=%s, id=%s, left=%p, right=%p, str_value=%s\n",
+      //      return_node->type ? return_node->type : "NULL",
+      //      return_node->id ? return_node->id : "NULL",
+      //      (void*)return_node->left,
+       //     (void*)return_node->right,
+       //     return_node->str_value ? return_node->str_value : "NULL");
+   // } else {
+   //     printf("[DIAG] return_node is NULL after gm->body\n");
+    //}
+    if (return_flag && return_node) {
+       // printf("[DIAG] interpret_call_method_alone: (global) about to check for CALL_FUNC/json, return_node type=%s id=%s left=%p\n",
+        //    return_node->type ? return_node->type : "NULL",
+        //    return_node->id ? return_node->id : "NULL",
+        //    (void*)return_node->left);
+        // Si el return es una llamada a función nativa 'json', ejecutarla directamente
+        if (strcmp(return_node->type, "CALL_FUNC") == 0 && return_node->id && strcmp(return_node->id, "json") == 0) {
+         //   printf("[DIAG] interpret_call_method: llamando native_json desde método global\n");
+            native_json(return_node->left);
+            return_flag = 0;
+            return_node = NULL;
+            return;
+        }
+        // ...existing code for other return types...
+        ASTNode *lit = NULL;
+        if (return_node->type && strcmp(return_node->type, "STRING") == 0) {
+            lit = create_ast_leaf("STRING", 0, return_node->str_value, NULL);
+        } else if (return_node->id) {
+            Variable *rv = find_variable(return_node->id);
+            if (rv) {
+                if (rv->vtype == VAL_STRING) {
+                    lit = create_ast_leaf("STRING", 0, strdup(rv->value.string_value), NULL);
+                } else if (rv->vtype == VAL_FLOAT) {
+                    lit = create_ast_leaf("FLOAT", 0, double_to_string(rv->value.float_value), NULL);
+                } else if (rv->vtype == VAL_INT) {
+                    lit = create_ast_leaf_number("INT", rv->value.int_value, NULL, NULL);
+                }
+            } else {
+                printf("Error: variable '%s' not found in return statement.\n", return_node->id);
+                return;
+            }
+        } else if (return_node->type && strcmp(return_node->type, "ACCESS_ATTR") == 0) {
+            ASTNode *objN = return_node->left;
+            ASTNode *attrN = return_node->right;
+            Variable *ov = find_variable(objN->id);
+            if (ov && ov->vtype == VAL_OBJECT) {
+                ObjectNode *oobj = ov->value.object_value; int i = -1;
+                int idx = -1;
+                for (i=0; i<oobj->class->attr_count; i++) {
+                    if (strcmp(oobj->class->attributes[i].id, attrN->id)==0) { idx=i; break; }
+                }
+                if (idx>=0) {
+                    if (strcmp(oobj->class->attributes[idx].type,"string")==0)
+                        lit = create_ast_leaf("STRING",0,strdup(oobj->attributes[idx].value.string_value),NULL);
+                    else if (strcmp(oobj->attributes[idx].type,"float")==0)
+                        lit = create_ast_leaf("FLOAT",0,double_to_string(oobj->attributes[idx].value.float_value),NULL);
+                    else
+                        lit = create_ast_leaf_number("INT",oobj->attributes[idx].value.int_value,NULL,NULL);
+                }
+            }
+        } else {
+            double rv_double = evaluate_expression(return_node);
+            if (rv_double == (int)rv_double) {
+                lit = create_ast_leaf_number("INT", (int)rv_double, NULL, NULL);
+            } else {
+                lit = create_ast_leaf("FLOAT", 0, double_to_string(rv_double), NULL);
+            }
+        }
+        if (lit) {
+            add_or_update_variable("__ret__", lit);
+            if (g_debug_mode) te_log_ast("[LOG] Método global '%s' retornó valor en __ret__", node->id);
+        }
+        return_flag = 0;
+        return_node = NULL;
+    }
+    return;
+    printf("Warning: METHOD_CALL_ALONE is deprecated, use CALL_METHOD instead.\n"); 
+    ASTNode *objNode = node->left;
+    Variable *v = find_variable(objNode->id);
+    return_flag = 0;
+    return_node = NULL;
+
+    if (__ret_var_active) {
+        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
+            free(__ret_var.value.string_value);
+        }
+        if (__ret_var.id) free(__ret_var.id);
+        if (__ret_var.type) free(__ret_var.type);
+        memset(&__ret_var, 0, sizeof(Variable));
+        __ret_var_active = 0;
+    }
+    
+    if (!v || v->vtype != VAL_OBJECT) {
+        printf("Error: '%s' no es un objeto válido.\n", objNode->id);
+        return;
+    }
+    ObjectNode *obj = v->value.object_value;
+
+    // === FIX START: Handle Bridge method calls ===
+    if (strcmp(obj->class->name, "Bridge") == 0) {
+        if (g_debug_mode) te_log_ast("Calling native bridge: %s.%s", v->id, node->id);
+        if (strcmp(v->id, "Chat") == 0) {
+            if (g_bridge_handlers.handle_chat_bridge) g_bridge_handlers.handle_chat_bridge(node->id, node->right);
+        } else if (strcmp(v->id, "NLU") == 0) {
+            if (g_debug_mode) te_log_ast("Calling NLU bridge");
+            if (g_bridge_handlers.handle_nlu_bridge) {
+                g_bridge_handlers.handle_nlu_bridge(node->id, node->right);
+                if (g_debug_mode) {
+                    if (__ret_var_active) {
+                        te_log_ast("[DEBUG] After NLU bridge: __ret__ active=1 type='%s'", __ret_var.type ? __ret_var.type : "(null)");
+                    } else {
+                        te_log_ast("[DEBUG] After NLU bridge: __ret__ active=0");
+                    }
+                }
+            }
+        } else if (strcmp(v->id, "API") == 0) {
+            if (g_bridge_handlers.handle_api_bridge) g_bridge_handlers.handle_api_bridge(node->id, node->right);
+        } else {
+            printf("Advertencia: Bridge '%s' desconocido o no implementado en este ejecutable.\n", v->id);
+        }
+        return;
+    }
+    // === FIX END ===
+
+    MethodNode *m = obj->class->methods;
+    while (m && strcmp(m->name, node->id) != 0) m = m->next;
+    if (!m) {
+        // Buscar método global (fuera de clase)
+        MethodNode *gm = global_methods;
+        while (gm && strcmp(gm->name, node->id) != 0) gm = gm->next;
+        if (!gm) {
+            printf("Error: Método '%s' no encontrado en clase '%s' ni como método global.\n", node->id, obj->class->name);
+            return;
+        }
+        ParameterNode *p = gm->params;
+        ASTNode *arg = node->right;
+        while (p && arg) {
+            ASTNode *vn = NULL;
+            if (arg->type && strcmp(arg->type, "STRING") == 0) {
+                vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
+            } else if (arg->type && (strcmp(arg->type,"ID")==0 || strcmp(arg->type,"IDENTIFIER")==0)) {
+                Variable *v_arg = find_variable(arg->id);
+                if (!v_arg) {
+                    printf("Error: Variable '%s' no encontrada.\n", arg->id);
+                    return;
+                }
+                if (v_arg->vtype == VAL_STRING) {
+                    vn = create_ast_leaf("STRING", 0, strdup(v_arg->value.string_value), NULL);
+                } else {
+                    vn = create_ast_leaf_number("INT", v_arg->value.int_value, NULL, NULL);
+                }
+            } else {
+                int val = evaluate_expression(arg);
+                vn = create_ast_leaf_number("INT", val, NULL, NULL);
+            }
+            add_or_update_variable(p->name, vn);
+            p   = p->next;
+            arg = arg->right;
+        }
+        interpret_ast(gm->body);
+          //  printf("[DIAG] interpret_call_method_alone: antes de check, return_flag=%d, return_node=%p\n", return_flag, (void*)return_node);
+            if (return_flag && return_node) {
+           //     printf("[DIAG] interpret_call_method_alone: return_node type=%s id=%s\n", return_node->type ? return_node->type : "NULL", return_node->id ? return_node->id : "NULL");
+            ASTNode *lit = NULL;
+            if (return_node->type && strcmp(return_node->type, "STRING") == 0) {
+                lit = create_ast_leaf("STRING", 0, return_node->str_value, NULL);
+            } else if (return_node->id) {
+                Variable *rv = find_variable(return_node->id);
+                if (rv) {
+                    if (rv->vtype == VAL_STRING) {
+                        lit = create_ast_leaf("STRING", 0, strdup(rv->value.string_value), NULL);
+                    } else if (rv->vtype == VAL_FLOAT) {
+                        lit = create_ast_leaf("FLOAT", 0, double_to_string(rv->value.float_value), NULL);
+                    } else if (rv->vtype == VAL_INT) {
+                        lit = create_ast_leaf_number("INT", rv->value.int_value, NULL, NULL);
+                    }
+                } else {
+                    printf("Error: variable '%s' not found in return statement.\n", return_node->id);
+                    return;
+                }
+            } else if (return_node->type && strcmp(return_node->type, "ACCESS_ATTR") == 0) {
+                ASTNode *objN = return_node->left;
+                ASTNode *attrN = return_node->right;
+                Variable *ov = find_variable(objN->id);
+                if (ov && ov->vtype == VAL_OBJECT) {
+                    ObjectNode *oobj = ov->value.object_value; int i = -1;
+                    int idx = -1;
+                    for (i=0; i<oobj->class->attr_count; i++) {
+                        if (strcmp(oobj->class->attributes[i].id, attrN->id)==0) { idx=i; break; }
+                    }
+                    if (idx>=0) {
+                        if (strcmp(oobj->class->attributes[idx].type,"string")==0)
+                            lit = create_ast_leaf("STRING",0,strdup(oobj->attributes[idx].value.string_value),NULL);
+                        else if (strcmp(oobj->attributes[idx].type,"float")==0)
+                            lit = create_ast_leaf("FLOAT",0,double_to_string(oobj->attributes[idx].value.float_value),NULL);
+                        else
+                            lit = create_ast_leaf_number("INT",oobj->attributes[idx].value.int_value,NULL,NULL);
+                    }
+                }
+            } else {
+                double rv_double = evaluate_expression(return_node);
+                if (rv_double == (int)rv_double) {
+                    lit = create_ast_leaf_number("INT", (int)rv_double, NULL, NULL);
+                } else {
+                    lit = create_ast_leaf("FLOAT", 0, double_to_string(rv_double), NULL);
+                }
+            }
+            if (lit) {
+                add_or_update_variable("__ret__", lit);
+            }
+            return_flag = 0;
+            return_node = NULL;
+        }
+        return;
+    }
+    ASTNode *thisNode = malloc(sizeof(ASTNode));
+    thisNode->type = strdup("OBJECT");
+    thisNode->id = strdup("this");
+    thisNode->left = thisNode->right = NULL;
+    thisNode->extra = (struct ASTNode*)obj;
+    thisNode->value = 0;
+    add_or_update_variable("this", thisNode);
+    ParameterNode *p = m->params;
+    ASTNode *arg = node->right;
+    while (p && arg) {
+        ASTNode *vn = NULL;
+        if (arg->type && strcmp(arg->type, "STRING") == 0) {
+            vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
+        } else if (arg->type && (strcmp(arg->type,"ID")==0 || strcmp(arg->type,"IDENTIFIER")==0)) {
+            Variable *v_arg = find_variable(arg->id);
+            if (!v_arg) {
+                printf("Error: Variable '%s' no encontrada.\n", arg->id);
+                return;
+            }
+            if (v_arg->vtype == VAL_STRING) {
+                vn = create_ast_leaf("STRING", 0, strdup(v_arg->value.string_value), NULL);
+            } else {
+                vn = create_ast_leaf_number("INT", v_arg->value.int_value, NULL, NULL);
+            }
+        } else {
+            int val = evaluate_expression(arg);
+            vn = create_ast_leaf_number("INT", val, NULL, NULL);
+        }
+        add_or_update_variable(p->name, vn);
+        p = p->next;
+        arg = arg->right;
+    }
+    interpret_ast(m->body);
     if (return_flag && return_node) {
         ASTNode *lit = NULL;
         if (return_node->type && strcmp(return_node->type, "STRING") == 0) {
@@ -1701,14 +2428,14 @@ static void interpret_call_method(ASTNode *node) {
             if (ov && ov->vtype == VAL_OBJECT) {
                 ObjectNode *oobj = ov->value.object_value; int i = -1;
                 int idx = -1;
-                for (i=0; i<oobj->class->attr_count; i++) { // Inicializa 'i'
+                for (i=0; i<oobj->class->attr_count; i++) {
                     if (strcmp(oobj->class->attributes[i].id, attrN->id)==0) { idx=i; break; }
                 }
                 if (idx>=0) {
                     if (strcmp(oobj->class->attributes[idx].type,"string")==0)
                         lit = create_ast_leaf("STRING",0,strdup(oobj->attributes[idx].value.string_value),NULL);
                     else if (strcmp(oobj->attributes[idx].type,"float")==0)
-                        lit = create_ast_leaf("FLOAT",0,double_to_string(oobj->attributes[idx].value.float_value),NULL); // Usar idx
+                        lit = create_ast_leaf("FLOAT",0,double_to_string(oobj->attributes[idx].value.float_value),NULL);
                     else
                         lit = create_ast_leaf_number("INT",oobj->attributes[idx].value.int_value,NULL,NULL);
                 }
