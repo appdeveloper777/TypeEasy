@@ -21,14 +21,11 @@ class OrdenDeCompra {
         this.fecha = _fecha;
     }   
 }
-// Endpoint para generar el XML de la orden de compra.
-[HTTPGET] 
-generarXML(p_edad : int) {  
-    
-    let mi_orden = new OrdenDeCompra("Suministros Industriales S.A.", "2025-09-06");
-    // Retorna el XML como string usando la función nativa
-    return xml(mi_orden);
-}
 
-// Generamos el XML de la orden de compra.
-generarXML(6);
+endpoint {
+    [HttpGet("/api/proveedores")]
+    GetProveedores() {
+        let mi_orden = new OrdenDeCompra("Suministros Industriales S.A.", "2025-09-06");
+        return xml(mi_orden);
+    }
+}

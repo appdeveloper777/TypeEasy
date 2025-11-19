@@ -13,7 +13,7 @@ class Person {
 }
 
 endpoint {
-    [HttpGet("/api/usuario/perfil2")]
+    [HttpGet("/api/usuario_json/perfil2")]
     GetUserProfile() {
         let usuario_json = new Person(36, "Fernando Ingunza", "Roussecloud");  
         println("{");
@@ -23,7 +23,7 @@ endpoint {
         println("}");   
     }
 
-    [HttpGet("/api/usuario/perfil")]
+    [HttpGet("/api/usuario_json/perfil")]
     GetUserProfileDos() {
         let usuario = new Person(36, "Fernando Ingunza", "Roussecloud");    
         return json(usuario);

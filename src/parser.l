@@ -48,7 +48,9 @@
 "state"                 { return STATE; }
 "match"                 { return MATCH; }
 "case"                  { return CASE; }
+"endpoint"              { return ENDPOINT; }
 "node"                  { return NODE; }
+
 
 "println"               { return PRINTLN; }
 "for"                   { return FOR; }

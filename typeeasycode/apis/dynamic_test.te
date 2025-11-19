@@ -1,0 +1,19 @@
+class Person {
+    id: int;
+    name: string;
+    company: string;
+
+    __constructor(id: int, name: string, company: string) {
+        this.id = id;
+        this.name = name;
+        this.company = company;
+    }
+}
+
+endpoint {
+    [HttpGet("/api/dynamic")]
+    GetDynamic() {
+        let p = new Person(101, "Dynamic User", "TypeEasy Inc");
+        return xml(p);
+    }
+}

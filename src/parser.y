@@ -33,7 +33,7 @@
 %token <ival> NUMBER
 %token IF ELSE
 %token AGENT LISTENER BRIDGE STATE MATCH CASE
-%token NODE
+%token NODE ENDPOINT
 %type <sval> method_name
 %type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args lambda_expression httpget_method_decl
 %type <pnode> parameter_decl parameter_list
@@ -58,6 +58,7 @@
 %type <node> object_literal key_value_list key_value_pair
 %type <node> node_decl
 %type <node> state_decl
+%type <node> endpoint_decl endpoint_methods endpoint_method
 %right ARROW
 %nonassoc GT LT EQ GT_EQ LT_EQ, DIFF
 
@@ -69,13 +70,41 @@ program:
     | program class_decl      { $$ = $1; root = $$; }
     | program agent_decl      { $$ = create_ast_node("AGENT_LIST", $1, $2); root = $$; }
     | program bridge_decl     { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; } /* <-- CORREGIDO */
-    | program httpget_method_decl   {   $$ = $1; root = $$; }  
-    | httpget_method_decl       {         $$ = NULL; }
-    | class_decl              {         $$ = NULL; }
+    | program endpoint_decl   { $$ = $1; root = $$; }
+    | endpoint_decl           { $$ = NULL; }
+    | httpget_method_decl     { $$ = NULL; }
+    | class_decl              { $$ = NULL; }
     | bridge_decl             { $$ = $1; root = $$; }   
     | statement               { $$ = $1; root = $$; }
         
 ;
+
+endpoint_decl:
+    ENDPOINT LBRACKET endpoint_methods RBRACKET
+        { $$ = NULL; }
+    ;
+
+endpoint_methods:
+    endpoint_method
+        { $$ = NULL; }
+    | endpoint_methods endpoint_method
+        { $$ = NULL; }
+    ;
+
+endpoint_method:
+    LSBRACKET HTTPGET LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
+    {
+        MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
+        m->name = strdup($7);
+        m->body = $12;
+        m->params = $9;
+        m->route_path = strdup($4);
+        m->http_method = strdup("GET");
+        m->next = global_methods;
+        global_methods = m;
+        $$ = NULL;
+    }
+    ;
 
 httpget_method_decl:
      LSBRACKET HTTPGET RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET

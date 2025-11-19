@@ -93,6 +93,9 @@ typedef struct MethodNode {
     ASTNode *body;
     ParameterNode *params; 
     struct MethodNode *next;
+    // New fields for dynamic endpoints
+    char *route_path;   // e.g. "/api/users"
+    char *http_method;  // e.g. "GET", "POST"
 } MethodNode;
 
 typedef struct ClassNode {
@@ -206,6 +209,8 @@ extern int __ret_var_active;
 double evaluate_expression(ASTNode *node);
 void generate_plot(double *values, int count);
 void interpret_if(ASTNode *node);
+ASTNode* create_call_node_return_json(const char* funcName, ASTNode* args);
+ASTNode* create_call_node_return_xml(const char* funcName, ASTNode* args);
 int evaluate_condition(ASTNode* condition);
 ASTNode *append_to_list_parser(ASTNode *list, ASTNode *item);
 void set_attribute_value_object(ObjectNode *obj, const char *attr_name, ObjectNode *value);

@@ -16,57 +16,113 @@ extern int g_debug_mode; // Para acceder a la variable global de parser.y
  */
 int main(int argc, char *argv[]) {
 
-    // (Tu código original de 'main' para parsear args, getenv, etc.) [cite: 205-213]
     const char* debug_env = getenv("TYPEEASY_DEBUG");
     if (debug_env != NULL && strcmp(debug_env, "1") == 0) {
         g_debug_mode = 1;
-        /* Info log removed */
     }
   
     clock_t inicio = clock();
     
-    // (Tu código original de 'main' para flags --interpret, --run, etc.) [cite: 213-214]
-    int interpret_mode = 0;
-    if (argc == 3 && strcmp(argv[2], "--run") == 0) {
-        interpret_mode = 1;
-    }
-
     if (argc < 2) {
-        printf("Uso: %s <archivo.te> [--run]\n", argv[0]);
+        fprintf(stderr, "Uso: %s <archivo.te> [--discover | --invoke <funcName> | --run]\n", argv[0]);
         return 1;
     }
 
+    // 1. Parsear el archivo
     FILE *file = fopen(argv[1], "r");
     if (!file) {
-        printf("Error abriendo el archivo %s\n", argv[1]);
+        perror("Error al abrir el archivo");
         return 1;
     }
 
-    // 1. Parsea el archivo usando el "Motor"
-    ASTNode* script_ast = parse_file(file);
+    ASTNode *script_ast = parse_file(file);
     fclose(file);
 
-    if (!script_ast) {
-        fprintf(stderr, "Error fatal: No se pudo construir el AST del script.\n");
-        return 1;
+    // 2. Verificar flags
+    int discover_mode = 0;
+    char *invoke_func = NULL;
+    int interpret_mode = 0;
+
+    if (argc >= 3) {
+        if (strcmp(argv[2], "--discover") == 0) {
+            discover_mode = 1;
+        } else if (strcmp(argv[2], "--invoke") == 0) {
+            if (argc >= 4) {
+                invoke_func = argv[3];
+            } else {
+                fprintf(stderr, "Error: --invoke requiere el nombre de la función.\n");
+                return 1;
+            }
+        } else if (strcmp(argv[2], "--run") == 0) {
+            interpret_mode = 1;
+        }
     }
 
-    // 2. Interpreta el script
-    // (Tu lógica original de 'if (root)' e 'if (interpret_mode)') [cite: 215-223]
-    if (g_debug_mode) {
-        /* debug mode enabled - no extra debug prints */
+    // 3. Modo Descubrimiento
+    if (discover_mode) {
+        printf("[");
+        MethodNode *m = global_methods;
+        int first = 1;
+        while (m) {
+            if (m->route_path) {
+                if (!first) printf(",");
+                printf("{\"route\": \"%s\", \"method\": \"%s\", \"function\": \"%s\"}", 
+                       m->route_path, m->http_method ? m->http_method : "GET", m->name);
+                first = 0;
+            }
+            m = m->next;
+        }
+        printf("]\n");
+        // Liberar memoria y salir
+        free_ast(script_ast);
+        return 0;
     }
 
-    interpret_ast(script_ast); // execute the script
+    // 4. Inicializar Runtime
+    runtime_save_initial_var_count();
 
+    // 5. Ejecutar Script (Global scope)
+    // Esto es necesario para inicializar variables globales, clases, etc.
+    if (script_ast) {
+        interpret_ast(script_ast); 
+    }
+
+    // 6. Modo Invocación
+    if (invoke_func) {
+        MethodNode *m = global_methods;
+        int found = 0;
+        while (m) {
+            if (strcmp(m->name, invoke_func) == 0) {
+                // Ejecutar el cuerpo de la función
+                interpret_ast(m->body);
+                
+                // Verificar si hubo un retorno (return json(...))
+                Variable *ret_var = find_variable("__ret__");
+                if (ret_var && ret_var->vtype == VAL_STRING) {
+                    // Imprimir el resultado (JSON/XML) a stdout
+                    printf("%s", ret_var->value.string_value);
+                }
+                found = 1;
+                break;
+            }
+            m = m->next;
+        }
+        if (!found) {
+            fprintf(stderr, "Error: Función '%s' no encontrada.\n", invoke_func);
+            return 1;
+        }
+    }
+
+    // 7. Modo Interpretación (Legacy/Default)
+    // Si no es discover ni invoke, ya se ejecutó interpret_ast(script_ast) arriba.
+    // Si había lógica adicional para --run, iría aquí.
     if(interpret_mode){
-        // (Tu lógica de system("g++ ...") y system("typeeasy_output.exe")) [cite: 217-220]
+        // Lógica extra si fuera necesaria
     }
 
-    // 3. Libera memoria y TERMINA
+    // 8. Libera memoria y TERMINA
     free_ast(script_ast);
     
-    // (Tu código original de medición de tiempo) [cite: 223-225]
     if (g_debug_mode) {
         clock_t fin = clock();
         double tiempo = (double)(fin - inicio) / CLOCKS_PER_SEC;

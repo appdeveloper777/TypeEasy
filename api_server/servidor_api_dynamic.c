@@ -73,34 +73,25 @@ void discover_routes() {
                 p += 8; // Skip "route":
                 while (*p == ' ' || *p == '"') p++; // Skip spaces and quote
                 char *route_start = p;
-                while (*p != '"' && *p != '\0') p++;
-                if (*p == '\0') break;
-                
-                // Copy route without modifying original buffer
-                int route_len = p - route_start;
-                char *route = (char*)malloc(route_len + 1);
-                strncpy(route, route_start, route_len);
-                route[route_len] = '\0';
+                while (*p != '"') p++;
+                *p = 0; // Terminate route string
+                char *route = strdup(route_start);
                 p++; // Move past quote
                 
                 // Buscar function
-                char *func_pos = strstr(p, "\"function\":");
-                if (func_pos) {
-                    func_pos += 11;
-                    while (*func_pos == ' ' || *func_pos == '"') func_pos++;
-                    char *func_start = func_pos;
-                    while (*func_pos != '"' && *func_pos != '\0') func_pos++;
-                    if (*func_pos == '"') {
-                        int func_len = func_pos - func_start;
-                        char *func = (char*)malloc(func_len + 1);
-                        strncpy(func, func_start, func_len);
-                        func[func_len] = '\0';
-                        
-                        // Registrar ruta
-                        add_route(route, path, func);
-                        
-                        free(func);
-                    }
+                p = strstr(p, "\"function\":");
+                if (p) {
+                    p += 11;
+                    while (*p == ' ' || *p == '"') p++;
+                    char *func_start = p;
+                    while (*p != '"') p++;
+                    *p = 0;
+                    char *func = strdup(func_start);
+                    
+                    // Registrar ruta
+                    add_route(route, path, func);
+                    
+                    free(func);
                 }
                 free(route);
             }
@@ -183,116 +174,16 @@ void signal_handler(int sig_num) {
 static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
     (void)cbdata; // Marcar como no utilizado para evitar warnings
 
-    // Construir HTML dinámicamente con las rutas descubiertas
-    char html[16384];
-    int offset = 0;
-    
-    offset += snprintf(html + offset, sizeof(html) - offset,
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/html; charset=utf-8\r\n"
-        "Connection: close\r\n"
-        "\r\n"
-        "<!DOCTYPE html>"
-        "<html>"
-        "<head>"
-        "<title>TypeEasy API Documentation</title>"
-        "<style>"
-        "body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }"
-        "h1 { color: #333; }"
-        ".container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }"
-        ".endpoint { background: #f9f9f9; padding: 15px; margin: 10px 0; border-left: 4px solid #4CAF50; border-radius: 4px; }"
-        ".method { display: inline-block; padding: 4px 12px; border-radius: 4px; font-weight: bold; color: white; margin-right: 10px; }"
-        ".get { background: #61affe; }"
-        ".post { background: #49cc90; }"
-        ".route { font-family: monospace; font-size: 16px; color: #333; }"
-        ".function { color: #666; font-size: 14px; margin-top: 5px; }"
-        ".count { color: #666; font-size: 14px; }"
-        ".try-btn { background: #4CAF50; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-top: 10px; font-size: 14px; }"
-        ".try-btn:hover { background: #45a049; }"
-        ".response { margin-top: 10px; padding: 10px; background: #263238; color: #aed581; font-family: monospace; font-size: 12px; border-radius: 4px; display: none; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }"
-        ".loading { color: #ffa726; }"
-        "</style>"
-        "<script>"
-        "async function tryEndpoint(route, btnId) {"
-        "  const btn = document.getElementById(btnId);"
-        "  const responseDiv = document.getElementById(btnId + '-response');"
-        "  btn.disabled = true;"
-        "  btn.textContent = 'Loading...';"
-        "  responseDiv.style.display = 'block';"
-        "  responseDiv.className = 'response loading';"
-        "  responseDiv.textContent = 'Ejecutando...';"
-        "  try {"
-        "    const response = await fetch(route);"
-        "    const data = await response.text();"
-        "    responseDiv.className = 'response';"
-        "    try {"
-        "      const json = JSON.parse(data);"
-        "      responseDiv.textContent = JSON.stringify(json, null, 2);"
-        "    } catch(e) {"
-        "      responseDiv.textContent = data;"
-        "    }"
-        "  } catch(error) {"
-        "    responseDiv.className = 'response';"
-        "    responseDiv.style.color = '#ef5350';"
-        "    responseDiv.textContent = 'Error: ' + error.message;"
-        "  }"
-        "  btn.disabled = false;"
-        "  btn.textContent = 'Try it out';"
-        "}"
-        "</script>"
-        "</head>"
-        "<body>"
-        "<div class='container'>"
-        "<h1>🚀 TypeEasy API Documentation</h1>"
-        "<p>El servidor está funcionando correctamente.</p>");
-    
-    // Contar rutas
-    int route_count = 0;
-    RouteEntry *entry = global_routes;
-    while (entry) {
-        route_count++;
-        entry = entry->next;
-    }
-    
-    offset += snprintf(html + offset, sizeof(html) - offset,
-        "<p class='count'><strong>%d</strong> ruta(s) dinámica(s) cargada(s):</p>",
-        route_count);
-    
-    // Listar todas las rutas
-    entry = global_routes;
-    int endpoint_id = 0;
-    if (entry == NULL) {
-        offset += snprintf(html + offset, sizeof(html) - offset,
-            "<p>No hay rutas descubiertas. Crea archivos .te con bloques 'endpoint { }' en typeeasycode/apis/</p>");
-    } else {
-        while (entry && offset < sizeof(html) - 1000) {
-            offset += snprintf(html + offset, sizeof(html) - offset,
-                "<div class='endpoint'>"
-                "<span class='method get'>GET</span>"
-                "<span class='route'>%s</span>"
-                "<div class='function'>→ %s()</div>"
-                "<button class='try-btn' id='btn-%d' onclick='tryEndpoint(\"%s\", \"btn-%d\")'>Try it out</button>"
-                "<div class='response' id='btn-%d-response'></div>"
-                "</div>",
-                entry->route_path,
-                entry->function_name,
-                endpoint_id,
-                entry->route_path,
-                endpoint_id,
-                endpoint_id);
-            entry = entry->next;
-            endpoint_id++;
-        }
-    }
-    
-    offset += snprintf(html + offset, sizeof(html) - offset,
-        "<hr>"
-        "<p style='color: #999; font-size: 12px;'>TypeEasy Dynamic API Server - Endpoints auto-discovered from .te files</p>"
-        "</div>"
-        "</body>"
-        "</html>");
-    
-    mg_write(conn, html, offset);
+    mg_printf(conn,
+              "HTTP/1.1 200 OK\r\n"
+              "Content-Type: text/html; charset=utf-8\r\n"
+              "Connection: close\r\n"
+              "\r\n"
+              "<html><body>"
+              "<h1>¡TypeEasy APIs!</h1>"
+              "<p>El servidor está funcionando correctamente.</p>"
+              "<p>Rutas dinámicas cargadas.</p>"
+              "</body></html>");
     return 1;
 }
 

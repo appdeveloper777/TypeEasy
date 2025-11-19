@@ -1,27 +1,20 @@
 // Mi código TypeEasy para manejar rutas y devolver JSON
-// Simulamos una petición a /api/producto/detalle
+// Simulamos una petición a /api/productos
 class Producto {
-    precio : int;
-    nombre : string;
-    categoria : string;
-    __constructor(_precio : int, _nombre : string, _categoria : string) {
+    precio: int;
+    nombre: string;
+    categoria: string;
+    __constructor(_precio: int, _nombre: string, _categoria: string) {
         this.precio = _precio;
         this.nombre = _nombre;
         this.categoria = _categoria;
     }
-    // GET endpoint /api/producto/detalle
-    GetProductInfo(p_precio : int) {
-        int precio = 99;
-        println("{ ");
-        print("\"precio\": "); print(precio); println(",");
-        println("\"nombre\": \"Teclado Mecánico RGB\", ");
-        println("\"categoria\": \"Periféricos\"");
-        print("}");
-    }
 }
 
-int mi_precio = 120;
-string mi_nombre_producto = "Mouse Gamer";
-string mi_categoria = "Periféricos";
-let obj = new Producto(mi_precio, mi_nombre_producto, mi_categoria);
-obj.GetProductInfo(mi_precio);
+endpoint {
+    [HttpGet("/api/productos")]
+    GetProductInfo() {
+        let producto = new Producto(99, "Teclado Mecánico RGB", "Periféricos");
+        return json(producto);
+    }
+}

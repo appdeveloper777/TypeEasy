@@ -19,49 +19,12 @@ class Factura {
         this.cliente = _cliente;
         this.fecha = _fecha;       
     }
-
-    // --- MÉTODO MODIFICADO ---
-    // Esta versión ya no usa el bucle 'for'.
-    // Genera un XML de prueba con datos fijos (mock).
-    generarXML() {
-        println("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-        println("<Factura>");
-        
-        // Usa los datos reales del cliente y la fecha del objeto.
-        print("  <Cliente>"); print(this.cliente); println("</Cliente>");
-        print("  <Fecha>"); print(this.fecha); println("</Fecha>");
-        
-        println("  <Items>");
-        // INICIO DEL MOCK: Ignoramos 'this.items' y escribimos datos fijos.
-        println("    <Item>");
-        println("      <Producto>CPU Intel i9 (Mock)</Producto>");
-        println("      <Cantidad>1</Cantidad>");
-        println("      <Precio>599.99</Precio>");
-        println("    </Item>");
-        println("    <Item>");
-        println("      <Producto>Memoria RAM 32GB (Mock)</Producto>");
-        println("      <Cantidad>2</Cantidad>");
-        println("      <Precio>149.50</Precio>");
-        println("    </Item>");
-        println("    <Item>");
-        println("      <Producto>SSD 2TB NVMe (Mock)</Producto>");
-        println("      <Cantidad>1</Cantidad>");
-        println("      <Precio>220.00</Precio>");
-        println("    </Item>");
-        // FIN DEL MOCK
-        println("  </Items>");
-        
-        println("</Factura>");
-    }
 }
 
-// El código para usar las clases sigue siendo el mismo.
-// Aunque creamos una lista real, el método generarXML() la ignorará.
-let item1 = new LineaItem("Producto Real 1", 1, 10);
-let item2 = new LineaItem("Producto Real 2", 5, 25);
-let lista_items_reales = [item1, item2];
-
-let mi_factura = new Factura("Cliente de Verdad S.A.", "2025-09-06");
-
-// Al llamar este método, se mostrará el XML con los datos del mock.
-mi_factura.generarXML();
+endpoint {
+    [HttpGet("/api/facturas")]
+    GetFacturas() {
+        let mi_factura = new Factura("Cliente de Verdad S.A.", "2025-09-06");
+        return json(mi_factura);
+    }
+}
