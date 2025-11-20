@@ -12,7 +12,7 @@ MAIN_AGENT_OBJ = $(MAIN_AGENT_C:.c=.o)
 BISON_FILE = parser.y
 FLEX_FILE = parser.l
 # (Asumiendo que estos son todos tus archivos de motor)
-MOTOR_C_FILES = ast.c bytecode.c 
+MOTOR_C_FILES = ast.c bytecode.c mysql_bridge.c
 MOTOR_OBJS = $(MOTOR_C_FILES:.c=.o)
 
 BISON_C = parser.tab.c
@@ -35,9 +35,9 @@ CXX = g++
 # ¡¡ARREGLO AQUÍ!! Añadidas las flags de OpenSSL
 CFLAGS = -Wall -g -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1
 CXXFLAGS = -Wall -g -std=c++17
-LIBS_SCRIPT = -lfl -lm
+LIBS_SCRIPT = -lfl -lm -lmysqlclient
 # ¡¡ARREGLO AQUÍ!! Añadidas las bibliotecas de OpenSSL
-LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto
+LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto -lmysqlclient
 
 # --- OBJETIVO PRINCIPAL ---
 all: $(EXEC_SCRIPT) $(EXEC_AGENT)

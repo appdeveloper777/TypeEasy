@@ -1,0 +1,9 @@
+endpoint {
+    [HttpGet("/api/test/simple")]
+    TestSimple() {
+        let conn = mysql_connect("mysql", "root", "rootpassword", "meri");
+        let result = mysql_query(conn, "SELECT * FROM bitacora");
+        mysql_close(conn);
+        return json(result);
+    }
+}

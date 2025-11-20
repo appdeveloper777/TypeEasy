@@ -1,16 +1,36 @@
 services:
+  # --- SERVICIO MYSQL ---
+  mysql:
+    image: mysql:8.0
+    container_name: typeeasy_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: test_db
+    ports:
+      - "3307:3306"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
   # --- SERVICIO DE LA API WEB (Sin cambios) ---
   api:
+    depends_on:
+      - mysql
     build:
       context: .
       dockerfile: src/Dockerfile
       target: api
     image: typeeasy-api
     ports:
-      - "8080:8080"  
+      - "8080:8080"
     environment:
-      - TYPEEASY_DEBUG=0  
-  
+      - TYPEEASY_DEBUG=0
+      # Configuración de MySQL - Cambia estos valores según tu servidor
+      - MYSQL_HOST=mysql # Nombre del servicio MySQL en Docker
+      - MYSQL_PORT=3306 # Puerto interno de MySQL
+      - MYSQL_USER=root # Usuario de MySQL
+      - MYSQL_PASSWORD=rootpassword # Contraseña de MySQL
+      - MYSQL_DATABASE=meri # Nombre de la base de datos
+
   # --- SERVICIO DEL INTÉRPRETE (Sin cambios) ---
   typeeasy:
     build:
@@ -22,7 +42,7 @@ services:
     environment:
       - TYPEEASY_DEBUG=0
     working_dir: /code
-    entrypoint: ["/typeeasy/typeeasy"]
+    entrypoint: [ "/typeeasy/typeeasy" ]
 
   # --- ¡NUEVO! SERVICIO DEL AGENTE (n8n) ---
   agent:

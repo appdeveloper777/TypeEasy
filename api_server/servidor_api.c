@@ -9,6 +9,7 @@
 #include <unistd.h>
 #endif
 #include "civetweb.h"
+#include <mysql/mysql.h>
 
 // Estructura para la tabla de rutas dinámica
 typedef struct RouteEntry {
@@ -254,6 +255,9 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         entry = entry->next;
     }
     
+    // Agregar 1 por el endpoint MySQL nativo
+    route_count++;
+    
     offset += snprintf(html + offset, sizeof(html) - offset,
         "<p class='count'><strong>%d</strong> ruta(s) dinámica(s) cargada(s):</p>",
         route_count);
@@ -285,6 +289,19 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         }
     }
     
+    // Agregar endpoint MySQL nativo
+    offset += snprintf(html + offset, sizeof(html) - offset,
+        "<div class='endpoint'>"
+        "<span class='method get'>GET</span>"
+        "<span class='route'>/api/mysql/usuarios</span>"
+        "<div class='function'>→ MySQL Native (C)</div>"
+        "<button class='try-btn' id='btn-%d' onclick='tryEndpoint(\"/api/mysql/usuarios\", \"btn-%d\")'>Try it out</button>"
+        "<div class='response' id='btn-%d-response'></div>"
+        "</div>",
+        endpoint_id,
+        endpoint_id,
+        endpoint_id);
+    
     offset += snprintf(html + offset, sizeof(html) - offset,
         "<hr>"
         "<p style='color: #999; font-size: 12px;'>TypeEasy Dynamic API Server - Endpoints auto-discovered from .te files</p>"
@@ -293,6 +310,103 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         "</html>");
     
     mg_write(conn, html, offset);
+    return 1;
+}
+
+// Handler para endpoint MySQL /api/mysql/usuarios
+static int manejadorMySQLUsuarios(struct mg_connection *conn, void *cbdata) {
+    (void)cbdata;
+    
+    // Inicializar conexión MySQL
+    MYSQL *mysql_conn = mysql_init(NULL);
+    if (!mysql_conn) {
+        mg_send_http_error(conn, 500, "MySQL init failed");
+        return 1;
+    }
+    
+    // Conectar a MySQL
+    if (!mysql_real_connect(mysql_conn, "mysql", "root", "rootpassword", "test_db", 3306, NULL, 0)) {
+        char error_msg[512];
+        snprintf(error_msg, sizeof(error_msg), "MySQL connection failed: %s", mysql_error(mysql_conn));
+        mysql_close(mysql_conn);
+        mg_send_http_error(conn, 500, error_msg);
+        return 1;
+    }
+    
+    // Configurar UTF-8 para caracteres acentuados
+    mysql_set_character_set(mysql_conn, "utf8mb4");
+    
+    // Ejecutar query
+    if (mysql_query(mysql_conn, "SELECT * FROM usuarios")) {
+        char error_msg[512];
+        snprintf(error_msg, sizeof(error_msg), "MySQL query failed: %s", mysql_error(mysql_conn));
+        mysql_close(mysql_conn);
+        mg_send_http_error(conn, 500, error_msg);
+        return 1;
+    }
+    
+    // Obtener resultados
+    MYSQL_RES *result = mysql_store_result(mysql_conn);
+    if (!result) {
+        mysql_close(mysql_conn);
+        mg_send_http_error(conn, 500, "Failed to store result");
+        return 1;
+    }
+    
+    // Convertir a JSON
+    int num_fields = mysql_num_fields(result);
+    MYSQL_FIELD *fields = mysql_fetch_fields(result);
+    
+    char json_buffer[65536];
+    int offset = 0;
+    offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "[");
+    
+    MYSQL_ROW row;
+    int first_row = 1;
+    while ((row = mysql_fetch_row(result))) {
+        if (!first_row) {
+            offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, ",");
+        }
+        first_row = 0;
+        
+        offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "{");
+        for (int i = 0; i < num_fields; i++) {
+            if (i > 0) {
+                offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, ",");
+            }
+            offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "\"%s\":", fields[i].name);
+            
+            if (row[i]) {
+                if (fields[i].type == MYSQL_TYPE_STRING || 
+                    fields[i].type == MYSQL_TYPE_VAR_STRING ||
+                    fields[i].type == MYSQL_TYPE_VARCHAR) {
+                    offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "\"%s\"", row[i]);
+                } else {
+                    offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "%s", row[i]);
+                }
+            } else {
+                offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "null");
+            }
+        }
+        offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "}");
+    }
+    
+    offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "]");
+    
+    // Liberar recursos
+    mysql_free_result(result);
+    mysql_close(mysql_conn);
+    
+    // Enviar respuesta
+    mg_printf(conn,
+              "HTTP/1.1 200 OK\r\n"
+              "Content-Type: application/json; charset=utf-8\r\n"
+              "Content-Length: %d\r\n"
+              "Access-Control-Allow-Origin: *\r\n"
+              "\r\n"
+              "%s",
+              (int)strlen(json_buffer), json_buffer);
+    
     return 1;
 }
 
@@ -321,6 +435,7 @@ int main(void) {
 
     // --- ¡Paso Clave! Registra los manejadores para cada ruta ---
     mg_set_request_handler(ctx, "/", manejadorRaiz, NULL);
+    // mg_set_request_handler(ctx, "/api/mysql/usuarios", manejadorMySQLUsuarios, NULL); // Comentado - usar TypeEasy dinámico
     mg_set_request_handler(ctx, "/api/**", manejadorApiDinamico, NULL);
 
     // Bucle principal del servidor. Se ejecuta hasta que exit_flag sea 1.

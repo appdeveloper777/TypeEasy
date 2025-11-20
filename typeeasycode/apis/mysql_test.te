@@ -1,0 +1,8 @@
+// Endpoint de prueba MySQL - Versión simplificada
+endpoint {
+    [HttpGet("/api/mysql/test")]
+    TestMySQL() {
+        println("[MySQL] Iniciando test de conexión...");
+        println("[MySQL] Test completado");
+    }
+}

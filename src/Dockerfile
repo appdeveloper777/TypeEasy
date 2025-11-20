@@ -7,7 +7,7 @@ FROM gcc:13.2.0 AS base
 
 # Instala las herramientas que ambos componentes necesitan
 RUN apt-get update && \
-    apt-get install -y flex bison libssl-dev && \
+    apt-get install -y flex bison libssl-dev default-libmysqlclient-dev && \
     apt-get clean
 
 WORKDIR /app
@@ -49,7 +49,7 @@ RUN openssl version
 # Compilamos con la versión correcta de OpenSSL API
 RUN gcc -I/app/api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 \
     /app/api_server/servidor_api.c /app/api_server/civetweb.c \
-    -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto
+    -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto -lmysqlclient
 
 # =================================================================
 # ETAPA 4: IMAGEN FINAL PARA LA API (Lista para producción)
@@ -64,7 +64,7 @@ WORKDIR /app
 # ¡¡ARREGLO AQUÍ!!
 # Instala las librerías SSL de runtime Y la librería de Flex (libfl2)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libssl3 libfl2 && \
+    apt-get install -y --no-install-recommends libssl3 libfl2 default-libmysqlclient-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -91,7 +91,7 @@ WORKDIR /typeeasy
 
 # ¡¡ARREGLO AQUÍ!! Instala la librería 'libfl' que falta
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libfl2 && \
+    apt-get install -y --no-install-recommends libfl2 default-libmysqlclient-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -111,7 +111,7 @@ FROM debian:12-slim AS agent
 WORKDIR /app
 # Instala las dependencias de runtime: libssl (para civetweb) y libfl2 (para flex)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libssl3 libfl2 && \
+    apt-get install -y --no-install-recommends libssl3 libfl2 default-libmysqlclient-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

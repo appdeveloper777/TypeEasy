@@ -1,0 +1,7 @@
+endpoint {
+    [HttpGet("/api/test/custom")]
+    TestCustom() {
+        let x = my_function("a", "b", "c", "d");
+        return json(x);
+    }
+}

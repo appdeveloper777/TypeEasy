@@ -1,0 +1,17 @@
+// Endpoint MySQL para TypeEasy - Versión con strings literales
+endpoint {
+    [HttpGet("/api/mysql/test")]
+    TestMySQLSimple() {
+        // Conectar con strings literales
+        let conn_id = mysql_connect("localhost", "root", "", "meri");
+        
+        // Ejecutar query
+        let result = mysql_query(conn_id, "SELECT * FROM users");
+        
+        // Cerrar conexión
+        mysql_close(conn_id);
+        
+        // Retornar resultado
+        return json(result);
+    }
+}

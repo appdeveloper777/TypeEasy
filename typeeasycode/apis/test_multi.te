@@ -1,0 +1,7 @@
+endpoint {
+    [HttpGet("/api/test/multi")]
+    TestMulti() {
+        let x = concat("a", "b", "c");
+        return json(x);
+    }
+}

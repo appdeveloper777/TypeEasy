@@ -227,6 +227,7 @@ method_decl:
   ;
 
 expression:
+  func_call_expr
  | list_literal   
 |expression GT expression    { $$ = create_ast_node("GT", $1, $3); }
   | expression LT expression      { $$ = create_ast_node("LT", $1, $3); }

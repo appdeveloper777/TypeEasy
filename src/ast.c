@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "bytecode.h"
+#include "mysql_bridge.h"
 
 #include "ast.h"
 #include <stdint.h>
@@ -55,6 +56,18 @@ void native_json(ASTNode *arg) {
 int call_native_function(const char *name, ASTNode *arg) {
     if (strcmp(name, "json") == 0) {
         native_json(arg);
+        return 1;
+    }
+    if (strcmp(name, "mysql_connect") == 0) {
+        native_mysql_connect(arg);
+        return 1;
+    }
+    if (strcmp(name, "mysql_query") == 0) {
+        native_mysql_query(arg);
+        return 1;
+    }
+    if (strcmp(name, "mysql_close") == 0) {
+        native_mysql_close(arg);
         return 1;
     }
     return 0;
@@ -1770,7 +1783,14 @@ static void interpret_call_func(ASTNode *node) {
         // --- FIN DE LA NUEVA LÓGICA ---
     }
 
+    
+    // Try native functions first (mysql_connect, mysql_query, mysql_close, etc.)
+    if (call_native_function(node->id, node->left)) {
+        return;
+    }
+    
     if (strcmp(node->id, "concat") != 0) return;
+
 
     char result_buffer[2048] = {0}; // Un búfer grande para construir el string
     char *s_temp = NULL;
