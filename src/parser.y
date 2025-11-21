@@ -28,7 +28,7 @@
 %token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA CONCAT JSON XML HTTPGET HTTPPOST
 %token       VAR ASSIGN PRINT PRINTLN FOR LPAREN RPAREN SEMICOLON CONCAT
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
-%token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN
+%token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN MYSQL_CONNECT MYSQL_CLOSE MYSQL_QUERY
 %token <sval> IDENTIFIER STRING_LITERAL CONST
 %token <ival> NUMBER
 %token IF ELSE
@@ -289,10 +289,11 @@ var_decl:
 ;
 
 statement:
-RETURN JSON LPAREN RPAREN SEMICOLON { }
+func_call_expr SEMICOLON { $$ = $1; }
+|   MYSQL_CLOSE LPAREN expression RPAREN SEMICOLON { $$ = create_call_node("mysql_close", $3); }
+|   RETURN JSON LPAREN RPAREN SEMICOLON { }
 
 |
-
         FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_for_in_node($4, $6, $9); }
     | LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$4); $$ = create_var_decl_node($2, obj); }
     | RETURN func_call_expr SEMICOLON { $$ = create_return_node($2); }
@@ -342,8 +343,12 @@ RETURN JSON LPAREN RPAREN SEMICOLON { }
 ; 
 
 func_call_expr:
-    IDENTIFIER LPAREN expression RPAREN { $$ = create_call_node($1, $3); }
+    IDENTIFIER LPAREN RPAREN { $$ = create_call_node($1, NULL); }
+    | IDENTIFIER LPAREN expression RPAREN { $$ = create_call_node($1, $3); }
     | IDENTIFIER LPAREN expression_list RPAREN { $$ = create_call_node($1, $3); }
+    | NEW MYSQL_CONNECT LPAREN expression_list RPAREN { $$ = create_call_node("mysql_connect", $4); }
+    | NEW MYSQL_QUERY LPAREN expression_list RPAREN { $$ = create_call_node("mysql_query", $4); }
+    | MYSQL_CLOSE LPAREN expression RPAREN { $$ = create_call_node("mysql_close", $3); }
     
 ;
 

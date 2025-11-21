@@ -22,6 +22,9 @@
 "from"       { yylval.sval = strdup(yytext); return FROM; }
 "layer"      { yylval.sval = strdup(yytext); return LAYER; }
 "plot"                   { return PLOT; }       
+"mysql_connect"          { return MYSQL_CONNECT; }
+"mysql_close"            { return MYSQL_CLOSE; }
+"mysql_query"            { return MYSQL_QUERY; }
 
 
 

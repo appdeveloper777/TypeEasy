@@ -18,11 +18,20 @@ static const char* get_arg_string(ASTNode* args, int index) {
     for (int i = 0; i < index && current; i++) {
         current = current->right;
     }
-    if (!current || !current->left) return NULL;
+    if (!current) return NULL;
     
-    if (strcmp(current->left->type, "STRING_LITERAL") == 0) {
+    // Primero verificar si el nodo actual es directamente un STRING
+    if (current->type && strcmp(current->type, "STRING") == 0 && current->str_value) {
+        return current->str_value;
+    }
+    
+    // Si no, verificar si tiene un left que sea STRING_LITERAL
+    if (current->left && current->left->type && 
+        strcmp(current->left->type, "STRING_LITERAL") == 0 && 
+        current->left->str_value) {
         return current->left->str_value;
     }
+    
     return NULL;
 }
 
@@ -32,29 +41,72 @@ static int get_arg_int(ASTNode* args, int index) {
     for (int i = 0; i < index && current; i++) {
         current = current->right;
     }
-    if (!current || !current->left) return -1;
+    if (!current) return -1;
     
-    if (strcmp(current->left->type, "NUMBER") == 0) {
+    // Primero verificar si el nodo actual es directamente un NUMBER
+    if (current->type && strcmp(current->type, "NUMBER") == 0) {
+        return current->value;
+    }
+    
+    // Si no, verificar si tiene un left que sea NUMBER
+    if (current->left && current->left->type && 
+        strcmp(current->left->type, "NUMBER") == 0) {
         return current->left->value;
     }
+    
     // Si es un identificador, buscar la variable
-    if (strcmp(current->left->type, "IDENTIFIER") == 0) {
+    if (current->type && strcmp(current->type, "IDENTIFIER") == 0 && current->id) {
+        Variable* v = find_variable(current->id);
+        if (v && v->vtype == VAL_INT) {
+            return v->value.int_value;
+        }
+    }
+    
+    // También verificar current->left si es IDENTIFIER
+    if (current->left && current->left->type && 
+        strcmp(current->left->type, "IDENTIFIER") == 0 && 
+        current->left->id) {
         Variable* v = find_variable(current->left->id);
         if (v && v->vtype == VAL_INT) {
             return v->value.int_value;
         }
     }
+    
     return -1;
 }
 
 // native_mysql_connect(host, user, password, database)
 // Retorna connection_id en __ret__
 void native_mysql_connect(ASTNode* args) {
+    // Debug: imprimir estructura de argumentos
+    printf("[MySQL DEBUG] native_mysql_connect called\n");
+    printf("[MySQL DEBUG] args=%p\n", (void*)args);
+    if (args) {
+        printf("[MySQL DEBUG] args->type=%s\n", args->type ? args->type : "NULL");
+        printf("[MySQL DEBUG] args->left=%p\n", (void*)args->left);
+        printf("[MySQL DEBUG] args->right=%p\n", (void*)args->right);
+        if (args->left) {
+            printf("[MySQL DEBUG] args->left->type=%s\n", args->left->type ? args->left->type : "NULL");
+            printf("[MySQL DEBUG] args->left->str_value=%s\n", args->left->str_value ? args->left->str_value : "NULL");
+        }
+    }
+    
     const char* host = get_arg_string(args, 0);
     const char* user = get_arg_string(args, 1);
     const char* password = get_arg_string(args, 2);
     const char* database = get_arg_string(args, 3);
     
+    printf("[MySQL DEBUG] host=%s, user=%s, password=%s, database=%s\n", 
+           host ? host : "NULL", 
+           user ? user : "NULL", 
+           password ? password : "NULL", 
+           database ? database : "NULL");
+    
+    int port = 3308; // valor por defecto
+    // Si hay un quinto argumento, úsalo como puerto
+    if (get_arg_int(args, 4) > 0) {
+        port = get_arg_int(args, 4);
+    }
     if (!host || !user || !password || !database) {
         printf("[MySQL] Error: Argumentos inválidos para mysql_connect\n");
         ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
@@ -62,7 +114,6 @@ void native_mysql_connect(ASTNode* args) {
         free_ast(ret_node);
         return;
     }
-    
     MYSQL* conn = mysql_init(NULL);
     if (!conn) {
         printf("[MySQL] Error: mysql_init() falló\n");
@@ -71,8 +122,7 @@ void native_mysql_connect(ASTNode* args) {
         free_ast(ret_node);
         return;
     }
-    
-    if (!mysql_real_connect(conn, host, user, password, database, 3308, NULL, 0)) {
+    if (!mysql_real_connect(conn, host, user, password, database, port, NULL, 0)) {
         printf("[MySQL] Error de conexión: %s\n", mysql_error(conn));
         mysql_close(conn);
         ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);

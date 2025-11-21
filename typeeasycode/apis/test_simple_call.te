@@ -1,0 +1,7 @@
+endpoint {
+    [HttpGet("/test")]
+    TestSimple() {
+        let x = 5;
+        return json();
+    }
+}

@@ -63,10 +63,12 @@ int call_native_function(const char *name, ASTNode *arg) {
         return 1;
     }
     if (strcmp(name, "mysql_query") == 0) {
+        printf("[DIAG] native_mysql_query: arg=%p\n", (void*)arg);
         native_mysql_query(arg);
         return 1;
     }
     if (strcmp(name, "mysql_close") == 0) {
+        printf("[DIAG] native_mysql_close: arg=%p\n", (void*)arg);
         native_mysql_close(arg);
         return 1;
     }

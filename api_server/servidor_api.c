@@ -336,8 +336,29 @@ static int manejadorMySQLUsuarios(struct mg_connection *conn, void *cbdata) {
     // Configurar UTF-8 para caracteres acentuados
     mysql_set_character_set(mysql_conn, "utf8mb4");
     
+    // Obtener parámetro 'tabla' de la query string
+    char tabla[128] = "usuarios"; // valor por defecto
+    const struct mg_request_info *req_info = mg_get_request_info(conn);
+    if (req_info && req_info->query_string) {
+        const char *qs = req_info->query_string;
+        const char *tabla_pos = strstr(qs, "tabla=");
+        if (tabla_pos) {
+            tabla_pos += 6;
+            int i = 0;
+            while (tabla_pos[i] && tabla_pos[i] != '&' && i < (int)sizeof(tabla) - 1) {
+                tabla[i] = tabla_pos[i];
+                i++;
+            }
+            tabla[i] = '\0';
+        }
+    }
+
+    // Construir consulta SQL dinámica
+    char query[256];
+    snprintf(query, sizeof(query), "SELECT * FROM %s", tabla);
+
     // Ejecutar query
-    if (mysql_query(mysql_conn, "SELECT * FROM usuarios")) {
+    if (mysql_query(mysql_conn, query)) {
         char error_msg[512];
         snprintf(error_msg, sizeof(error_msg), "MySQL query failed: %s", mysql_error(mysql_conn));
         mysql_close(mysql_conn);
