@@ -118,6 +118,14 @@ static int get_arg_int(ASTNode* args, int index) {
 // native_mysql_connect(host, user, password, database, [port])
 // Retorna connection_id en __ret__
 void native_mysql_connect(ASTNode* args) {
+        // Imprimir todos los argumentos recibidos
+        ASTNode* curr = args;
+        int idx = 0;
+        while (curr) {
+            printf("[DEBUG][native_mysql_connect] Arg #%d: type=%s, id=%s, str_value=%s, value=%d\n", idx, curr->type ? curr->type : "NULL", curr->id ? curr->id : "NULL", curr->str_value ? curr->str_value : "NULL", curr->value);
+            curr = curr->right;
+            idx++;
+        }
     // Debug: imprimir estructura de argumentos
     printf("[MySQL DEBUG] native_mysql_connect called\n");
     printf("[MySQL DEBUG] args=%p\n", (void*)args);
@@ -128,12 +136,21 @@ void native_mysql_connect(ASTNode* args) {
     const char* pass = get_arg_string(args, 2);
     const char* db   = get_arg_string(args, 3);
     int port = get_arg_int(args, 4);  // Optional 5th parameter
-    
+
+    // Debug: imprimir los valores recibidos
+    printf("[MySQL DEBUG] Valores recibidos en native_mysql_connect:\n");
+    printf("  host: '%s'\n", host ? host : "NULL");
+    printf("  user: '%s'\n", user ? user : "NULL");
+    printf("  pass: '%s'\n", pass ? pass : "NULL");
+    printf("  db:   '%s'\n", db ? db : "NULL");
+    printf("  port: %d\n", port);
+    fflush(stdout);
+
     // If port is -1 (not provided or invalid), use default 3306
     if (port <= 0) {
         port = 3306;
     }
-    
+
     printf("[MySQL] Args extracted: host=%s, user=%s, pass=%s, db=%s, port=%d\n", 
            host ? host : "NULL", 
            user ? user : "NULL", 

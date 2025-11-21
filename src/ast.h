@@ -215,6 +215,8 @@ int evaluate_condition(ASTNode* condition);
 ASTNode *append_to_list_parser(ASTNode *list, ASTNode *item);
 void set_attribute_value_object(ObjectNode *obj, const char *attr_name, ObjectNode *value);
 
+// Helper: Recursively evaluate arguments for native calls
+void evaluate_native_args(ASTNode *arg);
 // --- INICIO MEJORA: Desacoplamiento de Bridges ---
 // Estructura para registrar los manejadores de bridges nativos.
 // El motor (ast.c) llamará a estos punteros si no son NULL.

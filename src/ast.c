@@ -17,6 +17,34 @@
 #include <stdio.h>
 #include "bytecode.h"
 
+// Helper: Recursively evaluate arguments for native calls
+void evaluate_native_args(ASTNode *arg) {
+    ASTNode *curr = arg;
+    int idx = 0;
+    while (curr) {
+        printf("[DEBUG] Arg #%d antes: type=%s, id=%s, str_value=%s, value=%d\n", idx, curr->type ? curr->type : "NULL", curr->id ? curr->id : "NULL", curr->str_value ? curr->str_value : "NULL", curr->value);
+        if (curr->type && (strcmp(curr->type, "IDENTIFIER") == 0 || strcmp(curr->type, "ID") == 0)) {
+            Variable *v = find_variable(curr->id);
+            if (v) {
+                if (v->vtype == VAL_STRING) {
+                    curr->type = strdup("STRING");
+                    curr->str_value = strdup(v->value.string_value);
+                    printf("[DEBUG] Arg #%d convertido a STRING: %s\n", idx, curr->str_value);
+                } else if (v->vtype == VAL_INT) {
+                    curr->type = strdup("NUMBER");
+                    curr->value = v->value.int_value;
+                    printf("[DEBUG] Arg #%d convertido a NUMBER: %d\n", idx, curr->value);
+                }
+            } else {
+                printf("[DEBUG] Arg #%d: variable '%s' no encontrada\n", idx, curr->id ? curr->id : "NULL");
+            }
+        }
+        printf("[DEBUG] Arg #%d después: type=%s, id=%s, str_value=%s, value=%d\n", idx, curr->type ? curr->type : "NULL", curr->id ? curr->id : "NULL", curr->str_value ? curr->str_value : "NULL", curr->value);
+        curr = curr->right;
+        idx++;
+    }
+}
+
 // --- Función nativa para serializar objeto a JSON y printf ---
 void native_json(ASTNode *arg) {
     const char *var_id = NULL;
@@ -54,9 +82,31 @@ void native_json(ASTNode *arg) {
             printf("\"%s\"", obj->attributes[i].value.string_value);
         } else if (strcmp(obj->class->attributes[i].type, "float") == 0) {
             printf("%f", obj->attributes[i].value.float_value);
+
+// Helper: Recursively evaluate arguments for native calls
+void evaluate_native_args(ASTNode *arg) {
+    ASTNode *curr = arg;
+    while (curr) {
+        if (curr->type && (strcmp(curr->type, "IDENTIFIER") == 0 || strcmp(curr->type, "ID") == 0)) {
+            Variable *v = find_variable(curr->id);
+            if (v) {
+                if (v->vtype == VAL_STRING) {
+                    curr->type = strdup("STRING");
+                    curr->str_value = strdup(v->value.string_value);
+                } else if (v->vtype == VAL_INT) {
+                    curr->type = strdup("NUMBER");
+                    curr->value = v->value.int_value;
+                }
+            }
+        }
+        curr = curr->right;
+    }
+}
         } else {
             printf("%d", obj->attributes[i].value.int_value);
         }
+            // Always evaluate arguments before native call
+            if (arg) evaluate_native_args(arg);
         if (i < obj->class->attr_count - 1) printf(",\n");
         else printf("\n");
     }
@@ -65,6 +115,8 @@ void native_json(ASTNode *arg) {
 // --- Hook para funciones nativas ---
 int call_native_function(const char *name, ASTNode *arg) {
     printf("[DEBUG] call_native_function: %s\n", name); fflush(stdout);
+    // Siempre evaluar argumentos antes de llamada nativa
+    if (arg) evaluate_native_args(arg);
     if (strcmp(name, "json") == 0) {
         native_json(arg);
         return 1;

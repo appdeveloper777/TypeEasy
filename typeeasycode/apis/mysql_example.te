@@ -1,3 +1,4 @@
+
 // Endpoint MySQL para TypeEasy
 // Demuestra integración con base de datos MySQL
 
@@ -6,17 +7,22 @@ endpoint {
     GetUsuariosMySQL() {
         // Conexión a MySQL de XAMPP en la máquina host (Windows)
         // host.docker.internal:3308 - puerto de XAMPP
+        string host = "host.docker.internal";
+        string user = "root";
+        string pass = "";
+        string db   = "meri";
+        int port = 3308;
+        string query = "SELECT * FROM users LIMIT 20";
+        string format = "xml";
         
-        let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
-        
-        
+        let conn_id = new mysql_connect(host, user, pass, db, port);        
         // Ejecutar query
-        let result = new mysql_query(conn_id, "SELECT * FROM db_facturas_items");
+        let result = new mysql_query(conn_id, query, format);
         
         // Cerrar conexión
         mysql_close(conn_id);
         
         // Retornar resultado como XML
-        return json(result);
+        return xml(result);
     }
 }
