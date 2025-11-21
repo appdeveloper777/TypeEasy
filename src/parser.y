@@ -301,7 +301,7 @@ func_call_expr SEMICOLON { $$ = $1; }
 
 
    |RETURN XML LPAREN expression RPAREN SEMICOLON { $$ = create_return_node(create_call_node("xml", $4)); }
- 
+ |RETURN JSON LPAREN expression RPAREN SEMICOLON { $$ = create_return_node(create_call_node("json", $4)); }
 
 
   | state_decl
@@ -346,9 +346,9 @@ func_call_expr:
     IDENTIFIER LPAREN RPAREN { $$ = create_call_node($1, NULL); }
     | IDENTIFIER LPAREN expression RPAREN { $$ = create_call_node($1, $3); }
     | IDENTIFIER LPAREN expression_list RPAREN { $$ = create_call_node($1, $3); }
-    | NEW MYSQL_CONNECT LPAREN expression_list RPAREN { $$ = create_call_node("mysql_connect", $4); }
-    | NEW MYSQL_QUERY LPAREN expression_list RPAREN { $$ = create_call_node("mysql_query", $4); }
-    | MYSQL_CLOSE LPAREN expression RPAREN { $$ = create_call_node("mysql_close", $3); }
+    | NEW MYSQL_CONNECT LPAREN expression_list RPAREN { printf("PARSER: Reducing MYSQL_CONNECT\n"); fflush(stdout); $$ = create_call_node("mysql_connect", $4); }
+    | NEW MYSQL_QUERY LPAREN expression_list RPAREN { printf("PARSER: Reducing MYSQL_QUERY\n"); fflush(stdout); $$ = create_call_node("mysql_query", $4); }
+    | MYSQL_CLOSE LPAREN expression RPAREN { printf("PARSER: Reducing MYSQL_CLOSE\n"); fflush(stdout); $$ = create_call_node("mysql_close", $3); }
     
 ;
 
@@ -383,8 +383,14 @@ statement_list:
   ;
 
 expression_list:
-    expression                                { $$ = $1; }
-  | expression_list COMMA expression          { $$ = add_statement($1, $3); }
+        IDENTIFIER                                { printf("PARSER: expr_list -> IDENTIFIER\n"); fflush(stdout); $$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1); $$->id = strdup($1); }
+    | NUMBER                                    { printf("PARSER: expr_list -> NUMBER\n"); fflush(stdout); $$ = create_ast_leaf("NUMBER", $1, NULL, NULL); }
+    | STRING_LITERAL                            { printf("PARSER: expr_list -> STRING_LITERAL\n"); fflush(stdout); $$ = create_ast_leaf("STRING", 0, $1, NULL); }
+    | expression                                { printf("PARSER: expr_list -> expression\n"); fflush(stdout); $$ = $1; }
+    | expression_list COMMA IDENTIFIER          { printf("PARSER: expr_list -> list, IDENTIFIER\n"); fflush(stdout); ASTNode* id_node = create_ast_leaf("IDENTIFIER", 0, NULL, $3); id_node->id = strdup($3); $$ = add_statement($1, id_node); }
+    | expression_list COMMA NUMBER              { printf("PARSER: expr_list -> list, NUMBER\n"); fflush(stdout); $$ = add_statement($1, create_ast_leaf("NUMBER", $3, NULL, NULL)); }
+    | expression_list COMMA STRING_LITERAL      { printf("PARSER: expr_list -> list, STRING_LITERAL\n"); fflush(stdout); $$ = add_statement($1, create_ast_leaf("STRING", 0, $3, NULL)); }
+    | expression_list COMMA expression          { printf("PARSER: expr_list -> list, expression\n"); fflush(stdout); $$ = add_statement($1, $3); }
   ;
 
 expr_list:

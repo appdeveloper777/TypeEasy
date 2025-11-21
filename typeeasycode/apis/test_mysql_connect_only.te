@@ -1,7 +1,0 @@
-endpoint {
-    [HttpGet("/test")]
-    TestMySQLConnect() {
-        let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri");
-        return json();
-    }
-}

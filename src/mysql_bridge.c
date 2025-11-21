@@ -42,114 +42,169 @@ static int get_arg_int(ASTNode* args, int index) {
         current = current->right;
     }
     if (!current) return -1;
-    
-    // Primero verificar si el nodo actual es directamente un NUMBER
+
+    // Si es un número
     if (current->type && strcmp(current->type, "NUMBER") == 0) {
         return current->value;
     }
-    
+
+    // Si es un string que representa un número
+    if (current->type && strcmp(current->type, "STRING") == 0 && current->str_value) {
+        char* endptr = NULL;
+        long val = strtol(current->str_value, &endptr, 10);
+        if (endptr && *endptr == '\0') {
+            // Es un número válido
+            return (int)val;
+        } else {
+            // No es un número, intentar buscar como nombre de variable
+            printf("[DEBUG] String no numérico '%s', buscando como variable\n", current->str_value);
+            Variable* v = find_variable(current->str_value);
+            if (v) {
+                printf("[DEBUG] Variable encontrada: %s, tipo=%d, valor=%d\n", current->str_value, v->vtype, v->value.int_value);
+                if (v->vtype == VAL_INT) {
+                    return v->value.int_value;
+                }
+            } else {
+                printf("[DEBUG] Variable NO encontrada: %s\n", current->str_value);
+            }
+        }
+    }
+
     // Si no, verificar si tiene un left que sea NUMBER
-    if (current->left && current->left->type && 
-        strcmp(current->left->type, "NUMBER") == 0) {
+    if (current->left && current->left->type && strcmp(current->left->type, "NUMBER") == 0) {
         return current->left->value;
     }
-    
+
+    // Si el left es string numérico
+    if (current->left && current->left->type && strcmp(current->left->type, "STRING") == 0 && current->left->str_value) {
+        char* endptr = NULL;
+        long val = strtol(current->left->str_value, &endptr, 10);
+        if (endptr && *endptr == '\0') {
+            return (int)val;
+        } else {
+            // No es un número, intentar buscar como nombre de variable
+            Variable* v = find_variable(current->left->str_value);
+            if (v && v->vtype == VAL_INT) {
+                return v->value.int_value;
+            }
+        }
+    }
+
     // Si es un identificador, buscar la variable
     if (current->type && strcmp(current->type, "IDENTIFIER") == 0 && current->id) {
+        printf("[DEBUG] Buscando variable IDENTIFIER: %s\n", current->id);
         Variable* v = find_variable(current->id);
+        if (v) {
+            printf("[DEBUG] Variable encontrada: %s, tipo=%d, valor=%d\n", current->id, v->vtype, v->value.int_value);
+        } else {
+            printf("[DEBUG] Variable NO encontrada: %s\n", current->id);
+        }
         if (v && v->vtype == VAL_INT) {
             return v->value.int_value;
         }
     }
-    
+
     // También verificar current->left si es IDENTIFIER
-    if (current->left && current->left->type && 
-        strcmp(current->left->type, "IDENTIFIER") == 0 && 
-        current->left->id) {
+    if (current->left && current->left->type && strcmp(current->left->type, "IDENTIFIER") == 0 && current->left->id) {
         Variable* v = find_variable(current->left->id);
         if (v && v->vtype == VAL_INT) {
             return v->value.int_value;
         }
     }
-    
+
     return -1;
 }
 
-// native_mysql_connect(host, user, password, database)
+// native_mysql_connect(host, user, password, database, [port])
 // Retorna connection_id en __ret__
 void native_mysql_connect(ASTNode* args) {
     // Debug: imprimir estructura de argumentos
     printf("[MySQL DEBUG] native_mysql_connect called\n");
     printf("[MySQL DEBUG] args=%p\n", (void*)args);
-    if (args) {
-        printf("[MySQL DEBUG] args->type=%s\n", args->type ? args->type : "NULL");
-        printf("[MySQL DEBUG] args->left=%p\n", (void*)args->left);
-        printf("[MySQL DEBUG] args->right=%p\n", (void*)args->right);
-        if (args->left) {
-            printf("[MySQL DEBUG] args->left->type=%s\n", args->left->type ? args->left->type : "NULL");
-            printf("[MySQL DEBUG] args->left->str_value=%s\n", args->left->str_value ? args->left->str_value : "NULL");
-        }
-    }
+    printf("[MySQL] native_mysql_connect called\n"); fflush(stdout);
     
     const char* host = get_arg_string(args, 0);
     const char* user = get_arg_string(args, 1);
-    const char* password = get_arg_string(args, 2);
-    const char* database = get_arg_string(args, 3);
+    const char* pass = get_arg_string(args, 2);
+    const char* db   = get_arg_string(args, 3);
+    int port = get_arg_int(args, 4);  // Optional 5th parameter
     
-    printf("[MySQL DEBUG] host=%s, user=%s, password=%s, database=%s\n", 
+    // If port is -1 (not provided or invalid), use default 3306
+    if (port <= 0) {
+        port = 3306;
+    }
+    
+    printf("[MySQL] Args extracted: host=%s, user=%s, pass=%s, db=%s, port=%d\n", 
            host ? host : "NULL", 
            user ? user : "NULL", 
-           password ? password : "NULL", 
-           database ? database : "NULL");
-    
-    int port = 3308; // valor por defecto
-    // Si hay un quinto argumento, úsalo como puerto
-    if (get_arg_int(args, 4) > 0) {
-        port = get_arg_int(args, 4);
-    }
-    if (!host || !user || !password || !database) {
-        printf("[MySQL] Error: Argumentos inválidos para mysql_connect\n");
+           pass ? pass : "NULL", 
+           db ? db : "NULL",
+           port);
+    fflush(stdout);
+
+    if (!host || !user || !pass || !db) {
+        printf("[MySQL] Error: Argumentos inválidos para mysql_connect\n"); fflush(stdout);
         ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
         return;
     }
+    
+    if (next_conn_id >= 10) {
+        printf("[MySQL] Error: Max conexiones alcanzado\n"); fflush(stdout);
+        ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
+        add_or_update_variable("__ret__", ret_node);
+        free_ast(ret_node);
+        return;
+    }
+    
     MYSQL* conn = mysql_init(NULL);
     if (!conn) {
-        printf("[MySQL] Error: mysql_init() falló\n");
-        ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
-        add_or_update_variable("__ret__", ret_node);
-        free_ast(ret_node);
-        return;
-    }
-    if (!mysql_real_connect(conn, host, user, password, database, port, NULL, 0)) {
-        printf("[MySQL] Error de conexión: %s\n", mysql_error(conn));
-        mysql_close(conn);
+        printf("[MySQL] Error: mysql_init failed\n"); fflush(stdout);
         ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
         return;
     }
     
-    // Guardar conexión en el pool
-    int conn_id = next_conn_id % 10;
-    if (connections[conn_id]) {
-        mysql_close(connections[conn_id]);
+    if (!mysql_real_connect(conn, host, user, pass, db, port, NULL, 0)) {
+        printf("[MySQL] Error de conexión: %s\n", mysql_error(conn)); fflush(stdout);
+        ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
+        add_or_update_variable("__ret__", ret_node);
+        free_ast(ret_node);
+        mysql_close(conn);
+        return;
     }
+    
+    int conn_id = next_conn_id;
     connections[conn_id] = conn;
     next_conn_id++;
     
-    printf("[MySQL] Conexión exitosa (ID: %d)\n", conn_id);
+    printf("[MySQL] Conexión exitosa (ID: %d)\n", conn_id); fflush(stdout);
     ASTNode* ret_node = create_ast_leaf("NUMBER", conn_id, NULL, NULL);
     add_or_update_variable("__ret__", ret_node);
     free_ast(ret_node);
 }
 
-// native_mysql_query(connection_id, query_string)
-// Retorna JSON string en __ret__
+// native_mysql_query(connection_id, query_string, [format])
+// format can be "json" (default) or "xml"
+// Retorna JSON or XML string en __ret__
 void native_mysql_query(ASTNode* args) {
+
+    printf("[MySQL] native_mysql_query called\n");
+    //printf("[MySQL] args=%p\n", (void*)args);
+   // return;
+
     int conn_id = get_arg_int(args, 0);
     const char* query = get_arg_string(args, 1);
+    const char* format = get_arg_string(args, 2);  // Optional format parameter
+    
+    // Default to JSON if format not specified
+    if (!format || strlen(format) == 0) {
+        format = "json";
+    }
+    
+    printf("[MySQL] Query format: %s\n", format);
     
     if (conn_id < 0 || conn_id >= 10 || !connections[conn_id]) {
         printf("[MySQL] Error: Conexión inválida (ID: %d)\n", conn_id);
@@ -171,9 +226,9 @@ void native_mysql_query(ASTNode* args) {
     
     if (mysql_query(conn, query)) {
         printf("[MySQL] Error en query: %s\n", mysql_error(conn));
-        char error_msg[256];
-        snprintf(error_msg, sizeof(error_msg), "{\"error\":\"%s\"}", mysql_error(conn));
-        ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup(error_msg), NULL);
+        char error_buffer[512];
+        snprintf(error_buffer, sizeof(error_buffer), "{\"error\":\"%s\"}", mysql_error(conn));
+        ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup(error_buffer), NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
         return;
@@ -181,61 +236,108 @@ void native_mysql_query(ASTNode* args) {
     
     MYSQL_RES* result = mysql_store_result(conn);
     if (!result) {
-        // Query sin resultados (INSERT, UPDATE, DELETE)
-        ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"affected_rows\":0}"), NULL);
+        // Query sin resultados (INSERT, UPDATE, DELETE) o error al obtener resultados
+        if (mysql_field_count(conn) == 0) { // No result set for this query
+            ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"affected_rows\":0}"), NULL);
+            add_or_update_variable("__ret__", ret_node);
+            free_ast(ret_node);
+            return;
+        } else { // Error fetching result set for a query that should have one
+            printf("[MySQL] Error al obtener resultado: %s\n", mysql_error(conn));
+            ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"no_result\"}"), NULL);
+            add_or_update_variable("__ret__", ret_node);
+            free_ast(ret_node);
+            return;
+        }
+    }
+    
+    int num_fields = mysql_num_fields(result);
+    MYSQL_FIELD* fields = mysql_fetch_fields(result);
+    
+    // Allocate buffer for result (2MB for large queries)
+    char* result_buffer = (char*)malloc(2097152);
+    if (!result_buffer) {
+        mysql_free_result(result);
+        ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"memory_allocation_failed\"}"), NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
         return;
     }
     
-    // Convertir resultado a JSON
-    int num_fields = mysql_num_fields(result);
-    MYSQL_FIELD* fields = mysql_fetch_fields(result);
-    
-    // Buffer para construir JSON (máximo 64KB)
-    char* json_buffer = malloc(65536);
     int offset = 0;
-    offset += snprintf(json_buffer + offset, 65536 - offset, "[");
     
-    MYSQL_ROW row;
-    int first_row = 1;
-    while ((row = mysql_fetch_row(result))) {
-        if (!first_row) {
-            offset += snprintf(json_buffer + offset, 65536 - offset, ",");
-        }
-        first_row = 0;
-        
-        offset += snprintf(json_buffer + offset, 65536 - offset, "{");
-        for (int i = 0; i < num_fields; i++) {
-            if (i > 0) {
-                offset += snprintf(json_buffer + offset, 65536 - offset, ",");
+    // Check format and generate accordingly
+    size_t buffer_size = 2097152;
+    if (strcmp(format, "xml") == 0) {
+        // Generate XML
+        offset += snprintf(result_buffer + offset, buffer_size - offset, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rows>\n");
+        MYSQL_ROW row;
+        while ((row = mysql_fetch_row(result))) {
+            if (offset > buffer_size - 8192) {
+                // Clear buffer and write only valid XML error message
+                snprintf(result_buffer, buffer_size, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rows>\n  <error>Result too large</error>\n</rows>");
+                offset = strlen(result_buffer);
+                break;
             }
-            offset += snprintf(json_buffer + offset, 65536 - offset, "\"%s\":", fields[i].name);
-            
-            if (row[i]) {
-                // Escapar comillas en strings
-                if (fields[i].type == MYSQL_TYPE_STRING || 
-                    fields[i].type == MYSQL_TYPE_VAR_STRING ||
-                    fields[i].type == MYSQL_TYPE_VARCHAR) {
-                    offset += snprintf(json_buffer + offset, 65536 - offset, "\"%s\"", row[i]);
-                } else {
-                    offset += snprintf(json_buffer + offset, 65536 - offset, "%s", row[i]);
+            offset += snprintf(result_buffer + offset, buffer_size - offset, "  <row>\n");
+            for (int i = 0; i < num_fields; i++) {
+                offset += snprintf(result_buffer + offset, buffer_size - offset, "    <%s>", fields[i].name);
+                if (row[i]) {
+                    offset += snprintf(result_buffer + offset, buffer_size - offset, "%s", row[i]);
                 }
-            } else {
-                offset += snprintf(json_buffer + offset, 65536 - offset, "null");
+                offset += snprintf(result_buffer + offset, buffer_size - offset, "</%s>\n", fields[i].name);
             }
+            offset += snprintf(result_buffer + offset, buffer_size - offset, "  </row>\n");
         }
-        offset += snprintf(json_buffer + offset, 65536 - offset, "}");
+        offset += snprintf(result_buffer + offset, buffer_size - offset, "</rows>");
+    } else {
+        // Generate JSON (default)
+        offset += snprintf(result_buffer + offset, buffer_size - offset, "[");
+        MYSQL_ROW row;
+        int first_row = 1;
+        while ((row = mysql_fetch_row(result))) {
+            if (offset > buffer_size - 4096) {
+                // Clear buffer and write only error message
+                snprintf(result_buffer, buffer_size, "{\"error\":\"Result too large\"}");
+                offset = strlen(result_buffer);
+                break;
+            }
+            if (!first_row) {
+                offset += snprintf(result_buffer + offset, buffer_size - offset, ",");
+            }
+            first_row = 0;
+            offset += snprintf(result_buffer + offset, buffer_size - offset, "{");
+            for (int i = 0; i < num_fields; i++) {
+                if (i > 0) {
+                    offset += snprintf(result_buffer + offset, buffer_size - offset, ",");
+                }
+                offset += snprintf(result_buffer + offset, buffer_size - offset, "\"%s\":", fields[i].name);
+                if (row[i]) {
+                    // Check if field is numeric using IS_NUM flag
+                    // This is more reliable than checking field type
+                    if (IS_NUM(fields[i].type)) {
+                        // Numeric field - no quotes
+                        offset += snprintf(result_buffer + offset, buffer_size - offset, "%s", row[i]);
+                    } else {
+                        // String field - add quotes
+                        offset += snprintf(result_buffer + offset, buffer_size - offset, "\"%s\"", row[i]);
+                    }
+                } else {
+                    offset += snprintf(result_buffer + offset, buffer_size - offset, "null");
+                }
+            }
+            offset += snprintf(result_buffer + offset, buffer_size - offset, "}");
+        }
+        offset += snprintf(result_buffer + offset, buffer_size - offset, "]");
     }
-    
-    offset += snprintf(json_buffer + offset, 65536 - offset, "]");
     
     mysql_free_result(result);
     
     printf("[MySQL] Query ejecutado exitosamente\n");
-    ASTNode* ret_node = create_ast_leaf("STRING", 0, json_buffer, NULL);
+    ASTNode* ret_node = create_ast_leaf("STRING", 0, result_buffer, NULL);
     add_or_update_variable("__ret__", ret_node);
     free_ast(ret_node);
+    free(result_buffer);
 }
 
 // native_mysql_close(connection_id)

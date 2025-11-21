@@ -1,5 +1,5 @@
 endpoint {
-    [HttpGet("/test")]
+    [HttpGet("/test-simple-call")]
     TestSimple() {
         let x = 5;
         return json();

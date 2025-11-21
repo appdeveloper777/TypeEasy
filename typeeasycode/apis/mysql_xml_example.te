@@ -1,0 +1,36 @@
+// Ejemplo de MySQL con formato XML
+// Demuestra el uso del parámetro format en mysql_query
+
+endpoint {
+    [HttpGet("/api/mysql/usuarios/xml")]
+    GetUsuariosXML() {
+        // Conectar a MySQL
+        // host.docker.internal:3308 - puerto de XAMPP
+        
+        let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
+        
+        // Ejecutar query con formato XML
+        let result = new mysql_query(conn_id, "SELECT * FROM users LIMIT 5");
+        
+        // Cerrar conexión
+        mysql_close(conn_id);
+        
+        // Retornar resultado como XML
+        return xml(result);
+    }
+    
+    [HttpGet("/api/mysql/usuarios/json")]
+    GetUsuariosJSON() {
+        // Conectar a MySQL
+        let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
+        
+        // Ejecutar query con formato JSON (default)
+        let result = new mysql_query(conn_id, "SELECT * FROM users LIMIT 5", "json");
+        
+        // Cerrar conexión
+        mysql_close(conn_id);
+        
+        // Retornar resultado como JSON
+        return xml(result);
+    }
+}

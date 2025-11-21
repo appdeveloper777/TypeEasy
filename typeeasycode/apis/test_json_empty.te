@@ -1,6 +1,0 @@
-endpoint {
-    [HttpGet("/test")]
-    TestJsonEmpty() {
-        return json();
-    }
-}

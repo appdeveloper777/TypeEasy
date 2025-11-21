@@ -9,6 +9,29 @@ ASTNode* parse_file(FILE* file);
 extern int g_debug_mode; // Para acceder a la variable global de parser.y
 /* --- Fin Prototipos --- */
 
+// Helper function to detect response type from AST
+const char* detect_response_type(ASTNode *body) {
+    if (!body) return "json"; // default
+    
+    // Recursively search for RETURN_XML or RETURN_JSON nodes
+    if (body->type) {
+        if (strcmp(body->type, "RETURN_XML") == 0) return "xml";
+        if (strcmp(body->type, "RETURN_JSON") == 0) return "json";
+    }
+    
+    // Check children
+    if (body->left) {
+        const char *left_type = detect_response_type(body->left);
+        if (strcmp(left_type, "xml") == 0) return "xml";
+    }
+    if (body->right) {
+        const char *right_type = detect_response_type(body->right);
+        if (strcmp(right_type, "xml") == 0) return "xml";
+    }
+    
+    return "json"; // default
+}
+
 /**
  * Main para el EJECUTABLE 'typeeasy'.
  * Ejecuta un script y termina.
@@ -66,8 +89,9 @@ int main(int argc, char *argv[]) {
         while (m) {
             if (m->route_path) {
                 if (!first) printf(",");
-                printf("{\"route\": \"%s\", \"method\": \"%s\", \"function\": \"%s\"}", 
-                       m->route_path, m->http_method ? m->http_method : "GET", m->name);
+                const char *response_type = detect_response_type(m->body);
+                printf("{\"route\": \"%s\", \"method\": \"%s\", \"function\": \"%s\", \"response_type\": \"%s\"}", 
+                       m->route_path, m->http_method ? m->http_method : "GET", m->name, response_type);
                 first = 0;
             }
             m = m->next;

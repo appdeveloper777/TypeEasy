@@ -34,6 +34,16 @@ void native_json(ASTNode *arg) {
     Variable *v = find_variable(var_id);
     //printf("[DIAG] native_json: find_variable returned %p\n", (void*)v);
     if (!v) { printf("[DIAG] native_json: variable not found\n"); return; }
+    
+    // If variable is a STRING, return it as-is (for mysql_query results)
+    if (v->vtype == VAL_STRING) {
+        printf("[DEBUG] native_json: returning STRING value\n");
+        ASTNode *result_node = create_ast_leaf("STRING", 0, v->value.string_value, NULL);
+        add_or_update_variable("__ret__", result_node);
+        free_ast(result_node);
+        return;
+    }
+    
     if (v->vtype != VAL_OBJECT) { printf("[DIAG] native_json: variable is not VAL_OBJECT, vtype=%d\n", v->vtype); return; }
     ObjectNode *obj = v->value.object_value;
     if (!obj || !obj->class || obj->class->attr_count == 0) return;
@@ -54,21 +64,23 @@ void native_json(ASTNode *arg) {
 }
 // --- Hook para funciones nativas ---
 int call_native_function(const char *name, ASTNode *arg) {
+    printf("[DEBUG] call_native_function: %s\n", name); fflush(stdout);
     if (strcmp(name, "json") == 0) {
         native_json(arg);
         return 1;
     }
     if (strcmp(name, "mysql_connect") == 0) {
+        printf("[DEBUG] calling native_mysql_connect\n"); fflush(stdout);
         native_mysql_connect(arg);
         return 1;
     }
     if (strcmp(name, "mysql_query") == 0) {
-        printf("[DIAG] native_mysql_query: arg=%p\n", (void*)arg);
+        printf("[DIAG] native_mysql_query: arg=%p\n", (void*)arg); fflush(stdout);
         native_mysql_query(arg);
         return 1;
     }
     if (strcmp(name, "mysql_close") == 0) {
-        printf("[DIAG] native_mysql_close: arg=%p\n", (void*)arg);
+        printf("[DIAG] native_mysql_close: arg=%p\n", (void*)arg); fflush(stdout);
         native_mysql_close(arg);
         return 1;
     }
@@ -79,13 +91,17 @@ int call_native_function(const char *name, ASTNode *arg) {
 MethodNode* global_methods = NULL;
 
 ASTNode* create_call_node(const char* funcName, ASTNode* args) {
+    printf("[DEBUG] Entering create_call_node: %s\n", funcName); fflush(stdout);
     ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    if (!node) { printf("[DEBUG] malloc failed in create_call_node\n"); fflush(stdout); return NULL; }
+    printf("[DEBUG] malloc success\n"); fflush(stdout);
     node->type = strdup("CALL_FUNC");
     node->id = strdup(funcName);
     node->left = args;
     node->right = NULL;
     node->str_value = NULL;
     node->value = 0;
+    printf("[DEBUG] create_call_node success\n"); fflush(stdout);
    // if (args) {
     //    printf("[DEBUG] create_call_node: func=%s, args->type=%s, args->id=%s, args->str_value=%s\n", funcName, args->type ? args->type : "NULL", args->id ? args->id : "NULL", args->str_value ? args->str_value : "NULL");
    // } else {
@@ -641,6 +657,7 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
 
 void add_or_update_variable(char *id, ASTNode *value) {
     if (!value) return;
+    printf("[DEBUG] add_or_update_variable: id=%s, type=%s, value=%d, str_value=%s\n", id, value->type ? value->type : "NULL", value->value, value->str_value ? value->str_value : "NULL");
 
     if (strcmp(id, "__ret__") == 0) {
         if (__ret_var_active) {
@@ -826,6 +843,7 @@ ASTNode *create_identifier_node(const char* name) {
 }
 
 ASTNode *create_var_decl_node(char *id, ASTNode *value) {
+    printf("[DEBUG] Entering create_var_decl_node: %s\n", id); fflush(stdout);
     ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para VAR_DECL node.\n");
@@ -835,6 +853,7 @@ ASTNode *create_var_decl_node(char *id, ASTNode *value) {
     node->id = strdup(id);
     node->left = value;
     node->right = NULL;
+    printf("[DEBUG] create_var_decl_node success\n"); fflush(stdout);
     return node;
 }
 
@@ -1859,24 +1878,74 @@ char* get_object_xml_by_id(const char* id) {
     return xml_buffer;
 }
 
-void print_object_as_xml_by_id(const char* id) {
-    char* xml = get_object_xml_by_id(id);
-    if (xml) {
-        printf("%s\n", xml);
-        free(xml);
-    } else {
-        printf("Error: No se encontró objeto con id '%s' para serializar a XML.\n", id);
-    }
-}
+   void print_object_as_xml_by_id(const char* id) {
+            Variable *var = find_variable((char*)id);
+            if (!var) {
+                printf("Error: No se encontró variable con id '%s' para serializar a XML.\n", id);
+                return;
+            }
+
+            // If variable is a STRING, print it directly (for mysql_query results with XML format)
+            if (var->vtype == VAL_STRING) {
+                printf("%s\n", var->value.string_value);
+                return;
+            }
+
+            if (var->vtype != VAL_OBJECT || !var->value.object_value) {
+                printf("Error: Variable '%s' no es un objeto válido para serializar a XML.\n", id);
+                return;
+            }
+
+            ObjectNode *obj = var->value.object_value;
+            char xml_buffer[65536] = "";
+            snprintf(xml_buffer, sizeof(xml_buffer), "<%s>", obj->class->name);
+            for (int i = 0; i < obj->class->attr_count; i++) {
+                strcat(xml_buffer, "<");
+                strcat(xml_buffer, obj->attributes[i].id);
+                strcat(xml_buffer, ">");
+                if (obj->attributes[i].vtype == VAL_STRING) {
+                    strcat(xml_buffer, obj->attributes[i].value.string_value);
+                } else if (obj->attributes[i].vtype == VAL_INT) {
+                    char numbuf[32];
+                    snprintf(numbuf, sizeof(numbuf), "%d", obj->attributes[i].value.int_value);
+                    strcat(xml_buffer, numbuf);
+                } else if (obj->attributes[i].vtype == VAL_FLOAT) {
+                    char numbuf[64];
+                    snprintf(numbuf, sizeof(numbuf), "%f", obj->attributes[i].value.float_value);
+                    strcat(xml_buffer, numbuf);
+                } else {
+                    strcat(xml_buffer, "null");
+                }
+                strcat(xml_buffer, "</");
+                strcat(xml_buffer, obj->attributes[i].id);
+                strcat(xml_buffer, ">");
+            }
+            strcat(xml_buffer, "</");
+            strcat(xml_buffer, obj->class->name);
+            strcat(xml_buffer, ">\n");
+            printf("%s", xml_buffer);
+        }
 void print_object_as_json_by_id(const char* id) {
         // Limpiar la consola al inicio  
     Variable *var = find_variable((char*)id);
-    if (!var || var->vtype != VAL_OBJECT || !var->value.object_value) {
-        printf("Error: No se encontró objeto con id '%s' para serializar a JSON.\n", id);
+    if (!var) {
+        printf("Error: No se encontró variable con id '%s' para serializar a JSON.\n", id);
         return;
     }
+    
+    // If variable is a STRING, print it directly (for mysql_query results)
+    if (var->vtype == VAL_STRING) {
+        printf("%s\n", var->value.string_value);
+        return;
+    }
+    
+    if (var->vtype != VAL_OBJECT || !var->value.object_value) {
+        printf("Error: Variable '%s' no es un objeto válido para serializar a JSON.\n", id);
+        return;
+    }
+    
     ObjectNode *obj = var->value.object_value;
-    char json_buffer[4096] = "{\n";
+    char json_buffer[65536] = "{\n";
     int first_attr = 1;
     for (int i = 0; i < obj->class->attr_count; i++) {
         if (!first_attr) strcat(json_buffer, ",\n");
@@ -1905,31 +1974,17 @@ void print_object_as_json_by_id(const char* id) {
 }
 
 static void interpret_return_node(ASTNode *node) {
-  //  printf("[DIAG] interpret_return_node: llamado con node->type=%s node->id=%s\n", node->type ? node->type : "NULL", node->id ? node->id : "NULL");
-    //if (node->left) {
-   //     printf("[DIAG] sape1 RETURN left->type=%s, left->id=%s, left=%s\n", node->left->type ? node->left->type : "NULL", node->left->id ? node->left->id : "NULL", node->left);
-    //} else {
-   //     printf("[DIAG] sape2 RETURN left is NULL\n");
-   // }
+    printf("[DEBUG] interpret_return_node\n"); fflush(stdout);
     return_node = node->left;
     return_flag = 1;
- //   printf("[DIAG] interpret_return_node: sape3 set return_flag=%d, return_node=%p\n", return_flag, (void*)return_node);
     if (return_node) {
-
+        printf("[DEBUG] interpret_return_node: return_node type=%s\n", return_node->type ? return_node->type : "NULL"); fflush(stdout);
         if(return_node->type && strcmp(return_node->type, "RETURN_XML") == 0  && return_node->id) {
             print_object_as_xml_by_id(return_node->id);
         }
         if(return_node->type && strcmp(return_node->type, "RETURN_JSON") == 0  && return_node->id) {
             print_object_as_json_by_id(return_node->id);
         }
-
-      
-        /*printf("[DIAG] sape 4 interpret_return_node: return_node type=%s, id=%s, left=%s, right=%s, str_value=%s\n",
-            return_node->type ? return_node->type : "NULL",
-            return_node->id ? return_node->id : "NULL",
-            return_node->left,
-            return_node->right,
-            return_node->str_value ? return_node->str_value : "NULL");*/
     }
 }
 
@@ -2551,26 +2606,38 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
 
 
 static void interpret_var_decl(ASTNode *node) {
-    /* trace removed */
+    printf("[DEBUG] interpret_var_decl: %s\n", node->id); fflush(stdout);
     int is_const_flag = node->value;
     const char* declared_type = node->str_value;
     ASTNode* value_node = node->left;
     Variable *evaluated_value_var = NULL;
 
     // 1. Si el valor es una llamada a función, ejecútala primero
-if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0 || strcmp(value_node->type, "FILTER_CALL") == 0 || strcmp(value_node->type, "CALL_FUNC") == 0)) {        interpret_ast(value_node);
+if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0 || strcmp(value_node->type, "FILTER_CALL") == 0 || strcmp(value_node->type, "CALL_FUNC") == 0)) {        
+        printf("[DEBUG] interpret_var_decl: executing function call\n"); fflush(stdout);
+        interpret_ast(value_node);
+        printf("[DEBUG] interpret_var_decl: function call returned\n"); fflush(stdout);
         evaluated_value_var = find_variable("__ret__");
+        printf("[DEBUG] interpret_var_decl: find_variable returned %p\n", (void*)evaluated_value_var); fflush(stdout);
         if (!evaluated_value_var) {
             fprintf(stderr, "Error: No se capturó valor de retorno de la expresión '%s'. __ret_var_active=%d\n", value_node->type ? value_node->type : "desconocido", __ret_var_active);
             exit(1);
         }
     }
+    // ... (rest of function)
+    // I will just replace the beginning to add debug prints.
+    // But I need to include the rest of the function or use a smaller range.
+    // I will use a smaller range.
+
 
     // 2. Comprobación de tipos (Tu lógica es correcta)
+    printf("[DEBUG] interpret_var_decl: type checking\n"); fflush(stdout);
     const char* effective_value_type_str = NULL;
     if (evaluated_value_var != NULL) {
         effective_value_type_str = evaluated_value_var->type;
+        printf("[DEBUG] interpret_var_decl: effective_value_type_str from var: %s\n", effective_value_type_str ? effective_value_type_str : "NULL"); fflush(stdout);
     } else if (value_node != NULL) {
+        printf("[DEBUG] interpret_var_decl: effective_value_type_str from node\n"); fflush(stdout);
         if (strcmp(value_node->type, "NUMBER") == 0) {
             effective_value_type_str = "INT";
         } else if (strcmp(value_node->type, "STRING_LITERAL") == 0 || strcmp(value_node->type, "STRING") == 0) {
@@ -2598,15 +2665,19 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
     }
 
     // 3. Asignación
+    printf("[DEBUG] interpret_var_decl: assignment\n"); fflush(stdout);
     ASTNode *value_to_assign_node = NULL;
     if (evaluated_value_var != NULL) {
         // ---- Si el valor vino de una función (como __ret_var) ----
+        printf("[DEBUG] interpret_var_decl: assigning from evaluated_value_var (vtype=%d)\n", evaluated_value_var->vtype); fflush(stdout);
         
         // Crea un nuevo nodo AST persistente para almacenar el valor
         if (evaluated_value_var->vtype == VAL_STRING) {
             value_to_assign_node = create_ast_leaf("STRING", 0, strdup(evaluated_value_var->value.string_value), NULL);
         } else if (evaluated_value_var->vtype == VAL_INT) {
+            printf("[DEBUG] interpret_var_decl: creating INT node\n"); fflush(stdout);
             value_to_assign_node = create_ast_leaf_number("INT", evaluated_value_var->value.int_value, NULL, NULL);
+            printf("[DEBUG] interpret_var_decl: created INT node\n"); fflush(stdout);
         } else if (evaluated_value_var->vtype == VAL_FLOAT) {
             value_to_assign_node = create_ast_leaf("FLOAT", 0, double_to_string(evaluated_value_var->value.float_value), NULL);
         } else if (evaluated_value_var->vtype == VAL_OBJECT) {
@@ -2628,7 +2699,9 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
             exit(1);
         }
         
-    declare_variable(node->id, value_to_assign_node, is_const_flag);
+        printf("[DEBUG] interpret_var_decl: declaring variable %s\n", node->id); fflush(stdout);
+        declare_variable(node->id, value_to_assign_node, is_const_flag);
+        printf("[DEBUG] interpret_var_decl: declared variable\n"); fflush(stdout);
         
     // NOTE: Do NOT free 'value_to_assign_node' here. The declared variable
     // stores pointers into the node (or copies them) and freeing it here
@@ -2636,6 +2709,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
     // free_ast(value_to_assign_node); // removed intentionally
         
         // Limpia la variable de retorno
+        printf("[DEBUG] interpret_var_decl: cleaning __ret_var\n"); fflush(stdout);
         if (__ret_var_active) {
             if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
             if (__ret_var.id) free(__ret_var.id);
@@ -2654,6 +2728,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
 
     // 4. Ejecutar el constructor (Tu lógica es correcta)
     // (Este código se ejecuta para *ambos* casos, lo cual es correcto)
+    printf("[DEBUG] interpret_var_decl: checking constructor\n"); fflush(stdout);
     if (node->left && strcmp(node->left->type, "OBJECT")==0) {
         Variable *var = find_variable(node->id);
         if (!var || var->vtype!=VAL_OBJECT) return;
@@ -2698,6 +2773,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
             call_method(var->value.object_value, "__constructor");
         }
     }
+    printf("[DEBUG] interpret_var_decl: done\n"); fflush(stdout);
 }
 
 ASTNode *create_list_node(ASTNode *items) {

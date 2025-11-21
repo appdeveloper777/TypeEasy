@@ -22,9 +22,9 @@
 "from"       { yylval.sval = strdup(yytext); return FROM; }
 "layer"      { yylval.sval = strdup(yytext); return LAYER; }
 "plot"                   { return PLOT; }       
-"mysql_connect"          { return MYSQL_CONNECT; }
-"mysql_close"            { return MYSQL_CLOSE; }
-"mysql_query"            { return MYSQL_QUERY; }
+"mysql_connect"          { printf("LEXER: mysql_connect\n"); fflush(stdout); return MYSQL_CONNECT; }
+"mysql_close"            { printf("LEXER: mysql_close\n"); fflush(stdout); return MYSQL_CLOSE; }
+"mysql_query"            { printf("LEXER: mysql_query\n"); fflush(stdout); return MYSQL_QUERY; }
 
 
 

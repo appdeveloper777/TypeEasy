@@ -1,8 +1,0 @@
-endpoint {
-    [HttpGet("/api/test/basic")]
-    TestBasic() {
-        println("hello");   
-        //let x = println("hello");
-        //return json(x);
-    }
-}

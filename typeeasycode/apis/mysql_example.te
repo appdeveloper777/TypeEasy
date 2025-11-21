@@ -7,15 +7,16 @@ endpoint {
         // Conexión a MySQL de XAMPP en la máquina host (Windows)
         // host.docker.internal:3308 - puerto de XAMPP
         
-        let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri");
-        print("hola");
-        // Ejecutar query
-        let result = new mysql_query(conn_id, "SELECT * FROM bitacora");
-        print("hola");
-        // Cerrar conexión
-        //mysql_close(conn_id);
+        let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
         
-        // Retornar resultado como JSON
-        //return json(result);
+        
+        // Ejecutar query
+        let result = new mysql_query(conn_id, "SELECT * FROM db_facturas_items");
+        
+        // Cerrar conexión
+        mysql_close(conn_id);
+        
+        // Retornar resultado como XML
+        return json(result);
     }
 }

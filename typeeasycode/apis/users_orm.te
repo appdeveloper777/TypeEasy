@@ -1,0 +1,64 @@
+// ORM Endpoint para Users
+// Modelo: User con todos los campos de la tabla users
+
+endpoint {
+    [HttpGet("/api/orm/users")]
+    GetUsersORM() {
+        //  Conectar a MySQL   
+
+        let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
+        
+        
+        // Ejecutar query
+        let result = new mysql_query(conn_id, "SELECT * FROM users LIMIT 1");
+        
+        // Cerrar conexión
+        mysql_close(conn_id);
+        
+        // Retornar resultado como XML
+        return json(result);
+    }
+}
+/*
+// Clase User - Modelo ORM
+class User {
+    int id;
+    string usuario;
+    string email;
+    string cambio_correo;
+    string key;
+    int verificado;
+    string password;
+    string hash;
+    int rol_id;
+    int id_relacion_f;
+    int estado_doctor;
+    string created_at;
+    string updated_at;
+    
+    // Constructor
+    User(int id, string usuario, string email, string cambio_correo, 
+         string key, int verificado, string password, string hash,
+         int rol_id, int id_relacion_f, int estado_doctor, 
+         string created_at, string updated_at) {
+        this.id = id;
+        this.usuario = usuario;
+        this.email = email;
+        this.cambio_correo = cambio_correo;
+        this.key = key;
+        this.verificado = verificado;
+        this.password = password;
+        this.hash = hash;
+        this.rol_id = rol_id;
+        this.id_relacion_f = id_relacion_f;
+        this.estado_doctor = estado_doctor;
+        this.created_at = created_at;
+        this.updated_at = updated_at;
+    }
+    
+    // Método para obtener representación JSON
+    string toJson() {
+        return json(this);
+    }
+}
+*/

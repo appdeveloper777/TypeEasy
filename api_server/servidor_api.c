@@ -16,20 +16,22 @@ typedef struct RouteEntry {
     char *route_path;
     char *script_path;
     char *function_name;
+    char *response_type;  // "json" or "xml"
     struct RouteEntry *next;
 } RouteEntry;
 
 static RouteEntry *global_routes = NULL;
 
 // Función para añadir una ruta a la tabla
-void add_route(const char *route, const char *script, const char *func) {
+void add_route(const char *route, const char *script, const char *func, const char *resp_type) {
     RouteEntry *entry = (RouteEntry*)malloc(sizeof(RouteEntry));
     entry->route_path = strdup(route);
     entry->script_path = strdup(script);
     entry->function_name = strdup(func);
+    entry->response_type = strdup(resp_type ? resp_type : "json");
     entry->next = global_routes;
     global_routes = entry;
-    printf("[LOG] Ruta registrada: %s -> %s::%s\n", route, script, func);
+    printf("[LOG] Ruta registrada: %s -> %s() [%s]\n", route, func, entry->response_type);
 }
 
 // Función para descubrir rutas al inicio
@@ -97,9 +99,27 @@ void discover_routes() {
                         strncpy(func, func_start, func_len);
                         func[func_len] = '\0';
                         
-                        // Registrar ruta
-                        add_route(route, path, func);
+                        // Buscar response_type
+                        char *resp_type = "json"; // default
+                        char *resp_pos = strstr(p, "\"response_type\":");
+                        if (resp_pos) {
+                            resp_pos += 16;
+                            while (*resp_pos == ' ' || *resp_pos == '"') resp_pos++;
+                            char *resp_start = resp_pos;
+                            while (*resp_pos != '"' && *resp_pos != '\0') resp_pos++;
+                            if (*resp_pos == '"') {
+                                int resp_len = resp_pos - resp_start;
+                                char *resp_temp = (char*)malloc(resp_len + 1);
+                                strncpy(resp_temp, resp_start, resp_len);
+                                resp_temp[resp_len] = '\0';
+                                resp_type = resp_temp;
+                            }
+                        }
                         
+                        // Registrar ruta
+                        add_route(route, path, func, resp_type);
+                        
+                        if (resp_pos && resp_type != "json") free((char*)resp_type);
                         free(func);
                     }
                 }
@@ -125,7 +145,8 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
             // Encontrado!
             char command[512];
             // Usar --invoke para ejecutar la función específica
-            snprintf(command, sizeof(command), "/app/typeeasy \"%s\" --invoke %s 2>&1", entry->script_path, entry->function_name);
+            // Redirigir stderr a /dev/null para evitar capturar logs de debug
+            snprintf(command, sizeof(command), "/app/typeeasy \"%s\" --invoke %s 2>/dev/null", entry->script_path, entry->function_name);
             
             fprintf(stderr, "[LOG] Ejecutando: %s\n", command);
             
@@ -135,21 +156,60 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
                 return 1;
             }
 
-            char response_buffer[8192] = {0};
-            char buffer[1024];
+            // Increased buffer size to 512KB for large query results
+            char *response_buffer = (char*)malloc(524288);
+            if (!response_buffer) {
+                pclose(fp);
+                mg_send_http_error(conn, 500, "Error de memoria");
+                return 1;
+            }
+            response_buffer[0] = '\0';
+            
+            char buffer[4096];
+            size_t total_length = 0;
             while (fgets(buffer, sizeof(buffer), fp) != NULL) {
-                strcat(response_buffer, buffer);
+                size_t buffer_len = strlen(buffer);
+                // Check if we have space
+                if (total_length + buffer_len < 524288 - 1) {
+                    strcat(response_buffer, buffer);
+                    total_length += buffer_len;
+                } else {
+                    fprintf(stderr, "[ERROR] Response buffer overflow, truncating\n");
+                    break;
+                }
             }
             int ret = pclose(fp);
 
             if (ret != 0) {
+                 free(response_buffer);
                  mg_send_http_error(conn, 500, "Error en la ejecución del script TypeEasy");
                  return 1;
             }
 
+            // Extract only XML/JSON content, filtering out debug logs
+            char *actual_content = response_buffer;
+            
+            // Look for XML declaration
+            char *xml_start = strstr(response_buffer, "<?xml");
+            if (xml_start) {
+                actual_content = xml_start;
+            } else {
+                // Look for JSON array start
+                char *json_array_start = strstr(response_buffer, "[{");
+                if (json_array_start) {
+                    actual_content = json_array_start;
+                } else {
+                    // Look for JSON object start
+                    char *json_obj_start = strstr(response_buffer, "{\"");
+                    if (json_obj_start) {
+                        actual_content = json_obj_start;
+                    }
+                }
+            }
+
             // Determinar Content-Type (simple heurística)
             const char *content_type = "application/json";
-            if (response_buffer[0] == '<') {
+            if (actual_content[0] == '<') {
                 content_type = "application/xml";
             }
 
@@ -160,7 +220,9 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
                       "Access-Control-Allow-Origin: *\r\n"
                       "\r\n"
                       "%s",
-                      content_type, (int)strlen(response_buffer), response_buffer);
+                      content_type, (int)strlen(actual_content), actual_content);
+            
+            free(response_buffer);
             return 1;
         }
         entry = entry->next;
@@ -206,6 +268,8 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         ".get { background: #61affe; }"
         ".post { background: #49cc90; }"
         ".route { font-family: monospace; font-size: 16px; color: #333; }"
+        ".json-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: bold; background: #f0ad4e; color: white; margin-left: 8px; }"
+        ".xml-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: bold; background: #5bc0de; color: white; margin-left: 8px; }"
         ".function { color: #666; font-size: 14px; margin-top: 5px; }"
         ".count { color: #666; font-size: 14px; }"
         ".try-btn { background: #4CAF50; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-top: 10px; font-size: 14px; }"
@@ -270,15 +334,22 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
             "<p>No hay rutas descubiertas. Crea archivos .te con bloques 'endpoint { }' en typeeasycode/apis/</p>");
     } else {
         while (entry && offset < sizeof(html) - 1000) {
+            // Determine badge color based on response type
+            const char *badge_class = (entry->response_type && strcmp(entry->response_type, "xml") == 0) ? "xml-badge" : "json-badge";
+            const char *badge_text = (entry->response_type && strcmp(entry->response_type, "xml") == 0) ? "XML" : "JSON";
+            
             offset += snprintf(html + offset, sizeof(html) - offset,
                 "<div class='endpoint'>"
                 "<span class='method get'>GET</span>"
                 "<span class='route'>%s</span>"
+                "<span class='%s'>%s</span>"
                 "<div class='function'>→ %s()</div>"
                 "<button class='try-btn' id='btn-%d' onclick='tryEndpoint(\"%s\", \"btn-%d\")'>Try it out</button>"
                 "<div class='response' id='btn-%d-response'></div>"
                 "</div>",
                 entry->route_path,
+                badge_class,
+                badge_text,
                 entry->function_name,
                 endpoint_id,
                 entry->route_path,
@@ -323,6 +394,9 @@ static int manejadorMySQLUsuarios(struct mg_connection *conn, void *cbdata) {
         mg_send_http_error(conn, 500, "MySQL init failed");
         return 1;
     }
+
+    printf("[MySQL] Intentando conectar...\n");
+    return 1;
     
     // Conectar a MySQL
     if (!mysql_real_connect(mysql_conn, "mysql", "root", "rootpassword", "test_db", 3306, NULL, 0)) {
@@ -352,6 +426,8 @@ static int manejadorMySQLUsuarios(struct mg_connection *conn, void *cbdata) {
             tabla[i] = '\0';
         }
     }
+
+    
 
     // Construir consulta SQL dinámica
     char query[256];

@@ -26,6 +26,7 @@ endpoint {
     [HttpGet("/api/usuario_json/perfil")]
     GetUserProfileDos() {
         let usuario = new Person(36, "Fernando Ingunza", "Roussecloud");    
+        println("test");
         return json(usuario);
     }
 }

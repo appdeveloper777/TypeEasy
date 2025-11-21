@@ -1,7 +1,0 @@
-endpoint {
-    [HttpGet("/test")]
-    Test() {
-        mysql_close(conn_id);
-        return json("ok");
-    }
-}
