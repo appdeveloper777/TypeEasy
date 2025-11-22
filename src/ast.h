@@ -1,3 +1,6 @@
+// ...existing code...
+// Prototipo nativo ORM debe ir después de ASTNode
+// ...existing code...
 // Serializa un objeto a JSON string dado su id y lo imprime
 // Serializa un objeto a XML string dado su id y lo imprime
 // Retorna un string XML serializado de un objeto dado su id
@@ -32,6 +35,8 @@ typedef struct ASTNode {
     struct ASTNode *extra; 
 
 } ASTNode;
+// Prototipo nativo ORM debe ir después de ASTNode
+void native_orm_query(ASTNode* args);
 
 /* --- 2. ELIMINAMOS RuntimeHost y ActiveBridge --- */
 /* ... (Se han ido a servidor_agent.c) ... */

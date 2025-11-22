@@ -194,15 +194,22 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
             if (xml_start) {
                 actual_content = xml_start;
             } else {
-                // Look for JSON array start
-                char *json_array_start = strstr(response_buffer, "[{");
-                if (json_array_start) {
-                    actual_content = json_array_start;
+                // Look for XML tags (e.g., <Usuarios>, <Usuario>, etc.)
+                char *xml_tag_start = strchr(response_buffer, '<');
+                if (xml_tag_start && xml_tag_start[1] != '!' && xml_tag_start[1] != '?') {
+                    // Found an opening tag that's not a comment or processing instruction
+                    actual_content = xml_tag_start;
                 } else {
-                    // Look for JSON object start
-                    char *json_obj_start = strstr(response_buffer, "{\"");
-                    if (json_obj_start) {
-                        actual_content = json_obj_start;
+                    // Look for JSON array start
+                    char *json_array_start = strstr(response_buffer, "[{");
+                    if (json_array_start) {
+                        actual_content = json_array_start;
+                    } else {
+                        // Look for JSON object start
+                        char *json_obj_start = strstr(response_buffer, "{\"");
+                        if (json_obj_start) {
+                            actual_content = json_obj_start;
+                        }
                     }
                 }
             }

@@ -28,7 +28,7 @@
 %token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA CONCAT JSON XML HTTPGET HTTPPOST
 %token       VAR ASSIGN PRINT PRINTLN FOR LPAREN RPAREN SEMICOLON CONCAT
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
-%token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN MYSQL_CONNECT MYSQL_CLOSE MYSQL_QUERY
+%token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN MYSQL_CONNECT MYSQL_CLOSE MYSQL_QUERY ORM_QUERY
 %token <sval> IDENTIFIER STRING_LITERAL CONST
 %token <ival> NUMBER
 %token IF ELSE
@@ -349,6 +349,7 @@ func_call_expr:
     | NEW MYSQL_CONNECT LPAREN expression_list RPAREN { printf("PARSER: Reducing MYSQL_CONNECT\n"); fflush(stdout); $$ = create_call_node("mysql_connect", $4); }
     | NEW MYSQL_QUERY LPAREN expression_list RPAREN { printf("PARSER: Reducing MYSQL_QUERY\n"); fflush(stdout); $$ = create_call_node("mysql_query", $4); }
     | MYSQL_CLOSE LPAREN expression RPAREN { printf("PARSER: Reducing MYSQL_CLOSE\n"); fflush(stdout); $$ = create_call_node("mysql_close", $3); }
+    | ORM_QUERY LPAREN expression_list RPAREN { printf("PARSER: Reducing ORM_QUERY\n"); fflush(stdout); $$ = create_call_node("orm_query", $3); }
     
 ;
 

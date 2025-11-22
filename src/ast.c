@@ -114,6 +114,11 @@ void evaluate_native_args(ASTNode *arg) {
 }
 // --- Hook para funciones nativas ---
 int call_native_function(const char *name, ASTNode *arg) {
+        if (strcmp(name, "orm_query") == 0) {
+            printf("[DEBUG] calling native_orm_query\n"); fflush(stdout);
+            native_orm_query(arg);
+            return 1;
+        }
     printf("[DEBUG] call_native_function: %s\n", name); fflush(stdout);
     // Siempre evaluar argumentos antes de llamada nativa
     if (arg) evaluate_native_args(arg);
@@ -728,6 +733,10 @@ void add_or_update_variable(char *id, ASTNode *value) {
             __ret_var.vtype = VAL_OBJECT;
             __ret_var.type = strdup("OBJECT");
             __ret_var.value.object_value = (ObjectNode *)value->extra;
+        } else if (strcmp(value->type, "LIST") == 0) {
+            __ret_var.vtype = VAL_OBJECT;
+            __ret_var.type = strdup("LIST");
+            __ret_var.value.object_value = (ObjectNode *)value;
         } else if (strcmp(value->type, "FLOAT") == 0) {
             __ret_var.vtype = VAL_FLOAT;
             __ret_var.type = strdup("FLOAT");
@@ -1936,6 +1945,10 @@ char* get_object_xml_by_id(const char* id) {
                 printf("Error: No se encontró variable con id '%s' para serializar a XML.\n", id);
                 return;
             }
+            
+            printf("[DEBUG XML ENTRY] id=%s, vtype=%d, type=%s, value.object_value=%p\n", 
+                   id, var->vtype, var->type ? var->type : "NULL", (void*)var->value.object_value);
+            fflush(stdout);
 
             // If variable is a STRING, print it directly (for mysql_query results with XML format)
             if (var->vtype == VAL_STRING) {
@@ -1943,11 +1956,75 @@ char* get_object_xml_by_id(const char* id) {
                 return;
             }
 
+            // Si es una LISTA, serializar cada objeto
+            if (var->type && strcmp(var->type, "LIST") == 0 && var->value.object_value) {
+                ASTNode *listNode = (ASTNode *)(intptr_t)var->value.object_value;
+                printf("[DEBUG XML] listNode=%p, type=%s\n", (void*)listNode, listNode ? (listNode->type ? listNode->type : "NULL") : "NULL");
+                fflush(stdout);
+                
+                if (listNode && listNode->type && strcmp(listNode->type, "LIST") == 0) {
+                    printf("<Usuarios>\n");
+                    ASTNode *cur = listNode->left;
+                    printf("[DEBUG XML] listNode->left=%p\n", (void*)cur);
+                    fflush(stdout);
+                    
+                    int count = 0;
+                    while (cur) {
+                        count++;
+                        printf("[DEBUG XML] Processing item #%d: cur=%p, type=%s\n", count, (void*)cur, cur->type ? cur->type : "NULL");
+                        fflush(stdout);
+                        if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
+                            // ObjectNode pointer is stored in 'extra', not 'value'
+                            ObjectNode *obj = (ObjectNode *)cur->extra;
+                            printf("[DEBUG XML] obj=%p\n", (void*)obj);
+                            fflush(stdout);
+                            
+                            if (!obj) {
+                                printf("[DEBUG XML] obj is NULL!\n");
+                                fflush(stdout);
+                            } else {
+                                printf("[DEBUG XML] obj->class=%p\n", (void*)obj->class);
+                                fflush(stdout);
+                                
+                                if (!obj->class) {
+                                    printf("[DEBUG XML] obj->class is NULL!\n");
+                                    fflush(stdout);
+                                } else {
+                                    printf("[DEBUG XML] obj->class->attr_count=%d\n", obj->class->attr_count);
+                                    fflush(stdout);
+                                    
+                                    printf("  <Usuario>\n");
+                                    for (int i = 0; i < obj->class->attr_count; i++) {
+                                        Variable *attr = &obj->attributes[i];
+                                        printf("    <%s>", attr->id);
+                                        if (attr->vtype == VAL_STRING) {
+                                            printf("%s", attr->value.string_value);
+                                        } else if (attr->vtype == VAL_INT) {
+                                            printf("%d", attr->value.int_value);
+                                        } else if (attr->vtype == VAL_FLOAT) {
+                                            printf("%f", attr->value.float_value);
+                                        } else {
+                                            printf("null");
+                                        }
+                                        printf("</%s>\n", attr->id);
+                                    }
+                                    printf("  </Usuario>\n");
+                                }
+                            }
+                        }
+                        printf("[DEBUG XML] cur->next=%p\n", (void*)cur->next);
+                        cur = cur->next;
+                    }
+                    printf("[DEBUG XML] Total items processed: %d\n", count);
+                    printf("</Usuarios>\n");
+                    return;
+                }
+            }
+            // Si no es lista, serializar como objeto único
             if (var->vtype != VAL_OBJECT || !var->value.object_value) {
                 printf("Error: Variable '%s' no es un objeto válido para serializar a XML.\n", id);
                 return;
             }
-
             ObjectNode *obj = var->value.object_value;
             char xml_buffer[65536] = "";
             snprintf(xml_buffer, sizeof(xml_buffer), "<%s>", obj->class->name);
@@ -2733,19 +2810,38 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         } else if (evaluated_value_var->vtype == VAL_FLOAT) {
             value_to_assign_node = create_ast_leaf("FLOAT", 0, double_to_string(evaluated_value_var->value.float_value), NULL);
         } else if (evaluated_value_var->vtype == VAL_OBJECT) {
-            value_to_assign_node = malloc(sizeof(ASTNode));
-            value_to_assign_node->type = strdup(evaluated_value_var->type);
-            value_to_assign_node->extra = (struct ASTNode*)evaluated_value_var->value.object_value; // <-- CORRECCIÓN
-            value_to_assign_node->id = evaluated_value_var->id ? strdup(evaluated_value_var->id) : NULL;
-            value_to_assign_node->str_value = NULL;
+            // Si es LIST, asignar como VAL_OBJECT y type LIST, y value.object_value apunta al nodo LIST
             if (strcmp(evaluated_value_var->type, "LIST") == 0) {
-                value_to_assign_node->left = ((ASTNode*)evaluated_value_var->value.object_value)->left;
+                Variable *var = malloc(sizeof(Variable));
+                var->id = strdup(node->id);
+                var->is_const = is_const_flag;
+                var->vtype = VAL_OBJECT;
+                var->type = strdup("LIST");
+                var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value; // Apunta al nodo LIST
+                vars[var_count++] = *var;
+                free(var);
+                printf("[DEBUG] interpret_var_decl: declared LIST variable\n"); fflush(stdout);
+                // Limpia la variable de retorno
+                if (__ret_var_active) {
+                    if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
+                    if (__ret_var.id) free(__ret_var.id);
+                    if (__ret_var.type) free(__ret_var.type);
+                    memset(&__ret_var, 0, sizeof(Variable));
+                    __ret_var_active = 0;
+                }
+                return_flag = 0;
+                return_node = NULL;
+                return;
             } else {
+                value_to_assign_node = malloc(sizeof(ASTNode));
+                value_to_assign_node->type = strdup(evaluated_value_var->type);
+                value_to_assign_node->extra = (struct ASTNode*)evaluated_value_var->value.object_value;
+                value_to_assign_node->id = evaluated_value_var->id ? strdup(evaluated_value_var->id) : NULL;
+                value_to_assign_node->str_value = NULL;
                 value_to_assign_node->left = NULL;
+                value_to_assign_node->right = NULL;
+                value_to_assign_node->next = NULL;
             }
-            value_to_assign_node->right = NULL;
-            value_to_assign_node->next = NULL;
-           // value_to_assign_node->extra = NULL;
         } else {
             fprintf(stderr, "Error interno: Tipo de retorno desconocido para asignación de variable '%s'.\n", node->id);
             exit(1);

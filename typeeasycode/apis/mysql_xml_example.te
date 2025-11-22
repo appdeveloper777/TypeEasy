@@ -10,7 +10,7 @@ endpoint {
         let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
         
         // Ejecutar query con formato XML
-        let result = new mysql_query(conn_id, "SELECT * FROM users LIMIT 5");
+        let result = new mysql_query(conn_id, "SELECT * FROM users LIMIT 5", "xml");
         
         // Cerrar conexión
         mysql_close(conn_id);
@@ -31,6 +31,6 @@ endpoint {
         mysql_close(conn_id);
         
         // Retornar resultado como JSON
-        return xml(result);
+        return json(result);
     }
 }

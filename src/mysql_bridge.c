@@ -8,6 +8,85 @@
 static MYSQL* connections[10] = {NULL};
 static int next_conn_id = 0;
 
+// Devuelve lista de resultados para ORM
+ASTNode* mysql_query_result(int conn_id, const char* query) {
+    printf("[ORM] mysql_query_result: conn_id=%d, query=%s\n", conn_id, query ? query : "NULL");
+    fflush(stdout);
+    
+    // Validar conexión
+    if (conn_id < 0 || conn_id >= 10 || !connections[conn_id]) {
+        printf("[ORM] Error: Conexión inválida (ID: %d)\n", conn_id);
+        return NULL;
+    }
+    
+    MYSQL* conn = connections[conn_id];
+    
+    // Ejecutar query
+    if (mysql_query(conn, query)) {
+        printf("[ORM] Error en query: %s\n", mysql_error(conn));
+        return NULL;
+    }
+    
+    // Obtener resultados
+    MYSQL_RES* res = mysql_store_result(conn);
+    if (!res) {
+        printf("[ORM] No hay resultados para la consulta\n");
+        return NULL;
+    }
+    
+    int num_fields = mysql_num_fields(res);
+    MYSQL_FIELD* fields = mysql_fetch_fields(res);
+    
+    printf("[ORM] Query ejecutado exitosamente. Campos: %d\n", num_fields);
+    
+    // Construir lista de resultados
+    ASTNode* first_row = NULL;
+    ASTNode* last_row = NULL;
+    MYSQL_ROW row;
+    
+    while ((row = mysql_fetch_row(res))) {
+        // Crear nodo de argumentos para esta fila
+        ASTNode* row_args = NULL;
+        
+        // Debug: mostrar campos de la primera fila
+        if (!first_row) {
+            printf("[MySQL DEBUG] Campos de la primera fila:\n");
+            for (int i = 0; i < num_fields; i++) {
+                printf("  Campo %d: name='%s', value='%s', type=%d\n", 
+                       i, fields[i].name, row[i] ? row[i] : "NULL", fields[i].type);
+            }
+        }
+        for (int i = 0; i < num_fields; i++) {
+            const char* field_name = fields[i].name;
+            const char* field_value = row[i] ? row[i] : "";
+            ASTNode* field_node = NULL;
+            if (IS_NUM(fields[i].type)) {
+                int int_value = row[i] ? atoi(row[i]) : 0;
+                field_node = create_ast_leaf("NUMBER", int_value, NULL, (char*)field_name);
+            } else {
+                field_node = create_ast_leaf("STRING", 0, (char*)field_value, (char*)field_name);
+            }
+            row_args = append_to_list(row_args, field_node);
+        }
+        ASTNode* row_node = create_ast_node("ARGS", row_args, NULL);
+        if (!first_row) {
+            first_row = row_node;
+            last_row = row_node;
+        } else {
+            last_row->right = row_node;
+            last_row = row_node;
+        }
+    }
+    
+    mysql_free_result(res);
+    
+    printf("[ORM] Resultados procesados exitosamente\n");
+    printf("[MySQL DEBUG] mysql_query_result returning: first_row=%p\n", (void*)first_row);
+    fflush(stdout);
+    
+    return first_row;
+}
+
 // Prototipos de funciones auxiliares de ast.c
 extern ASTNode* create_ast_leaf(char *type, int value, char *str_value, char *id);
 extern void free_ast(ASTNode *node);
@@ -184,7 +263,10 @@ void native_mysql_connect(ASTNode* args) {
         return;
     }
     
-    if (!mysql_real_connect(conn, host, user, pass, db, port, NULL, 0)) {
+    // Habilitar SSL (necesario para TiDB Cloud y otros servicios seguros)
+    mysql_ssl_set(conn, NULL, NULL, NULL, NULL, NULL);
+
+    if (!mysql_real_connect(conn, host, user, pass, db, port, NULL, CLIENT_SSL)) {
         printf("[MySQL] Error de conexión: %s\n", mysql_error(conn)); fflush(stdout);
         ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
         add_or_update_variable("__ret__", ret_node);

@@ -12,7 +12,7 @@ MAIN_AGENT_OBJ = $(MAIN_AGENT_C:.c=.o)
 BISON_FILE = parser.y
 FLEX_FILE = parser.l
 # (Asumiendo que estos son todos tus archivos de motor)
-MOTOR_C_FILES = ast.c bytecode.c mysql_bridge.c
+MOTOR_C_FILES = ast.c bytecode.c mysql_bridge.c orm_bridge.c
 MOTOR_OBJS = $(MOTOR_C_FILES:.c=.o)
 
 BISON_C = parser.tab.c

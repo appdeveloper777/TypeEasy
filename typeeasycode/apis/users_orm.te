@@ -1,64 +1,38 @@
-// ORM Endpoint para Users
-// Modelo: User con todos los campos de la tabla users
+// Ejemplo de conexión y consulta ORM a MySQL usando TypeEasy
+// Archivo: orm_mysql.te
+
+class Usuario {
+  Id : int;
+  usuario : string;
+  email : string;
+
+  __constructor(_id : int, _usuario : string, _email : string) {
+    this.Id = _id;
+    this.usuario = _usuario;
+    this.email = _email;
+  }
+}
 
 endpoint {
-    [HttpGet("/api/orm/users")]
-    GetUsersORM() {
-        //  Conectar a MySQL   
+  [HttpGet("/api/orm/usuarios")]
+  GetUsuariosORM() {
+    
+    string host = "gateway01.us-east-1.prod.aws.tidbcloud.com";
+    string user = "2XCY4FHDYiMMcdi.root";
+    string pass = "dMal8ex6FlLgprno";
+    string db   = "test";
+    int port = 4000;
+    
+    string query = "SELECT * FROM usuarios LIMIT 3";
+    let conn_id = new mysql_connect(host, user, pass, db, port);
+      
+    // ORM: consulta y mapeo a objetos
+    let usuarios = orm_query(conn_id, query, Usuario);
 
-        let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
-        
-        
-        // Ejecutar query
-        let result = new mysql_query(conn_id, "SELECT * FROM users LIMIT 1");
-        
-        // Cerrar conexión
-        mysql_close(conn_id);
-        
-        // Retornar resultado como XML
-        return json(result);
-    }
+    // Cerrar conexión
+    mysql_close(conn_id);
+
+    // Retornar lista de usuarios como XML
+    return xml(usuarios);
+  }
 }
-/*
-// Clase User - Modelo ORM
-class User {
-    int id;
-    string usuario;
-    string email;
-    string cambio_correo;
-    string key;
-    int verificado;
-    string password;
-    string hash;
-    int rol_id;
-    int id_relacion_f;
-    int estado_doctor;
-    string created_at;
-    string updated_at;
-    
-    // Constructor
-    User(int id, string usuario, string email, string cambio_correo, 
-         string key, int verificado, string password, string hash,
-         int rol_id, int id_relacion_f, int estado_doctor, 
-         string created_at, string updated_at) {
-        this.id = id;
-        this.usuario = usuario;
-        this.email = email;
-        this.cambio_correo = cambio_correo;
-        this.key = key;
-        this.verificado = verificado;
-        this.password = password;
-        this.hash = hash;
-        this.rol_id = rol_id;
-        this.id_relacion_f = id_relacion_f;
-        this.estado_doctor = estado_doctor;
-        this.created_at = created_at;
-        this.updated_at = updated_at;
-    }
-    
-    // Método para obtener representación JSON
-    string toJson() {
-        return json(this);
-    }
-}
-*/
