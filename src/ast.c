@@ -714,7 +714,7 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
 
 void add_or_update_variable(char *id, ASTNode *value) {
     if (!value) return;
-    printf("[DEBUG] add_or_update_variable: id=%s, type=%s, value=%d, str_value=%s\n", id, value->type ? value->type : "NULL", value->value, value->str_value ? value->str_value : "NULL");
+    // printf("[DEBUG] add_or_update_variable: id=%s, type=%s, value=%d, str_value=%s\n", id, value->type ? value->type : "NULL", value->value, value->str_value ? value->str_value : "NULL");
 
     if (strcmp(id, "__ret__") == 0) {
         if (__ret_var_active) {
@@ -1952,7 +1952,9 @@ char* get_object_xml_by_id(const char* id) {
 
             // If variable is a STRING, print it directly (for mysql_query results with XML format)
             if (var->vtype == VAL_STRING) {
-                printf("%s\n", var->value.string_value);
+                ASTNode *ret_node = create_ast_leaf("STRING", 0, strdup(var->value.string_value), NULL);
+                add_or_update_variable("__ret__", ret_node);
+                free_ast(ret_node);
                 return;
             }
 
