@@ -8,6 +8,49 @@
 static MYSQL* connections[10] = {NULL};
 static int next_conn_id = 0;
 
+// Helper: Escape XML special characters
+static void xml_escape(const char* input, char* output, size_t output_size) {
+    size_t out_pos = 0;
+    for (size_t i = 0; input[i] != '\0' && out_pos < output_size - 6; i++) {
+        switch (input[i]) {
+            case '&':
+                if (out_pos + 5 < output_size) {
+                    strcpy(output + out_pos, "&amp;");
+                    out_pos += 5;
+                }
+                break;
+            case '<':
+                if (out_pos + 4 < output_size) {
+                    strcpy(output + out_pos, "&lt;");
+                    out_pos += 4;
+                }
+                break;
+            case '>':
+                if (out_pos + 4 < output_size) {
+                    strcpy(output + out_pos, "&gt;");
+                    out_pos += 4;
+                }
+                break;
+            case '"':
+                if (out_pos + 6 < output_size) {
+                    strcpy(output + out_pos, "&quot;");
+                    out_pos += 6;
+                }
+                break;
+            case '\'':
+                if (out_pos + 6 < output_size) {
+                    strcpy(output + out_pos, "&apos;");
+                    out_pos += 6;
+                }
+                break;
+            default:
+                output[out_pos++] = input[i];
+                break;
+        }
+    }
+    output[out_pos] = '\0';
+}
+
 // Devuelve lista de resultados para ORM
 ASTNode* mysql_query_result(int conn_id, const char* query) {
     printf("[ORM] mysql_query_result: conn_id=%d, query=%s\n", conn_id, query ? query : "NULL");
@@ -136,16 +179,18 @@ static int get_arg_int(ASTNode* args, int index) {
             return (int)val;
         } else {
             // No es un número, intentar buscar como nombre de variable
-            printf("[DEBUG] String no numérico '%s', buscando como variable\n", current->str_value);
+            //printf("[DEBUG] String no numérico '%s', buscando como variable\n", current->str_value);
             Variable* v = find_variable(current->str_value);
             if (v) {
-                printf("[DEBUG] Variable encontrada: %s, tipo=%d, valor=%d\n", current->str_value, v->vtype, v->value.int_value);
+               // printf("[DEBUG] Variable encontrada: %s, tipo=%d, valor=%d\n", current->str_value, v->vtype, v->value.int_value);
                 if (v->vtype == VAL_INT) {
                     return v->value.int_value;
                 }
-            } else {
-                printf("[DEBUG] Variable NO encontrada: %s\n", current->str_value);
             }
+            /*
+            else {
+                printf("[DEBUG] Variable NO encontrada: %s\n", current->str_value);
+            }*/
         }
     }
 
@@ -173,11 +218,11 @@ static int get_arg_int(ASTNode* args, int index) {
     if (current->type && strcmp(current->type, "IDENTIFIER") == 0 && current->id) {
         printf("[DEBUG] Buscando variable IDENTIFIER: %s\n", current->id);
         Variable* v = find_variable(current->id);
-        if (v) {
+        /*if (v) {
             printf("[DEBUG] Variable encontrada: %s, tipo=%d, valor=%d\n", current->id, v->vtype, v->value.int_value);
         } else {
             printf("[DEBUG] Variable NO encontrada: %s\n", current->id);
-        }
+        }*/
         if (v && v->vtype == VAL_INT) {
             return v->value.int_value;
         }
@@ -201,7 +246,7 @@ void native_mysql_connect(ASTNode* args) {
         ASTNode* curr = args;
         int idx = 0;
         while (curr) {
-            printf("[DEBUG][native_mysql_connect] Arg #%d: type=%s, id=%s, str_value=%s, value=%d\n", idx, curr->type ? curr->type : "NULL", curr->id ? curr->id : "NULL", curr->str_value ? curr->str_value : "NULL", curr->value);
+            //printf("[DEBUG][native_mysql_connect] Arg #%d: type=%s, id=%s, str_value=%s, value=%d\n", idx, curr->type ? curr->type : "NULL", curr->id ? curr->id : "NULL", curr->str_value ? curr->str_value : "NULL", curr->value);
             curr = curr->right;
             idx++;
         }
@@ -381,10 +426,13 @@ void native_mysql_query(ASTNode* args) {
             offset += snprintf(result_buffer + offset, buffer_size - offset, "  <row>\n");
             for (int i = 0; i < num_fields; i++) {
                 offset += snprintf(result_buffer + offset, buffer_size - offset, "    <%s>", fields[i].name);
-                if (row[i]) {
-                    offset += snprintf(result_buffer + offset, buffer_size - offset, "%s", row[i]);
-                }
-                offset += snprintf(result_buffer + offset, buffer_size - offset, "</%s>\n", fields[i].name);
+            if (row[i]) {
+                // Escape XML special characters
+                char escaped[8192];
+                xml_escape(row[i], escaped, sizeof(escaped));
+                offset += snprintf(result_buffer + offset, buffer_size - offset, "%s", escaped);
+            }
+            offset += snprintf(result_buffer + offset, buffer_size - offset, "</%s>\n", fields[i].name);
             }
             offset += snprintf(result_buffer + offset, buffer_size - offset, "  </row>\n");
         }

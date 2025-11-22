@@ -365,20 +365,7 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
             entry = entry->next;
             endpoint_id++;
         }
-    }
-    
-    // Agregar endpoint MySQL nativo
-    offset += snprintf(html + offset, sizeof(html) - offset,
-        "<div class='endpoint'>"
-        "<span class='method get'>GET</span>"
-        "<span class='route'>/api/mysql/usuarios</span>"
-        "<div class='function'>→ MySQL Native (C)</div>"
-        "<button class='try-btn' id='btn-%d' onclick='tryEndpoint(\"/api/mysql/usuarios\", \"btn-%d\")'>Try it out</button>"
-        "<div class='response' id='btn-%d-response'></div>"
-        "</div>",
-        endpoint_id,
-        endpoint_id,
-        endpoint_id);
+    }        
     
     offset += snprintf(html + offset, sizeof(html) - offset,
         "<hr>"

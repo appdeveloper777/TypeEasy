@@ -14,7 +14,7 @@ class Usuario {
 }
 
 endpoint {
-  [HttpGet("/api/orm/usuarios")]
+  [HttpGet("/api/mysql-orm/local-xampp-server/usuarios")]
   GetUsuariosORM() {
      // Conexión a MySQL de XAMPP en la máquina host (Windows)
      // host.docker.internal:3308 - puerto de XAMPP

@@ -13,20 +13,24 @@ class Person {
 }
 
 endpoint {
-    [HttpGet("/api/usuario_json/perfil2")]
-    GetUserProfile() {
-        let usuario_json = new Person(36, "Fernando Ingunza", "Roussecloud");  
+    [HttpGet("/api/usuario_json/primer-perfil")]
+    GetUserProfile() {        
+        
+        let usuario_json = new Person(36, "Fernando Ingunza", "Roussecloud");          
+       
+        let body = concat(
+            "\"nombre\": \"", usuario_json.nombre, "\", ",
+            "\"company\": \"", usuario_json.company, "\", ",
+            "\"edad\": ", usuario_json.edad
+        );
         println("{");
-        println("nombre\":");
-        println(usuario_json.nombre);
-        println("company\": \"Roussecloud\", \"edad\": 36}");
+        println(body);
         println("}");   
     }
 
-    [HttpGet("/api/usuario_json/perfil")]
+    [HttpGet("/api/usuario_json/segundo-perfil")]
     GetUserProfileDos() {
-        let usuario = new Person(36, "Fernando Ingunza", "Roussecloud");    
-        println("test");
+        let usuario = new Person(36, "Fernando Ingunza", "Roussecloud");          
         return json(usuario);
     }
 }
