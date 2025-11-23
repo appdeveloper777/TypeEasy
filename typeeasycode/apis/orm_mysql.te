@@ -3,12 +3,12 @@
 
 class Usuario {
   id : int;
-  nombre : string;
+  usuario : string;
   email : string;
 
-  __constructor(id : int, nombre : string, email : string) {
+  __constructor(id : int, usuario : string, email : string) {
     this.id = id;
-    this.nombre = nombre;
+    this.usuario = usuario;
     this.email = email;
   }
 }
@@ -21,12 +21,16 @@ endpoint {
     string host = "host.docker.internal";
     string user = "root";
     string pass = "";
-    string db   = "mysql";
+    string db   = "meri";
     int port = 3308;
     let conn_id = new mysql_connect(host, user, pass, db, port);
 
     // ORM: consulta y mapeo a objetos
-    let usuarios = orm_query(conn_id, "SELECT id, nombre, email FROM usuarios", Usuario);
+     string query = "SELECT * FROM users LIMIT 3";
+    let conn_id = new mysql_connect(host, user, pass, db, port);
+      
+    // ORM: consulta y mapeo a objetos
+    let usuarios = orm_query(conn_id, query, Usuario);
 
     // Cerrar conexión
     mysql_close(conn_id);
@@ -36,11 +40,4 @@ endpoint {
   }
 }
 
-// Función simulada para ORM (debes implementar en C si no existe)
-function orm_query(conn_id, query, clase) {
-  // Aquí deberías mapear el resultado SQL a instancias de la clase
-  // Este es solo un placeholder para mostrar la idea
-  let resultado = new mysql_query(conn_id, query, "json");
-  // ...parsear JSON y crear objetos...
-  return resultado;
-}
+
