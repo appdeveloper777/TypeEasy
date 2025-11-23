@@ -48,7 +48,7 @@ RUN openssl version
 
 # Compilamos con la versión correcta de OpenSSL API
 RUN gcc -I/app/api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 \
-    /app/api_server/servidor_api.c /app/api_server/civetweb.c \
+    /app/api_server/servidor_api.c /app/api_server/typeeasy.c /app/api_server/civetweb.c \
     -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto -lmysqlclient
 
 # =================================================================

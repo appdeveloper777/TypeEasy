@@ -11,6 +11,9 @@
 #include "civetweb.h"
 #include <mysql/mysql.h>
 
+// Incluir el encabezado de TypeEasy
+#include "typeeasy.h"
+
 // Estructura para la tabla de rutas dinámica
 typedef struct RouteEntry {
     char *route_path;
@@ -21,6 +24,7 @@ typedef struct RouteEntry {
 } RouteEntry;
 
 static RouteEntry *global_routes = NULL;
+static TypeEasyContext *g_typeeasy_ctx = NULL;
 
 // Función para añadir una ruta a la tabla
 void add_route(const char *route, const char *script, const char *func, const char *resp_type) {
@@ -34,9 +38,58 @@ void add_route(const char *route, const char *script, const char *func, const ch
     printf("[LOG] Ruta registrada: %s -> %s() [%s]\n", route, func, entry->response_type);
 }
 
+// Función para cargar un script TypeEasy
+int load_typeeasy_script(const char *script_path) {
+    if (!g_typeeasy_ctx) {
+        fprintf(stderr, "[ERROR] Contexto TypeEasy no inicializado\n");
+        return 0;
+    }
+    
+    FILE *fp = fopen(script_path, "r");
+    if (!fp) {
+        fprintf(stderr, "[ERROR] No se pudo abrir el script: %s\n", script_path);
+        return 0;
+    }
+    
+    // Obtener tamaño del archivo
+    fseek(fp, 0, SEEK_END);
+    long file_size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    
+    // Leer contenido completo
+    char *script_content = (char*)malloc(file_size + 1);
+    if (!script_content) {
+        fclose(fp);
+        return 0;
+    }
+    
+    size_t bytes_read = fread(script_content, 1, file_size, fp);
+    script_content[bytes_read] = '\0';
+    fclose(fp);
+    
+    // Cargar script en TypeEasy
+    int result = typeeasy_load_script(g_typeeasy_ctx, script_path, script_content);
+    free(script_content);
+    
+    if (result) {
+        printf("[LOG] Script cargado: %s\n", script_path);
+    } else {
+        fprintf(stderr, "[ERROR] Error al cargar script: %s\n", script_path);
+    }
+    
+    return result;
+}
+
 // Función para descubrir rutas al inicio
 void discover_routes() {
     printf("[LOG] Iniciando descubrimiento de rutas...\n");
+    
+    // Inicializar contexto TypeEasy
+    g_typeeasy_ctx = typeeasy_init();
+    if (!g_typeeasy_ctx) {
+        fprintf(stderr, "[ERROR] No se pudo inicializar TypeEasy\n");
+        return;
+    }
     
     FILE *fp;
     char path[1035];
@@ -52,80 +105,79 @@ void discover_routes() {
         // Eliminar salto de línea
         path[strcspn(path, "\r\n")] = 0;
         
-        // path ya contiene la ruta completa (/app/apis/archivo.te)
         printf("[LOG] Descubriendo rutas en: %s\n", path);
         
-        // Ejecutar typeeasy con --discover
-        char command[512];
-        snprintf(command, sizeof(command), "/app/typeeasy \"%s\" --discover 2>&1", path);
-        
-        FILE *cmd_fp = popen(command, "r");
-        if (cmd_fp) {
-            char json_output[4096] = {0};
-            char buffer[1024];
-            while (fgets(buffer, sizeof(buffer), cmd_fp) != NULL) {
-                strcat(json_output, buffer);
-            }
-            pclose(cmd_fp);
-            
-            printf("[LOG] Salida de --discover para %s: %s\n", path, json_output);
-            
-            // Parsear JSON simple (ej: [{"route": "/api/x", ...}])
-            char *p = json_output;
-            while ((p = strstr(p, "\"route\":"))) {
-                p += 8; // Skip "route":
-                while (*p == ' ' || *p == '"') p++; // Skip spaces and quote
-                char *route_start = p;
-                while (*p != '"' && *p != '\0') p++;
-                if (*p == '\0') break;
-                
-                // Copy route without modifying original buffer
-                int route_len = p - route_start;
-                char *route = (char*)malloc(route_len + 1);
-                strncpy(route, route_start, route_len);
-                route[route_len] = '\0';
-                p++; // Move past quote
-                
-                // Buscar function
-                char *func_pos = strstr(p, "\"function\":");
-                if (func_pos) {
-                    func_pos += 11;
-                    while (*func_pos == ' ' || *func_pos == '"') func_pos++;
-                    char *func_start = func_pos;
-                    while (*func_pos != '"' && *func_pos != '\0') func_pos++;
-                    if (*func_pos == '"') {
-                        int func_len = func_pos - func_start;
-                        char *func = (char*)malloc(func_len + 1);
-                        strncpy(func, func_start, func_len);
-                        func[func_len] = '\0';
-                        
-                        // Buscar response_type
-                        char *resp_type = "json"; // default
-                        char *resp_pos = strstr(p, "\"response_type\":");
-                        if (resp_pos) {
-                            resp_pos += 16;
-                            while (*resp_pos == ' ' || *resp_pos == '"') resp_pos++;
-                            char *resp_start = resp_pos;
-                            while (*resp_pos != '"' && *resp_pos != '\0') resp_pos++;
-                            if (*resp_pos == '"') {
-                                int resp_len = resp_pos - resp_start;
-                                char *resp_temp = (char*)malloc(resp_len + 1);
-                                strncpy(resp_temp, resp_start, resp_len);
-                                resp_temp[resp_len] = '\0';
-                                resp_type = resp_temp;
-                            }
-                        }
-                        
-                        // Registrar ruta
-                        add_route(route, path, func, resp_type);
-                        
-                        if (resp_pos && resp_type != "json") free((char*)resp_type);
-                        free(func);
-                    }
-                }
-                free(route);
-            }
+        // Cargar script en TypeEasy
+        if (!load_typeeasy_script(path)) {
+            continue;
         }
+        
+        // Ejecutar discover usando TypeEasy embebido
+        char *discover_result = typeeasy_discover(g_typeeasy_ctx, path);
+        if (!discover_result) {
+            fprintf(stderr, "[ERROR] No se pudo descubrir rutas en: %s\n", path);
+            continue;
+        }
+        
+        printf("[LOG] Salida de --discover para %s: %s\n", path, discover_result);
+        
+        // Parsear JSON simple (ej: [{"route": "/api/x", ...}])
+        char *p = discover_result;
+        while ((p = strstr(p, "\"route\":"))) {
+            p += 8; // Skip "route":
+            while (*p == ' ' || *p == '"') p++; // Skip spaces and quote
+            char *route_start = p;
+            while (*p != '"' && *p != '\0') p++;
+            if (*p == '\0') break;
+            
+            // Copy route without modifying original buffer
+            int route_len = p - route_start;
+            char *route = (char*)malloc(route_len + 1);
+            strncpy(route, route_start, route_len);
+            route[route_len] = '\0';
+            p++; // Move past quote
+            
+            // Buscar function
+            char *func_pos = strstr(p, "\"function\":");
+            if (func_pos) {
+                func_pos += 11;
+                while (*func_pos == ' ' || *func_pos == '"') func_pos++;
+                char *func_start = func_pos;
+                while (*func_pos != '"' && *func_pos != '\0') func_pos++;
+                if (*func_pos == '"') {
+                    int func_len = func_pos - func_start;
+                    char *func = (char*)malloc(func_len + 1);
+                    strncpy(func, func_start, func_len);
+                    func[func_len] = '\0';
+                    
+                    // Buscar response_type
+                    char *resp_type = "json"; // default
+                    char *resp_pos = strstr(p, "\"response_type\":");
+                    if (resp_pos) {
+                        resp_pos += 16;
+                        while (*resp_pos == ' ' || *resp_pos == '"') resp_pos++;
+                        char *resp_start = resp_pos;
+                        while (*resp_pos != '"' && *resp_pos != '\0') resp_pos++;
+                        if (*resp_pos == '"') {
+                            int resp_len = resp_pos - resp_start;
+                            char *resp_temp = (char*)malloc(resp_len + 1);
+                            strncpy(resp_temp, resp_start, resp_len);
+                            resp_temp[resp_len] = '\0';
+                            resp_type = resp_temp;
+                        }
+                    }
+                    
+                    // Registrar ruta
+                    add_route(route, path, func, resp_type);
+                    
+                    if (resp_pos && resp_type != "json") free((char*)resp_type);
+                    free(func);
+                }
+            }
+            free(route);
+        }
+        
+        free(discover_result);
     }
     pclose(fp);
 }
@@ -142,71 +194,38 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
     RouteEntry *entry = global_routes;
     while (entry) {
         if (strcmp(uri, entry->route_path) == 0) {
-            // Encontrado!
-            char command[512];
-            // Usar --invoke para ejecutar la función específica
-            // Redirigir stderr a /dev/null para evitar capturar logs de debug
-            snprintf(command, sizeof(command), "/app/typeeasy \"%s\" --invoke %s 2>/dev/null", entry->script_path, entry->function_name);
+            // Encontrado! Invocar función directamente usando TypeEasy embebido
+            fprintf(stderr, "[LOG] Invocando función: %s desde %s\n", entry->function_name, entry->script_path);
             
-            fprintf(stderr, "[LOG] Ejecutando: %s\n", command);
+            // CAMBIO PRINCIPAL: Usar typeeasy_invoke_with_script en lugar de typeeasy_invoke
+            char *result = typeeasy_invoke_with_script(g_typeeasy_ctx, entry->script_path, entry->function_name, NULL);
             
-            FILE *fp = popen(command, "r");
-            if (!fp) {
-                mg_send_http_error(conn, 500, "Error interno al ejecutar script");
+            if (!result) {
+                mg_send_http_error(conn, 500, "Error interno al ejecutar función TypeEasy");
                 return 1;
             }
 
-            // Increased buffer size to 512KB for large query results
-            char *response_buffer = (char*)malloc(524288);
-            if (!response_buffer) {
-                pclose(fp);
-                mg_send_http_error(conn, 500, "Error de memoria");
-                return 1;
-            }
-            response_buffer[0] = '\0';
+            // Extraer solo contenido XML/JSON, filtrando logs de debug
+            char *actual_content = result;
             
-            char buffer[4096];
-            size_t total_length = 0;
-            while (fgets(buffer, sizeof(buffer), fp) != NULL) {
-                size_t buffer_len = strlen(buffer);
-                // Check if we have space
-                if (total_length + buffer_len < 524288 - 1) {
-                    strcat(response_buffer, buffer);
-                    total_length += buffer_len;
-                } else {
-                    fprintf(stderr, "[ERROR] Response buffer overflow, truncating\n");
-                    break;
-                }
-            }
-            int ret = pclose(fp);
-
-            if (ret != 0) {
-                 free(response_buffer);
-                 mg_send_http_error(conn, 500, "Error en la ejecución del script TypeEasy");
-                 return 1;
-            }
-
-            // Extract only XML/JSON content, filtering out debug logs
-            char *actual_content = response_buffer;
-            
-            // Look for XML declaration
-            char *xml_start = strstr(response_buffer, "<?xml");
+            // Buscar declaración XML
+            char *xml_start = strstr(result, "<?xml");
             if (xml_start) {
                 actual_content = xml_start;
             } else {
-                // Look for XML tags (e.g., <Usuarios>, <Usuario>, etc.)
-                char *xml_tag_start = strchr(response_buffer, '<');
+                // Buscar etiquetas XML (ej: <Usuarios>, <Usuario>, etc.)
+                char *xml_tag_start = strchr(result, '<');
                 if (xml_tag_start && xml_tag_start[1] != '!' && xml_tag_start[1] != '?') {
-                    // Found an opening tag that's not a comment or processing instruction
+                    // Encontrada una etiqueta de apertura que no es comentario
                     actual_content = xml_tag_start;
                 } else {
-                    // Look for JSON array start
-                    char *json_array_start = strstr(response_buffer, "[{");
+                    // Buscar inicio de array JSON
+                    char *json_array_start = strstr(result, "[{");
                     if (json_array_start) {
                         actual_content = json_array_start;
                     } else {
-                        // Look for JSON object start
-                        char *json_obj_start = strstr(response_buffer, "{\"");
+                        // Buscar inicio de objeto JSON
+                        char *json_obj_start = strstr(result, "{\"");
                         if (json_obj_start) {
                             actual_content = json_obj_start;
                         }
@@ -214,7 +233,7 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
                 }
             }
 
-            // Determinar Content-Type (simple heurística)
+            // Determinar Content-Type (heurística simple)
             const char *content_type = "application/json";
             if (actual_content[0] == '<') {
                 content_type = "application/xml";
@@ -229,7 +248,7 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
                       "%s",
                       content_type, (int)strlen(actual_content), actual_content);
             
-            free(response_buffer);
+            free(result);
             return 1;
         }
         entry = entry->next;
@@ -249,9 +268,30 @@ void signal_handler(int sig_num) {
     exit_flag = 1;
 }
 
+// Función de limpieza al salir
+void cleanup() {
+    if (g_typeeasy_ctx) {
+        typeeasy_cleanup(g_typeeasy_ctx);
+        g_typeeasy_ctx = NULL;
+    }
+    
+    // Liberar rutas
+    RouteEntry *entry = global_routes;
+    while (entry) {
+        RouteEntry *next = entry->next;
+        free(entry->route_path);
+        free(entry->script_path);
+        free(entry->function_name);
+        free(entry->response_type);
+        free(entry);
+        entry = next;
+    }
+    global_routes = NULL;
+}
+
 // Nuevo manejador para la ruta raíz ("/")
 static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
-    (void)cbdata; // Marcar como no utilizado para evitar warnings
+    (void)cbdata;
 
     // Construir HTML dinámicamente con las rutas descubiertas
     char html[16384];
@@ -283,6 +323,7 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         ".try-btn:hover { background: #45a049; }"
         ".response { margin-top: 10px; padding: 10px; background: #263238; color: #aed581; font-family: monospace; font-size: 12px; border-radius: 4px; display: none; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }"
         ".loading { color: #ffa726; }"
+        ".embedded-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: bold; background: #4CAF50; color: white; margin-left: 8px; }"
         "</style>"
         "<script>"
         "async function tryEndpoint(route, btnId) {"
@@ -316,7 +357,7 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         "<body>"
         "<div class='container'>"
         "<h1>🚀 TypeEasy API Documentation</h1>"
-        "<p>El servidor está funcionando correctamente.</p>");
+        "<p>El servidor está funcionando correctamente. <span class='embedded-badge'>EMBEDDED MODE</span></p>");
     
     // Contar rutas
     int route_count = 0;
@@ -325,9 +366,6 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         route_count++;
         entry = entry->next;
     }
-    
-    // Agregar 1 por el endpoint MySQL nativo
-    route_count++;
     
     offset += snprintf(html + offset, sizeof(html) - offset,
         "<p class='count'><strong>%d</strong> ruta(s) dinámica(s) cargada(s):</p>",
@@ -338,10 +376,10 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
     int endpoint_id = 0;
     if (entry == NULL) {
         offset += snprintf(html + offset, sizeof(html) - offset,
-            "<p>No hay rutas descubiertas. Crea archivos .te con bloques 'endpoint { }' en typeeasycode/apis/</p>");
+            "<p>No hay rutas descubiertas. Crea archivos .te con bloques 'endpoint { }' en /app/apis/</p>");
     } else {
         while (entry && offset < sizeof(html) - 1000) {
-            // Determine badge color based on response type
+            // Determinar badge color basado en response type
             const char *badge_class = (entry->response_type && strcmp(entry->response_type, "xml") == 0) ? "xml-badge" : "json-badge";
             const char *badge_text = (entry->response_type && strcmp(entry->response_type, "xml") == 0) ? "XML" : "JSON";
             
@@ -369,135 +407,12 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
     
     offset += snprintf(html + offset, sizeof(html) - offset,
         "<hr>"
-        "<p style='color: #999; font-size: 12px;'>TypeEasy Dynamic API Server - Endpoints auto-discovered from .te files</p>"
+        "<p style='color: #999; font-size: 12px;'>TypeEasy Dynamic API Server - Embedded Mode - Endpoints auto-discovered from .te files</p>"
         "</div>"
         "</body>"
         "</html>");
     
     mg_write(conn, html, offset);
-    return 1;
-}
-
-// Handler para endpoint MySQL /api/mysql/usuarios
-static int manejadorMySQLUsuarios(struct mg_connection *conn, void *cbdata) {
-    (void)cbdata;
-    
-    // Inicializar conexión MySQL
-    MYSQL *mysql_conn = mysql_init(NULL);
-    if (!mysql_conn) {
-        mg_send_http_error(conn, 500, "MySQL init failed");
-        return 1;
-    }
-
-    printf("[MySQL] Intentando conectar...\n");
-    return 1;
-    
-    // Conectar a MySQL
-    if (!mysql_real_connect(mysql_conn, "mysql", "root", "rootpassword", "test_db", 3306, NULL, 0)) {
-        char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg), "MySQL connection failed: %s", mysql_error(mysql_conn));
-        mysql_close(mysql_conn);
-        mg_send_http_error(conn, 500, error_msg);
-        return 1;
-    }
-    
-    // Configurar UTF-8 para caracteres acentuados
-    mysql_set_character_set(mysql_conn, "utf8mb4");
-    
-    // Obtener parámetro 'tabla' de la query string
-    char tabla[128] = "usuarios"; // valor por defecto
-    const struct mg_request_info *req_info = mg_get_request_info(conn);
-    if (req_info && req_info->query_string) {
-        const char *qs = req_info->query_string;
-        const char *tabla_pos = strstr(qs, "tabla=");
-        if (tabla_pos) {
-            tabla_pos += 6;
-            int i = 0;
-            while (tabla_pos[i] && tabla_pos[i] != '&' && i < (int)sizeof(tabla) - 1) {
-                tabla[i] = tabla_pos[i];
-                i++;
-            }
-            tabla[i] = '\0';
-        }
-    }
-
-    
-
-    // Construir consulta SQL dinámica
-    char query[256];
-    snprintf(query, sizeof(query), "SELECT * FROM %s", tabla);
-
-    // Ejecutar query
-    if (mysql_query(mysql_conn, query)) {
-        char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg), "MySQL query failed: %s", mysql_error(mysql_conn));
-        mysql_close(mysql_conn);
-        mg_send_http_error(conn, 500, error_msg);
-        return 1;
-    }
-    
-    // Obtener resultados
-    MYSQL_RES *result = mysql_store_result(mysql_conn);
-    if (!result) {
-        mysql_close(mysql_conn);
-        mg_send_http_error(conn, 500, "Failed to store result");
-        return 1;
-    }
-    
-    // Convertir a JSON
-    int num_fields = mysql_num_fields(result);
-    MYSQL_FIELD *fields = mysql_fetch_fields(result);
-    
-    char json_buffer[65536];
-    int offset = 0;
-    offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "[");
-    
-    MYSQL_ROW row;
-    int first_row = 1;
-    while ((row = mysql_fetch_row(result))) {
-        if (!first_row) {
-            offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, ",");
-        }
-        first_row = 0;
-        
-        offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "{");
-        for (int i = 0; i < num_fields; i++) {
-            if (i > 0) {
-                offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, ",");
-            }
-            offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "\"%s\":", fields[i].name);
-            
-            if (row[i]) {
-                if (fields[i].type == MYSQL_TYPE_STRING || 
-                    fields[i].type == MYSQL_TYPE_VAR_STRING ||
-                    fields[i].type == MYSQL_TYPE_VARCHAR) {
-                    offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "\"%s\"", row[i]);
-                } else {
-                    offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "%s", row[i]);
-                }
-            } else {
-                offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "null");
-            }
-        }
-        offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "}");
-    }
-    
-    offset += snprintf(json_buffer + offset, sizeof(json_buffer) - offset, "]");
-    
-    // Liberar recursos
-    mysql_free_result(result);
-    mysql_close(mysql_conn);
-    
-    // Enviar respuesta
-    mg_printf(conn,
-              "HTTP/1.1 200 OK\r\n"
-              "Content-Type: application/json; charset=utf-8\r\n"
-              "Content-Length: %d\r\n"
-              "Access-Control-Allow-Origin: *\r\n"
-              "\r\n"
-              "%s",
-              (int)strlen(json_buffer), json_buffer);
-    
     return 1;
 }
 
@@ -508,6 +423,9 @@ int main(void) {
 
     // Registrar el manejador de señales para Ctrl+C
     signal(SIGINT, signal_handler);
+    
+    // Registrar cleanup al salir
+    atexit(cleanup);
 
     // Inicia la biblioteca CivetWeb
     mg_init_library(0);
@@ -522,16 +440,14 @@ int main(void) {
         return 1;
     }
 
-    printf("Servidor iniciado en http://localhost:8080\n");
+    printf("Servidor iniciado en http://localhost:8080 (Modo Embebido TypeEasy)\n");
 
-    // --- ¡Paso Clave! Registra los manejadores para cada ruta ---
+    // Registrar manejadores
     mg_set_request_handler(ctx, "/", manejadorRaiz, NULL);
-    // mg_set_request_handler(ctx, "/api/mysql/usuarios", manejadorMySQLUsuarios, NULL); // Comentado - usar TypeEasy dinámico
     mg_set_request_handler(ctx, "/api/**", manejadorApiDinamico, NULL);
 
-    // Bucle principal del servidor. Se ejecuta hasta que exit_flag sea 1.
+    // Bucle principal del servidor
     while (exit_flag == 0) {
-        // Pausa de 1 segundo. Usamos la función correcta para cada sistema operativo.
 #if defined(_WIN32)
         Sleep(1000);
 #else
@@ -539,7 +455,7 @@ int main(void) {
 #endif
     }
 
-    // Detiene el servidor de forma segura.
+    // Detiene el servidor de forma segura
     printf("\nDeteniendo el servidor...\n");
     mg_stop(ctx);
     mg_exit_library();

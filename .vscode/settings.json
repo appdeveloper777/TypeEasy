@@ -1,9 +1,11 @@
 {
     "C_Cpp.errorSquiggles": "disabled",
     "files.associations": {
+        "*.embeddedhtml": "html",
+        "*.te": "dart",
         "*.y": "c",
         "*.l": "c",
-        "*.te": "dart",
-        "random": "c"
+        "random": "c",
+        "xlocale": "c"
     }
 }
