@@ -2,11 +2,12 @@
 endpoint {
     [HttpGet("/api/mysql/test")]
     TestMySQLSimple() {
-        // Conectar con strings literales
-        let conn_id = mysql_connect("localhost", "root", "", "meri");
+        // Conectar a MySQL
+        // host.docker.internal:3308 - puerto de XAMPP
+        let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
         
-        // Ejecutar query
-        let result = mysql_query(conn_id, "SELECT * FROM users");
+        // Ejecutar query con formato JSON (default)
+        let result = new mysql_query(conn_id, "SELECT * FROM users LIMIT 5", "json");
         
         // Cerrar conexión
         mysql_close(conn_id);

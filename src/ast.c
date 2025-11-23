@@ -1321,6 +1321,8 @@ static void interpret_assign_attr(ASTNode *node);
 static void interpret_assign(ASTNode *node);
 static void interpret_print(ASTNode *node);
 static void interpret_println(ASTNode *node);
+static void interpret_fprint(ASTNode *node);
+static void interpret_fprintln(ASTNode *node);
 static void interpret_statement_list(ASTNode *node);
 double evaluate_number(ASTNode *node);
 static void interpret_match(ASTNode *node);
@@ -1648,6 +1650,8 @@ void interpret_ast(ASTNode *node) {
     else if (strcmp(node->type, "ASSIGN") == 0)         interpret_assign(node);
     else if (strcmp(node->type, "PRINT") == 0)          interpret_print(node);
     else if (strcmp(node->type, "PRINTLN") == 0)        interpret_println(node);
+    else if (strcmp(node->type, "FPRINT") == 0)          interpret_fprint(node);
+    else if (strcmp(node->type, "FPRINTLN") == 0)        interpret_fprintln(node);
     else if (strcmp(node->type, "STATEMENT_LIST") == 0) interpret_statement_list(node);
     else if (strcmp(node->type, "PLOT") == 0) {
     /* plot generation debug log removed */
@@ -3267,6 +3271,178 @@ static void interpret_print(ASTNode *node) {
             printf("%d", (int)val);
         } else {
             printf("%f", val);
+        }
+    }
+
+    if (__ret_var_active) {
+        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
+        if (__ret_var.id) free(__ret_var.id);
+        if (__ret_var.type) free(__ret_var.type);
+        memset(&__ret_var, 0, sizeof(Variable));
+        __ret_var_active = 0;
+    }
+}
+
+static void interpret_fprint(ASTNode *node) {
+    ASTNode *arg = node->left;
+    if (!arg) {
+        fprintf(stdout, "Error: print sin argumento\n");
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "STRING") == 0) {
+        fprintf(stderr, "%s", arg->str_value);
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
+        ASTNode *o = arg->left;
+        ASTNode *a = arg->right;
+        Variable *v = find_variable(o->id);
+        if (!v || v->vtype != VAL_OBJECT) {
+            fprintf(stderr, "Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
+            return;
+        }
+        ObjectNode *obj = v->value.object_value;
+        int idx = -1;
+        for (int i = 0; i < obj->class->attr_count; i++) {
+            if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0) {
+            fprintf(stderr, "Error: Atributo '%s' no encontrado en clase '%s'.\n", a->id, obj->class->name);
+            return;
+        }
+        Variable *attr = &obj->attributes[idx];
+        if (attr->vtype == VAL_STRING)
+            fprintf(stderr, "%s", attr->value.string_value);
+        else
+            fprintf(stderr, "%d", attr->value.int_value);
+        return;
+    }
+
+    if (arg->id) { 
+        Variable *v = find_variable(arg->id);
+        if (!v) {
+            fprintf(stderr, "Error: Variable '%s' no definida.\n", arg->id);
+            return;
+        }
+        if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
+            ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
+            if (listNode && strcmp(listNode->type, "LIST") == 0) {
+                ASTNode *cur = listNode->left;
+                fprintf(stderr, "[\n");
+                while (cur) {
+                    if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
+                        ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
+                        call_method(obj, "Mostrar");
+                    }
+                    cur = cur->next; // CORRECCIÓN
+                }
+                fprintf(stderr, "]\n");
+                return;
+            }
+        }
+        if (v->vtype == VAL_STRING)
+            fprintf(stderr, "%s", v->value.string_value);
+        else if (v->vtype == VAL_INT)
+            fprintf(stderr, "%d", v->value.int_value);
+        else if (v->vtype == VAL_FLOAT)
+            fprintf(stderr, "%f", v->value.float_value);
+        else
+            fprintf(stderr, "Objeto de clase: %s\n", v->value.object_value->class->name);
+    } else {
+        double val = evaluate_expression(arg);
+        if (val == (int)val) {
+            fprintf(stderr, "%d", (int)val);
+        } else {
+            fprintf(stderr, "%f", val);
+        }
+    }
+
+    if (__ret_var_active) {
+        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
+        if (__ret_var.id) free(__ret_var.id);
+        if (__ret_var.type) free(__ret_var.type);
+        memset(&__ret_var, 0, sizeof(Variable));
+        __ret_var_active = 0;
+    }
+}
+
+static void interpret_fprintln(ASTNode *node) {
+    ASTNode *arg = node->left;
+    if (!arg) {
+        fprintf(stderr, "Error: print sin argumento\n");
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "STRING") == 0) {
+        fprintf(stderr, "%s\n", arg->str_value);
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
+        ASTNode *o = arg->left;
+        ASTNode *a = arg->right;
+        Variable *v = find_variable(o->id);
+        if (!v || v->vtype != VAL_OBJECT) {
+            fprintf(stderr, "Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
+            return;
+        }
+        ObjectNode *obj = v->value.object_value;
+        int idx = -1;
+        for (int i = 0; i < obj->class->attr_count; i++) {
+            if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0) {
+            fprintf(stderr, "Error: Atributo '%s' no encontrado en clase '%s'.\n", a->id, obj->class->name);
+            return;
+        }
+        Variable *attr = &obj->attributes[idx];
+        if (attr->vtype == VAL_STRING)
+            fprintf(stderr, "%s\n", attr->value.string_value);
+        else
+            fprintf(stderr, "%d\n", attr->value.int_value);
+        return;
+    }
+
+    if (arg->id) {
+        Variable *v = find_variable(arg->id);
+        if (!v) {
+            fprintf(stderr, "Error: Variable '%s' no definida.\n", arg->id);
+            return;
+        }
+        if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
+            ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
+            if (listNode && strcmp(listNode->type, "LIST") == 0) {
+                ASTNode *cur = listNode->left;
+                fprintf(stderr, "[\n");
+                while (cur) {
+                    if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
+                        ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
+                        call_method(obj, "Mostrar");
+                    }
+                    cur = cur->next; // CORRECCIÓN
+                }
+                fprintf(stderr, "]\n");
+                return;
+            }
+        }
+        if (v->vtype == VAL_STRING)
+            fprintf(stderr, "%s\n", v->value.string_value);
+        else if (v->vtype == VAL_INT)
+            fprintf(stderr, "%d\n", v->value.int_value);
+        else if (v->vtype == VAL_FLOAT)
+            fprintf(stderr, "%f\n", v->value.float_value);
+        else
+            fprintf(stderr, "Objeto de clase: %s\n", v->value.object_value->class->name);
+    } else {
+        double val = evaluate_expression(arg);
+        if (val == (int)val) {
+            fprintf(stderr, "%d\n", (int)val);
+        } else {
+            fprintf(stderr, "%f\n", val);
         }
     }
 

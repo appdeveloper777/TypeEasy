@@ -39,6 +39,9 @@
 "new"                   { return NEW; }
 "let"                   { return LET; }
 "print"                 { return PRINT; }
+"println"               { return PRINTLN; }
+"fprint"                { return FPRINT; }
+"fprintln"              { return FPRINTLN; }
 "const"                 { return CONST; }
 
 "HttpGet"               { return HTTPGET; }
@@ -56,8 +59,6 @@
 "endpoint"              { return ENDPOINT; }
 "node"                  { return NODE; }
 
-
-"println"               { return PRINTLN; }
 "for"                   { return FOR; }
 "concat"                { return CONCAT; }
 "in"                    { return IN; }
