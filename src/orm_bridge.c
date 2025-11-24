@@ -6,7 +6,7 @@
 #include <strings.h> // For strcasecmp
 
 void native_orm_query(ASTNode* args) {
-    printf("[ORM] native_orm_query ejecutado\n"); fflush(stdout);
+    //printf("[ORM] native_orm_query ejecutado\n"); fflush(stdout);
     // Espera: (conn_id, query, class)
     if (!args) {
         printf("[ORM] args es NULL\n");
@@ -48,8 +48,8 @@ void native_orm_query(ASTNode* args) {
         }
     }
     
-    printf("[ORM] Argumentos finales: conn_id=%d, query=%s, class_name=%s\n", conn_id, query ? query : "NULL", class_name ? class_name : "NULL");
-    fflush(stdout);
+   // printf("[ORM] Argumentos finales: conn_id=%d, query=%s, class_name=%s\n", conn_id, query ? query : "NULL", class_name ? class_name : "NULL");
+   // fflush(stdout);
     
     // Buscar clase destino
     extern ClassNode* find_class(char* name);
@@ -142,8 +142,8 @@ void native_orm_query(ASTNode* args) {
         item = item->right;
     }
     
-    printf("[ORM] Total objetos mapeados: %d\n", obj_count);
-    fflush(stdout);
+    //printf("[ORM] Total objetos mapeados: %d\n", obj_count);
+    //fflush(stdout);
     
     // Retornar lista
     ASTNode* list_node = (ASTNode*)malloc(sizeof(ASTNode));
@@ -156,7 +156,7 @@ void native_orm_query(ASTNode* args) {
     list_node->value = 0;
     add_or_update_variable("__ret__", list_node);
     
-    printf("[ORM] Cleaning up result_list...\n"); fflush(stdout);
+    //printf("[ORM] Cleaning up result_list...\n"); fflush(stdout);
     // free_ast(result_list); // Commented out to debug crash
-    printf("[ORM] native_orm_query finished\n"); fflush(stdout);
+    //printf("[ORM] native_orm_query finished\n"); fflush(stdout);
 }

@@ -1,7 +1,13 @@
 endpoint {
     [HttpGet("/api/test/multi")]
     TestMulti() {
-        let x = concat("a", "b", "c");
-        return json(x);
+        
+        let x = 5;
+        let y = 10;
+        if (x > y) {
+            println("x es mayor que y");
+        } else {
+            println("y es mayor que x");
+        }
     }
 }

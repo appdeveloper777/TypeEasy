@@ -11,6 +11,11 @@ class Usuario {
     this.usuario = _usuario;
     this.email = _email;
   }
+
+  MiNombre() {
+    let nombre = this.usuario;
+    println(nombre);    
+  }
 }
 
 endpoint {
@@ -29,10 +34,16 @@ endpoint {
     // ORM: consulta y mapeo a objetos
     let usuarios = orm_query(conn_id, query, Usuario);
 
+    /*for (let item in usuarios) {
+        println("Nombre:");       
+        item.MiNombre();       
+        println(item.email);        
+    }*/
+  
     // Cerrar conexión
     mysql_close(conn_id);
 
-    // Retornar lista de usuarios como XML
-    return xml(usuarios);
+    return json(usuarios);
+   
   }
 }

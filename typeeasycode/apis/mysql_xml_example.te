@@ -1,6 +1,13 @@
 // Ejemplo de MySQL con formato XML
 // Demuestra el uso del parámetro format en mysql_query
 
+class Usuario {
+    id : int;
+    usuario : string;
+    email : string;
+    // Otros campos omitidos por brevedad, pero se mapearán si existen en la clase
+}
+
 endpoint {
     [HttpGet("/api/mysql/usuarios/xml")]
     GetUsuariosXML() {
@@ -10,11 +17,12 @@ endpoint {
         let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
         
         // Ejecutar query con formato XML
+        // NOTA: Con mysql_query, SIEMPRE debes especificar el formato ("json" o "xml")
+        // porque retorna un string ya formateado.
         let result = new mysql_query(conn_id, "SELECT * FROM users LIMIT 5", "xml");
         
         // Cerrar conexión
-        mysql_close(conn_id);
-        
+        mysql_close(conn_id);        
         // Retornar resultado como XML
         return xml(result);
     }
@@ -32,5 +40,25 @@ endpoint {
         
         // Retornar resultado como JSON
         return json(result);
+    }
+
+    [HttpGet("/api/mysql/usuarios/dynamic")]
+    GetUsuariosDynamic() {
+        // Conectar a MySQL
+        let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
+        
+        // USANDO ORM:
+        // orm_query retorna una LISTA de OBJETOS 'Usuario'.
+        // Esto permite que 'return xml()' o 'return json()' decidan el formato final.
+        let usuarios = orm_query(conn_id, "SELECT * FROM users LIMIT 5", Usuario);
+
+        for (let item in usuarios) {
+            println(item.usuario);
+        }
+        
+        mysql_close(conn_id);
+        
+        // Aquí puedes cambiar a return json(usuarios) y funcionará automáticamente
+      //  return xml(usuarios); 
     }
 }

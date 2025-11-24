@@ -1,7 +1,7 @@
 endpoint {
-    [HttpGet("/test-simple-call")]
+    [HttpGet("/api/test/simple-call-xml")]
     TestSimple() {
-        let x = 5;
-        return json();
+        println("<Testsimple>");
+        println("</Testsimple>");        
     }
 }

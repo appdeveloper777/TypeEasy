@@ -210,43 +210,6 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
               "<html><body>"
               "<h1>¡TypeEasy APIs!</h1>"
               "<p>El servidor está funcionando correctamente.</p>"
-              "<p>Prueba el endpoint de la API en: <a href=\"/api/productos\">/api/productos</a></p>"
-              "</body></html>");
-    return 1;
-}
-
-int main(void) {
-    struct mg_context *ctx;
-    // Opciones del servidor. Escuchará en el puerto 8080.
-    const char *options[] = {"listening_ports", "8080", NULL};
-
-    // Registrar el manejador de señales para Ctrl+C
-    signal(SIGINT, signal_handler);
-
-    // Inicia la biblioteca CivetWeb
-    mg_init_library(0);
-
-    // Inicia el servidor
-    ctx = mg_start(NULL, NULL, options);
-    if (ctx == NULL) {
-        printf("Error al iniciar el servidor.\n");
-        return 1;
-    }
-
-    printf("Servidor iniciado en http://localhost:8080\n");
-
-    // --- ¡Paso Clave! Registra los manejadores para cada ruta ---
-    mg_set_request_handler(ctx, "/", manejadorRaiz, NULL);
-    mg_set_request_handler(ctx, "/api/productos", manejadorProductos, NULL);
-    mg_set_request_handler(ctx, "/api/usuario/perfil", manejadorUsuarios, NULL);
-    mg_set_request_handler(ctx, "/api/proveedores", manejadorProveedores, NULL);
-    mg_set_request_handler(ctx, "/api/facturas", manejadorFacturas, NULL);
-
-    // Bucle principal del servidor. Se ejecuta hasta que exit_flag sea 1.
-    while (exit_flag == 0) {
-        // Pausa de 1 segundo. Usamos la función correcta para cada sistema operativo.
-#if defined(_WIN32)
-        Sleep(1000);
 #else
         sleep(1);
 #endif

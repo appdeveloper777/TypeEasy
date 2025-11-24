@@ -53,8 +53,8 @@ static void xml_escape(const char* input, char* output, size_t output_size) {
 
 // Devuelve lista de resultados para ORM
 ASTNode* mysql_query_result(int conn_id, const char* query) {
-    printf("[ORM] mysql_query_result: conn_id=%d, query=%s\n", conn_id, query ? query : "NULL");
-    fflush(stdout);
+    //printf("[ORM] mysql_query_result: conn_id=%d, query=%s\n", conn_id, query ? query : "NULL");
+   // fflush(stdout);
     
     // Validar conexión
     if (conn_id < 0 || conn_id >= 10 || !connections[conn_id]) {
@@ -80,7 +80,7 @@ ASTNode* mysql_query_result(int conn_id, const char* query) {
     int num_fields = mysql_num_fields(res);
     MYSQL_FIELD* fields = mysql_fetch_fields(res);
     
-    printf("[ORM] Query ejecutado exitosamente. Campos: %d\n", num_fields);
+    //printf("[ORM] Query ejecutado exitosamente. Campos: %d\n", num_fields);
     
     // Construir lista de resultados
     ASTNode* first_row = NULL;
@@ -92,13 +92,13 @@ ASTNode* mysql_query_result(int conn_id, const char* query) {
         ASTNode* row_args = NULL;
         
         // Debug: mostrar campos de la primera fila
-        if (!first_row) {
+        /*if (!first_row) {
             printf("[MySQL DEBUG] Campos de la primera fila:\n");
             for (int i = 0; i < num_fields; i++) {
                 printf("  Campo %d: name='%s', value='%s', type=%d\n", 
                        i, fields[i].name, row[i] ? row[i] : "NULL", fields[i].type);
             }
-        }
+        }*/
         for (int i = 0; i < num_fields; i++) {
             const char* field_name = fields[i].name;
             const char* field_value = row[i] ? row[i] : "";
@@ -123,9 +123,9 @@ ASTNode* mysql_query_result(int conn_id, const char* query) {
     
     mysql_free_result(res);
     
-    printf("[ORM] Resultados procesados exitosamente\n");
-    printf("[MySQL DEBUG] mysql_query_result returning: first_row=%p\n", (void*)first_row);
-    fflush(stdout);
+    //printf("[ORM] Resultados procesados exitosamente\n");
+   // printf("[MySQL DEBUG] mysql_query_result returning: first_row=%p\n", (void*)first_row);
+    //fflush(stdout);
     
     return first_row;
 }
@@ -251,9 +251,9 @@ void native_mysql_connect(ASTNode* args) {
             idx++;
         }
     // Debug: imprimir estructura de argumentos
-    printf("[MySQL DEBUG] native_mysql_connect called\n");
-    printf("[MySQL DEBUG] args=%p\n", (void*)args);
-    printf("[MySQL] native_mysql_connect called\n"); fflush(stdout);
+   // printf("[MySQL DEBUG] native_mysql_connect called\n");
+   // printf("[MySQL DEBUG] args=%p\n", (void*)args);
+    //printf("[MySQL] native_mysql_connect called\n"); fflush(stdout);
     
     const char* host = get_arg_string(args, 0);
     const char* user = get_arg_string(args, 1);
@@ -262,29 +262,29 @@ void native_mysql_connect(ASTNode* args) {
     int port = get_arg_int(args, 4);  // Optional 5th parameter
 
     // Debug: imprimir los valores recibidos
-    printf("[MySQL DEBUG] Valores recibidos en native_mysql_connect:\n");
+   /* printf("[MySQL DEBUG] Valores recibidos en native_mysql_connect:\n");
     printf("  host: '%s'\n", host ? host : "NULL");
     printf("  user: '%s'\n", user ? user : "NULL");
     printf("  pass: '%s'\n", pass ? pass : "NULL");
     printf("  db:   '%s'\n", db ? db : "NULL");
     printf("  port: %d\n", port);
-    fflush(stdout);
+    fflush(stdout);*/
 
     // If port is -1 (not provided or invalid), use default 3306
     if (port <= 0) {
         port = 3306;
     }
 
-    printf("[MySQL] Args extracted: host=%s, user=%s, pass=%s, db=%s, port=%d\n", 
+   /* printf("[MySQL] Args extracted: host=%s, user=%s, pass=%s, db=%s, port=%d\n", 
            host ? host : "NULL", 
            user ? user : "NULL", 
            pass ? pass : "NULL", 
            db ? db : "NULL",
            port);
-    fflush(stdout);
+    fflush(stdout);*/
 
     if (!host || !user || !pass || !db) {
-        printf("[MySQL] Error: Argumentos inválidos para mysql_connect\n"); fflush(stdout);
+        //printf("[MySQL] Error: Argumentos inválidos para mysql_connect\n"); fflush(stdout);
         ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
@@ -292,7 +292,7 @@ void native_mysql_connect(ASTNode* args) {
     }
     
     if (next_conn_id >= 10) {
-        printf("[MySQL] Error: Max conexiones alcanzado\n"); fflush(stdout);
+       // printf("[MySQL] Error: Max conexiones alcanzado\n"); fflush(stdout);
         ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
@@ -301,7 +301,7 @@ void native_mysql_connect(ASTNode* args) {
     
     MYSQL* conn = mysql_init(NULL);
     if (!conn) {
-        printf("[MySQL] Error: mysql_init failed\n"); fflush(stdout);
+        //printf("[MySQL] Error: mysql_init failed\n"); fflush(stdout);
         ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
@@ -312,7 +312,7 @@ void native_mysql_connect(ASTNode* args) {
     mysql_ssl_set(conn, NULL, NULL, NULL, NULL, NULL);
 
     if (!mysql_real_connect(conn, host, user, pass, db, port, NULL, CLIENT_SSL)) {
-        printf("[MySQL] Error de conexión: %s\n", mysql_error(conn)); fflush(stdout);
+        //printf("[MySQL] Error de conexión: %s\n", mysql_error(conn)); fflush(stdout);
         ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
@@ -324,7 +324,7 @@ void native_mysql_connect(ASTNode* args) {
     connections[conn_id] = conn;
     next_conn_id++;
     
-    printf("[MySQL] Conexión exitosa (ID: %d)\n", conn_id); fflush(stdout);
+    //printf("[MySQL] Conexión exitosa (ID: %d)\n", conn_id); fflush(stdout);
     ASTNode* ret_node = create_ast_leaf("NUMBER", conn_id, NULL, NULL);
     add_or_update_variable("__ret__", ret_node);
     free_ast(ret_node);
@@ -335,7 +335,7 @@ void native_mysql_connect(ASTNode* args) {
 // Retorna JSON or XML string en __ret__
 void native_mysql_query(ASTNode* args) {
 
-    printf("[MySQL] native_mysql_query called\n");
+    //printf("[MySQL] native_mysql_query called\n");
     //printf("[MySQL] args=%p\n", (void*)args);
    // return;
 
@@ -348,10 +348,10 @@ void native_mysql_query(ASTNode* args) {
         format = "json";
     }
     
-    printf("[MySQL] Query format: %s\n", format);
+   // printf("[MySQL] Query format: %s\n", format);
     
     if (conn_id < 0 || conn_id >= 10 || !connections[conn_id]) {
-        printf("[MySQL] Error: Conexión inválida (ID: %d)\n", conn_id);
+       // printf("[MySQL] Error: Conexión inválida (ID: %d)\n", conn_id);
         ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"invalid_connection\"}"), NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
@@ -359,7 +359,7 @@ void native_mysql_query(ASTNode* args) {
     }
     
     if (!query) {
-        printf("[MySQL] Error: Query inválido\n");
+        //printf("[MySQL] Error: Query inválido\n");
         ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"invalid_query\"}"), NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
@@ -369,7 +369,7 @@ void native_mysql_query(ASTNode* args) {
     MYSQL* conn = connections[conn_id];
     
     if (mysql_query(conn, query)) {
-        printf("[MySQL] Error en query: %s\n", mysql_error(conn));
+      //  printf("[MySQL] Error en query: %s\n", mysql_error(conn));
         char error_buffer[512];
         snprintf(error_buffer, sizeof(error_buffer), "{\"error\":\"%s\"}", mysql_error(conn));
         ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup(error_buffer), NULL);
@@ -387,7 +387,7 @@ void native_mysql_query(ASTNode* args) {
             free_ast(ret_node);
             return;
         } else { // Error fetching result set for a query that should have one
-            printf("[MySQL] Error al obtener resultado: %s\n", mysql_error(conn));
+           // printf("[MySQL] Error al obtener resultado: %s\n", mysql_error(conn));
             ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"no_result\"}"), NULL);
             add_or_update_variable("__ret__", ret_node);
             free_ast(ret_node);
@@ -480,7 +480,7 @@ void native_mysql_query(ASTNode* args) {
     
     mysql_free_result(result);
     
-    printf("[MySQL] Query ejecutado exitosamente\n");
+    //printf("[MySQL] Query ejecutado exitosamente\n");
     ASTNode* ret_node = create_ast_leaf("STRING", 0, result_buffer, NULL);
     add_or_update_variable("__ret__", ret_node);
     free_ast(ret_node);
@@ -498,5 +498,5 @@ void native_mysql_close(ASTNode* args) {
     
     mysql_close(connections[conn_id]);
     connections[conn_id] = NULL;
-    printf("[MySQL] Conexión cerrada (ID: %d)\n", conn_id);
+   // printf("[MySQL] Conexión cerrada (ID: %d)\n", conn_id);
 }

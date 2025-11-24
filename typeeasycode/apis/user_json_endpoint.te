@@ -26,6 +26,8 @@ endpoint {
         println("{");
         println(body);
         println("}");   
+
+        return json();  
     }
 
     [HttpGet("/api/usuario_json/segundo-perfil")]

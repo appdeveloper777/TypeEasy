@@ -1,7 +1,4 @@
-    // ...existing code...
-    // Si no hay objeto, buscar método global
-    // ...existing code...
-    // Si no hay objeto, buscar método global
+
 #include "ast.h"
 #include <stdint.h>
 #include <string.h>
@@ -10,47 +7,30 @@
 #include "bytecode.h"
 #include "mysql_bridge.h"
 
-#include "ast.h"
-#include <stdint.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include "bytecode.h"
-
 // Helper: Recursively evaluate arguments for native calls
 void evaluate_native_args(ASTNode *arg) {
     ASTNode *curr = arg;
     int idx = 0;
     while (curr) {
-        //printf("[DEBUG] Arg #%d antes: type=%s, id=%s, str_value=%s, value=%d\n", idx, curr->type ? curr->type : "NULL", curr->id ? curr->id : "NULL", curr->str_value ? curr->str_value : "NULL", curr->value);
         if (curr->type && (strcmp(curr->type, "IDENTIFIER") == 0 || strcmp(curr->type, "ID") == 0)) {
             Variable *v = find_variable(curr->id);
             if (v) {
                 if (v->vtype == VAL_STRING) {
                     curr->type = strdup("STRING");
                     curr->str_value = strdup(v->value.string_value);
-                    //printf("[DEBUG] Arg #%d convertido a STRING: %s\n", idx, curr->str_value);
                 } else if (v->vtype == VAL_INT) {
                     curr->type = strdup("NUMBER");
                     curr->value = v->value.int_value;
-                    //printf("[DEBUG] Arg #%d convertido a NUMBER: %d\n", idx, curr->value);
                 }
-            } 
-           // else {
-              //  printf("[DEBUG] Arg #%d: variable '%s' no encontrada\n", idx, curr->id ? curr->id : "NULL");
-            //}
+            }
         }
-        //printf("[DEBUG] Arg #%d después: type=%s, id=%s, str_value=%s, value=%d\n", idx, curr->type ? curr->type : "NULL", curr->id ? curr->id : "NULL", curr->str_value ? curr->str_value : "NULL", curr->value);
         curr = curr->right;
         idx++;
     }
 }
 
-// --- Función nativa para serializar objeto a JSON y printf ---
 void native_json(ASTNode *arg) {
     const char *var_id = NULL;
-   // printf("[DIAG] native_json: arg=%p\n", (void*)arg);
-    //if (!arg) { printf("[DIAG] native_json: arg is NULL\n"); return; }
     if (arg->id) {
         var_id = arg->id;
     } else if (arg->type && (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0)) {
@@ -58,15 +38,12 @@ void native_json(ASTNode *arg) {
     } else if (arg->left && arg->left->id) {
         var_id = arg->left->id;
     }
-   // printf("[DIAG] native_json: var_id=%s\n", var_id ? var_id : "(null)");
     if (!var_id) { printf("[DIAG] native_json: var_id is NULL\n"); return; }
     Variable *v = find_variable(var_id);
-    //printf("[DIAG] native_json: find_variable returned %p\n", (void*)v);
     if (!v) { printf("[DIAG] native_json: variable not found\n"); return; }
     
     // If variable is a STRING, return it as-is (for mysql_query results)
     if (v->vtype == VAL_STRING) {
-       // printf("[DEBUG] native_json: returning STRING value\n");
         ASTNode *result_node = create_ast_leaf("STRING", 0, v->value.string_value, NULL);
         add_or_update_variable("__ret__", result_node);
         free_ast(result_node);
@@ -83,44 +60,21 @@ void native_json(ASTNode *arg) {
             printf("\"%s\"", obj->attributes[i].value.string_value);
         } else if (strcmp(obj->class->attributes[i].type, "float") == 0) {
             printf("%f", obj->attributes[i].value.float_value);
-
-// Helper: Recursively evaluate arguments for native calls
-void evaluate_native_args(ASTNode *arg) {
-    ASTNode *curr = arg;
-    while (curr) {
-        if (curr->type && (strcmp(curr->type, "IDENTIFIER") == 0 || strcmp(curr->type, "ID") == 0)) {
-            Variable *v = find_variable(curr->id);
-            if (v) {
-                if (v->vtype == VAL_STRING) {
-                    curr->type = strdup("STRING");
-                    curr->str_value = strdup(v->value.string_value);
-                } else if (v->vtype == VAL_INT) {
-                    curr->type = strdup("NUMBER");
-                    curr->value = v->value.int_value;
-                }
-            }
-        }
-        curr = curr->right;
-    }
-}
         } else {
             printf("%d", obj->attributes[i].value.int_value);
         }
-            // Always evaluate arguments before native call
-            if (arg) evaluate_native_args(arg);
         if (i < obj->class->attr_count - 1) printf(",\n");
         else printf("\n");
     }
     printf("}\n");
 }
+
 // --- Hook para funciones nativas ---
 int call_native_function(const char *name, ASTNode *arg) {
-        if (strcmp(name, "orm_query") == 0) {
-            // printf("[DEBUG] calling native_orm_query\n"); fflush(stdout);
-            native_orm_query(arg);
-            return 1;
-        }
-  //  printf("[DEBUG] call_native_function: %s\n", name); fflush(stdout);
+    if (strcmp(name, "orm_query") == 0) {
+        native_orm_query(arg);
+        return 1;
+    }
     // Siempre evaluar argumentos antes de llamada nativa
     if (arg) evaluate_native_args(arg);
     if (strcmp(name, "json") == 0) {
@@ -128,17 +82,14 @@ int call_native_function(const char *name, ASTNode *arg) {
         return 1;
     }
     if (strcmp(name, "mysql_connect") == 0) {
-        //printf("[DEBUG] calling native_mysql_connect\n"); fflush(stdout);
         native_mysql_connect(arg);
         return 1;
     }
     if (strcmp(name, "mysql_query") == 0) {
-        printf("[DIAG] native_mysql_query: arg=%p\n", (void*)arg); fflush(stdout);
         native_mysql_query(arg);
         return 1;
     }
     if (strcmp(name, "mysql_close") == 0) {
-        printf("[DIAG] native_mysql_close: arg=%p\n", (void*)arg); fflush(stdout);
         native_mysql_close(arg);
         return 1;
     }
@@ -1246,7 +1197,22 @@ double evaluate_expression(ASTNode *node) {
             return 0;
         }
     
+        // Try to get ObjectNode from value.object_value first, then from extra
+        // This supports both storage patterns: direct storage and wrapper pattern (used by for-in)
         ObjectNode *obj = v->value.object_value;
+        if (!obj) {
+            // Fallback: The ObjectNode might be stored in an ASTNode wrapper's extra field
+            // This happens when objects are created by interpret_for_in()
+            ASTNode *wrapper = (ASTNode*)(intptr_t)v->value.object_value;
+            if (wrapper && wrapper->extra) {
+                obj = (ObjectNode *)wrapper->extra;
+            }
+        }
+        
+        if (!obj) {
+            printf("Error: No se pudo obtener el objeto para acceder al atributo.\n");
+            return 0;
+        }
         for (int i = 0; i < obj->class->attr_count; i++) {
             if (strcmp(obj->class->attributes[i].id, attr->id) == 0) {
                 if(obj->attributes[i].vtype == VAL_INT)
@@ -1440,7 +1406,13 @@ static void interpret_for_in(ASTNode *node) {
     ASTNode *items = listNode->left;   
     for (ASTNode *item = items; item; item = item->next) {
         if (item->type && strcmp(item->type, "OBJECT") == 0) {
-            ObjectNode *obj = (ObjectNode *)(intptr_t)item->value;
+            // Get ObjectNode from extra field (where create_object_with_args stores it)
+            // For backward compatibility, also check value field for objects created differently
+            ObjectNode *obj = (ObjectNode *)item->extra;
+            if (!obj) {
+                // Fallback for objects that might store pointer in value field
+                obj = (ObjectNode *)(intptr_t)item->value;
+            }
             if (strcmp(node->id, list_expr->id) != 0) {
                 ASTNode *wrapper = malloc(sizeof(ASTNode));
                 wrapper->type = strdup("OBJECT");
@@ -1785,7 +1757,6 @@ static void interpret_train_node(ASTNode *node) {
     (void)epochs; // Suprime el warning de 'unused variable'
 }
 
-
 static void interpret_predict_node(ASTNode *node) {
     execute_predict(node->left, node->right);
 }
@@ -1854,250 +1825,203 @@ static void interpret_call_func(ASTNode *node) {
         }
 
         strcat(json_buffer, "}"); // Cerramos el objeto JSON
-
+        
         // 5. Devolver el string JSON resultante
         ASTNode *result_node = create_ast_leaf("STRING", 0, json_buffer, NULL);
         add_or_update_variable("__ret__", result_node);
         free_ast(result_node);
-        // --- FIN DE LA NUEVA LÓGICA ---
+        return;
     }
 
-    
     // Try native functions first (mysql_connect, mysql_query, mysql_close, etc.)
     if (call_native_function(node->id, node->left)) {
         return;
     }
-    
-    if (strcmp(node->id, "concat") != 0) return;
-
-
-    char result_buffer[2048] = {0}; // Un búfer grande para construir el string
-    char *s_temp = NULL;
-    ASTNode *arg = node->left;
-
-    while (arg) {
-        // Usamos get_node_string para evaluar CADA argumento
-        // (esto maneja "string", 123, y var_string, var_int)
-        s_temp = get_node_string(arg); 
-        
-        // strncat es más seguro que strcat
-        strncat(result_buffer, s_temp, sizeof(result_buffer) - strlen(result_buffer) - 1);
-        
-        free(s_temp); // Liberamos la memoria temporal
-        arg = arg->right; // Avanzamos al siguiente argumento
-    }
-
-    // Devolvemos el resultado final
-    ASTNode *lit = create_ast_leaf("STRING", 0, result_buffer, NULL); // create_ast_leaf hace strdup
-    add_or_update_variable("__ret__", lit);
-    free_ast(lit); // add_or_update_variable copia el valor
 }
 
 // Serializa un objeto a XML string dado su id y lo imprime
-char* get_object_xml_by_id(const char* id) {
+void print_object_as_xml_by_id(const char* id) {
     Variable *var = find_variable((char*)id);
-    if (!var || var->vtype != VAL_OBJECT || !var->value.object_value) {
-        return NULL;
+    if (!var) {
+        printf("Error: No se encontró variable con id '%s' para serializar a XML.\n", id);
+        return;
     }
+    
+    // If variable is a STRING, print it directly (for mysql_query results with XML format)
+    if (var->vtype == VAL_STRING) {
+        printf("%s\n", var->value.string_value);
+        return;
+    }
+
+    // Si es una LISTA, serializar cada objeto
+    if (var->type && strcmp(var->type, "LIST") == 0 && var->value.object_value) {
+        ASTNode *listNode = (ASTNode *)(intptr_t)var->value.object_value;
+        if (listNode && listNode->type && strcmp(listNode->type, "LIST") == 0) {
+            printf("<Items>\n");
+            ASTNode *cur = listNode->left;
+            
+            while (cur) {
+                if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
+                    // ObjectNode pointer is stored in 'extra', not 'value'
+                    ObjectNode *obj = (ObjectNode *)cur->extra;
+                    
+                    if (obj && obj->class) {
+                        printf("  <Item>\n");
+                        for (int i = 0; i < obj->class->attr_count; i++) {
+                            Variable *attr = &obj->attributes[i];
+                            printf("    <%s>", attr->id);
+                            if (attr->vtype == VAL_STRING) {
+                                printf("%s", attr->value.string_value);
+                            } else if (attr->vtype == VAL_INT) {
+                                printf("%d", attr->value.int_value);
+                            } else if (attr->vtype == VAL_FLOAT) {
+                                printf("%f", attr->value.float_value);
+                            } else {
+                                printf("null");
+                            }
+                            printf("</%s>\n", attr->id);
+                        }
+                        printf("  </Item>\n");
+                    }
+                }
+                cur = cur->next;
+            }
+            printf("</Items>\n");
+            return;
+        }
+    }
+
+    // Si no es lista, serializar como objeto único
+    if (var->vtype != VAL_OBJECT || !var->value.object_value) {
+        printf("Error: Variable '%s' no es un objeto válido para serializar a XML.\n", id);
+        return;
+    }
+
     ObjectNode *obj = var->value.object_value;
-    char *xml_buffer = malloc(2048);
-    if (!xml_buffer) return NULL;
-    snprintf(xml_buffer, 2048, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<%s>", obj->class->name);
+    char xml_buffer[65536] = "";
+    snprintf(xml_buffer, sizeof(xml_buffer), "<%s>", obj->class->name);
     for (int i = 0; i < obj->class->attr_count; i++) {
-        Variable *attr = &obj->attributes[i];
-        if (!attr || !attr->id) continue;
         strcat(xml_buffer, "<");
-        strcat(xml_buffer, attr->id);
+        strcat(xml_buffer, obj->attributes[i].id);
         strcat(xml_buffer, ">");
-        if (attr->vtype == VAL_STRING) {
-            if (attr->value.string_value)
-                strcat(xml_buffer, attr->value.string_value);
-            else
-                strcat(xml_buffer, "");
-        } else if (attr->vtype == VAL_INT) {
+        if (obj->attributes[i].vtype == VAL_STRING) {
+            strcat(xml_buffer, obj->attributes[i].value.string_value);
+        } else if (obj->attributes[i].vtype == VAL_INT) {
             char numbuf[32];
-            snprintf(numbuf, sizeof(numbuf), "%d", attr->value.int_value);
+            snprintf(numbuf, sizeof(numbuf), "%d", obj->attributes[i].value.int_value);
             strcat(xml_buffer, numbuf);
-        } else if (attr->vtype == VAL_FLOAT) {
+        } else if (obj->attributes[i].vtype == VAL_FLOAT) {
             char numbuf[64];
-            snprintf(numbuf, sizeof(numbuf), "%f", attr->value.float_value);
+            snprintf(numbuf, sizeof(numbuf), "%f", obj->attributes[i].value.float_value);
             strcat(xml_buffer, numbuf);
         } else {
             strcat(xml_buffer, "null");
         }
         strcat(xml_buffer, "</");
-        strcat(xml_buffer, attr->id);
-        strcat(xml_buffer, ">\n");
+        strcat(xml_buffer, obj->attributes[i].id);
+        strcat(xml_buffer, ">");
     }
-    char end_tag[128];
-    snprintf(end_tag, sizeof(end_tag), "</%s>", obj->class->name);
-    strcat(xml_buffer, end_tag);
-    return xml_buffer;
+    strcat(xml_buffer, "</");
+    strcat(xml_buffer, obj->class->name);
+    strcat(xml_buffer, ">\n");
+    printf("%s", xml_buffer);
 }
 
-   void print_object_as_xml_by_id(const char* id) {
-            Variable *var = find_variable((char*)id);
-            if (!var) {
-                printf("Error: No se encontró variable con id '%s' para serializar a XML.\n", id);
-                return;
-            }
-            
-            printf("[DEBUG XML ENTRY] id=%s, vtype=%d, type=%s, value.object_value=%p\n", 
-                   id, var->vtype, var->type ? var->type : "NULL", (void*)var->value.object_value);
-            fflush(stdout);
-
-            // If variable is a STRING, print it directly (for mysql_query results with XML format)
-            if (var->vtype == VAL_STRING) {
-                ASTNode *ret_node = create_ast_leaf("STRING", 0, strdup(var->value.string_value), NULL);
-                add_or_update_variable("__ret__", ret_node);
-                free_ast(ret_node);
-                return;
-            }
-
-            // Si es una LISTA, serializar cada objeto
-            if (var->type && strcmp(var->type, "LIST") == 0 && var->value.object_value) {
-                ASTNode *listNode = (ASTNode *)(intptr_t)var->value.object_value;
-                //printf("[DEBUG XML] listNode=%p, type=%s\n", (void*)listNode, listNode ? (listNode->type ? listNode->type : "NULL") : "NULL");
-                fflush(stdout);
-                
-                if (listNode && listNode->type && strcmp(listNode->type, "LIST") == 0) {
-                    printf("<Items>\n");
-                    ASTNode *cur = listNode->left;
-                  //  printf("[DEBUG XML] listNode->left=%p\n", (void*)cur);
-                    fflush(stdout);
-                    
-                    int count = 0;
-                    while (cur) {
-                        count++;
-                       // printf("[DEBUG XML] Processing item #%d: cur=%p, type=%s\n", count, (void*)cur, cur->type ? cur->type : "NULL");
-                        fflush(stdout);
-                        if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
-                            // ObjectNode pointer is stored in 'extra', not 'value'
-                            ObjectNode *obj = (ObjectNode *)cur->extra;
-                          //  printf("[DEBUG XML] obj=%p\n", (void*)obj);
-                            fflush(stdout);
-                            
-                            if (!obj) {
-                              //  printf("[DEBUG XML] obj is NULL!\n");
-                                fflush(stdout);
-                            } else {
-                              //  printf("[DEBUG XML] obj->class=%p\n", (void*)obj->class);
-                                fflush(stdout);
-                                
-                                if (!obj->class) {
-                                  //  printf("[DEBUG XML] obj->class is NULL!\n");
-                                    fflush(stdout);
-                                } else {
-                                  //  printf("[DEBUG XML] obj->class->attr_count=%d\n", obj->class->attr_count);
-                                    fflush(stdout);
-                                    
-                                    printf("  <Item>\n");
-                                    for (int i = 0; i < obj->class->attr_count; i++) {
-                                        Variable *attr = &obj->attributes[i];
-                                        printf("    <%s>", attr->id);
-                                        if (attr->vtype == VAL_STRING) {
-                                            printf("%s", attr->value.string_value);
-                                        } else if (attr->vtype == VAL_INT) {
-                                            printf("%d", attr->value.int_value);
-                                        } else if (attr->vtype == VAL_FLOAT) {
-                                            printf("%f", attr->value.float_value);
-                                        } else {
-                                            printf("null");
-                                        }
-                                        printf("</%s>\n", attr->id);
-                                    }
-                                    printf("  </Item>\n");
-                                }
-                            }
-                        }
-                      //  printf("[DEBUG XML] cur->next=%p\n", (void*)cur->next);
-                        cur = cur->next;
-                    }
-                   // printf("[DEBUG XML] Total items processed: %d\n", count);
-                    printf("</Items>\n");
-                    return;
-                }
-            }
-            // Si no es lista, serializar como objeto único
-            if (var->vtype != VAL_OBJECT || !var->value.object_value) {
-                printf("Error: Variable '%s' no es un objeto válido para serializar a XML.\n", id);
-                return;
-            }
-            ObjectNode *obj = var->value.object_value;
-            char xml_buffer[65536] = "";
-            snprintf(xml_buffer, sizeof(xml_buffer), "<%s>", obj->class->name);
-            for (int i = 0; i < obj->class->attr_count; i++) {
-                strcat(xml_buffer, "<");
-                strcat(xml_buffer, obj->attributes[i].id);
-                strcat(xml_buffer, ">");
-                if (obj->attributes[i].vtype == VAL_STRING) {
-                    strcat(xml_buffer, obj->attributes[i].value.string_value);
-                } else if (obj->attributes[i].vtype == VAL_INT) {
-                    char numbuf[32];
-                    snprintf(numbuf, sizeof(numbuf), "%d", obj->attributes[i].value.int_value);
-                    strcat(xml_buffer, numbuf);
-                } else if (obj->attributes[i].vtype == VAL_FLOAT) {
-                    char numbuf[64];
-                    snprintf(numbuf, sizeof(numbuf), "%f", obj->attributes[i].value.float_value);
-                    strcat(xml_buffer, numbuf);
-                } else {
-                    strcat(xml_buffer, "null");
-                }
-                strcat(xml_buffer, "</");
-                strcat(xml_buffer, obj->attributes[i].id);
-                strcat(xml_buffer, ">");
-            }
-            strcat(xml_buffer, "</");
-            strcat(xml_buffer, obj->class->name);
-            strcat(xml_buffer, ">\n");
-            printf("%s", xml_buffer);
-        }
 void print_object_as_json_by_id(const char* id) {
         // Limpiar la consola al inicio  
-    Variable *var = find_variable((char*)id);
+   Variable *var = find_variable((char*)id);
     if (!var) {
         printf("Error: No se encontró variable con id '%s' para serializar a JSON.\n", id);
         return;
     }
     
-    // If variable is a STRING, print it directly (for mysql_query results)
+    // If variable is a STRING, print it directly (for mysql_query results with JSON format)
     if (var->vtype == VAL_STRING) {
         printf("%s\n", var->value.string_value);
         return;
     }
-    
+
+    // Si es una LISTA, serializar cada objeto como array
+    if (var->type && strcmp(var->type, "LIST") == 0 && var->value.object_value) {
+        ASTNode *listNode = (ASTNode *)(intptr_t)var->value.object_value;
+        if (listNode && listNode->type && strcmp(listNode->type, "LIST") == 0) {
+            printf("[\n");
+            ASTNode *cur = listNode->left;
+            int first_item = 1;  // Cambiado de bool a int
+            
+            while (cur) {
+                if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
+                    // ObjectNode pointer is stored in 'extra', not 'value'
+                    ObjectNode *obj = (ObjectNode *)cur->extra;
+                    
+                    if (obj && obj->class) {
+                        if (!first_item) {
+                            printf(",\n");
+                        }
+                        printf("  {\n");
+                        for (int i = 0; i < obj->class->attr_count; i++) {
+                            Variable *attr = &obj->attributes[i];
+                            if (i > 0) {
+                                printf(",\n");
+                            }
+                            printf("    \"%s\": ", attr->id);
+                            if (attr->vtype == VAL_STRING) {
+                                printf("\"%s\"", attr->value.string_value);
+                            } else if (attr->vtype == VAL_INT) {
+                                printf("%d", attr->value.int_value);
+                            } else if (attr->vtype == VAL_FLOAT) {
+                                printf("%f", attr->value.float_value);
+                            } else {
+                                printf("null");
+                            }
+                        }
+                        printf("\n  }");
+                        first_item = 0;  // Cambiado de false a 0
+                    }
+                }
+                cur = cur->next;
+            }
+            printf("\n]\n");
+            return;
+        }
+    }
+
+    // Si no es lista, serializar como objeto único
     if (var->vtype != VAL_OBJECT || !var->value.object_value) {
         printf("Error: Variable '%s' no es un objeto válido para serializar a JSON.\n", id);
         return;
     }
-    
+
     ObjectNode *obj = var->value.object_value;
-    char json_buffer[65536] = "{\n";
-    int first_attr = 1;
+    char json_buffer[65536] = "";
+    char temp_buffer[256];
+    
+    snprintf(json_buffer, sizeof(json_buffer), "{\n");
+    
     for (int i = 0; i < obj->class->attr_count; i++) {
-        if (!first_attr) strcat(json_buffer, ",\n");
-        first_attr = 0;
-        strcat(json_buffer, "    \"");
-        strcat(json_buffer, obj->attributes[i].id);
-        strcat(json_buffer, "\": ");
+        if (i > 0) {
+            strcat(json_buffer, ",\n");
+        }
+        
+        snprintf(temp_buffer, sizeof(temp_buffer), "  \"%s\": ", obj->attributes[i].id);
+        strcat(json_buffer, temp_buffer);
+        
         if (obj->attributes[i].vtype == VAL_STRING) {
-            strcat(json_buffer, "\"");
-            strcat(json_buffer, obj->attributes[i].value.string_value);
-            strcat(json_buffer, "\"");
+            snprintf(temp_buffer, sizeof(temp_buffer), "\"%s\"", obj->attributes[i].value.string_value);
+            strcat(json_buffer, temp_buffer);
         } else if (obj->attributes[i].vtype == VAL_INT) {
-            char numbuf[32];
-            snprintf(numbuf, sizeof(numbuf), "%d", obj->attributes[i].value.int_value);
-            strcat(json_buffer, numbuf);
+            snprintf(temp_buffer, sizeof(temp_buffer), "%d", obj->attributes[i].value.int_value);
+            strcat(json_buffer, temp_buffer);
         } else if (obj->attributes[i].vtype == VAL_FLOAT) {
-            char numbuf[64];
-            snprintf(numbuf, sizeof(numbuf), "%f", obj->attributes[i].value.float_value);
-            strcat(json_buffer, numbuf);
+            snprintf(temp_buffer, sizeof(temp_buffer), "%f", obj->attributes[i].value.float_value);
+            strcat(json_buffer, temp_buffer);
         } else {
             strcat(json_buffer, "null");
         }
     }
-    strcat(json_buffer, "\n}");
-    printf("%s\n", json_buffer);
+    
+    strcat(json_buffer, "\n}\n");
+    printf("%s", json_buffer);
 }
 
 static void interpret_return_node(ASTNode *node) {
@@ -2135,10 +2059,34 @@ static void interpret_call_method(ASTNode *node) {
         printf("Error: '%s' no es un objeto válido.\n", objNode->id);
         return;
     }
+    // Try to get ObjectNode from value.object_value first, then from extra
+    // This supports both storage patterns: direct storage and wrapper pattern (used by for-in)
     ObjectNode *obj = v->value.object_value;
+    //printf("[DEBUG interpret_call_method] objNode->id='%s', v->type='%s', v->vtype=%d, obj=%p\n", 
+      //     objNode->id, v->type, v->vtype, (void*)obj);
+    if (!obj) {
+        // Fallback: The ObjectNode might be stored in an ASTNode wrapper's extra field
+        // This happens when objects are created by interpret_for_in()
+        ASTNode *wrapper = (ASTNode*)(intptr_t)v->value.object_value;
+       // printf("[DEBUG interpret_call_method] Trying fallback: wrapper=%p\n", (void*)wrapper);
+        if (wrapper && wrapper->extra) {
+            obj = (ObjectNode *)wrapper->extra;
+            //printf("[DEBUG interpret_call_method] Got obj from wrapper->extra: obj=%p\n", (void*)obj);
+        }
+    }
+    
+    if (!obj) {
+        printf("[DEBUG interpret_call_method] ERROR: obj is NULL after fallback!\n");
+        return;
+    }
+    
+   // printf("[DEBUG interpret_call_method] obj=%p, obj->class=%p\n", (void*)obj, (void*)obj->class);
+//if (obj->class) {
+    //    printf("[DEBUG interpret_call_method] obj->class->name='%s'\n", obj->class->name);
+   // }
 
     // === FIX START: Handle Bridge method calls ===
-    if (strcmp(obj->class->name, "Bridge") == 0) {
+    if (obj && strcmp(obj->class->name, "Bridge") == 0) {
         if (g_debug_mode) te_log_ast("Calling native bridge: %s.%s", v->id, node->id);
         // Aquí es donde la magia ocurre. Delegamos al manejador específico del bridge.
         if (strcmp(v->id, "Chat") == 0) {
@@ -2271,8 +2219,6 @@ static void interpret_call_method(ASTNode *node) {
 }
 
 static void interpret_call_method_alone(ASTNode *node) {
-    // ...al final del manejo de return para método global...
-    // Si el método es una función nativa, ejecutarla
     if (call_native_function(node->id, node->right)) {
         return_flag = 0;
         return_node = NULL;

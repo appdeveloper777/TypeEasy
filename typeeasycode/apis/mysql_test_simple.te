@@ -1,6 +1,6 @@
 // Endpoint MySQL para TypeEasy - Versión con strings literales
 endpoint {
-    [HttpGet("/api/mysql/test")]
+    [HttpGet("/api/mysql/select")]
     TestMySQLSimple() {
         // Conectar a MySQL
         // host.docker.internal:3308 - puerto de XAMPP
