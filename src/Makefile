@@ -11,8 +11,8 @@ MAIN_AGENT_OBJ = $(MAIN_AGENT_C:.c=.o)
 # --- ARCHIVOS DEL "MOTOR" ---
 BISON_FILE = parser.y
 FLEX_FILE = parser.l
-# (Asumiendo que estos son todos tus archivos de motor)
-MOTOR_C_FILES = ast.c bytecode.c mysql_bridge.c orm_bridge.c
+# Archivos del motor incluyendo la nueva API embebida
+MOTOR_C_FILES = ast.c bytecode.c mysql_bridge.c orm_bridge.c typeeasy_api.c
 MOTOR_OBJS = $(MOTOR_C_FILES:.c=.o)
 
 BISON_C = parser.tab.c
@@ -20,23 +20,21 @@ BISON_H = parser.tab.h
 FLEX_C = lex.yy.c
 BISON_OBJ = parser.tab.o
 FLEX_OBJ = lex.yy.o
-STRVARS_OBJ = strvars.o # (Asumiendo que tienes strvars.c)
+STRVARS_OBJ = strvars.o
 
 # --- CIVETWEB (para el agente) ---
 CIVETWEB_C = ../api_server/civetweb.c
 CIVETWEB_OBJ = civetweb.o
 
-# Motor EasySpark (basado en tu Makefile original)
+# Motor EasySpark
 SPARK_DIR = easyspark
 SPARK_OBJ = $(SPARK_DIR)/dataframe.o
 
 CC = gcc
 CXX = g++
-# ¡¡ARREGLO AQUÍ!! Añadidas las flags de OpenSSL
 CFLAGS = -Wall -g -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1
 CXXFLAGS = -Wall -g -std=c++17
 LIBS_SCRIPT = -lfl -lm -lmysqlclient
-# ¡¡ARREGLO AQUÍ!! Añadidas las bibliotecas de OpenSSL
 LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto -lmysqlclient
 
 # --- OBJETIVO PRINCIPAL ---
@@ -58,30 +56,30 @@ $(BISON_OBJ): $(BISON_C) $(BISON_H)
 $(FLEX_OBJ): $(FLEX_C)
 	$(CC) $(CFLAGS) -c $(FLEX_C) -o $(FLEX_OBJ)
 
-# Reglas para los NUEVOS archivos 'main'
+# Reglas para los archivos 'main'
 $(MAIN_SCRIPT_OBJ): $(MAIN_SCRIPT_C)
 	$(CC) $(CFLAGS) -c $(MAIN_SCRIPT_C) -o $(MAIN_SCRIPT_OBJ)
 $(MAIN_AGENT_OBJ): $(MAIN_AGENT_C)
 	$(CC) $(CFLAGS) -c $(MAIN_AGENT_C) -o $(MAIN_AGENT_OBJ)
 
-# Compila civetweb.o con las CFLAGS correctas
+# Compila civetweb.o
 $(CIVETWEB_OBJ): $(CIVETWEB_C)
 	$(CC) $(CFLAGS) -c $(CIVETWEB_C) -o $(CIVETWEB_OBJ)
     
-# (Asumiendo que tienes strvars.c)
+# Compila strvars.o
 $(STRVARS_OBJ): strvars.c
 	$(CC) $(CFLAGS) -c strvars.c -o $(STRVARS_OBJ)
 
 # --- REGLAS DE EJECUTABLES ---
-# 1. 'typeeasy' (para tu API)
+# 1. 'typeeasy' (intérprete para scripts)
 $(EXEC_SCRIPT): $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ)
 	$(CC) $(CFLAGS) -o $(EXEC_SCRIPT) $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(LIBS_SCRIPT)
 
-# 2. 'servidor_agent' (para tu Agente)
+# 2. 'servidor_agent' (servidor del agente)
 $(EXEC_AGENT): $(MAIN_AGENT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ)
 	$(CC) $(CFLAGS) -o $(EXEC_AGENT) $(MAIN_AGENT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ) $(LIBS_AGENT)
 
-# --- REGLAS DE EASYSPARK (sin cambios) ---
+# --- REGLAS DE EASYSPARK ---
 $(SPARK_OBJ): $(SPARK_DIR)/dataframe.cpp $(SPARK_DIR)/dataframe.hpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 

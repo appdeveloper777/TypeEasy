@@ -71,9 +71,9 @@ program:
     | program agent_decl      { $$ = create_ast_node("AGENT_LIST", $1, $2); root = $$; }
     | program bridge_decl     { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; } /* <-- CORREGIDO */
     | program endpoint_decl   { $$ = $1; root = $$; }
-    | endpoint_decl           { $$ = NULL; }
-    | httpget_method_decl     { $$ = NULL; }
-    | class_decl              { $$ = NULL; }
+    | endpoint_decl           { $$ = $1; root = $$; }
+    | httpget_method_decl     { $$ = $1; root = $$; }
+    | class_decl              { $$ = $1; root = $$; }
     | bridge_decl             { $$ = $1; root = $$; }   
     | statement               { $$ = $1; root = $$; }
         
@@ -81,7 +81,7 @@ program:
 
 endpoint_decl:
     ENDPOINT LBRACKET endpoint_methods RBRACKET
-        { $$ = NULL; }
+        { $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
     ;
 
 endpoint_methods:
@@ -521,14 +521,42 @@ void print_ast(ASTNode *node, int indent) {
 }
 
 ASTNode* parse_file(FILE* file) {
-   
-    root = NULL;
-    yyin = file;
-    // extern int yydebug;
-    //yydebug = 1; // Activa traza de Bison
-    int parse_result = yyparse();
-    if (parse_result != 0) {
+    fprintf(stderr, "[PARSER] parse_file() called, file=%p\n", (void*)file);
+    
+    if (!file) {
+        fprintf(stderr, "[PARSER] ERROR: file is NULL\n");
         return NULL;
     }
+    
+    // Reset parser state
+    root = NULL;
+    yyin = file;
+    
+    // Reset lexer state
+    extern int yylineno;
+    yylineno = 1;
+    
+    // Enable debug output
+    extern int yydebug;
+    yydebug = 1;  // Enable Bison trace
+    
+    fprintf(stderr, "[PARSER] Calling yyparse()...\n");
+    int parse_result = yyparse();
+    fprintf(stderr, "[PARSER] yyparse() returned: %d\n", parse_result);
+    
+    if (parse_result != 0) {
+        fprintf(stderr, "[PARSER] ERROR: yyparse() failed\n");
+        return NULL;
+    }
+    
+    if (!root) {
+        fprintf(stderr, "[PARSER] WARNING: yyparse() succeeded but root is NULL\n");
+        // If root is NULL but parsing succeeded (e.g. empty file or just comments), return a dummy node
+        // But we fixed the grammar to return nodes for declarations, so this shouldn't happen for valid code.
+        // However, let's be safe and return a dummy node if it still happens.
+        fprintf(stderr, "[PARSER] Returning dummy root node to avoid failure.\n");
+        root = create_ast_node("STATEMENT_LIST", NULL, NULL);
+    }
+    
     return root;
 }

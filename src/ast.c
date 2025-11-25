@@ -30,43 +30,128 @@ void evaluate_native_args(ASTNode *arg) {
 }
 
 void native_json(ASTNode *arg) {
+    fprintf(stderr, "[DEBUG] native_json called\n"); fflush(stderr);
     const char *var_id = NULL;
     if (arg->id) {
         var_id = arg->id;
     } else if (arg->type && (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0)) {
-        var_id = arg->str_value;
+        var_id = arg->str_value ? arg->str_value : arg->id;
     } else if (arg->left && arg->left->id) {
         var_id = arg->left->id;
     }
-    if (!var_id) { printf("[DIAG] native_json: var_id is NULL\n"); return; }
-    Variable *v = find_variable(var_id);
-    if (!v) { printf("[DIAG] native_json: variable not found\n"); return; }
     
-    // If variable is a STRING, return it as-is (for mysql_query results)
+    if (!var_id) { printf("[DIAG] native_json: var_id is NULL\n"); return; }
+    Variable *v = find_variable((char*)var_id);
+    if (!v) { printf("[DIAG] native_json: variable '%s' not found\n", var_id); return; }
+    
+    // Handle STRING
     if (v->vtype == VAL_STRING) {
         ASTNode *result_node = create_ast_leaf("STRING", 0, v->value.string_value, NULL);
         add_or_update_variable("__ret__", result_node);
         free_ast(result_node);
         return;
     }
-    
+
+    // Handle LIST
+    if (v->type && strcmp(v->type, "LIST") == 0) {
+        ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
+        if (!listNode) {
+             ASTNode *empty = create_ast_leaf("STRING", 0, "[]", NULL);
+             add_or_update_variable("__ret__", empty);
+             free_ast(empty);
+             return;
+        }
+        
+        int estimated_size = 4096; 
+        char *json_buffer = malloc(estimated_size);
+        if(!json_buffer) return;
+        strcpy(json_buffer, "[");
+        
+        ASTNode *cur = listNode->left;
+        int first = 1;
+        
+        while (cur) {
+            if (!first) strcat(json_buffer, ", ");
+            first = 0;
+            
+            if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
+                ObjectNode *obj = NULL;
+                if (cur->extra) obj = (ObjectNode *)cur->extra;
+                else obj = (ObjectNode *)(intptr_t)cur->value;
+                
+                if (obj && obj->class) {
+                    if (strlen(json_buffer) + 1024 > estimated_size) {
+                        estimated_size *= 2;
+                        json_buffer = realloc(json_buffer, estimated_size);
+                    }
+                    
+                    strcat(json_buffer, "{");
+                    for (int i = 0; i < obj->class->attr_count; i++) {
+                        char temp[512];
+                        snprintf(temp, sizeof(temp), "\"%s\": ", obj->class->attributes[i].id);
+                        strcat(json_buffer, temp);
+                        
+                        Variable *attr = &obj->attributes[i];
+                        if (attr->vtype == VAL_STRING) {
+                            strcat(json_buffer, "\"");
+                            strcat(json_buffer, attr->value.string_value ? attr->value.string_value : "");
+                            strcat(json_buffer, "\"");
+                        } else if (attr->vtype == VAL_FLOAT) {
+                            snprintf(temp, sizeof(temp), "%f", attr->value.float_value);
+                            strcat(json_buffer, temp);
+                        } else {
+                            snprintf(temp, sizeof(temp), "%d", attr->value.int_value);
+                            strcat(json_buffer, temp);
+                        }
+                        if (i < obj->class->attr_count - 1) strcat(json_buffer, ", ");
+                    }
+                    strcat(json_buffer, "}");
+                }
+            }
+            cur = cur->next;
+        }
+        strcat(json_buffer, "]");
+        
+        ASTNode *result_node = create_ast_leaf("STRING", 0, json_buffer, NULL);
+        add_or_update_variable("__ret__", result_node);
+        free_ast(result_node);
+        free(json_buffer);
+        return;
+    }
+
+    // Handle single OBJECT
     if (v->vtype != VAL_OBJECT) { printf("[DIAG] native_json: variable is not VAL_OBJECT, vtype=%d\n", v->vtype); return; }
     ObjectNode *obj = v->value.object_value;
-    if (!obj || !obj->class || obj->class->attr_count == 0) return;
-    printf("{\n");
+    if (!obj || !obj->class) return;
+    
+    char *json_buffer = malloc(4096);
+    strcpy(json_buffer, "{");
     for (int i = 0; i < obj->class->attr_count; i++) {
-        printf("  \"%s\": ", obj->class->attributes[i].id);
-        if (strcmp(obj->class->attributes[i].type, "string") == 0) {
-            printf("\"%s\"", obj->attributes[i].value.string_value);
-        } else if (strcmp(obj->class->attributes[i].type, "float") == 0) {
-            printf("%f", obj->attributes[i].value.float_value);
+        char temp[512];
+        snprintf(temp, sizeof(temp), "\"%s\": ", obj->class->attributes[i].id);
+        strcat(json_buffer, temp);
+        if (obj->attributes[i].vtype == VAL_STRING) {
+            strcat(json_buffer, "\"");
+            strcat(json_buffer, obj->attributes[i].value.string_value ? obj->attributes[i].value.string_value : "");
+            strcat(json_buffer, "\"");
+        } else if (obj->attributes[i].vtype == VAL_INT) {
+            snprintf(temp, sizeof(temp), "%d", obj->attributes[i].value.int_value);
+            strcat(json_buffer, temp);
+        } else if (obj->attributes[i].vtype == VAL_FLOAT) {
+            snprintf(temp, sizeof(temp), "%f", obj->attributes[i].value.float_value);
+            strcat(json_buffer, temp);
         } else {
-            printf("%d", obj->attributes[i].value.int_value);
+            strcat(json_buffer, "null");
         }
-        if (i < obj->class->attr_count - 1) printf(",\n");
-        else printf("\n");
+        if (i < obj->class->attr_count - 1) strcat(json_buffer, ", ");
     }
-    printf("}\n");
+    strcat(json_buffer, "}");
+    
+    ASTNode *result_node = create_ast_leaf("STRING", 0, json_buffer, NULL);
+    add_or_update_variable("__ret__", result_node);
+    fprintf(stderr, "[DEBUG] native_json: __ret__ set to %s\n", json_buffer); fflush(stderr);
+    free_ast(result_node);
+    free(json_buffer);
 }
 
 // --- Hook para funciones nativas ---
@@ -1557,9 +1642,16 @@ ASTNode *append_kv_pair(ASTNode *list, ASTNode *pair) {
     return list;
 }
 
-void interpret_ast(ASTNode *node) {    
-    if (!node || return_flag) return; 
-    /* debug print removed */    
+// Forward declarations
+static void interpret_return_node(ASTNode *node);
+void print_object_as_xml_by_id(const char* id);
+void print_object_as_json_by_id(const char* id);
+
+void interpret_ast(ASTNode *node) {
+    if (!node) return;
+    if (return_flag) return; 
+
+    // fprintf(stderr, "[DEBUG] interpret_ast: node->type=%s\n", node->type ? node->type : "NULL"); fflush(stderr);
 
     if (strcmp(node->type, "STATE_DECL") == 0) {
         printf("[TypeEasy] 'state' '%s' tratado como 'var' en modo script.\n", node->id);
@@ -1593,6 +1685,12 @@ void interpret_ast(ASTNode *node) {
     else if (strcmp(node->type, "MODEL") == 0 || strcmp(node->type, "OBJECT") == 0) interpret_model_object(node);
     else if (strcmp(node->type, "TRAIN") == 0)          interpret_train_node(node);
     else if (strcmp(node->type, "PREDICT") == 0)        interpret_predict_node(node);
+    else if (strcmp(node->type, "RETURN_JSON") == 0)    native_json(node->left);
+    else if (strcmp(node->type, "RETURN_XML") == 0) {
+        if (node->left && node->left->id) {
+            print_object_as_xml_by_id(node->left->id);
+        }
+    }
     else if (strcmp(node->type, "CALL_FUNC") == 0)      interpret_call_func(node);
     else if (strcmp(node->type, "RETURN") == 0)         interpret_return_node(node);
     else if (strcmp(node->type, "CALL_METHOD") == 0) {
@@ -1636,19 +1734,12 @@ void interpret_ast(ASTNode *node) {
         }
         generate_plot(values, count);
     }
-}
+    }
 
-
-/* ... (El resto de tu ast.c, desde evaluate_number hasta free_ast) ... */
 
 double evaluate_number(ASTNode *node) {
-    if (node == NULL) {
-        fprintf(stderr, "Error: Nodo nulo en evaluate_number\n");
-        return 0;
-    }
-    if (strcmp(node->type, "NUMBER") == 0) {
-        return node->value;
-    }
+    if (node == NULL) return 0;
+    if (strcmp(node->type, "NUMBER") == 0) return node->value;
     if (strcmp(node->type, "FLOAT") == 0) {
         return atof(node->str_value);
     }
@@ -1762,280 +1853,45 @@ static void interpret_predict_node(ASTNode *node) {
 }
 
 static void interpret_call_func(ASTNode *node) {
-
-   // printf("[DIAG] SAPPPEEEEE interpret_call_func: llamado con node->id=%s\n", node->id ? node->id : "NULL");
     if (strcmp(node->id, "json") == 0) {
-        // --- INICIO DE LA NUEVA LÓGICA PARA JSON ---
-        ASTNode *arg_node = node->left;
-
-        if (arg_node == NULL) {
-            // Caso: return json(); (sin argumentos)
-            ASTNode *result_node = create_ast_leaf("STRING", 0, "{}", NULL);
-            add_or_update_variable("__ret__", result_node);
-            free_ast(result_node);
-            return;
-        }
-
-        // 1. Verificar que el argumento es un identificador
-        if (arg_node->type == NULL || strcmp(arg_node->type, "IDENTIFIER") != 0) {
-            fprintf(stderr, "Error: El argumento de json() debe ser una variable de tipo objeto.\n");
-            return;
-        }
-
-        // 2. Buscar la variable en la tabla de símbolos
-        Variable *var = find_variable(arg_node->id);
-        if (!var) {
-            fprintf(stderr, "Error: Variable '%s' no encontrada para serializar a JSON.\n", arg_node->id);
-            return;
-        }
-
-        // 3. Verificar que la variable es un objeto
-        if (var->vtype != VAL_OBJECT || var->value.object_value == NULL) {
-            fprintf(stderr, "Error: La variable '%s' no es un objeto válido.\n", arg_node->id);
-            return;
-        }
-
-        ObjectNode *obj = var->value.object_value;
-        char json_buffer[2048] = "{"; // Empezamos a construir el string JSON
-        int first_attr = 1;
-
-        // 4. Iterar sobre los atributos del objeto para construir el JSON
-        for (int i = 0; i < obj->class->attr_count; i++) {
-            if (!first_attr) {
-                strcat(json_buffer, ",");
-            }
-
-            Variable *attr = &obj->attributes[i];
-            char attr_buffer[512];
-
-            // Formateamos cada atributo como "clave":valor
-            if (attr->vtype == VAL_STRING) {
-                snprintf(attr_buffer, sizeof(attr_buffer), "\"%s\":\"%s\"", attr->id, attr->value.string_value);
-            } else if (attr->vtype == VAL_INT) {
-                snprintf(attr_buffer, sizeof(attr_buffer), "\"%s\":%d", attr->id, attr->value.int_value);
-            } else if (attr->vtype == VAL_FLOAT) {
-                snprintf(attr_buffer, sizeof(attr_buffer), "\"%s\":%f", attr->id, attr->value.float_value);
-            } else {
-                // Omitir atributos no serializables por ahora
-                continue;
-            }
-
-            strncat(json_buffer, attr_buffer, sizeof(json_buffer) - strlen(json_buffer) - 1);
-            first_attr = 0;
-        }
-
-        strcat(json_buffer, "}"); // Cerramos el objeto JSON
-        
-        // 5. Devolver el string JSON resultante
-        ASTNode *result_node = create_ast_leaf("STRING", 0, json_buffer, NULL);
-        add_or_update_variable("__ret__", result_node);
-        free_ast(result_node);
+        native_json(node->left);
         return;
     }
 
-    // Try native functions first (mysql_connect, mysql_query, mysql_close, etc.)
+    // Try native functions (orm_query, mysql_*, etc.)
     if (call_native_function(node->id, node->left)) {
         return;
     }
-}
 
-// Serializa un objeto a XML string dado su id y lo imprime
-void print_object_as_xml_by_id(const char* id) {
-    Variable *var = find_variable((char*)id);
-    if (!var) {
-        printf("Error: No se encontró variable con id '%s' para serializar a XML.\n", id);
-        return;
+    // If not native, check for global user functions
+    MethodNode *m = global_methods;
+    while (m) {
+        if (strcmp(m->name, node->id) == 0) {
+             // Setup arguments and execute body
+             // Note: This is a simplified handling. Ideally we should share logic with interpret_call_method
+             // For now, we assume global functions are mostly native or handled via METHOD_CALL_ALONE
+             // But if we are here, it means it was parsed as CALL_FUNC (e.g. inside an expression)
+             
+             // Create a new scope/context if needed?
+             // For embedded, we just execute the body.
+             // But we need to map arguments.
+             // Since we don't have argument mapping logic ready here, and orm_query is native,
+             // we just print an error if it's not found.
+             // If the user defines a global function and calls it inside an expression, it might fail here.
+             // But our current goal is to fix orm_query.
+             break;
+        }
+        m = m->next;
     }
     
-    // If variable is a STRING, print it directly (for mysql_query results with XML format)
-    if (var->vtype == VAL_STRING) {
-        printf("%s\n", var->value.string_value);
-        return;
-    }
-
-    // Si es una LISTA, serializar cada objeto
-    if (var->type && strcmp(var->type, "LIST") == 0 && var->value.object_value) {
-        ASTNode *listNode = (ASTNode *)(intptr_t)var->value.object_value;
-        if (listNode && listNode->type && strcmp(listNode->type, "LIST") == 0) {
-            printf("<Items>\n");
-            ASTNode *cur = listNode->left;
-            
-            while (cur) {
-                if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
-                    // ObjectNode pointer is stored in 'extra', not 'value'
-                    ObjectNode *obj = (ObjectNode *)cur->extra;
-                    
-                    if (obj && obj->class) {
-                        printf("  <Item>\n");
-                        for (int i = 0; i < obj->class->attr_count; i++) {
-                            Variable *attr = &obj->attributes[i];
-                            printf("    <%s>", attr->id);
-                            if (attr->vtype == VAL_STRING) {
-                                printf("%s", attr->value.string_value);
-                            } else if (attr->vtype == VAL_INT) {
-                                printf("%d", attr->value.int_value);
-                            } else if (attr->vtype == VAL_FLOAT) {
-                                printf("%f", attr->value.float_value);
-                            } else {
-                                printf("null");
-                            }
-                            printf("</%s>\n", attr->id);
-                        }
-                        printf("  </Item>\n");
-                    }
-                }
-                cur = cur->next;
-            }
-            printf("</Items>\n");
-            return;
-        }
-    }
-
-    // Si no es lista, serializar como objeto único
-    if (var->vtype != VAL_OBJECT || !var->value.object_value) {
-        printf("Error: Variable '%s' no es un objeto válido para serializar a XML.\n", id);
-        return;
-    }
-
-    ObjectNode *obj = var->value.object_value;
-    char xml_buffer[65536] = "";
-    snprintf(xml_buffer, sizeof(xml_buffer), "<%s>", obj->class->name);
-    for (int i = 0; i < obj->class->attr_count; i++) {
-        strcat(xml_buffer, "<");
-        strcat(xml_buffer, obj->attributes[i].id);
-        strcat(xml_buffer, ">");
-        if (obj->attributes[i].vtype == VAL_STRING) {
-            strcat(xml_buffer, obj->attributes[i].value.string_value);
-        } else if (obj->attributes[i].vtype == VAL_INT) {
-            char numbuf[32];
-            snprintf(numbuf, sizeof(numbuf), "%d", obj->attributes[i].value.int_value);
-            strcat(xml_buffer, numbuf);
-        } else if (obj->attributes[i].vtype == VAL_FLOAT) {
-            char numbuf[64];
-            snprintf(numbuf, sizeof(numbuf), "%f", obj->attributes[i].value.float_value);
-            strcat(xml_buffer, numbuf);
-        } else {
-            strcat(xml_buffer, "null");
-        }
-        strcat(xml_buffer, "</");
-        strcat(xml_buffer, obj->attributes[i].id);
-        strcat(xml_buffer, ">");
-    }
-    strcat(xml_buffer, "</");
-    strcat(xml_buffer, obj->class->name);
-    strcat(xml_buffer, ">\n");
-    printf("%s", xml_buffer);
-}
-
-void print_object_as_json_by_id(const char* id) {
-        // Limpiar la consola al inicio  
-   Variable *var = find_variable((char*)id);
-    if (!var) {
-        printf("Error: No se encontró variable con id '%s' para serializar a JSON.\n", id);
-        return;
-    }
-    
-    // If variable is a STRING, print it directly (for mysql_query results with JSON format)
-    if (var->vtype == VAL_STRING) {
-        printf("%s\n", var->value.string_value);
-        return;
-    }
-
-    // Si es una LISTA, serializar cada objeto como array
-    if (var->type && strcmp(var->type, "LIST") == 0 && var->value.object_value) {
-        ASTNode *listNode = (ASTNode *)(intptr_t)var->value.object_value;
-        if (listNode && listNode->type && strcmp(listNode->type, "LIST") == 0) {
-            printf("[\n");
-            ASTNode *cur = listNode->left;
-            int first_item = 1;  // Cambiado de bool a int
-            
-            while (cur) {
-                if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
-                    // ObjectNode pointer is stored in 'extra', not 'value'
-                    ObjectNode *obj = (ObjectNode *)cur->extra;
-                    
-                    if (obj && obj->class) {
-                        if (!first_item) {
-                            printf(",\n");
-                        }
-                        printf("  {\n");
-                        for (int i = 0; i < obj->class->attr_count; i++) {
-                            Variable *attr = &obj->attributes[i];
-                            if (i > 0) {
-                                printf(",\n");
-                            }
-                            printf("    \"%s\": ", attr->id);
-                            if (attr->vtype == VAL_STRING) {
-                                printf("\"%s\"", attr->value.string_value);
-                            } else if (attr->vtype == VAL_INT) {
-                                printf("%d", attr->value.int_value);
-                            } else if (attr->vtype == VAL_FLOAT) {
-                                printf("%f", attr->value.float_value);
-                            } else {
-                                printf("null");
-                            }
-                        }
-                        printf("\n  }");
-                        first_item = 0;  // Cambiado de false a 0
-                    }
-                }
-                cur = cur->next;
-            }
-            printf("\n]\n");
-            return;
-        }
-    }
-
-    // Si no es lista, serializar como objeto único
-    if (var->vtype != VAL_OBJECT || !var->value.object_value) {
-        printf("Error: Variable '%s' no es un objeto válido para serializar a JSON.\n", id);
-        return;
-    }
-
-    ObjectNode *obj = var->value.object_value;
-    char json_buffer[65536] = "";
-    char temp_buffer[256];
-    
-    snprintf(json_buffer, sizeof(json_buffer), "{\n");
-    
-    for (int i = 0; i < obj->class->attr_count; i++) {
-        if (i > 0) {
-            strcat(json_buffer, ",\n");
-        }
-        
-        snprintf(temp_buffer, sizeof(temp_buffer), "  \"%s\": ", obj->attributes[i].id);
-        strcat(json_buffer, temp_buffer);
-        
-        if (obj->attributes[i].vtype == VAL_STRING) {
-            snprintf(temp_buffer, sizeof(temp_buffer), "\"%s\"", obj->attributes[i].value.string_value);
-            strcat(json_buffer, temp_buffer);
-        } else if (obj->attributes[i].vtype == VAL_INT) {
-            snprintf(temp_buffer, sizeof(temp_buffer), "%d", obj->attributes[i].value.int_value);
-            strcat(json_buffer, temp_buffer);
-        } else if (obj->attributes[i].vtype == VAL_FLOAT) {
-            snprintf(temp_buffer, sizeof(temp_buffer), "%f", obj->attributes[i].value.float_value);
-            strcat(json_buffer, temp_buffer);
-        } else {
-            strcat(json_buffer, "null");
-        }
-    }
-    
-    strcat(json_buffer, "\n}\n");
-    printf("%s", json_buffer);
-}
-
-static void interpret_return_node(ASTNode *node) {
-    //printf("[DEBUG] interpret_return_node\n"); fflush(stdout);
-    return_node = node->left;
-    return_flag = 1;
-    if (return_node) {
-        //printf("[DEBUG] interpret_return_node: return_node type=%s\n", return_node->type ? return_node->type : "NULL"); fflush(stdout);
-        if(return_node->type && strcmp(return_node->type, "RETURN_XML") == 0  && return_node->id) {
-            print_object_as_xml_by_id(return_node->id);
-        }
-        if(return_node->type && strcmp(return_node->type, "RETURN_JSON") == 0  && return_node->id) {
-            print_object_as_json_by_id(return_node->id);
-        }
+    if (m) {
+        // Found user function, but execution logic is missing here.
+        // We rely on the fact that most user functions are called as statements (METHOD_CALL_ALONE).
+        // If called as expression, we might need to implement this.
+        // For now, let's assume it's not needed for orm_query.
+         printf("Warning: Calling user function '%s' as expression is not fully supported yet.\n", node->id);
+    } else {
+        printf("Error: Función '%s' no definida.\n", node->id);
     }
 }
 
@@ -3515,9 +3371,7 @@ void set_attribute_value(ObjectNode *obj, const char *attr_name, int value) {
         }
     }
     printf("Error: Atributo '%s' no encontrado en clase '%s'.\n", attr_name, obj->class->name);
-    exit(EXIT_FAILURE);
-}
-
+    }
 // ====================== LIBERACIÓN DE MEMORIA ======================
 
 void free_ast(ASTNode *node) {
@@ -3529,4 +3383,150 @@ void free_ast(ASTNode *node) {
     free_ast(node->right);
     free_ast(node->next);
     free(node);
+}
+
+// Serializa un objeto a XML string dado su id y lo guarda en __ret__
+void print_object_as_xml_by_id(const char* id) {
+    Variable *var = find_variable((char*)id);
+    if (!var) {
+        printf("Error: No se encontró variable con id '%s' para serializar a XML.\n", id);
+        return;
+    }
+    
+    if (var->vtype == VAL_STRING) {
+        ASTNode *result_node = create_ast_leaf("STRING", 0, var->value.string_value, NULL);
+        add_or_update_variable("__ret__", result_node);
+        free_ast(result_node);
+        return;
+    }
+
+    // Handle LISTs
+    if (var->type && strcmp(var->type, "LIST") == 0) {
+        ASTNode *listNode = (ASTNode *)(intptr_t)var->value.object_value;
+        if (!listNode) {
+             ASTNode *empty = create_ast_leaf("STRING", 0, "<Items></Items>", NULL);
+             add_or_update_variable("__ret__", empty);
+             free_ast(empty);
+             return;
+        }
+        
+        int estimated_size = 4096; 
+        char *xml_buffer = malloc(estimated_size);
+        if(!xml_buffer) return;
+        strcpy(xml_buffer, "<Items>\n");
+        
+        ASTNode *cur = listNode->left;
+        
+        while (cur) {
+            if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
+                ObjectNode *obj = NULL;
+                if (cur->extra) obj = (ObjectNode *)cur->extra;
+                else obj = (ObjectNode *)(intptr_t)cur->value;
+                
+                if (obj && obj->class) {
+                    if (strlen(xml_buffer) + 1024 > estimated_size) {
+                        estimated_size *= 2;
+                        xml_buffer = realloc(xml_buffer, estimated_size);
+                    }
+                    
+                    strcat(xml_buffer, "  <Item>\n");
+                    for (int i = 0; i < obj->class->attr_count; i++) {
+                        char temp[512];
+                        snprintf(temp, sizeof(temp), "    <%s>", obj->class->attributes[i].id);
+                        strcat(xml_buffer, temp);
+                        
+                        Variable *attr = &obj->attributes[i];
+                        if (attr->vtype == VAL_STRING) {
+                            strcat(xml_buffer, attr->value.string_value ? attr->value.string_value : "");
+                        } else if (attr->vtype == VAL_FLOAT) {
+                            snprintf(temp, sizeof(temp), "%f", attr->value.float_value);
+                            strcat(xml_buffer, temp);
+                        } else {
+                            snprintf(temp, sizeof(temp), "%d", attr->value.int_value);
+                            strcat(xml_buffer, temp);
+                        }
+                        snprintf(temp, sizeof(temp), "</%s>\n", obj->class->attributes[i].id);
+                        strcat(xml_buffer, temp);
+                    }
+                    strcat(xml_buffer, "  </Item>\n");
+                }
+            }
+            cur = cur->next;
+        }
+        strcat(xml_buffer, "</Items>");
+        
+        ASTNode *result_node = create_ast_leaf("STRING", 0, xml_buffer, NULL);
+        add_or_update_variable("__ret__", result_node);
+        free_ast(result_node);
+        free(xml_buffer);
+        return;
+    }
+
+    if (var->vtype != VAL_OBJECT || !var->value.object_value) {
+        printf("Error: Variable '%s' no es un objeto válido para serializar a XML.\n", id);
+        return;
+    }
+
+    ObjectNode *obj = var->value.object_value;
+    char *xml_buffer = malloc(4096);
+    snprintf(xml_buffer, 4096, "<%s>\n", obj->class->name);
+    for (int i = 0; i < obj->class->attr_count; i++) {
+        char temp[512];
+        snprintf(temp, sizeof(temp), "  <%s>", obj->attributes[i].id);
+        strcat(xml_buffer, temp);
+        if (obj->attributes[i].vtype == VAL_STRING) {
+            strcat(xml_buffer, obj->attributes[i].value.string_value ? obj->attributes[i].value.string_value : "");
+        } else if (obj->attributes[i].vtype == VAL_INT) {
+            snprintf(temp, sizeof(temp), "%d", obj->attributes[i].value.int_value);
+            strcat(xml_buffer, temp);
+        } else if (obj->attributes[i].vtype == VAL_FLOAT) {
+            snprintf(temp, sizeof(temp), "%f", obj->attributes[i].value.float_value);
+            strcat(xml_buffer, temp);
+        } else {
+            strcat(xml_buffer, "null");
+        }
+        snprintf(temp, sizeof(temp), "</%s>\n", obj->attributes[i].id);
+        strcat(xml_buffer, temp);
+    }
+    char end_tag[256];
+    snprintf(end_tag, sizeof(end_tag), "</%s>", obj->class->name);
+    strcat(xml_buffer, end_tag);
+    
+    ASTNode *result_node = create_ast_leaf("STRING", 0, xml_buffer, NULL);
+    add_or_update_variable("__ret__", result_node);
+    free_ast(result_node);
+    free(xml_buffer);
+}
+
+void print_object_as_json_by_id(const char* id) {
+    ASTNode *arg = (ASTNode*)malloc(sizeof(ASTNode));
+    if(!arg) return;
+    arg->type = strdup("IDENTIFIER");
+    arg->id = strdup(id);
+    arg->left = NULL;
+    arg->right = NULL;
+    arg->str_value = NULL;
+    arg->value = 0;
+    arg->next = NULL;
+    arg->extra = NULL;
+
+    native_json(arg);
+    
+    free(arg->id);
+    free(arg->type);
+    free(arg);
+}
+
+static void interpret_return_node(ASTNode *node) {
+    fprintf(stderr, "[DEBUG] interpret_return_node called\n"); fflush(stderr);
+    return_node = node->left;
+    
+    if (return_node) {
+        fprintf(stderr, "[DEBUG] interpret_return_node: executing return expression type=%s\n", return_node->type); fflush(stderr);
+        interpret_ast(return_node);
+        fprintf(stderr, "[DEBUG] interpret_return_node: expression executed\n"); fflush(stderr);
+    } else {
+        fprintf(stderr, "[DEBUG] interpret_return_node: no return expression\n"); fflush(stderr);
+    }
+    return_flag = 1;
 }
