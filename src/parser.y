@@ -24,7 +24,7 @@
     ParameterNode *pnode;
 }
 
-%token <sval> INT STRING FLOAT FLOAT_LITERAL LAYER LSBRACKET RSBRACKET
+%token <sval> INT STRING FLOAT FLOAT_LITERAL LAYER LSBRACKET RSBRACKET CACHE
 %token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA CONCAT JSON XML HTTPGET HTTPPOST
 %token       VAR ASSIGN PRINT PRINTLN FOR LPAREN RPAREN SEMICOLON CONCAT FPRINT FPRINTLN 
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
@@ -59,25 +59,29 @@
 %type <node> node_decl
 %type <node> state_decl
 %type <node> endpoint_decl endpoint_methods endpoint_method
+%type <ival> cache_decorator
 %right ARROW
 %nonassoc GT LT EQ GT_EQ LT_EQ, DIFF
 
 %%
 
 program:
-    
      program statement       { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; }  
     | program class_decl      { $$ = $1; root = $$; }
     | program agent_decl      { $$ = create_ast_node("AGENT_LIST", $1, $2); root = $$; }
     | program bridge_decl     { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; } /* <-- CORREGIDO */
     | program endpoint_decl   { $$ = $1; root = $$; }
     | endpoint_decl           { $$ = $1; root = $$; }
+    | cache_decorator endpoint_decl { if ($2 && $2->extra) ((MethodNode*)$2->extra)->cache_ttl = $1; $$ = $2; root = $$; }
     | httpget_method_decl     { $$ = $1; root = $$; }
+    | cache_decorator httpget_method_decl { if ($2 && $2->extra) ((MethodNode*)$2->extra)->cache_ttl = $1; $$ = $2; root = $$; }
     | class_decl              { $$ = $1; root = $$; }
     | bridge_decl             { $$ = $1; root = $$; }   
     | statement               { $$ = $1; root = $$; }
-        
 ;
+
+cache_decorator:
+    CACHE LPAREN NUMBER RPAREN { $$ = $3; }
 
 endpoint_decl:
     ENDPOINT LBRACKET endpoint_methods RBRACKET
@@ -100,6 +104,20 @@ endpoint_method:
         m->params = $9;
         m->route_path = strdup($4);
         m->http_method = strdup("GET");
+        m->cache_ttl = 0;  // No cache by default
+        m->next = global_methods;
+        global_methods = m;
+        $$ = NULL;
+    }
+    | cache_decorator LSBRACKET HTTPGET LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
+    {
+        MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
+        m->name = strdup($8);
+        m->body = $13;
+        m->params = $10;
+        m->route_path = strdup($5);
+        m->http_method = strdup("GET");
+        m->cache_ttl = $1;  // Set cache TTL from decorator
         m->next = global_methods;
         global_methods = m;
         $$ = NULL;
@@ -291,7 +309,7 @@ var_decl:
 statement:
 func_call_expr SEMICOLON { $$ = $1; }
 |   MYSQL_CLOSE LPAREN expression RPAREN SEMICOLON { $$ = create_call_node("mysql_close", $3); }
-|   RETURN JSON LPAREN RPAREN SEMICOLON { }
+
 
 |
         FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_for_in_node($4, $6, $9); }
@@ -301,7 +319,9 @@ func_call_expr SEMICOLON { $$ = $1; }
 
 
    |RETURN XML LPAREN expression RPAREN SEMICOLON { $$ = create_return_node(create_call_node("xml", $4)); }
- |RETURN JSON LPAREN expression RPAREN SEMICOLON { $$ = create_return_node(create_call_node("json", $4)); }
+   |RETURN XML LPAREN RPAREN SEMICOLON { $$ = create_return_node(create_call_node("xml", NULL)); }
+   |RETURN JSON LPAREN expression RPAREN SEMICOLON { $$ = create_return_node(create_call_node("json", $4)); }
+   |RETURN JSON LPAREN RPAREN SEMICOLON { $$ = create_return_node(create_call_node("json", NULL)); }
 
 
   | state_decl
@@ -521,7 +541,7 @@ void print_ast(ASTNode *node, int indent) {
 }
 
 ASTNode* parse_file(FILE* file) {
-    fprintf(stderr, "[PARSER] parse_file() called, file=%p\n", (void*)file);
+    //fprintf(stderr, "[PARSER] parse_file() called, file=%p\n", (void*)file);
     
     if (!file) {
         fprintf(stderr, "[PARSER] ERROR: file is NULL\n");
@@ -538,23 +558,23 @@ ASTNode* parse_file(FILE* file) {
     
     // Enable debug output
     extern int yydebug;
-    yydebug = 1;  // Enable Bison trace
+    yydebug = 0;  // Disable Bison trace
     
-    fprintf(stderr, "[PARSER] Calling yyparse()...\n");
+   // fprintf(stderr, "[PARSER] Calling yyparse()...\n");
     int parse_result = yyparse();
-    fprintf(stderr, "[PARSER] yyparse() returned: %d\n", parse_result);
+    //fprintf(stderr, "[PARSER] yyparse() returned: %d\n", parse_result);
     
     if (parse_result != 0) {
-        fprintf(stderr, "[PARSER] ERROR: yyparse() failed\n");
+       // fprintf(stderr, "[PARSER] ERROR: yyparse() failed\n");
         return NULL;
     }
     
     if (!root) {
-        fprintf(stderr, "[PARSER] WARNING: yyparse() succeeded but root is NULL\n");
+      //  fprintf(stderr, "[PARSER] WARNING: yyparse() succeeded but root is NULL\n");
         // If root is NULL but parsing succeeded (e.g. empty file or just comments), return a dummy node
         // But we fixed the grammar to return nodes for declarations, so this shouldn't happen for valid code.
         // However, let's be safe and return a dummy node if it still happens.
-        fprintf(stderr, "[PARSER] Returning dummy root node to avoid failure.\n");
+     //   fprintf(stderr, "[PARSER] Returning dummy root node to avoid failure.\n");
         root = create_ast_node("STATEMENT_LIST", NULL, NULL);
     }
     

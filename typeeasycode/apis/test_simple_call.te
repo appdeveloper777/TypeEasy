@@ -2,6 +2,7 @@ endpoint {
     [HttpGet("/api/test/simple-call-xml")]
     TestSimple() {
         println("<Testsimple>");
-        println("</Testsimple>");        
+        println("</Testsimple>"); 
+        return xml();       
     }
 }

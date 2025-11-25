@@ -9,6 +9,11 @@ extern MethodNode* global_methods;
 extern int g_debug_mode;
 extern FILE *yyin;  // Variable global de Flex para el parser
 
+// Declaraciones externas para manejo de return values
+extern Variable __ret_var;
+extern int __ret_var_active;
+extern int return_flag;
+
 // Funciones auxiliares para captura de stdout
 static int stdout_backup = -1;
 static int pipe_fds[2];
@@ -193,8 +198,17 @@ int typeeasy_embedded_load_script(TypeEasyEmbeddedContext* ctx, const char* scri
     
     printf("[TYPEEASY_API] Ejecutando scope global...\n");
     
+    // CRITICAL: Activar __ret_var antes de ejecutar scope global
+    if (!__ret_var_active) {
+        memset(&__ret_var, 0, sizeof(Variable));
+        __ret_var_active = 1;
+    }
+    fprintf(stderr, "[DEBUG] ANTES de interpret_ast(scope global): __ret_var_active=%d\n", __ret_var_active);
+    
     // Ejecutar scope global para inicializar clases, variables globales, etc.
     interpret_ast(ast);
+    
+    fprintf(stderr, "[DEBUG] DESPUÉS de interpret_ast(scope global): __ret_var_active=%d\n", __ret_var_active);
     
     printf("[TYPEEASY_API] Script cargado exitosamente (embebido verdadero): %s\n", script_path);
     
@@ -284,9 +298,6 @@ char* typeeasy_embedded_invoke(TypeEasyEmbeddedContext* ctx, const char* script_
     
     printf("[TYPEEASY_API] Invocando función: %s\n", function_name);
     
-    // Resetear estado del runtime (limpiar variables de requests anteriores)
-    // runtime_reset_vars_to_initial_state(); // TODO: Implementar esto correctamente
-    
     // Buscar la función en global_methods
     MethodNode* m = global_methods;
     int found = 0;
@@ -299,22 +310,56 @@ char* typeeasy_embedded_invoke(TypeEasyEmbeddedContext* ctx, const char* script_
             found = 1;
             printf("[TYPEEASY_API] ¡Función encontrada! Ejecutando...\n");
             
-            // Iniciar captura de stdout (si tuviéramos un mecanismo interno, pero por ahora usaremos __ret__)
-            // start_stdout_capture(ctx);
+            // CRITICAL: Activar __ret_var si no está activo
+            if (!__ret_var_active) {
+                memset(&__ret_var, 0, sizeof(Variable));
+                __ret_var_active = 1;
+            }
+            
+            // CRITICAL: Limpiar __ret__ antes de ejecutar la función
+            if (__ret_var_active) {
+                // Liberar el valor anterior pero mantener la variable activa
+                if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
+                    free(__ret_var.value.string_value);
+                    __ret_var.value.string_value = NULL;
+                }
+                if (__ret_var.id) {
+                    free(__ret_var.id);
+                    __ret_var.id = NULL;
+                }
+                if (__ret_var.type) {
+                    free(__ret_var.type);
+                    __ret_var.type = NULL;
+                }
+                __ret_var.vtype = VAL_INT;  // Reset to default type
+                __ret_var.value.int_value = 0;
+                // NO desactivar: __ret_var_active sigue siendo 1
+            }
+            
+            // Resetear return_flag
+            return_flag = 0;
             
             // Ejecutar el cuerpo de la función
             interpret_ast(m->body);
             
-            // Verificar si hubo un retorno explícito en __ret__
+            // Guardar el resultado ANTES de limpiar variables
+            char* result = NULL;
             Variable* ret_var = find_variable("__ret__");
             if (ret_var) {
                 fprintf(stderr, "[TYPEEASY_API] __ret__ encontrado. vtype=%d (esperado VAL_STRING=%d)\n", ret_var->vtype, VAL_STRING); fflush(stderr);
                 if (ret_var->vtype == VAL_STRING) {
                     fprintf(stderr, "[TYPEEASY_API] Retorno encontrado en __ret__: %s\n", ret_var->value.string_value); fflush(stderr);
-                    return strdup(ret_var->value.string_value);
+                    result = strdup(ret_var->value.string_value);
                 }
             } else {
                 fprintf(stderr, "[TYPEEASY_API] __ret__ NO encontrado via find_variable\n"); fflush(stderr);
+            }
+            
+            // CRITICAL: Limpiar variables DESPUÉS de ejecutar (para cerrar conexiones MySQL)
+            runtime_reset_vars_to_initial_state();
+            
+            if (result) {
+                return result;
             }
             
             fprintf(stderr, "[TYPEEASY_API] Ejecución completada sin retorno en __ret__\n"); fflush(stderr);

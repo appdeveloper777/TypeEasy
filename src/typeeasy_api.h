@@ -3,6 +3,7 @@
 
 #include "ast.h"
 #include <stdio.h>
+#include <time.h>
 
 /**
  * TypeEasy Embedded API
@@ -15,6 +16,7 @@
 typedef struct LoadedScript {
     char *script_path;
     ASTNode *parsed_ast;
+    time_t load_time;  // Timestamp de cuando se cargó
     struct LoadedScript *next;
 } LoadedScript;
 

@@ -17,6 +17,14 @@ const char* detect_response_type(ASTNode *body) {
     if (body->type) {
         if (strcmp(body->type, "RETURN_XML") == 0) return "xml";
         if (strcmp(body->type, "RETURN_JSON") == 0) return "json";
+        
+        // Handle explicit return xml() / return json()
+        if (strcmp(body->type, "RETURN") == 0 && body->left) {
+            if (body->left->type && strcmp(body->left->type, "CALL_FUNC") == 0 && body->left->id) {
+                if (strcmp(body->left->id, "xml") == 0) return "xml";
+                if (strcmp(body->left->id, "json") == 0) return "json";
+            }
+        }
     }
     
     // Check children
@@ -27,6 +35,12 @@ const char* detect_response_type(ASTNode *body) {
     if (body->right) {
         const char *right_type = detect_response_type(body->right);
         if (strcmp(right_type, "xml") == 0) return "xml";
+    }
+    
+    // Check next (for statement lists)
+    if (body->next) {
+        const char *next_type = detect_response_type(body->next);
+        if (strcmp(next_type, "xml") == 0) return "xml";
     }
     
     return "json"; // default

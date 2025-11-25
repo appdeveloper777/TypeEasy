@@ -18,25 +18,22 @@ endpoint {
   GetUsuariosORM() {
      // Conexión a MySQL de XAMPP en la máquina host (Windows)
      // host.docker.internal:3308 - puerto de XAMPP
-    string host = "host.docker.internal";
-    string user = "root";
-    string pass = "";
-    string db   = "meri";
-    int port = 3308;
-    let conn_id = new mysql_connect(host, user, pass, db, port);
+    string _host = "host.docker.internal";
+    string _user = "root";
+    string _pass = "";
+    string _db   = "meri";
+    int _port = 3308;
+    let _conn_id = new mysql_connect(_host, _user, _pass, _db, _port);
 
     // ORM: consulta y mapeo a objetos
-     string query = "SELECT * FROM users LIMIT 3";
-    let conn_id = new mysql_connect(host, user, pass, db, port);
-      
-    // ORM: consulta y mapeo a objetos
-    let usuarios = orm_query(conn_id, query, Usuario);
+    string _query = "SELECT * FROM users LIMIT 3";
+    let _usuarios = orm_query(_conn_id, _query, Usuario);
 
     // Cerrar conexión
-    mysql_close(conn_id);
+    mysql_close(_conn_id);
 
     // Retornar lista de usuarios como XML
-    return xml(usuarios);
+    return xml(_usuarios);
   }
 }
 

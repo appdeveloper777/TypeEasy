@@ -291,7 +291,16 @@ void native_mysql_connect(ASTNode* args) {
         return;
     }
     
-    if (next_conn_id >= 10) {
+    // Find a free connection slot
+    int conn_id = -1;
+    for (int i = 0; i < 10; i++) {
+        if (connections[i] == NULL) {
+            conn_id = i;
+            break;
+        }
+    }
+
+    if (conn_id == -1) {
        // printf("[MySQL] Error: Max conexiones alcanzado\n"); fflush(stdout);
         ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
         add_or_update_variable("__ret__", ret_node);
@@ -320,11 +329,10 @@ void native_mysql_connect(ASTNode* args) {
         return;
     }
     
-    int conn_id = next_conn_id;
     connections[conn_id] = conn;
-    next_conn_id++;
+    // next_conn_id is no longer used for allocation logic
     
-    //printf("[MySQL] Conexión exitosa (ID: %d)\n", conn_id); fflush(stdout);
+    printf("[MySQL] Conexión exitosa (ID: %d)\n", conn_id); fflush(stdout);
     ASTNode* ret_node = create_ast_leaf("NUMBER", conn_id, NULL, NULL);
     add_or_update_variable("__ret__", ret_node);
     free_ast(ret_node);

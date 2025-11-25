@@ -1,0 +1,21 @@
+class Person {
+    nombre: string;
+    company: string;
+    edad: int;
+    __constructor(_edad: int, _nombre: string, _company: string) {
+        this.edad = _edad;
+        this.nombre = _nombre;
+        this.company = _company;
+    }
+}
+
+let usuario_json = new Person(36, "Fernando Ingunza", "Roussecloud");          
+
+let body = concat(
+    "\"nombre\": \"", usuario_json.nombre, "\", ",
+    "\"company\": \"", usuario_json.company, "\", ",
+    "\"edad\": ", usuario_json.edad
+);
+println("{");
+println(body);
+println("}");

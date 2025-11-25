@@ -9,5 +9,7 @@ endpoint {
         } else {
             println("y es mayor que x");
         }
+
+        return json();
     }
 }

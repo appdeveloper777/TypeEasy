@@ -59,6 +59,6 @@ endpoint {
         mysql_close(conn_id);
         
         // Aquí puedes cambiar a return json(usuarios) y funcionará automáticamente
-      //  return xml(usuarios); 
+        return xml(usuarios); 
     }
 }

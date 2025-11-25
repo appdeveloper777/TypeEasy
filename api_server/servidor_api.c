@@ -3,6 +3,7 @@
 #include <string.h>
 #include <signal.h>
 #include <ctype.h>
+#include <time.h>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -188,17 +189,25 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
     const struct mg_request_info *req_info = mg_get_request_info(conn);
     const char *uri = req_info->local_uri;
 
-    fprintf(stderr, "[LOG] manejadorApiDinamico: URI recibida: %s\n", uri);
+    fprintf(stderr, "[LOG] manejadorApiDinamico: URI recibida: %s\n", uri); fflush(stderr);
 
     // Buscar en la tabla de rutas dinámica
     RouteEntry *entry = global_routes;
     while (entry) {
         if (strcmp(uri, entry->route_path) == 0) {
             // Encontrado! Invocar función directamente usando TypeEasy embebido
-            fprintf(stderr, "[LOG] Invocando función: %s desde %s\n", entry->function_name, entry->script_path);
+            fprintf(stderr, "[LOG] Invocando función: %s desde %s\n", entry->function_name, entry->script_path); fflush(stderr);
+            
+            // Medir tiempo de ejecución
+            clock_t start_time = clock();
+            fprintf(stderr, "[DEBUG] Starting execution timer\n"); fflush(stderr);
             
             // CAMBIO PRINCIPAL: Usar typeeasy_invoke_with_script en lugar de typeeasy_invoke
             char *result = typeeasy_invoke_with_script(g_typeeasy_ctx, entry->script_path, entry->function_name, NULL);
+            fprintf(stderr, "[DEBUG] Execution finished, result: %p\n", result); fflush(stderr);
+            
+            clock_t end_time = clock();
+            double time_taken = ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
             
             if (!result) {
                 mg_send_http_error(conn, 500, "Error interno al ejecutar función TypeEasy");
@@ -214,10 +223,13 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
                 actual_content = xml_start;
             } else {
                 // Buscar etiquetas XML (ej: <Usuarios>, <Usuario>, etc.)
-                char *xml_tag_start = strchr(result, '<');
-                if (xml_tag_start && xml_tag_start[1] != '!' && xml_tag_start[1] != '?') {
-                    // Encontrada una etiqueta de apertura que no es comentario
-                    actual_content = xml_tag_start;
+                // Ignorar espacios en blanco iniciales
+                char *p = result;
+                while (*p && isspace((unsigned char)*p)) p++;
+                
+                if (*p == '<') {
+                     // Es XML si empieza con < y no es un comentario obvio (aunque <?xml ya lo cubrimos)
+                     actual_content = p;
                 } else {
                     // Buscar inicio de array JSON
                     char *json_array_start = strstr(result, "[{");
@@ -235,7 +247,12 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
 
             // Determinar Content-Type (heurística simple)
             const char *content_type = "application/json";
-            if (actual_content[0] == '<') {
+            // Check if it looks like XML (starts with <)
+            // We need to be careful about whitespace
+            char *check_p = actual_content;
+            while (*check_p && isspace((unsigned char)*check_p)) check_p++;
+            
+            if (*check_p == '<') {
                 content_type = "application/xml";
             }
 
@@ -244,9 +261,10 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
                       "Content-Type: %s\r\n"
                       "Content-Length: %d\r\n"
                       "Access-Control-Allow-Origin: *\r\n"
+                      "X-Execution-Time: %.4f s\r\n"
                       "\r\n"
                       "%s",
-                      content_type, (int)strlen(actual_content), actual_content);
+                      content_type, (int)strlen(actual_content), time_taken, actual_content);
             
             free(result);
             return 1;
@@ -307,48 +325,81 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         "<head>"
         "<title>TypeEasy API Documentation</title>"
         "<style>"
-        "body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }"
-        "h1 { color: #333; }"
-        ".container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }"
-        ".endpoint { background: #f9f9f9; padding: 15px; margin: 10px 0; border-left: 4px solid #4CAF50; border-radius: 4px; }"
-        ".method { display: inline-block; padding: 4px 12px; border-radius: 4px; font-weight: bold; color: white; margin-right: 10px; }"
+        "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px; background: #f5f5f5; color: #333; }"
+        "h1 { color: #2c3e50; }"
+        ".container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }"
+        ".endpoint { background: #fff; padding: 20px; margin: 15px 0; border: 1px solid #e0e0e0; border-left: 5px solid #4CAF50; border-radius: 4px; transition: box-shadow 0.2s; }"
+        ".endpoint:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }"
+        ".method { display: inline-block; padding: 5px 10px; border-radius: 4px; font-weight: bold; color: white; margin-right: 10px; font-size: 14px; }"
         ".get { background: #61affe; }"
         ".post { background: #49cc90; }"
-        ".route { font-family: monospace; font-size: 16px; color: #333; }"
-        ".json-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: bold; background: #f0ad4e; color: white; margin-left: 8px; }"
-        ".xml-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: bold; background: #5bc0de; color: white; margin-left: 8px; }"
-        ".function { color: #666; font-size: 14px; margin-top: 5px; }"
-        ".count { color: #666; font-size: 14px; }"
-        ".try-btn { background: #4CAF50; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-top: 10px; font-size: 14px; }"
-        ".try-btn:hover { background: #45a049; }"
-        ".response { margin-top: 10px; padding: 10px; background: #263238; color: #aed581; font-family: monospace; font-size: 12px; border-radius: 4px; display: none; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }"
-        ".loading { color: #ffa726; }"
-        ".embedded-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: bold; background: #4CAF50; color: white; margin-left: 8px; }"
+        ".route { font-family: 'Consolas', 'Monaco', monospace; font-size: 16px; color: #333; font-weight: 600; }"
+        ".json-badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; background: #f0ad4e; color: white; margin-left: 10px; vertical-align: middle; }"
+        ".xml-badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; background: #5bc0de; color: white; margin-left: 10px; vertical-align: middle; }"
+        ".embedded-badge { background: #673ab7; color: white; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: bold; vertical-align: middle; margin-left: 10px; text-transform: uppercase; letter-spacing: 0.5px; }"
+        ".function { color: #7f8c8d; font-size: 14px; margin-top: 8px; font-family: monospace; }"
+        ".count { color: #666; font-size: 14px; margin-bottom: 20px; }"
+        ".controls { margin-top: 15px; display: flex; align-items: center; gap: 10px; }"
+        ".try-btn { background: #4CAF50; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; transition: background 0.2s; }"
+        ".try-btn:hover { background: #43A047; }"
+        ".try-btn:disabled { background: #a5d6a7; cursor: not-allowed; }"
+        ".copy-btn { background: #2196F3; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; display: none; transition: background 0.2s; }"
+        ".copy-btn:hover { background: #1976D2; }"
+        ".exec-time { font-size: 13px; color: #555; font-weight: 600; font-family: monospace; }"
+        ".response { background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 4px; margin-top: 15px; font-family: 'Consolas', 'Monaco', monospace; white-space: pre-wrap; display: none; font-size: 13px; line-height: 1.5; overflow-x: auto; }"
+        ".loading { color: #aaa; font-style: italic; }"
         "</style>"
         "<script>"
         "async function tryEndpoint(route, btnId) {"
         "  const btn = document.getElementById(btnId);"
         "  const responseDiv = document.getElementById(btnId + '-response');"
+        "  const timeSpan = document.getElementById(btnId + '-time');"
+        "  const copyBtn = document.getElementById(btnId + '-copy');"
+        "  "
         "  btn.disabled = true;"
         "  btn.textContent = 'Loading...';"
         "  responseDiv.style.display = 'block';"
         "  responseDiv.className = 'response loading';"
         "  responseDiv.textContent = 'Ejecutando...';"
+        "  timeSpan.textContent = '';"
+        "  copyBtn.style.display = 'none';"
+        "  "
         "  try {"
         "    const response = await fetch(route);"
+        "    const execTime = response.headers.get('X-Execution-Time');"
         "    const data = await response.text();"
+        "    "
         "    responseDiv.className = 'response';"
+        "    let output = '';"
+        "    "
         "    try {"
         "      const json = JSON.parse(data);"
-        "      responseDiv.textContent = JSON.stringify(json, null, 2);"
+        "      output = JSON.stringify(json, null, 2);"
         "    } catch(e) {"
-        "      responseDiv.textContent = data;"
+        "      output = data;"
         "    }"
+        "    "
+        "    responseDiv.textContent = output;"
+        "    "
+        "    if (execTime) {"
+        "      timeSpan.textContent = '⏱ ' + execTime + 's';"
+        "    }"
+        "    "
+        "    copyBtn.style.display = 'inline-block';"
+        "    copyBtn.onclick = function() {"
+        "      navigator.clipboard.writeText(output).then(function() {"
+        "        const originalText = copyBtn.textContent;"
+        "        copyBtn.textContent = 'Copied!';"
+        "        setTimeout(() => { copyBtn.textContent = originalText; }, 2000);"
+        "      });"
+        "    };"
+        "    "
         "  } catch(error) {"
         "    responseDiv.className = 'response';"
-        "    responseDiv.style.color = '#ef5350';"
+        "    responseDiv.style.color = '#ff5252';"
         "    responseDiv.textContent = 'Error: ' + error.message;"
         "  }"
+        "  "
         "  btn.disabled = false;"
         "  btn.textContent = 'Try it out';"
         "}"
@@ -356,8 +407,8 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         "</head>"
         "<body>"
         "<div class='container'>"
-        "<h1>🚀 TypeEasy API Documentation</h1>"
-        "<p>El servidor está funcionando correctamente. <span class='embedded-badge'>EMBEDDED MODE</span></p>");
+        "<h1>TypeEasy API Server <span class='embedded-badge'>EMBEDDED MODE</span></h1>"
+        "<p>El servidor está funcionando correctamente.</p>");
     
     // Contar rutas
     int route_count = 0;
@@ -389,7 +440,11 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
                 "<span class='route'>%s</span>"
                 "<span class='%s'>%s</span>"
                 "<div class='function'>→ %s()</div>"
+                "<div class='controls'>"
                 "<button class='try-btn' id='btn-%d' onclick='tryEndpoint(\"%s\", \"btn-%d\")'>Try it out</button>"
+                "<button class='copy-btn' id='btn-%d-copy'>Copy Response</button>"
+                "<span class='exec-time' id='btn-%d-time'></span>"
+                "</div>"
                 "<div class='response' id='btn-%d-response'></div>"
                 "</div>",
                 entry->route_path,
@@ -398,6 +453,9 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
                 entry->function_name,
                 endpoint_id,
                 entry->route_path,
+                endpoint_id,
+                endpoint_id,
+                endpoint_id,
                 endpoint_id,
                 endpoint_id);
             entry = entry->next;

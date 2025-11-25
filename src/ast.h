@@ -16,6 +16,8 @@ void print_object_as_json_by_id(const char* id);
 #include <string.h>
 
 
+
+typedef struct MethodNode MethodNode;
 typedef struct ParameterNode ParameterNode;
 /*
     YA NO INCLUIMOS civetweb.h NI windows.h/unistd.h AQUÍ.
@@ -88,20 +90,9 @@ typedef struct Variable {
         int int_value;
         char *string_value;
         double float_value;
-        ObjectNode *object_value;
+        struct ObjectNode *object_value;
     } value; // << este nombre ES IMPORTANTE
 } Variable;
-
-
-typedef struct MethodNode {
-    char *name;
-    ASTNode *body;
-    ParameterNode *params; 
-    struct MethodNode *next;
-    // New fields for dynamic endpoints
-    char *route_path;   // e.g. "/api/users"
-    char *http_method;  // e.g. "GET", "POST"
-} MethodNode;
 
 typedef struct ClassNode {
     char *name;
@@ -115,6 +106,30 @@ typedef struct ObjectNode {
     ClassNode *class;
     Variable *attributes;
 } ObjectNode;
+
+typedef struct MethodNode {
+    char *name;
+    ParameterNode *params;
+    ASTNode *body;
+    char *route_path;    // For endpoints
+    char *http_method;   // For endpoints
+    int cache_ttl;       // For endpoint cache decorator
+    struct MethodNode *next;
+} MethodNode;
+
+// --- Endpoint Cache Support ---
+typedef struct CachedResponse {
+    MethodNode *method;
+    ASTNode *args;         // Arguments used for cache key
+    ASTNode *result;       // Cached result
+    time_t timestamp;      // When cached
+    int ttl;               // Time-to-live in seconds
+    struct CachedResponse *next;
+} CachedResponse;
+
+CachedResponse *get_cached_response(MethodNode *method, ASTNode *args);
+void set_cached_response(MethodNode *method, ASTNode *args, ASTNode *result);
+void invalidate_cache(MethodNode *method);
 
 typedef struct ParameterNode {
     char *name;

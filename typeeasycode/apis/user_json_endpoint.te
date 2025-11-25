@@ -1,7 +1,7 @@
 // Mi código TypeEasy para manejar rutas y devolver JSON
 // Simulamos una petición a /api/usuario/perfil
 
-class Person {
+class PersonJson {
     nombre: string;
     company: string;
     edad: int;
@@ -16,7 +16,7 @@ endpoint {
     [HttpGet("/api/usuario_json/primer-perfil")]
     GetUserProfile() {        
         
-        let usuario_json = new Person(36, "Fernando Ingunza", "Roussecloud");          
+        let usuario_json = new PersonJson(36, "Fernando Ingunza", "Roussecloud");          
        
         let body = concat(
             "\"nombre\": \"", usuario_json.nombre, "\", ",
@@ -32,7 +32,7 @@ endpoint {
 
     [HttpGet("/api/usuario_json/segundo-perfil")]
     GetUserProfileDos() {
-        let usuario = new Person(36, "Fernando Ingunza", "Roussecloud");          
+        let usuario = new PersonJson(36, "Fernando Ingunza", "Roussecloud");          
         return json(usuario);
     }
 }

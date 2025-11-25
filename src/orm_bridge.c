@@ -48,8 +48,8 @@ void native_orm_query(ASTNode* args) {
         }
     }
     
-   // printf("[ORM] Argumentos finales: conn_id=%d, query=%s, class_name=%s\n", conn_id, query ? query : "NULL", class_name ? class_name : "NULL");
-   // fflush(stdout);
+    printf("[ORM] Argumentos finales: conn_id=%d, query=%s, class_name=%s\n", conn_id, query ? query : "NULL", class_name ? class_name : "NULL");
+    fflush(stdout);
     
     // Buscar clase destino
     extern ClassNode* find_class(char* name);

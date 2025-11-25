@@ -4,5 +4,6 @@ endpoint {
     TestMySQL() {
         println("[MySQL] Iniciando test de conexión...");
         println("[MySQL] Test completado");
+        return xml();
     }
 }
