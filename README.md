@@ -13,8 +13,10 @@ TypeEasy te ayuda a crear tu propio lenguaje de programación, tus endpoints com
 
 TypeEasy es un prototipo de un lenguaje tipado, lenguaje HECHO con C, PARA LOGRAR ESTO Bison y Flex son herramientas utilizadas para crear compiladores e intérpretes. Se utilizan juntas para generar analizadores sintácticos y léxicos. La idea es ser mejor que Polar y no depender de Python.
 
-NEW!! Ahora es un framework, puedes crear endpoints como FastAPI, hacer bridges con tu lenguaje preferido: <br />
-<img width="1910" height="932" alt="image" src="https://github.com/user-attachments/assets/ed4b9ace-8242-454d-853e-d22dd6bc2a74" />
+NEW!! Ahora es un framework, puedes crear endpoints como FastAPI 🚀, hacer bridges con tu lenguaje preferido: <br />
+<img width="1887" height="1000" alt="image" src="https://github.com/user-attachments/assets/10715949-23e5-4434-b675-d4f3aae72a7c" />
+
+
 
 
 
