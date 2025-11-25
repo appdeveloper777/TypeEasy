@@ -5,7 +5,6 @@ class Usuario {
   id : int;
   usuario : string;
   email : string;
-
   __constructor(id : int, usuario : string, email : string) {
     this.id = id;
     this.usuario = usuario;
@@ -13,28 +12,28 @@ class Usuario {
   }
 }
 
+/***************************************** */
+// Endpoint para consultas ORM a MySQL
+// Conexión a MySQL de XAMPP en la máquina host (Windows)
+// host.docker.internal:3308 - puerto de XAMPP     
+/***************************************** */
 endpoint {
-  [HttpGet("/api/mysql-orm/local-xampp-server/usuarios")]
-  GetUsuariosORM() {
-     // Conexión a MySQL de XAMPP en la máquina host (Windows)
-     // host.docker.internal:3308 - puerto de XAMPP
-    string _host = "host.docker.internal";
-    string _user = "root";
-    string _pass = "";
-    string _db   = "meri";
-    int _port = 3308;
-    let _conn_id = new mysql_connect(_host, _user, _pass, _db, _port);
 
-    // ORM: consulta y mapeo a objetos
-    string _query = "SELECT * FROM users LIMIT 3";
-    let _usuarios = orm_query(_conn_id, _query, Usuario);
-
-    // Cerrar conexión
-    mysql_close(_conn_id);
-
-    // Retornar lista de usuarios como XML
-    return xml(_usuarios);
-  }
+          [HttpGet("/api/mysql-orm/local-xampp-server/usuarios")]
+          GetUsuariosORM() {                      
+              let _conn_id = new mysql_connect(host, user, pass, db, port);
+              // ORM: consulta y mapeo a objetos
+              string _query = "SELECT * FROM users LIMIT 3";
+              let _usuarios = orm_query(_conn_id, _query, Usuario);
+              // Cerrar conexión
+              mysql_close(_conn_id);
+              // Retornar lista de usuarios como XML
+              return xml(_usuarios);
+        }
 }
-
-
+          // Parámetros de conexión MySQL XAMPP - Globales
+          string host = "host.docker.internal";
+          string user = "root";
+          string pass = "";
+          string db   = "meri";
+          int port = 3308;
