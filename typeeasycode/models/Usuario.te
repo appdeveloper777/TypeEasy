@@ -1,0 +1,18 @@
+class UsuarioModel {
+  Id : int;
+  usuario : string;
+  email : string;
+
+  __constructor(_id : int, _usuario : string, _email : string) {
+    this.Id = _id;
+    this.usuario = _usuario;
+    this.email = _email;
+  }
+
+  MiNombre() {
+    let nombre = this.usuario;
+    println(nombre);    
+  }
+}
+
+

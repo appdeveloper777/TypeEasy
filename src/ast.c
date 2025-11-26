@@ -1818,6 +1818,7 @@ ASTNode *append_kv_pair(ASTNode *list, ASTNode *pair) {
     return list;
 }
 
+
 // Forward declarations
 static void interpret_return_node(ASTNode *node);
 void print_object_as_xml_by_id(const char* id);
@@ -2927,10 +2928,13 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                   //  fprintf(stderr, "[DEBUG] Constructor arg expr int val: %d\n", val);
                 }
                 add_or_update_variable(p->name, vn);
+                fprintf(stderr, "[DEBUG] Constructor param '%s' set\n", p->name);
                 p   = p->next;
                 arg = arg->right;
             }
+            fprintf(stderr, "[DEBUG] Calling __constructor for class '%s'\n", var->value.object_value->class->name);
             call_method(var->value.object_value, "__constructor");
+            fprintf(stderr, "[DEBUG] __constructor completed\n");
         }
     }
    // printf("[DEBUG] interpret_var_decl: done\n"); fflush(stdout);
@@ -3079,7 +3083,7 @@ static void interpret_assign_attr(ASTNode *node) {
     if (strcmp(declared, "string") == 0) {
         if (value_node->type && strcmp(value_node->type, "STRING") == 0) {
           obj->attributes[idx].value.string_value = strdup(value_node->str_value);
-         // fprintf(stderr, "[DEBUG] Assign attr %s = %s (STRING)\n", attr_name, value_node->str_value);
+          fprintf(stderr, "[DEBUG] Assign attr %s = %s (STRING)\n", attr_name, value_node->str_value);
         }
         else if (value_node->type && (strcmp(value_node->type, "IDENTIFIER") == 0 || strcmp(value_node->type, "ID") == 0)) {
           Variable *v2 = find_variable(value_node->id ? value_node->id : value_node->str_value);
@@ -3088,7 +3092,7 @@ static void interpret_assign_attr(ASTNode *node) {
             return;
           }
           obj->attributes[idx].value.string_value = strdup(v2->value.string_value);
-         // fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR)\n", attr_name, v2->value.string_value);
+          fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR)\n", attr_name, v2->value.string_value);
         }
         else if (value_node->id) {
           Variable *v2 = find_variable(value_node->id);
@@ -3097,7 +3101,7 @@ static void interpret_assign_attr(ASTNode *node) {
             return;
           }
           obj->attributes[idx].value.string_value = strdup(v2->value.string_value);
-        //  fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR ID)\n", attr_name, v2->value.string_value);
+          fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR ID)\n", attr_name, v2->value.string_value);
         }
         else if (strcmp(value_node->type, "CALL_FUNC") == 0) {
           interpret_ast(value_node);
@@ -3107,14 +3111,14 @@ static void interpret_assign_attr(ASTNode *node) {
             return;
           }
           obj->attributes[idx].value.string_value = strdup(r->value.string_value);
-         // fprintf(stderr, "[DEBUG] Assign attr %s = %s (CALL)\n", attr_name, r->value.string_value);
+          fprintf(stderr, "[DEBUG] Assign attr %s = %s (CALL)\n", attr_name, r->value.string_value);
         }
         obj->attributes[idx].vtype = VAL_STRING;
       } else {
         int val = evaluate_expression(value_node);
         obj->attributes[idx].value.int_value = val;
         obj->attributes[idx].vtype = VAL_INT;
-       // fprintf(stderr, "[DEBUG] Assign attr %s = %d (INT)\n", attr_name, val);
+        fprintf(stderr, "[DEBUG] Assign attr %s = %d (INT)\n", attr_name, val);
     }
 }
 

@@ -1,0 +1,6 @@
+// Configuración de conexión MySQL - Globales
+string global_host = "gateway01.us-east-1.prod.aws.tidbcloud.com";
+string global_user = "2XCY4FHDYiMMcdi.root";
+string global_pass = "dMal8ex6FlLgprno";
+string global_db   = "test";
+int global_port = 4000;

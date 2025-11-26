@@ -253,39 +253,39 @@ char* typeeasy_embedded_discover(TypeEasyEmbeddedContext* ctx, const char* scrip
         return NULL;
     }
     
-    // ENFOQUE HÍBRIDO: Usar el ejecutable typeeasy con --discover
-    char command[1024];
-    snprintf(command, sizeof(command), "/app/typeeasy \"%s\" --discover 2>/dev/null", script_path);
-    
-    FILE* fp = popen(command, "r");
-    if (!fp) {
-        fprintf(stderr, "[TYPEEASY_API] Error al ejecutar typeeasy --discover: %s\n", script_path);
-        return NULL;
-    }
-    
-    // Leer la salida JSON
+    // NUEVO ENFOQUE: Descubrir endpoints directamente desde global_methods
+    // Esto evita re-parsear el archivo (que causaría segfault con imports)
     char* result = (char*)malloc(65536);
     if (!result) {
-        pclose(fp);
         return NULL;
     }
     
-    size_t total_read = 0;
-    char buffer[4096];
-    while (fgets(buffer, sizeof(buffer), fp) != NULL) {
-        size_t len = strlen(buffer);
-        if (total_read + len + 1 < 65536) {
-            strcpy(result + total_read, buffer);
-            total_read += len;
+    strcpy(result, "[");
+    int first = 1;
+    
+    MethodNode *m = global_methods;
+    while (m) {
+        if (m->route_path) {
+            if (!first) strcat(result, ",");
+            
+            // Detect response type
+            const char *response_type = detect_response_type_embedded(m->body);
+            
+            // Build JSON entry
+            char entry[1024];
+            snprintf(entry, sizeof(entry), 
+                     "{\"route\": \"%s\", \"method\": \"%s\", \"function\": \"%s\", \"response_type\": \"%s\"}", 
+                     m->route_path, 
+                     m->http_method ? m->http_method : "GET", 
+                     m->name, 
+                     response_type);
+            strcat(result, entry);
+            first = 0;
         }
+        m = m->next;
     }
     
-    pclose(fp);
-    
-    // Si no se leyó nada, retornar array vacío
-    if (total_read == 0) {
-        strcpy(result, "[]");
-    }
+    strcat(result, "]");
     
     return result;
 }

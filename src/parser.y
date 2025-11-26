@@ -66,11 +66,11 @@
 %%
 
 program:
-     program statement       { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; }  
+     program statement       { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; root = $$; }  
     | program class_decl      { $$ = $1; root = $$; }
-    | program agent_decl      { $$ = create_ast_node("AGENT_LIST", $1, $2); root = $$; }
-    | program bridge_decl     { $$ = create_ast_node("STATEMENT_LIST", $1, $2); root = $$; } /* <-- CORREGIDO */
-    | program endpoint_decl   { $$ = $1; root = $$; }
+    | program agent_decl      { $$ = $1 ? create_ast_node("AGENT_LIST", $1, $2) : $2; root = $$; }
+    | program bridge_decl     { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; root = $$; }
+    | program endpoint_decl   { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; root = $$; }
     | endpoint_decl           { $$ = $1; root = $$; }
     | cache_decorator endpoint_decl { if ($2 && $2->extra) ((MethodNode*)$2->extra)->cache_ttl = $1; $$ = $2; root = $$; }
     | httpget_method_decl     { $$ = $1; root = $$; }
@@ -82,6 +82,8 @@ program:
 
 cache_decorator:
     CACHE LPAREN NUMBER RPAREN { $$ = $3; }
+
+
 
 endpoint_decl:
     ENDPOINT LBRACKET endpoint_methods RBRACKET
@@ -117,7 +119,7 @@ endpoint_method:
         m->params = $10;
         m->route_path = strdup($5);
         m->http_method = strdup("GET");
-        m->cache_ttl = $1;  // Set cache TTL from decorator
+        m->cache_ttl = $1;
         m->next = global_methods;
         global_methods = m;
         $$ = NULL;
@@ -134,7 +136,6 @@ httpget_method_decl:
             m->next = global_methods;
             global_methods = m;            
             $$ = NULL;           
-          
      }
     ;
 

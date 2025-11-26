@@ -79,6 +79,8 @@ COPY --from=typeeasy_builder /app/src/typeeasy .
 
 # Copia los scripts de la API desde la etapa 'base'
 COPY --from=base /app/typeeasycode/apis ./apis
+COPY --from=base /app/typeeasycode/models ./models
+COPY --from=base /app/typeeasycode/settings ./settings
 
 EXPOSE 8080
 

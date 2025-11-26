@@ -1,0 +1,34 @@
+
+/********************************************************************
+ * TypeEasy - Ejemplo de API con MySQL
+ * 
+ * Copyright (c) 2025 Fernando Ingunza
+ * Licencia: MIT (https://opensource.org/licenses/MIT)
+ * 
+ * Este proyecto es Open Source y tiene como objetivo enseñar cómo 
+ * crear APIs usando TypeEasy. Puedes encontrar el repositorio en:
+ * https://github.com/appdeveloper777/TypeEasy
+ * 
+ * Características:
+ * - Endpoint HTTP GET para consultar usuarios desde MySQL.
+ * - Uso de configuración global y ORM.
+ ********************************************************************/
+
+// ======================= IMPORTACIONES ============================
+import "models/Usuario.te";          // Modelo ORM para la tabla usuarios
+import "settings/mysql_config.te";   // Configuración global de MySQL
+
+// ======================= ENDPOINT ================================
+// Endpoint para consultas ORM a MySQL usando configuración global
+endpoint {
+  [HttpGet("/api/usuarios")]
+  GetUsuarios() {
+      string global_query = "SELECT * FROM usuarios LIMIT 3";
+
+      let _conn_id = new mysql_connect(global_host, global_user, global_pass, global_db, global_port);
+      let _usuarios = orm_query(_conn_id, global_query, UsuarioModel);
+      mysql_close(_conn_id);
+
+      return xml(_usuarios);
+  }
+}

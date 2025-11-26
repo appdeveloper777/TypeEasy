@@ -1,13 +1,3 @@
-// ...existing code...
-// Prototipo nativo ORM debe ir después de ASTNode
-// ...existing code...
-// Serializa un objeto a JSON string dado su id y lo imprime
-// Serializa un objeto a XML string dado su id y lo imprime
-// Retorna un string XML serializado de un objeto dado su id
-char* get_object_xml_by_id(const char* id);
-void print_object_as_xml_by_id(const char* id);
-void print_object_as_json_by_id(const char* id);
-// Prototypes moved below ASTNode struct definition
 #ifndef AST_H
 #define AST_H
 
@@ -15,15 +5,8 @@ void print_object_as_json_by_id(const char* id);
 #include <stdlib.h>
 #include <string.h>
 
-
-
 typedef struct MethodNode MethodNode;
 typedef struct ParameterNode ParameterNode;
-/*
-    YA NO INCLUIMOS civetweb.h NI windows.h/unistd.h AQUÍ.
-    Este archivo es ahora 100% independiente del servidor.
-*/
-
 
 /* --- 1. LA DEFINICIÓN DE ASTNode --- */
 typedef struct ASTNode {
@@ -35,14 +18,10 @@ typedef struct ASTNode {
     struct ASTNode *right;
     struct ASTNode *next;    
     struct ASTNode *extra; 
-
 } ASTNode;
+
 // Prototipo nativo ORM debe ir después de ASTNode
 void native_orm_query(ASTNode* args);
-
-/* --- 2. ELIMINAMOS RuntimeHost y ActiveBridge --- */
-/* ... (Se han ido a servidor_agent.c) ... */
-
 
 /* --- EL RESTO DE TUS DEFINICIONES (SIN CAMBIOS) --- */
 
@@ -166,32 +145,6 @@ ASTNode *create_method_call_node(ASTNode *objectNode,
                                      const char *methodName,
                                      ASTNode *args);
 
-ASTNode *add_argument(ASTNode *list, ASTNode *expr);
-ASTNode *create_return_node(ASTNode *expr);
-
-void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *body);
-ASTNode *create_function_call_node(const char *funcName, ASTNode *args);
-ASTNode *add_statement(ASTNode *list, ASTNode *stmt);
-ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right);
-ASTNode *create_if_node(ASTNode* condition, ASTNode* if_branch, ASTNode* else_branch);
-ASTNode *create_match_node(ASTNode* condition, ASTNode* case_list);
-ASTNode *create_case_node(ASTNode* condition, ASTNode* body);
-ASTNode *append_case_clause(ASTNode* list, ASTNode* case_clause);
-ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id);
-ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
-ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *condition, ASTNode *update, ASTNode *body);
-void interpret_ast(ASTNode *node);
-Variable *find_variable_for(char *id);
-void add_or_update_variable(char *id, ASTNode *value);
-void add_variable_for(char *id, int value);
-void store_variable(char *id, ASTNode *value);
-Variable *find_variable(char *id);
-void declare_variable(char *id, ASTNode *value, int is_const);
-void free_ast(ASTNode *node);
-int get_attribute_value(ObjectNode *obj, const char *attr_name);
-void set_attribute_value(ObjectNode *obj, const char *attr_name, int value);
-
-// Funciones para clases y objetos
 ClassNode *create_class(char *name);
 void add_class(ClassNode *class);
 void add_attribute_to_class(ClassNode *class, char *attr_name, char *attr_type);
@@ -202,21 +155,6 @@ void add_method_to_class(ClassNode *class,
 ObjectNode *create_object(ClassNode *class);
 void call_method(ObjectNode *obj, char *method);
 ClassNode *find_class(char *name);
-
-// Funciones que faltaban en las declaraciones
-ASTNode *create_var_decl_node(char *id, ASTNode *value);
-ASTNode *create_string_node(char *value);
-
-// Prototipos para el Agente (¡SÓLO los nodos de sintaxis!)
-ASTNode *create_agent_node(char *name, ASTNode *body);
-ASTNode *create_listener_node(ASTNode *event_expr, ASTNode *body);
-ASTNode *create_bridge_node(char *name, ASTNode *call_expr_node);
-ASTNode *create_state_decl_node(char *name, ASTNode *value_expr);
-
-ASTNode *create_access_node(ASTNode *base, ASTNode *index_expr);
-ASTNode *create_object_literal_node(ASTNode *kv_list);
-ASTNode *create_kv_pair_node(char *key, ASTNode *value);
-ASTNode *append_kv_pair(ASTNode *list, ASTNode *pair);
 ASTNode *create_int_node(int value);
 ASTNode *create_float_node(int value);
 ASTNode *create_train_node(const char *model_name, const char *dataset_name, ASTNode *options);
@@ -251,6 +189,24 @@ typedef struct BridgeHandlers {
 void runtime_register_bridge_handlers(BridgeHandlers handlers);
 // --- FIN MEJORA ---
 
-/* --- ELIMINADOS: Prototipos del Runtime (runtime_init, etc) --- */
+// Missing declarations
+void interpret_ast(ASTNode *node);
+void free_ast(ASTNode *node);
+ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *condition, ASTNode *update, ASTNode *body);
+Variable *find_variable_for(char *id);
+Variable *find_variable(char *id);
+void add_or_update_variable(char *id, ASTNode *value);
+ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id);
+ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right);
+ASTNode *create_return_node(ASTNode *expr);
+ASTNode *create_call_node(const char *funcName, ASTNode *args);
+char* get_object_xml_by_id(const char* id);
+void print_object_as_xml_by_id(const char* id);
+void print_object_as_json_by_id(const char* id);
+ASTNode *add_statement(ASTNode *list, ASTNode *stmt);
+ASTNode *create_case_node(ASTNode* condition, ASTNode* body);
+ASTNode *append_case_clause(ASTNode* list, ASTNode* case_clause);
+ASTNode *create_match_node(ASTNode* condition, ASTNode* case_list);
+ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
 
 #endif

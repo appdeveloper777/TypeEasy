@@ -1,20 +1,20 @@
 services:
   # --- SERVICIO MYSQL ---
- # mysql:
+  # mysql:
   #  image: mysql:8.0
-   # container_name: typeeasy_mysql
-    #environment:
-     # MYSQL_ROOT_PASSWORD: rootpassword
-      #MYSQL_DATABASE: test_db
-    #ports:
-     # - "3307:3306"
-    #volumes:
-     # - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+  # container_name: typeeasy_mysql
+  #environment:
+  # MYSQL_ROOT_PASSWORD: rootpassword
+  #MYSQL_DATABASE: test_db
+  #ports:
+  # - "3307:3306"
+  #volumes:
+  # - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
   # --- SERVICIO DE LA API WEB (Sin cambios) ---
   api:
     #depends_on:
-     # - mysql
+    # - mysql
     build:
       context: .
       dockerfile: src/Dockerfile
@@ -30,6 +30,10 @@ services:
       - MYSQL_USER=root # Usuario de MySQL
       - MYSQL_PASSWORD=rootpassword # Contraseña de MySQL
       - MYSQL_DATABASE=meri # Nombre de la base de datos
+    volumes:
+      - ./typeeasycode/apis:/app/apis
+      - ./typeeasycode/models:/app/models
+      - ./typeeasycode/settings:/app/settings
 
   # --- SERVICIO DEL INTÉRPRETE (Sin cambios) ---
   typeeasy:
