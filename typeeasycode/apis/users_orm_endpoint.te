@@ -30,12 +30,21 @@ endpoint {
     int port = 4000;
     
     string query = "SELECT * FROM usuarios LIMIT 3";
-    let conn_id = new mysql_connect(host, user, pass, db, port);   
-    let usuarios = orm_query(conn_id, query, Usuario);   
+    let conn_id = new mysql_connect(host, user, pass, db, port);      
  
+    
+    let usuarios = orm_query(conn_id, query, Usuario);  
+ 
+    /*for (let item in usuarios) {
+        println("Nombre:");       
+        item.MiNombre();       
+        println(item.email);        
+    }*/
+  
+    // Cerrar conexión
     mysql_close(conn_id);
 
-    return json(usuarios);
+    return xml(usuarios);
    
   }
 }

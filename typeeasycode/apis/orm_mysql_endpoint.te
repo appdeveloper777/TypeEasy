@@ -1,6 +1,6 @@
+
+
 // Ejemplo de conexión y consulta ORM a MySQL usando TypeEasy
-// Parámetros de conexión MySQL XAMPP - Globales
-/***************************************** */
 class Usuario {
   id : int;
   usuario : string;
@@ -20,19 +20,20 @@ class Usuario {
 endpoint {
 
           [HttpGet("/api/mysql-orm/local-xampp-server/usuarios")]
-          GetUsuariosORM() { 
-              string host = "host.docker.internal";
-              string user = "root";
-              string pass = "";
-              string db   = "meri";
-              int port = 3308;                    
-              let _conn_id = new mysql_connect(host, user, pass, db, port);
-              // ORM: consulta y mapeo a objetos
-              string _query = "SELECT * FROM users LIMIT 3";
+          GetUsuariosORM() {  
+
+              string _query = "SELECT * FROM users LIMIT 5";   
+              string _host = "host.docker.internal";
+              string _user = "root";
+              string _pass = "";
+              string _db   = "meri";
+              int _port = 3308;                                
+
+              let _conn_id = new mysql_connect(_host, _user, _pass, _db, _port);           
               let _usuarios = orm_query(_conn_id, _query, Usuario);
-              // Cerrar conexión
-              mysql_close(_conn_id);
-              // Retornar lista de usuarios como XML
+             
+              mysql_close(_conn_id);            
+               
               return xml(_usuarios);
         }
 }

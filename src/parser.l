@@ -12,7 +12,12 @@
 \n                      { yylineno++; }    
 
 "//".*                  {  }
-"/*"([^*]|\*+[^*/])*\*+"/"  {  }
+"/*"([^*]|\*+[^*/])*\*+"/"  { 
+    // Count newlines in the comment
+    for (char *p = yytext; *p; p++) {
+        if (*p == '\n') yylineno++;
+    }
+}
 
 
 "dataset"    { yylval.sval = strdup(yytext); return DATASET; }
@@ -126,9 +131,9 @@
 }
 
 [0-9]+                  {
-                            yylval.ival = atoi(yytext);
-                            return NUMBER;
-                        }
+    yylval.ival = atoi(yytext);
+    return NUMBER;
+}
 [0-9]+\.[0-9]+          {
                             yylval.sval = strdup(yytext);
                             return FLOAT_LITERAL;
@@ -136,9 +141,9 @@
 
 
 [A-Za-z_][A-Za-z0-9_]*  {
-                            yylval.sval = strdup(yytext);
-                            return IDENTIFIER;
-                        }
+    yylval.sval = strdup(yytext);
+    return IDENTIFIER;
+}
 
 %%
 

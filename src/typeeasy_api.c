@@ -177,8 +177,14 @@ int typeeasy_embedded_load_script(TypeEasyEmbeddedContext* ctx, const char* scri
     fclose(file);
     
     if (!ast) {
-        fprintf(stderr, "[TYPEEASY_API] parse_file() retornó NULL para: %s\n", script_path);
-        return 0;
+        fprintf(stderr, "[TYPEEASY_API] ERROR: parse_file() retornó NULL para: %s\n", script_path);
+        fprintf(stderr, "[TYPEEASY_API] El archivo contiene errores de sintaxis y no se cargará.\n");
+        // Crear un AST dummy para evitar crashes posteriores
+        ast = create_ast_node("STATEMENT_LIST", NULL, NULL);
+        if (!ast) {
+            fprintf(stderr, "[TYPEEASY_API] CRITICAL: No se pudo crear AST dummy\n");
+            return 0;
+        }
     }
     
     printf("[TYPEEASY_API] parse_file() exitoso, AST creado\n");
