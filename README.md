@@ -1,6 +1,7 @@
 <div align="center">
 
-<img src="https://github.com/user-attachments/assets/d4617ae8-71f0-4270-9e70-ad00bd6694ab" alt="TypeEasy Logo" width="600"/>
+<img src="https://github.com/user-attachments/assets/e4066c0d-07c1-419b-a479-3483488521eb" alt="TypeEasy Logo" width="200"/>
+
 
 # TypeEasy
 
