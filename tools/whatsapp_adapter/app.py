@@ -4,7 +4,6 @@ import requests
 import hmac
 import hashlib
 import base64
-import os
 from datetime import datetime
 
 app = Flask(__name__)
@@ -17,11 +16,52 @@ TWILIO_FROM = os.environ.get('TWILIO_FROM')
 META_TOKEN = os.environ.get('META_WHATSAPP_TOKEN')
 META_PHONE_ID = os.environ.get('META_WHATSAPP_PHONE_ID')
 
-# Agent endpoint (the TypeEasy agent webhook)
-AGENT_WEBHOOK = os.environ.get('AGENT_WEBHOOK', 'http://agent:8081/whatsapp_hook')
+# WAHA Configuration
+WAHA_API_URL = os.environ.get('WAHA_API_URL', 'http://waha:3000')
+WAHA_API_KEY = os.environ.get('WAHA_API_KEY', 'typeeasy_waha_key_2024')
 
-# In-memory mock history for development (not persisted)
+# Agent webhook configuration
+AGENT_WEBHOOK = os.environ.get('AGENT_WEBHOOK', 'http://agent_gemini:8081/whatsapp_hook')
+
+# Mock history for development
 MOCK_HISTORY = []
+
+# Track last sender for responses
+last_sender = None
+
+@app.route('/waha_webhook', methods=['POST'])
+def waha_webhook():
+    """Handle incoming webhooks from WAHA (WhatsApp HTTP API)"""
+    global last_sender
+    try:
+        print("🔍 DEBUG PRINT: WAHA Webhook received:", request.get_json())
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({'status': 'no_data'}), 200
+            
+        event_type = data.get('event')
+        
+        if event_type == 'message':
+            payload = data.get('payload', {})
+            text = payload.get('body', '')
+            sender = payload.get('from', '')
+            
+            if text and sender:
+                # Save sender for response routing
+                last_sender = sender
+                print(f"✅ Saved sender: {sender}")
+                print(f"Forwarding to agent at {AGENT_WEBHOOK} with message: {text}")
+                # Forward to agent via query param (workaround for civetweb body reading issue)
+                params = {'message': text}
+                requests.post(AGENT_WEBHOOK, params=params, timeout=5)
+                return jsonify({'status': 'forwarded'}), 200
+                
+        return jsonify({'status': 'ignored'}), 200
+        
+    except Exception as e:
+        app.logger.exception(f"❌ Error processing WAHA webhook: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/webhook', methods=['POST'])
@@ -41,20 +81,14 @@ def incoming_webhook():
         sender = request.form.get('From')
 
     # Signature verification (optional)
-    # Twilio: X-Twilio-Signature (HMAC-SHA1 over URL+params)
-    # Meta: X-Hub-Signature-256 (sha256 HMAC over raw body)
     try:
-        # Verify Twilio signature if configured
         twilio_token = os.environ.get('TWILIO_AUTH_TOKEN')
         meta_secret = os.environ.get('META_APP_SECRET')
         if twilio_token and request.headers.get('X-Twilio-Signature'):
             sig = request.headers.get('X-Twilio-Signature')
-            # Build the expected signature per Twilio docs
             url = request.url
-            # For form-encoded, use params sorted by key
             params = ''
             if request.form:
-                # Twilio concatenates keys and values in alphabetical order
                 items = sorted(request.form.items())
                 params = ''.join([k + v for k, v in items])
             expected = base64.b64encode(hmac.new(twilio_token.encode('utf-8'), (url + params).encode('utf-8'), hashlib.sha1).digest()).decode()
@@ -75,14 +109,13 @@ def incoming_webhook():
         app.logger.exception('Error during signature verification')
         return ('', 500)
 
-    # Forward to agent webhook as raw text body so the agent's /whatsapp_hook
-    # handler (which reads raw body or ?message=) receives the message in 'mensaje'.
     try:
-        # Prefer sending raw text body; include 'from' as header if available
         headers = {'Content-Type': 'text/plain'}
         if sender:
             headers['X-WhatsApp-From'] = sender
-        requests.post(AGENT_WEBHOOK, data=text, headers=headers, timeout=5)
+        
+        params = {'message': text}
+        requests.post(AGENT_WEBHOOK, params=params, headers=headers, timeout=5)
     except Exception:
         app.logger.exception('Failed forwarding to agent')
 
@@ -91,7 +124,6 @@ def incoming_webhook():
 
 @app.route('/webhook', methods=['GET'])
 def verify_webhook():
-    # Handle the verification handshake from Meta (Facebook) Webhooks
     mode = request.args.get('hub.mode')
     challenge = request.args.get('hub.challenge')
     verify_token = request.args.get('hub.verify_token')
@@ -104,7 +136,8 @@ def verify_webhook():
 
 @app.route('/send', methods=['POST'])
 def send_message():
-    # Accept JSON {to, message} or raw body (message) with ?to= parameter
+    global last_sender
+    
     if request.is_json:
         j = request.get_json()
         to = j.get('to')
@@ -113,18 +146,53 @@ def send_message():
         to = request.args.get('to')
         message = request.get_data(as_text=True) or ''
 
+    # Use last_sender if to is "unknown"
+    if to == "unknown" and last_sender:
+        to = last_sender
+        print(f"✅ Using last_sender: {to}")
+
     if not to:
         return jsonify({'error': 'missing "to" parameter'}), 400
 
-    # Prefer Twilio if configured
-    if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM:
+    # Determine provider
+    provider = os.environ.get('WHATSAPP_PROVIDER', 'waha').lower()
+    app.logger.info(f"🚀 Sending message via provider: {provider}")
+
+    # 1. WAHA (WhatsApp HTTP API)
+    if provider == 'waha' and WAHA_API_URL:
+        try:
+            url = f'{WAHA_API_URL}/api/sendText'
+            headers = {
+                'Content-Type': 'application/json',
+                'X-Api-Key': WAHA_API_KEY
+            }
+            payload = {
+                'chatId': to,
+                'text': message,
+                'session': 'default'
+            }
+            
+            app.logger.info(f"📤 Sending via WAHA to {to}: {message}")
+            resp = requests.post(url, json=payload, headers=headers, timeout=10)
+            
+            if resp.status_code in [200, 201]:
+                return jsonify({'status': 'sent', 'provider': 'waha', 'response': resp.json()}), 200
+            else:
+                app.logger.error(f"❌ WAHA Error: {resp.text}")
+                return (resp.text, resp.status_code, resp.headers.items())
+        except Exception as e:
+            app.logger.error(f"❌ WAHA Connection Error: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    # 2. Twilio
+    elif provider == 'twilio' and TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM:
         url = f'https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json'
         data = {'To': to, 'From': TWILIO_FROM, 'Body': message}
         resp = requests.post(url, data=data, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
         return (resp.text, resp.status_code, resp.headers.items())
 
-    # Else try Meta WhatsApp Cloud API
-    if META_TOKEN and META_PHONE_ID:
+    # 3. Meta WhatsApp Cloud API
+    elif provider == 'meta' and META_TOKEN and META_PHONE_ID:
         url = f'https://graph.facebook.com/v15.0/{META_PHONE_ID}/messages'
         headers = {'Authorization': f'Bearer {META_TOKEN}', 'Content-Type': 'application/json'}
         body = {
@@ -135,10 +203,10 @@ def send_message():
         }
         resp = requests.post(url, json=body, headers=headers)
         return (resp.text, resp.status_code, resp.headers.items())
-    # No provider configured: fallback to dev/mock mode — just log the outgoing
-    app.logger.info('No provider configured (TWILIO or META). Falling back to mock send.')
+    
+    # 4. Fallback / Mock
+    app.logger.info(f'Provider {provider} not configured or failed. Falling back to mock send.')
     app.logger.info('Mock send -> to: %s message: %s', to, message)
-    # Add to in-memory history for inspection
     try:
         MOCK_HISTORY.append({
             'to': to,
@@ -147,18 +215,12 @@ def send_message():
         })
     except Exception:
         app.logger.exception('Failed appending to MOCK_HISTORY')
-    # Return 200 so the agent believes the send succeeded in dev environments
-    return jsonify({'mock_sent': True, 'to': to, 'message': message}), 200
+    return jsonify({'mock_sent': True, 'to': to, 'message': message, 'provider': 'mock'}), 200
 
 
 @app.route('/history', methods=['GET'])
 def history():
-    """Return the in-memory mock send history.
-
-    This is intended for development and testing only. The history is not persisted
-    and is reset when the adapter restarts.
-    """
-    # Return in reverse chronological order (most recent first)
+    """Return the in-memory mock send history."""
     try:
         hist = list(reversed(MOCK_HISTORY))
     except Exception:

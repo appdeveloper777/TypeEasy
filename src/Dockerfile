@@ -7,7 +7,7 @@ FROM gcc:13.2.0 AS base
 
 # Instala las herramientas que ambos componentes necesitan
 RUN apt-get update && \
-    apt-get install -y flex bison libssl-dev default-libmysqlclient-dev && \
+    apt-get install -y flex bison libssl-dev default-libmysqlclient-dev libcurl4-openssl-dev && \
     apt-get clean
 
 WORKDIR /app
@@ -115,7 +115,7 @@ FROM debian:12-slim AS agent
 WORKDIR /app
 # Instala las dependencias de runtime: libssl (para civetweb) y libfl2 (para flex)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libssl3 libfl2 default-libmysqlclient-dev && \
+    apt-get install -y --no-install-recommends libssl3 libfl2 default-libmysqlclient-dev libcurl4 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -124,6 +124,7 @@ COPY --from=typeeasy_builder /app/src/servidor_agent .
 
 # Copia el script del agente
 COPY --from=base /app/typeeasycode/agente_chat_whatsapp.te .
+COPY --from=base /app/typeeasycode/agente_gemini_whatsapp.te .
 
 # Copia el shim Rust compilado (si existe) y lo renombra para que el runtime
 # lo encuentre como `motor_nlu_local` (libmotor_nlu_local.so)

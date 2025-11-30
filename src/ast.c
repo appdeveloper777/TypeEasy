@@ -516,6 +516,7 @@ void runtime_register_bridge_handlers(BridgeHandlers handlers) {
     g_bridge_handlers.handle_chat_bridge = handlers.handle_chat_bridge;
     g_bridge_handlers.handle_nlu_bridge = handlers.handle_nlu_bridge;
     g_bridge_handlers.handle_api_bridge = handlers.handle_api_bridge;
+    g_bridge_handlers.handle_gemini_bridge = handlers.handle_gemini_bridge;
 }
 // --- FIN MEJORA ---
 
@@ -2151,6 +2152,8 @@ static void interpret_call_method(ASTNode *node) {
             }
         } else if (strcmp(v->id, "API") == 0) {
             if (g_bridge_handlers.handle_api_bridge) g_bridge_handlers.handle_api_bridge(node->id, node->right);
+        } else if (strcmp(v->id, "Gemini") == 0) {
+            if (g_bridge_handlers.handle_gemini_bridge) g_bridge_handlers.handle_gemini_bridge(node->id, node->right);
         } else {
             printf("Advertencia: Bridge '%s' desconocido o no implementado en este ejecutable.\n", v->id);
         }
@@ -2486,6 +2489,8 @@ static void interpret_call_method_alone(ASTNode *node) {
             }
         } else if (strcmp(v->id, "API") == 0) {
             if (g_bridge_handlers.handle_api_bridge) g_bridge_handlers.handle_api_bridge(node->id, node->right);
+        } else if (strcmp(v->id, "Gemini") == 0) {
+            if (g_bridge_handlers.handle_gemini_bridge) g_bridge_handlers.handle_gemini_bridge(node->id, node->right);
         } else {
             printf("Advertencia: Bridge '%s' desconocido o no implementado en este ejecutable.\n", v->id);
         }

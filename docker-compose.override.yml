@@ -8,4 +8,4 @@ services:
 
   whatsapp_adapter:
     environment:
-      - AGENT_WEBHOOK=http://agent:8081/whatsapp_hook
+      - AGENT_WEBHOOK=http://agent_gemini:8081/whatsapp_hook

@@ -1,0 +1,6 @@
+waha_sessions/
+.git/
+.env
+*.log
+__pycache__/
+*.pyc

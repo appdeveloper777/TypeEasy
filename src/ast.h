@@ -182,6 +182,7 @@ typedef struct BridgeHandlers {
     void (*handle_chat_bridge)(char* method_name, ASTNode* args);
     void (*handle_nlu_bridge)(char* method_name, ASTNode* args);
     void (*handle_api_bridge)(char* method_name, ASTNode* args);
+    void (*handle_gemini_bridge)(char* method_name, ASTNode* args);
 } BridgeHandlers;
 
 // Función para que el programa principal (servidor_agent o typeeasy_main)
@@ -208,5 +209,6 @@ ASTNode *create_case_node(ASTNode* condition, ASTNode* body);
 ASTNode *append_case_clause(ASTNode* list, ASTNode* case_clause);
 ASTNode *create_match_node(ASTNode* condition, ASTNode* case_list);
 ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
+char* get_node_string(ASTNode *node);
 
 #endif

@@ -35,7 +35,7 @@ CXX = g++
 CFLAGS = -Wall -g -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1
 CXXFLAGS = -Wall -g -std=c++17
 LIBS_SCRIPT = -lfl -lm -lmysqlclient
-LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto -lmysqlclient
+LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto -lmysqlclient -lcurl
 
 # --- OBJETIVO PRINCIPAL ---
 all: $(EXEC_SCRIPT) $(EXEC_AGENT)

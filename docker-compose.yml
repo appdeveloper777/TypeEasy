@@ -81,6 +81,34 @@ services:
     ports:
       - "5001:5001"
 
+  # --- ¡NUEVO! SERVICIO GEMINI AI ---
+  gemini:
+    build:
+      context: ./tools/gemini_service
+    image: typeeasy-gemini-ai
+    ports:
+      - "5003:5003"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-1.5-flash-latest}
+
+  # --- ¡NUEVO! AGENTE CON GEMINI (alternativo al agent original) ---
+  agent_gemini:
+    build:
+      context: .
+      dockerfile: src/Dockerfile
+      target: agent
+    image: typeeasy-agent-gemini
+    ports:
+      - "8082:8081" # Puerto diferente para no conflictuar con agent original
+    environment:
+      - TYPEEASY_DEBUG=1
+    # Usar el nuevo agente con Gemini
+    command: [ "./servidor_agent", "agente_gemini_whatsapp.te" ]
+    depends_on:
+      - api_mock
+      - gemini
+
   whatsapp_adapter:
     build:
       context: ./tools/whatsapp_adapter
@@ -88,7 +116,9 @@ services:
     ports:
       - "5002:5002"
     environment:
-      - AGENT_WEBHOOK=http://agent:8081/whatsapp_hook
+      - AGENT_WEBHOOK=http://agent_gemini:8081/whatsapp_hook
+      - WHATSAPP_PROVIDER=${WHATSAPP_PROVIDER:-waha} # waha, meta, or twilio
+      - WAHA_API_URL=http://waha:3000
       # For Twilio integration, set these in your environment or compose overrides:
       # - TWILIO_ACCOUNT_SID=your_sid
       # - TWILIO_AUTH_TOKEN=your_token
@@ -101,3 +131,21 @@ services:
       # - META_WHATSAPP_PHONE_ID=your_phone_id
     depends_on:
       - agent
+
+  # --- ¡NUEVO! WAHA (WhatsApp HTTP API) ---
+  waha:
+    image: devlikeapro/waha
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - WHATSAPP_DEFAULT_ENGINE=WEBJS
+      - WHATSAPP_RESTART_ON_FAIL=True
+      - WAHA_API_KEY=typeeasy_waha_key_2024
+      - WAHA_DASHBOARD_USERNAME=admin
+      - WAHA_DASHBOARD_PASSWORD=typeeasy
+      # Configurar webhook automáticamente al iniciar
+      - WAHA_WEBHOOK_URL=http://whatsapp_adapter:5002/waha_webhook
+      - WAHA_WEBHOOK_EVENTS=message
+    volumes:
+      - ./waha_sessions:/app/.sessions

@@ -1,5 +1,0 @@
-endpoint [HttpGet("/api/mysql-orm/public-server/usuarios-xml")]
-GetUsuariosXML() {
-    let usuarios = orm_query(usuarios);
-    return xml(usuarios);
-}

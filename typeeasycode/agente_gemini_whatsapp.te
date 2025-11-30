@@ -1,0 +1,46 @@
+/********************************************************************
+ * TypeEasy - Agente WhatsApp con Gemini AI
+ * 
+ * Copyright (c) 2025 Fernando Ingunza
+ * Licencia: MIT (https://opensource.org/licenses/MIT)
+ * 
+ * Este agente usa Gemini AI para conversaciones inteligentes
+ * con manejo de contexto conversacional.
+ * 
+ * Características:
+ * - Conversaciones naturales con Gemini
+ * - Contexto conversacional automático
+ * - Respuestas personalizadas
+ * - Sin necesidad de definir intenciones
+ ********************************************************************/
+
+// ======================= BRIDGES ============================
+// Adapter de WhatsApp (envía y recibe mensajes)
+bridge Chat = Http.client("http://whatsapp_adapter:5002");
+
+// Servicio de Gemini AI (conversaciones inteligentes)
+bridge Gemini = Http.client("http://gemini:5003");
+
+// API mock (opcional, para consultas adicionales)
+bridge API = Http.client("http://api_mock:5001");
+
+// ======================= AGENTE ================================
+agent GeminiChatBot {
+
+    listener Chat.onMessage(mensaje) { 
+        println("📨 Mensaje recibido: ");
+        println(mensaje);
+        
+        // Llamar a Gemini AI para obtener respuesta inteligente
+        // Gemini maneja automáticamente el contexto conversacional
+        node respuesta_ia = Gemini.post("/chat", mensaje);
+        
+        println("🤖 Respuesta de Gemini: ");
+        println(respuesta_ia);
+        
+        // Enviar respuesta al usuario vía WhatsApp
+        Chat.sendMessage(respuesta_ia);
+        
+        println("✅ Respuesta enviada al usuario");
+    }
+}

@@ -2,36 +2,50 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "ast.h"      // Incluye tu "Motor" puro
-#include "civetweb.h" // Incluye la librería del servidor
+#include "ast.h"
+#include "civetweb.h"
 #include <stdarg.h>
+#include <curl/curl.h>
 
-/* --- AÑADIDO PARA ARREGLAR WARNING --- */
 #ifdef _WIN32
 #include <windows.h>
 #else
-#include <unistd.h> // Para sleep()
+#include <unistd.h>
 #endif
-/* --- FIN AÑADIDO --- */
 
+/* --- Estructura para manejar la respuesta de libcurl --- */
+struct MemoryStruct {
+  char *memory;
+  size_t size;
+};
 
-/* --- Prototipos de las funciones en tu "Motor" (ast.c) --- */
+static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
+  size_t realsize = size * nmemb;
+  struct MemoryStruct *mem = (struct MemoryStruct *)userp;
+
+  char *ptr = realloc(mem->memory, mem->size + realsize + 1);
+  if(!ptr) {
+    printf("not enough memory (realloc returned NULL)\n");
+    return 0;
+  }
+
+  mem->memory = ptr;
+  memcpy(&(mem->memory[mem->size]), contents, realsize);
+  mem->size += realsize;
+  mem->memory[mem->size] = 0;
+
+  return realsize;
+}
+
+/* --- Prototipos --- */
 ASTNode* parse_file(FILE* file);
 void interpret_ast(ASTNode* node);
 void free_ast(ASTNode* node);
 ASTNode *create_string_node(char *value);
 void add_or_update_variable(char *id, ASTNode *value);
-ObjectNode* clone_object(ObjectNode *original); // Asumiendo que está en ast.h o ast.c
-
-// --- AÑADIDO: Prototipo para que el main lo vea ---
+ObjectNode* clone_object(ObjectNode *original);
 char* get_node_string(ASTNode *node);
 
-// --- COPIADO DE ast.c PARA DESACOPLAR ---
-// Estas funciones son necesarias para que handle_chat_bridge pueda convertir
-// los argumentos del script a strings de C.
-
-
-/* --- DEFINICIONES DEL SERVIDOR (Movidas de ast.h) --- */
 typedef struct ActiveBridge {
     char* name;
     struct mg_context* context;
@@ -39,20 +53,14 @@ typedef struct ActiveBridge {
 } ActiveBridge;
 
 typedef struct RuntimeHost {
-    ASTNode* agents; // Lista de ASTs de agentes
+    ASTNode* agents;
     ActiveBridge* bridges;
 } RuntimeHost;
 
-// Instancia global del Runtime (solo para este ejecutable)
 RuntimeHost g_runtime;
-
-// --- INICIO MEJORA: Variable global para la conexión actual ---
-// Esto permite a los bridges interactuar con la petición HTTP actual.
 static struct mg_connection *g_current_conn = NULL;
-// Expose debug flag from ast.c so we can gate noisy logs
 extern int g_debug_mode;
 
-/* Logging helper to produce consistent "TypeEasy Agent" messages */
 static void te_log(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -64,7 +72,6 @@ static void te_log(const char *fmt, ...) {
     va_end(ap);
 }
 
-/* Print a decorative startup banner similar to the requested style */
 static void print_startup_banner(const char *port, const char *url) {
     const char *blue = "\x1b[34m";
     const char *reset = "\x1b[0m";
@@ -78,44 +85,82 @@ static void print_startup_banner(const char *port, const char *url) {
     int pad;
 
     printf("%s", blue);
-    // top border
     for (int i = 0; i < width; i++) putchar('=');
     putchar('\n');
 
-    // title centered
     pad = (width - (int)strlen(title)) / 2;
     for (int i = 0; i < pad; i++) putchar(' ');
     printf("%s\n", title);
 
-    // separator
     for (int i = 0; i < width; i++) putchar('-');
     putchar('\n');
 
-    // line1
     pad = (width - (int)strlen(line1)) / 2;
     for (int i = 0; i < pad; i++) putchar(' ');
     printf("%s\n", line1);
 
-    // line2
     pad = (width - (int)strlen(line2)) / 2;
     for (int i = 0; i < pad; i++) putchar(' ');
     printf("%s\n", line2);
 
-    // bottom border
     for (int i = 0; i < width; i++) putchar('=');
     putchar('\n');
     printf("%s", reset);
 }
 
-// Implementación del manejador del bridge 'Chat'
 void handle_chat_bridge(char* method_name, ASTNode* args) {
     if (strcmp(method_name, "sendMessage") == 0 && args != NULL) {
-        // Extraer el primer argumento (el mensaje a enviar)
-        char* message_to_send = get_node_string(args); // Necesitarás una función auxiliar para esto
+        char* message_to_send = get_node_string(args); 
+        te_log("Chat.sendMessage called");
 
-    te_log("Chat.sendMessage called: %s", message_to_send);
+        // Extraer solo el campo "response" del JSON de Gemini
+        char response_text[4096] = {0};
+        char* response_field = strstr(message_to_send, "\"response\":\"");
+        if (response_field) {
+            response_field += 12; // Skip "response":"
+            char* end = strstr(response_field, "\",\"timestamp\"");
+            if (!end) end = strstr(response_field, "\"}");
+            if (end) {
+                int len = end - response_field;
+                if (len > 0 && len < sizeof(response_text) - 1) {
+                    strncpy(response_text, response_field, len);
+                    response_text[len] = '\0';
+                }
+            }
+        }
+        
+        if (response_text[0] == '\0') {
+            strncpy(response_text, message_to_send, sizeof(response_text) - 1);
+        }
 
-        // Enviar el mensaje como respuesta HTTP
+        // Enviar a WAHA
+        CURL *curl = curl_easy_init();
+        if(curl) {
+            struct curl_slist *headers = NULL;
+            headers = curl_slist_append(headers, "Content-Type: application/json");
+            
+            char json_payload[8192];
+            snprintf(json_payload, sizeof(json_payload), 
+                     "{\"to\":\"unknown\",\"message\":\"%s\"}", response_text);
+            
+            curl_easy_setopt(curl, CURLOPT_URL, "http://whatsapp_adapter:5002/send");
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_payload);
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+            
+            te_log("Sending to WhatsApp via WAHA");
+            CURLcode res = curl_easy_perform(curl);
+            
+            if(res != CURLE_OK) {
+                te_log("Failed to send: %s", curl_easy_strerror(res));
+            } else {
+                te_log("✅ Message sent to WhatsApp successfully");
+            }
+            
+            curl_easy_cleanup(curl);
+            curl_slist_free_all(headers);
+        }
+
+        // También devolver como respuesta HTTP
         if (g_current_conn) {
             mg_send_http_ok(g_current_conn, "text/plain; charset=utf-8", strlen(message_to_send));
             mg_write(g_current_conn, message_to_send, strlen(message_to_send));
@@ -124,18 +169,13 @@ void handle_chat_bridge(char* method_name, ASTNode* args) {
     }
 }
 
-/* --- Implementación del Bridge NLU (Simulado) --- */
-
 void handle_nlu_bridge(char* method_name, ASTNode* args) {
-    // Support both direct NLU.parse(mensaje) and HTTP-style NLU.post(path, mensaje)
     if (strcmp(method_name, "parse") != 0 && strcmp(method_name, "post") != 0) return;
 
-    // 1. Obtenemos el mensaje real
     char* mensaje_usuario = NULL;
     if (strcmp(method_name, "parse") == 0) {
         mensaje_usuario = get_node_string(args);
     } else {
-        // method == "post" -> args: first = path (string), second = message
         if (args && args->right) {
             mensaje_usuario = get_node_string(args->right);
         } else {
@@ -143,23 +183,15 @@ void handle_nlu_bridge(char* method_name, ASTNode* args) {
         }
     }
     
-    // 2. Variables para simular la intención
-    //    (Ahora se asignan DENTRO de los 'if')
     const char* tipo_simulado = NULL;
     const char* item_simulado = "";
     int cant_simulada = 0;
 
-    /* NLU bridge invoked; avoid verbose logging in production */
-
-    // 3. Decidimos qué simular
     if (strstr(mensaje_usuario, "menu") != NULL || strstr(mensaje_usuario, "carta") != NULL) {
-        /* simulate consultarMenu */
         tipo_simulado = "consultarMenu";
     } else if (strstr(mensaje_usuario, "hola") != NULL || strstr(mensaje_usuario, "gracias") != NULL) {
-        /* simulate desconocido */
         tipo_simulado = "desconocido";
     } else {
-        /* default: simulate agregarItem */
         tipo_simulado = "agregarItem";
         item_simulado = "Tacos al Pastor";
         cant_simulada = 2;
@@ -167,14 +199,11 @@ void handle_nlu_bridge(char* method_name, ASTNode* args) {
 
     free(mensaje_usuario); 
 
-    // 4. Encontrar la clase (sin cambios)
     ClassNode* result_class = find_class("NluResult");
-    if (!result_class) { /* ... */ return; }
+    if (!result_class) { return; }
     
-    // 5. Crear el objeto 'NluResult' (sin cambios)
     ObjectNode* result_obj = create_object(result_class);
     for(int i=0; i < result_obj->class->attr_count; i++) {
-        
         if(strcmp(result_obj->attributes[i].id, "tipo") == 0) {
             result_obj->attributes[i].value.string_value = strdup(tipo_simulado);
             result_obj->attributes[i].vtype = VAL_STRING;
@@ -189,16 +218,79 @@ void handle_nlu_bridge(char* method_name, ASTNode* args) {
         }
     }
     
-    // 6. Devolverlo (sin cambios)
     ASTNode* result_node = create_ast_leaf("OBJECT", 0, NULL, NULL);
     result_node->type = strdup("OBJECT");   
     result_node->extra = (struct ASTNode*)result_obj;
     
     add_or_update_variable("__ret__", result_node);
-    // Do not free result_node here — the interpreter holds a reference to it via __ret__
-    // free_ast(result_node);
+}
 
-    /* no verbose diagnostics here; interpreter logs cover lifecycle if needed */
+void handle_gemini_bridge(char* method_name, ASTNode* args) {
+    if (strcmp(method_name, "post") == 0 && args != NULL) {
+        char* path = NULL;
+        char* message = NULL;
+        
+        path = get_node_string(args);
+        if (args->right) {
+            message = get_node_string(args->right);
+        }
+        
+        if (!path) path = strdup("");
+        if (!message) message = strdup("");
+        
+        te_log("Gemini.post called. Path: %s, Message: %s", path, message);
+        
+        char url[512];
+        snprintf(url, sizeof(url), "http://gemini:5003%s", path);
+        
+        CURL *curl;
+        CURLcode res;
+        struct MemoryStruct chunk;
+        chunk.memory = malloc(1);
+        chunk.size = 0;
+        
+        curl = curl_easy_init();
+        if(curl) {
+            struct curl_slist *headers = NULL;
+            headers = curl_slist_append(headers, "Content-Type: text/plain");
+            
+            curl_easy_setopt(curl, CURLOPT_URL, url);
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, message);
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+            curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+            
+            res = curl_easy_perform(curl);
+            
+            if(res != CURLE_OK) {
+                te_log("curl_easy_perform() failed: %s", curl_easy_strerror(res));
+            } else {
+                te_log("Gemini response: %s", chunk.memory);
+                ASTNode* resp_node = create_string_node(chunk.memory);
+                add_or_update_variable("__ret__", resp_node);
+            }
+            
+            curl_easy_cleanup(curl);
+            curl_slist_free_all(headers);
+        }
+        
+        free(chunk.memory);
+        
+        free(path);
+        free(message);
+    }
+}
+
+void handle_api_bridge(char* method_name, ASTNode* args) {
+    if (strcmp(method_name, "get") == 0) {
+        if (g_debug_mode) te_log("API.get invoked: returning simulated menu");
+        
+        ASTNode* menu_node = create_string_node(
+            "Menú del Día: Tacos (3€), Burritos (5€), Enchiladas (4€)"
+        );
+
+        add_or_update_variable("__ret__", menu_node);
+    }
 }
 
 ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) {
@@ -214,7 +306,7 @@ ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) 
                     expr->left && expr->left->id && strcmp(expr->left->id, bridge_name) == 0 &&
                     expr->id && strcmp(expr->id, event_name) == 0) {
 
-                                    if (g_debug_mode) te_log("Listener found for %s.%s", bridge_name, event_name);
+                    if (g_debug_mode) te_log("Listener found for %s.%s", bridge_name, event_name);
                     return listener;
                 }
             }
@@ -224,42 +316,15 @@ ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) 
     return NULL;
 }
 
-/* --- Implementación del Bridge API (Simulado) --- */
-void handle_api_bridge(char* method_name, ASTNode* args) {
-    if (strcmp(method_name, "get") == 0) {
-        if (g_debug_mode) te_log("API.get invoked: returning simulated menu");
-        
-        // 1. Simplemente creamos un nodo de string con el menú
-        ASTNode* menu_node = create_string_node(
-            "Menú del Día: Tacos (3€), Burritos (5€), Enchiladas (4€)"
-        );
-
-        // 2. Devolverlo al intérprete
-        add_or_update_variable("__ret__", menu_node);
-        
-        // NO liberar menu_node aquí. El intérprete lo necesita.
-       //  free_ast(menu_node); // <-- ¡Este es el error!
-    }
-}
-
-/*
- * WEBHOOK_HANDLER (Versión 10 - Corrección de compilación)
- * - Arregla la llamada a mg_get_var (faltaba data_len)
- * - Arregla el warning de printf (%ld -> %lld)
- */
 static int webhook_handler(struct mg_connection *conn, void *cbdata) {
-    
     const struct mg_request_info *req_info = mg_get_request_info(conn);
-
     runtime_reset_vars_to_initial_state();
 
     char post_data[2048] = {0};
     int read = 0;
 
-    // Establish the global connection for bridges that may use it
     g_current_conn = conn;
 
-    // Read the request body (robust): first try body, otherwise query string ?message=
     char c;
     while (read < (sizeof(post_data) - 1)) {
         int bytes_leidos_ahora = mg_read(conn, &c, 1);
@@ -277,32 +342,26 @@ static int webhook_handler(struct mg_connection *conn, void *cbdata) {
         read = mg_get_var(query, query_len, "message", post_data, sizeof(post_data) - 1);
     }
 
-    // Minimal log for incoming messages (only when debugging)
     if (g_debug_mode) te_log("Incoming webhook received. Message: \"%s\"", post_data);
 
-    // 2. Encontrar el listener (sin cambios)
     ASTNode* listener = runtime_find_listener("Chat", "onMessage");
     if (!listener) {
         fprintf(stderr, "TypeEasy Agent: Error: listener 'Chat.onMessage' not configured\n");
         mg_send_http_error(conn, 500, "Listener no configurado");
-        g_current_conn = NULL; // Limpiar
+        g_current_conn = NULL;
         return 500;
     }
 
-    // 3. Poner el body en la variable 'mensaje' (sin cambios)
     ASTNode* msg_node = create_string_node(post_data);
     add_or_update_variable("mensaje", msg_node);
     free_ast(msg_node); 
 
-    // 4. Ejecutar el listener (sin changes)
     if (g_debug_mode) te_log("Executing listener logic");
-    interpret_ast(listener->right); // El 'Motor' interpreta el cuerpo
+    interpret_ast(listener->right);
     te_log("Listener logic finished");
 
-    // --- CORRECCIÓN 1 (B): Limpiar la conexión global DESPUÉS ---
     g_current_conn = NULL; 
     
-    // 5. Enviar 200 OK si el bridge no lo hizo (sin cambios)
     if (mg_get_response_info(conn) == NULL) {
         mg_printf(conn, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
     }
@@ -356,41 +415,25 @@ void runtime_init(ASTNode* ast_root) {
     ClassNode* bridge_class = create_class("Bridge");
     add_class(bridge_class);
 
-    // --- AÑADIDO ---
-    // Clase para el objeto 'entidad' (debe definirse ANTES de NluResult)
     ClassNode* entity_map_class = create_class("EntityMap");
     add_attribute_to_class(entity_map_class, "item", "string");
     add_attribute_to_class(entity_map_class, "cantidad", "int");
     add_class(entity_map_class);
-    // --- FIN AÑADIDO ---
 
-    //printf("[Agente] Clase 'Bridge' registrada.\n");
-    //ClassNode* bridge_class = create_class("Bridge");
-    //add_class(bridge_class);
-
-    // Clase para el resultado de NLU.parse()
     ClassNode* nlu_class = create_class("NluResult");
     add_attribute_to_class(nlu_class, "tipo", "string");
     add_attribute_to_class(nlu_class, "item", "string");
     add_attribute_to_class(nlu_class, "cantidad", "int");
     add_class(nlu_class);
 
-    // Clase para el resultado de Chat.getSession()
     ClassNode* session_class = create_class("Session");
     add_attribute_to_class(session_class, "paso", "string");
     add_class(session_class);
 }
 
-/**
- * Main para el EJECUTABLE 'servidor_agent'.
- * Inicia el servicio persistente de WhatsApp en el puerto 8081.
- */
 int main(int argc, char *argv[]) {
-    
     print_startup_banner("8081", "/whatsapp_hook");
-    // Disable stdout buffering so logs are immediately visible in container logs
     setbuf(stdout, NULL);
-    /* Allow toggling debug logs with TYPEEASY_DEBUG=1 */
     const char *debug_env = getenv("TYPEEASY_DEBUG");
     if (debug_env != NULL && strcmp(debug_env, "1") == 0) {
         g_debug_mode = 1;
@@ -401,15 +444,14 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // --- INICIO MEJORA: Registrar los manejadores de bridges ---
     BridgeHandlers agent_handlers = {
         .handle_chat_bridge = handle_chat_bridge,
-        .handle_nlu_bridge = handle_nlu_bridge, // Aún no implementado
-        .handle_api_bridge = handle_api_bridge  // Aún no implementado
+        .handle_nlu_bridge = handle_nlu_bridge,
+        .handle_api_bridge = handle_api_bridge,
+        .handle_gemini_bridge = handle_gemini_bridge
     };
     
     runtime_register_bridge_handlers(agent_handlers);
-    // --- FIN MEJORA ---
 
     FILE *file = fopen(argv[1], "r");
     if (!file) {
@@ -417,7 +459,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // 1. Parsea el "Workflow" del agente usando el "Motor"
     ASTNode* agent_ast = parse_file(file);
     fclose(file);
 
@@ -426,7 +467,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // 2. Inicia el Runtime del Agente (funciones en ESTE archivo)
     runtime_init(agent_ast);
     interpret_ast(agent_ast);    
     runtime_save_initial_var_count();
@@ -434,7 +474,6 @@ int main(int argc, char *argv[]) {
 
     te_log("Runtime started. Waiting for events...");
 
-    // 3. Bucle de servidor infinito
     while(1) {
         #ifdef _WIN32
             Sleep(1000);
@@ -443,7 +482,6 @@ int main(int argc, char *argv[]) {
         #endif
     }
 
-    // (Esto nunca se alcanza)
     free_ast(agent_ast);
     return 0;
 }

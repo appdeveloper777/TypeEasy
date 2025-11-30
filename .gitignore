@@ -6,3 +6,26 @@ src/parser.output
 
 # Ejecutables
 typeeasy
+
+# WAHA Sessions (datos privados de WhatsApp)
+waha_sessions/
+
+# Variables de entorno (contienen API keys)
+.env
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Node modules (si usas npm)
+node_modules/
+
+# Docker volumes
+volumes/
