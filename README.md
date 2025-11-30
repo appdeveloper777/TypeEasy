@@ -23,7 +23,11 @@
 
 ## 🌟 Nuevo: Chatbot WhatsApp con Gemini AI
 
-¿Quieres crear un chatbot inteligente para WhatsApp en minutos? Ahora TypeEasy incluye una integración completa con Google Gemini AI y WAHA.
+¿Quieres crear un chatbot inteligente para WhatsApp en minutos? Ahora TypeEasy incluye una integración completa con Google Gemini AI.
+
+**Dos opciones de integración:**
+- 🔷 **WAHA** - Gratis, fácil de configurar (escanear QR) - No comendable para producción, solamente para pruebas, por bloqueo whatsapp de parte de meta
+- 🔶 **Meta WhatsApp Cloud API** - API oficial, más estable para producción
 
 ### 🚀 Inicio Rápido del Chatbot
 
@@ -37,17 +41,23 @@ cp .env.example .env
 # 2. Levantar servicios
 docker compose up -d
 
-# 3. Abrir dashboard y escanear QR
+# 3a. Con WAHA: Abrir dashboard y escanear QR
 # http://localhost:3000
+
+# 3b. Con Meta API: Configurar webhook
+# Ver guía: docs/META_WHATSAPP_SETUP.md
 ```
 
 ### 📖 Documentación Completa del Chatbot
 
-**[→ Ver Guía Completa: Chatbot WhatsApp + WAHA + Gemini AI](README_CHATBOT_WHATSAPP_WAHA_GEMINI.md)**
+| Guía | Descripción |
+|------|-------------|
+| **[Chatbot con WAHA](README_CHATBOT_WHATSAPP_WAHA_GEMINI.md)** | Configuración con WAHA (escanear QR) |
+| **[Chatbot con Meta API](docs/META_WHATSAPP_SETUP.md)** | Configuración con WhatsApp Cloud API oficial |
 
-La guía incluye:
+**Guías incluyen:**
 - ✅ Instalación paso a paso (Windows/Mac/Linux)
-- ✅ Configuración de WAHA y escaneo de QR
+- ✅ Configuración de WhatsApp (WAHA o Meta API)
 - ✅ Despliegue en producción con Nginx
 - ✅ Solución de problemas comunes
 - ✅ Personalización del chatbot
