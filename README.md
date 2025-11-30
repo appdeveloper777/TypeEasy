@@ -13,7 +13,7 @@
 
 **Un intérprete / framework experimental para crear lenguajes, scripts y bridges con servicios externos**
 
-[🚀 Inicio Rápido](#-ejecutar-typeeasy-con-docker-compose) • [📖 Documentación](#-documentación-completa-del-chatbot) • [💬 Chatbot WhatsApp](#-nuevo-chatbot-whatsapp-con-gemini-ai) • [⭐ Apoyar](#-apoya-el-proyecto)
+[🚀 Inicio Rápido](#-inicio-rápido) • [📖 Chatbot WhatsApp](#-chatbot-whatsapp-con-gemini-ai) • [🔌 APIs REST](#-crear-apis-rest) • [⭐ Apoyar](#-apoya-el-proyecto)
 
 </div>
 
@@ -21,14 +21,59 @@
 
 ## ¿Qué es TypeEasy?
 
+TypeEasy es un intérprete / framework experimental escrito principalmente en C que te permite:
 
-## 🌟 Nuevo: Chatbot WhatsApp con Gemini AI
+✔️ **Crear tu propia sintaxis** adaptada perfectamente a tu dominio o equipo <br>
+✔️ **Hacer "bridge"** sin esfuerzo con otros lenguajes potentes como Java, Rust y C# <br>
+✔️ **Crear endpoints REST** como FastAPI pero con sintaxis TypeEasy <br>
+✔️ **Crear scripts** para integraciones y automatizaciones
 
-¿Quieres crear un chatbot inteligente para WhatsApp en minutos? Ahora TypeEasy incluye una integración completa con Google Gemini AI.
+![image](https://github.com/user-attachments/assets/d4617ae8-71f0-4270-9e70-ad00bd6694ab)
 
-**Dos opciones de integración:**
-- 🔷 **WAHA** - Gratis, fácil de configurar (escanear QR) - No comendable para producción, solamente para pruebas, por bloqueo whatsapp de parte de meta
-- 🔶 **Meta WhatsApp Cloud API** - API oficial, más estable para producción
+---
+
+## 🚀 Inicio Rápido
+
+### 📦 Requisitos
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) instalado
+- Git (opcional)
+
+### 🛠️ Instalación
+
+**Para macOS, Linux o Windows (Git Bash):**
+
+```bash
+git clone https://github.com/appdeveloper777/TypeEasy.git && cd TypeEasy && code -r .
+```
+
+**Para Windows (PowerShell):**
+
+```bash
+git clone https://github.com/appdeveloper777/TypeEasy.git; cd TypeEasy; code -r .
+```
+
+### ▶️ Ejecutar un Script TypeEasy
+
+1. Crea un archivo `.te` en `typeeasycode/`:
+
+```te
+// typeeasycode/hola.te
+print("¡Hola, mundo!");
+```
+
+2. Construye y ejecuta:
+
+```bash
+docker compose build
+docker compose run --rm typeeasy hola.te
+```
+
+---
+
+## 💬 Chatbot WhatsApp con Gemini AI
+
+Crea un chatbot inteligente para WhatsApp en minutos usando Google Gemini AI.
 
 ### 🚀 Inicio Rápido del Chatbot
 
@@ -49,267 +94,150 @@ docker compose up -d
 # Ver guía: docs/META_WHATSAPP_SETUP.md
 ```
 
-### 📖 Documentación Completa del Chatbot
+### 📖 Opciones de Integración
 
-| Guía | Descripción |
-|------|-------------|
-| **[Chatbot con WAHA](README_CHATBOT_WHATSAPP_WAHA_GEMINI.md)** | Configuración con WAHA (escanear QR) |
-| **[Chatbot con Meta API](docs/META_WHATSAPP_SETUP.md)** | Configuración con WhatsApp Cloud API oficial |
+| Opción | Descripción | Mejor Para |
+|--------|-------------|------------|
+| 🔷 **[WAHA](README_CHATBOT_WHATSAPP_WAHA_GEMINI.md)** | Gratis, escanear QR | Desarrollo y pruebas |
+| 🔶 **[Meta WhatsApp Cloud API](docs/META_WHATSAPP_SETUP.md)** | API oficial de Meta | Producción |
 
-**Guías incluyen:**
+> ⚠️ **Nota:** WAHA no es recomendable para producción debido a posibles bloqueos de WhatsApp por parte de Meta.
+
+**Las guías incluyen:**
 - ✅ Instalación paso a paso (Windows/Mac/Linux)
-- ✅ Configuración de WhatsApp (WAHA o Meta API)
+- ✅ Configuración completa
 - ✅ Despliegue en producción con Nginx
-- ✅ Solución de problemas comunes
+- ✅ Solución de problemas
 - ✅ Personalización del chatbot
 
 ---
 
-## ¿Qué es TypeEasy?
+## 🔌 Crear APIs REST
 
-✔️ Tienes la libertad de crear tu propia sintaxis para adaptarla perfectamente a tu dominio o equipo. <br>
-✔️ Puedes hacer "bridge" sin esfuerzo con otros lenguajes potentes como Java, Rust y C#, aprovechando lo mejor de cada ecosistema. <br>
-✔️ Crear tus endpoint como FastAPI <br>
-✔️ Crear tus scripting para Integraciones
+TypeEasy te permite crear endpoints REST con clases, tipado fuerte y sintaxis simple.
 
-![image](https://github.com/user-attachments/assets/d4617ae8-71f0-4270-9e70-ad00bd6694ab)
+### 🚀 Tu Primer Endpoint
 
-## 🚀 Ejecutar TypeEasy con Docker Compose
-
-### 📦 Requisitos
-
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) instalado y ejecutándose
-- Git (opcional para clonar el repositorio)
-
----
-
-### 🛠️ Cómo usar
-
-1. Clona el repositorio o descarga el proyecto, ejecuta el siguiente comando en el VS Code:
-   
-**Para macOS, Linux o Windows (Usando Git Bash)**
-
-```bash
-git clone https://github.com/appdeveloper777/TypeEasy.git && cd TypeEasy && code -r .
-```
-
-**Para Windows (usando PowerShell)**
-
-```bash
-git clone https://github.com/appdeveloper777/TypeEasy.git; cd TypeEasy; code -r .
-```
-   
-Asegúrate de tener un archivo `.te` dentro de la carpeta `typeeasycode/`.  
-Por ejemplo: `TypeEasy/typeeasycode/main.te`
-
-2. Construye la imagen de Docker:
-
-```bash
-docker compose build
-```
-
-3. Ejecuta un archivo `.te`:
-
-```bash
-docker compose run --rm typeeasy main.te
-```
-
-✅ Esto ejecutará `/code/main.te` dentro del contenedor, usando el ejecutable `typeeasy`.
-
----
-
-## ✍️ Escribir y ejecutar código TypeEasy
-
-### 🧾 1. Crea tu archivo `.te` dentro de `typeeasycode/`
-
-Ejemplo: `typeeasycode/hola.te`
+Crea `typeeasycode/apis/proveedores_endpoint.te`:
 
 ```te
-print("¡Hola, mundo!");
+class OrdenDeCompra {
+    proveedor: string; 
+    fecha: string;
+
+    __constructor(_proveedor: string, _fecha: string) {
+        this.proveedor = _proveedor;
+        this.fecha = _fecha;
+    }   
+}
+
+endpoint {
+    [HttpGet("/api/proveedores")]
+    GetProveedores() {
+        let mi_orden = new OrdenDeCompra("Suministros Industriales S.A.", "2025-09-06");
+        return jsonl(mi_orden);
+    }
+}
 ```
 
-> Asegúrate de guardar el archivo con extensión `.te`
-
----
-
-### ▶️ 2. Ejecuta tu archivo `.te` con Docker Compose
-
-```bash
-docker compose run --rm typeeasy hola.te
-```
-
----
-
-## 🧹 Limpieza
-
-Para evitar que se acumulen contenedores al ejecutar muchas veces:
-
-```bash
-docker compose run --rm typeeasy archivo.te
-```
-
-Si necesitas limpiar contenedores antiguos manualmente:
-
-```bash
-docker container prune
-```
-
-Para correr los endpoints el código se encuentra en TypeEasy/typeeasycode/apis: http://localhost:8080/
+Levanta el servidor y prueba:
 
 ```bash
 docker compose up -d --build api
-docker compose logs -f api
+curl http://localhost:8080/api/proveedores
 ```
 
-## 🧠 Consejos útiles
-
-- Puedes crear tantos archivos `.te` como quieras en `typeeasycode/`
-- Para inspeccionar el contenedor directamente:
-
-```bash
-docker compose run --rm --entrypoint sh typeeasy
+**Respuesta:**
+```json
+{
+    "proveedor": "Suministros Industriales S.A.",
+    "fecha": "2025-09-06"
+}
 ```
 
-- Para ver el contenido dentro del contenedor:
+### 📖 Guía Completa de Endpoints
+
+**[→ Ver Guía: Cómo Crear Endpoints con TypeEasy](docs/CREAR_ENDPOINTS.md)**
+
+La guía incluye:
+- ✅ Métodos HTTP (GET, POST, PUT, DELETE)
+- ✅ Clases y tipado fuerte
+- ✅ Parámetros de ruta y query
+- ✅ Request body y validación
+- ✅ Respuestas JSON y XML
+- ✅ Integración con MySQL/PostgreSQL
+- ✅ Ejemplos completos de CRUD
+
+---
+
+## 🧠 Características Avanzadas
+
+### Scripts y Automatizaciones
+
+Crea scripts para automatizar tareas:
+
+```te
+// typeeasycode/backup.te
+print("Iniciando backup...");
+// Tu lógica aquí
+```
+
+Ejecuta:
+```bash
+docker compose run --rm typeeasy backup.te
+```
+
+### Integración con Bases de Datos
+
+```te
+import "models/Usuario.te";
+import "settings/mysql_config.te";
+
+endpoint {
+  [HttpGet("/api/usuarios")]
+  GetUsuarios() {
+      let conn = new mysql_connect(global_host, global_user, global_pass, global_db, global_port);
+      let usuarios = orm_query(conn, "SELECT * FROM usuarios", UsuarioModel);
+      mysql_close(conn);
+      return xml(usuarios);
+  }
+}
+```
+
+### Modo Mock para Desarrollo
+
+Prueba sin credenciales reales:
 
 ```bash
-docker compose run --rm --entrypoint ls typeeasy -l /code
+# El adapter funcionará en modo "mock"
+docker compose up -d whatsapp_adapter
+
+# Ver historial de mensajes mock
+curl http://localhost:5002/history
 ```
 
 ---
 
-## Exponer el adapter de WhatsApp con ngrok
-
-Para conectar tu agente a WhatsApp real (Meta Cloud API) necesitas exponer el adapter a internet. Usa el script helper:
+## 🧹 Comandos Útiles
 
 ```bash
-bash scripts/ngrok_up.sh
+# Ejecutar un archivo .te
+docker compose run --rm typeeasy archivo.te
+
+# Levantar API server
+docker compose up -d --build api
+
+# Ver logs
+docker compose logs -f api
+
+# Limpiar contenedores
+docker container prune
+
+# Inspeccionar contenedor
+docker compose run --rm --entrypoint sh typeeasy
 ```
 
-Esto iniciará ngrok en el puerto 5002 y mostrará la URL pública (ejemplo: `https://abcd1234.ngrok.io/webhook`). Usa esa URL en el panel de Facebook Developer para registrar el webhook de WhatsApp y pon el mismo `META_VERIFY_TOKEN` que tienes en tu `.env`.
-
-Cuando termines, puedes matar ngrok con:
-
-```bash
-kill $(pgrep ngrok)
-```
-
-Recuerda tener configuradas las variables `META_WHATSAPP_TOKEN`, `META_WHATSAPP_PHONE_ID`, `META_APP_SECRET` y `META_VERIFY_TOKEN` en tu `.env`.
-
-## Adapter: modo mock / desarrollo
-
-Si no configuras `TWILIO_*` ni `META_*`, el adapter funcionará en modo "mock" y no intentará enviar mensajes reales: en su lugar registrará el intento de envío en sus logs y devolverá HTTP 200 para que el agente considere el envío exitoso. Esto es útil para probar el flujo end-to-end sin credenciales.
-
-Ejemplo: si el agente hace `Chat.post("/send", respuesta);`, el adapter responderá con `{"mock_sent":true, ...}` y verás en los logs la línea `Mock send -> to: ... message: ...`.
-
-### Ver el historial de mensajes mock enviados
-
-El adapter expone un endpoint útil para desarrollo: `GET /history` que devuelve los envíos mock recientes en memoria.
-
-Ejemplo:
-
-```bash
-curl http://localhost:5002/history
-```
-
-## Probar el Agente WhatsApp desde Windows: reconstruir sin cache y usar curl
-
-Si estás en Windows y quieres forzar una reconstrucción limpia de la imagen del agente y ejecutar el contenedor para pruebas locales, usa los siguientes pasos y ejemplos. Estos comandos están pensados para CMD o PowerShell según tu preferencia.
-
-- Reconstruir la imagen del agente sin usar cache:
-
-```bash
-docker compose build --no-cache agent
-```
-
-- Ejecutar el contenedor del agente exponiendo los puertos declarados (útil para pruebas locales):
-
-```bash
-docker compose run --rm --service-ports agent
-```
-
-Nota: `--service-ports` mapea los puertos del servicio tal como están declarados en `docker-compose` hacia el host (por ejemplo, el agente escucha en el puerto `8081`).
-
-Ejemplos de `curl` desde Windows (CMD o PowerShell). Puedes ejecutar exactamente estas líneas si el servicio está escuchando en `http://localhost:8081`:
-
-```powershell
-C:\Windows\System32>curl -X POST "http://localhost:8081/whatsapp_hook?message=ver+el+menu"
-
-C:\Windows\System32>curl -X POST "http://localhost:8081/whatsapp_hook?message=hola"
-
-C:\Windows\System32>curl -X POST "http://localhost:8081/whatsapp_hook?message=hola"
-
-C:\Windows\System32>curl -X POST "http://localhost:8081/whatsapp_hook?message=ver+el+menu"
-```
-
-<img width="1868" height="990" alt="agent logs typeeasy" src="https://github.com/user-attachments/assets/b2fee05a-19d7-46bb-9161-3fc32c839134" />
-
-agente_chat_whatsapp.te: <img width="1777" height="978" alt="agent logs typeeasy codigo" src="https://github.com/user-attachments/assets/139c8574-b234-4701-aae1-192c6413ec45" />
-
-Consejos adicionales:
-
-- Para ver logs más verbosos del agente al ejecutar con `docker compose run` añade la variable de entorno `TYPEEASY_DEBUG=1`:
-
-```bash
-docker compose run --rm -e TYPEEASY_DEBUG=1 --service-ports agent
-```
-
-- En PowerShell puedes exportar la variable antes de ejecutar el contenedor:
-
-```powershell
-$env:TYPEEASY_DEBUG = '1'; docker compose run --rm --service-ports agent
-```
-
-- Después de modificar código en `src/` recuerda reconstruir la imagen del agente con `--no-cache` si quieres asegurarte de que los binarios nativos se recompilan:
-
-```bash
-docker compose build --no-cache agent
-```
-
-## Variables de entorno importantes
-
-- Gemini AI (para chatbot): `GEMINI_API_KEY`
-- WAHA (para chatbot): `WAHA_API_KEY`, `WAHA_API_URL`
-- Twilio (opcional): `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`
-- Meta WhatsApp (opcional): `META_WHATSAPP_TOKEN`, `META_WHATSAPP_PHONE_ID`, `META_APP_SECRET`, `META_VERIFY_TOKEN`
-- Adapter -> Agent: `AGENT_WEBHOOK` (por defecto `http://agent:8081/whatsapp_hook`)
-
-Ejemplo de `.env` mínimo (copiar desde `.env.example` si existe):
-
-```env
-# Gemini AI (para chatbot)
-GEMINI_API_KEY=tu_api_key_aqui
-
-# WAHA (para chatbot)
-WAHA_API_KEY=typeeasy_waha_key_2024
-WAHA_API_URL=http://waha:3000
-WHATSAPP_PROVIDER=waha
-
-# Twilio (opcional)
-TWILIO_ACCOUNT_SID=
-TWILIO_AUTH_TOKEN=
-TWILIO_FROM=whatsapp:+123456789
-
-# Meta (opcional)
-META_WHATSAPP_TOKEN=
-META_WHATSAPP_PHONE_ID=
-META_APP_SECRET=
-META_VERIFY_TOKEN=
-
-AGENT_WEBHOOK=http://agent_gemini:8081/whatsapp_hook
-```
-
-## Compilar el shim Rust (opcional)
-
-El Dockerfile incluye una etapa que compila el shim Rust para `motor_nlu_local`. No es obligatorio ejecutar `cargo` localmente para el flujo por defecto. Si quieres compilar localmente:
-
-```bash
-cd tools/motor_nlu_shim
-cargo build --release
-# copy the shared library into src/native_libs/ if you want to mount it into the image manually
-mkdir -p ../../src/native_libs
-cp target/release/libmotor_nlu_shim.so ../../src/native_libs/libmotor_nlu_shim.so
-```
+---
 
 ## 📊 Diagrama de Arquitectura
 
@@ -320,16 +248,20 @@ cp target/release/libmotor_nlu_shim.so ../../src/native_libs/libmotor_nlu_shim.s
 ### Arquitectura del Chatbot WhatsApp + Gemini
 
 ```
-Usuario WhatsApp → WAHA → Adapter → Agent Gemini → Gemini AI
+Usuario WhatsApp → WAHA/Meta API → Adapter → Agent Gemini → Gemini AI
 ```
 
 **[Ver arquitectura detallada del chatbot →](README_CHATBOT_WHATSAPP_WAHA_GEMINI.md#arquitectura-del-sistema)**
 
 ---
 
-## 👨‍💻 Autor
+## 📚 Documentación
 
-Desarrollado por [@appdeveloper777](https://github.com/appdeveloper777)
+| Guía | Descripción |
+|------|-------------|
+| [Chatbot con WAHA](README_CHATBOT_WHATSAPP_WAHA_GEMINI.md) | Configuración completa con WAHA |
+| [Chatbot con Meta API](docs/META_WHATSAPP_SETUP.md) | Configuración con WhatsApp Cloud API |
+| [Crear Endpoints REST](docs/CREAR_ENDPOINTS.md) | Guía completa de APIs REST |
 
 ---
 
@@ -345,7 +277,7 @@ Si TypeEasy te resulta útil, considera:
 
 ---
 
-## � Apoya el Proyecto
+## 💖 Apoya el Proyecto
 
 TypeEasy es un proyecto de código abierto desarrollado con pasión. Tu apoyo nos ayuda a:
 
@@ -387,18 +319,15 @@ Gracias a todos nuestros sponsors y contribuidores que hacen posible este proyec
 
 ---
 
-## �📚 Recursos Adicionales
-
-- 📖 [Guía Completa del Chatbot WhatsApp](README_CHATBOT_WHATSAPP_WAHA_GEMINI.md)
-- 🔧 [Documentación de WAHA](https://waha.devlike.pro/docs/)
-- 🤖 [Google Gemini API](https://ai.google.dev/docs)
-- 🐳 [Docker Compose](https://docs.docker.com/compose/)
-
----
-
 ## 📄 Licencia
 
 Este proyecto está bajo la Licencia MIT. Ver el archivo [LICENSE](LICENSE) para más detalles.
+
+---
+
+## 👨‍💻 Autor
+
+Desarrollado por [@appdeveloper777](https://github.com/appdeveloper777)
 
 ---
 
