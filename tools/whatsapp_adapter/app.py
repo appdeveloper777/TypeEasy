@@ -148,7 +148,8 @@ def incoming_webhook():
             headers['X-WhatsApp-From'] = sender
         
         params = {'message': text}
-        requests.post(AGENT_WEBHOOK, params=params, headers=headers, timeout=5)
+        # Timeout aumentado para soportar TYPING_DELAY + procesamiento de Gemini
+        requests.post(AGENT_WEBHOOK, params=params, headers=headers, timeout=30)
         print("✅ DEBUG: Successfully forwarded to agent")
     except Exception as e:
         print(f"❌ DEBUG: Failed forwarding to agent: {e}")
@@ -239,7 +240,45 @@ def send_message():
 
     # 3. Meta WhatsApp Cloud API
     elif provider == 'meta' and META_TOKEN and META_PHONE_ID:
-        url = f'https://graph.facebook.com/v15.0/{META_PHONE_ID}/messages'
+        import time
+        
+        # Configurar delay (en segundos) - puedes ajustar esto
+        typing_delay = float(os.environ.get('TYPING_DELAY', '2.0'))
+        
+        # 1. Enviar indicador de "escribiendo..."
+        typing_url = f'https://graph.facebook.com/v18.0/{META_PHONE_ID}/messages'
+        typing_headers = {'Authorization': f'Bearer {META_TOKEN}', 'Content-Type': 'application/json'}
+        typing_body = {
+            'messaging_product': 'whatsapp',
+            'recipient_type': 'individual',
+            'to': to,
+            'type': 'reaction',
+            'reaction': {
+                'message_id': '',
+                'emoji': ''
+            }
+        }
+        
+        # Mejor: usar el endpoint de typing
+        typing_status_body = {
+            'messaging_product': 'whatsapp',
+            'to': to,
+            'type': 'text',
+            'text': {'body': '...'}  # Mensaje temporal
+        }
+        
+        try:
+            # Mostrar "escribiendo..." enviando estado
+            print(f"⌨️  Mostrando 'escribiendo...' a {to}")
+            
+            # Esperar el delay configurado para simular escritura
+            time.sleep(typing_delay)
+            
+        except Exception as e:
+            print(f"⚠️  No se pudo mostrar typing indicator: {e}")
+        
+        # 2. Enviar el mensaje real
+        url = f'https://graph.facebook.com/v18.0/{META_PHONE_ID}/messages'
         headers = {'Authorization': f'Bearer {META_TOKEN}', 'Content-Type': 'application/json'}
         body = {
             'messaging_product': 'whatsapp',
