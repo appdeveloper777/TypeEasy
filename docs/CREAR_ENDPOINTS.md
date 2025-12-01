@@ -47,7 +47,7 @@ TypeEasy/
 
 Crea un archivo `typeeasycode/apis/proveedores_endpoint.te`:
 
-```te
+```ts
 class OrdenDeCompra {
     proveedor: string; 
     fecha: string;
@@ -93,7 +93,7 @@ curl http://localhost:8080/api/proveedores
 
 Este es un ejemplo completo basado en `usuarios_endpoint.te` que consulta una base de datos MySQL:
 
-```te
+```ts
 /********************************************************************
  * TypeEasy - Ejemplo de API con MySQL
  * 
@@ -130,7 +130,7 @@ endpoint {
 
 #### 1. Modelo: `typeeasycode/models/Usuario.te`
 
-```te
+```ts
 // Definir el modelo de Usuario
 class UsuarioModel {
     int id;
@@ -142,7 +142,7 @@ class UsuarioModel {
 
 #### 2. Configuración: `typeeasycode/settings/mysql_config.te`
 
-```te
+```ts
 // Configuración global de MySQL
 string global_host = "mysql";
 string global_user = "root";
@@ -205,7 +205,7 @@ TypeEasy soporta los principales métodos HTTP:
 
 ### GET - Obtener Datos
 
-```te
+```ts
 endpoint {
     [HttpGet("/api/productos")]
     GetProductos() {
@@ -220,7 +220,7 @@ endpoint {
 
 ### POST - Crear Datos
 
-```te
+```ts
 endpoint {
     [HttpPost("/api/productos")]
     CrearProducto() {
@@ -241,7 +241,7 @@ endpoint {
 
 ### PUT - Actualizar Datos
 
-```te
+```ts
 endpoint {
     [HttpPut("/api/productos/{id}")]
     ActualizarProducto() {
@@ -262,7 +262,7 @@ endpoint {
 
 ### DELETE - Eliminar Datos
 
-```te
+```ts
 endpoint {
     [HttpDelete("/api/productos/{id}")]
     EliminarProducto() {
@@ -384,7 +384,7 @@ mysql_close(conn);  // ✅ Importante
 
 ### 4. Validación de Datos
 
-```te
+```ts
 endpoint {
     [HttpPost("/api/usuarios")]
     CrearUsuario() {
