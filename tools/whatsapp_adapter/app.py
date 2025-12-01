@@ -66,19 +66,47 @@ def waha_webhook():
 
 @app.route('/webhook', methods=['POST'])
 def incoming_webhook():
+    global last_sender  # Add this to save the sender
+    
     # Generic adapter: try Twilio form, JSON from meta, or raw body
     sender = None
     text = None
 
     if request.is_json:
         data = request.get_json()
-        # Meta webhook structure or generic
-        text = data.get('text') or data.get('Body') or ''
-        sender = data.get('from') or data.get('From') or data.get('from_number')
+        print(f"🔍 DEBUG: Received JSON webhook: {data}")
+        
+        # Meta WhatsApp Cloud API format
+        # Structure: { "object": "whatsapp_business_account", "entry": [...] }
+        if data.get('object') == 'whatsapp_business_account' and data.get('entry'):
+            print("📱 DEBUG: Detected Meta WhatsApp webhook format")
+            try:
+                entry = data['entry'][0]
+                changes = entry.get('changes', [])
+                if changes:
+                    change = changes[0]
+                    value = change.get('value', {})
+                    messages = value.get('messages', [])
+                    if messages:
+                        message = messages[0]
+                        sender = message.get('from')
+                        text = message.get('text', {}).get('body', '')
+                        print(f"✅ DEBUG: Extracted - sender: {sender}, text: {text}")
+            except (KeyError, IndexError) as e:
+                print(f"❌ DEBUG: Error parsing Meta webhook: {e}")
+        else:
+            # Generic format or Twilio JSON
+            text = data.get('text') or data.get('Body') or ''
+            sender = data.get('from') or data.get('From') or data.get('from_number')
     else:
         # Twilio sends form-encoded: 'From' and 'Body'
         text = request.form.get('Body') or request.get_data(as_text=True) or ''
         sender = request.form.get('From')
+
+    # Save sender for response routing
+    if sender:
+        last_sender = sender
+        print(f"💾 DEBUG: Saved last_sender: {last_sender}")
 
     # Signature verification (optional)
     try:
@@ -109,14 +137,21 @@ def incoming_webhook():
         app.logger.exception('Error during signature verification')
         return ('', 500)
 
+    if not text or not sender:
+        print(f"⚠️ DEBUG: Missing text or sender - text: {text}, sender: {sender}")
+        return ('', 200)
+
     try:
+        print(f"📤 DEBUG: Forwarding to agent - sender: {sender}, message: {text}")
         headers = {'Content-Type': 'text/plain'}
         if sender:
             headers['X-WhatsApp-From'] = sender
         
         params = {'message': text}
         requests.post(AGENT_WEBHOOK, params=params, headers=headers, timeout=5)
-    except Exception:
+        print("✅ DEBUG: Successfully forwarded to agent")
+    except Exception as e:
+        print(f"❌ DEBUG: Failed forwarding to agent: {e}")
         app.logger.exception('Failed forwarding to agent')
 
     return ('', 200)
@@ -129,8 +164,19 @@ def verify_webhook():
     verify_token = request.args.get('hub.verify_token')
 
     expected = os.environ.get('META_VERIFY_TOKEN')
+    
+    # Debug prints
+    print(f"🔍 Webhook verification attempt:")
+    print(f"  - mode: {mode}")
+    print(f"  - verify_token received: {verify_token}")
+    print(f"  - expected token: {expected}")
+    print(f"  - challenge: {challenge}")
+    
     if mode == 'subscribe' and verify_token and expected and hmac.compare_digest(verify_token, expected):
+        print(f"✅ Verification successful! Returning challenge: {challenge}")
         return challenge or ('', 200)
+    
+    print(f"❌ Verification failed!")
     return ('', 403)
 
 

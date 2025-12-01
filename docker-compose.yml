@@ -119,16 +119,16 @@ services:
       - AGENT_WEBHOOK=http://agent_gemini:8081/whatsapp_hook
       - WHATSAPP_PROVIDER=${WHATSAPP_PROVIDER:-waha} # waha, meta, or twilio
       - WAHA_API_URL=http://waha:3000
-      # For Twilio integration, set these in your environment or compose overrides:
-      # - TWILIO_ACCOUNT_SID=your_sid
-      # - TWILIO_AUTH_TOKEN=your_token
-      # - TWILIO_FROM=whatsapp:+1415XXXXXXX
-      # For Meta (WhatsApp Cloud API): set META_WHATSAPP_TOKEN and META_WHATSAPP_PHONE_ID
-      # Optional Meta webhook verification and secret (set these in production)
-      # - META_VERIFY_TOKEN=your_verify_token
-      # - META_APP_SECRET=your_app_secret
-      # - META_WHATSAPP_TOKEN=your_graph_api_token
-      # - META_WHATSAPP_PHONE_ID=your_phone_id
+      - WAHA_API_KEY=${WAHA_API_KEY:-typeeasy_waha_key_2024}
+      # Meta WhatsApp Cloud API
+      - META_VERIFY_TOKEN=${META_VERIFY_TOKEN}
+      - META_APP_SECRET=${META_APP_SECRET}
+      - META_WHATSAPP_TOKEN=${META_WHATSAPP_TOKEN}
+      - META_WHATSAPP_PHONE_ID=${META_WHATSAPP_PHONE_ID}
+      # Twilio (optional)
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_FROM=${TWILIO_FROM}
     depends_on:
       - agent
 
