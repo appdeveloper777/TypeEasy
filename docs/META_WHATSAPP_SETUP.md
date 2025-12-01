@@ -104,11 +104,121 @@ ngrok http 5002
 
 Copia la URL que te da ngrok (ej: `https://abcd1234.ngrok.io`)
 
-**Opción B: Servidor en producción**
+**Opción B: Servidor en producción con Nginx**
 
-Si ya tienes un servidor con dominio, usa tu URL:
+Si ya tienes un servidor con dominio y SSL, configura Nginx:
+
+#### Configuración Completa de Nginx
+
+Crea o edita el archivo de configuración:
+
+```bash
+sudo nano /etc/nginx/sites-available/tu-dominio
 ```
-https://tu-dominio.com
+
+Agrega esta configuración completa:
+
+```nginx
+# Redirigir HTTP a HTTPS
+server {
+    listen 80;
+    server_name tu-dominio.com;
+    
+    return 301 https://$server_name$request_uri;
+}
+
+# Servidor HTTPS principal
+server {
+    listen 443 ssl http2;
+    server_name tu-dominio.com;
+
+    # Certificados SSL (Let's Encrypt)
+    ssl_certificate /etc/letsencrypt/live/tu-dominio.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/tu-dominio.com/privkey.pem;
+
+    # Configuración SSL recomendada
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    # Webhook de Meta WhatsApp (IMPORTANTE para Meta API)
+    location /webhook {
+        proxy_pass http://localhost:5002/webhook;
+        proxy_http_version 1.1;
+        
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Timeouts
+        proxy_read_timeout 60;
+        proxy_connect_timeout 60;
+    }
+
+    # WAHA Dashboard (interfaz web) - Opcional si usas WAHA
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        
+        # Timeouts para WebSocket
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+
+    # API de WAHA - Opcional si usas WAHA
+    location /api/ {
+        proxy_pass http://localhost:3000/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Webhook de WAHA - Opcional si usas WAHA
+    location /waha_webhook {
+        proxy_pass http://localhost:5002/waha_webhook;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+**Activar la configuración:**
+
+```bash
+# Crear enlace simbólico
+sudo ln -s /etc/nginx/sites-available/tu-dominio /etc/nginx/sites-enabled/
+
+# Verificar configuración
+sudo nginx -t
+
+# Recargar Nginx
+sudo systemctl reload nginx
+```
+
+**Obtener certificado SSL con Let's Encrypt:**
+
+```bash
+# Instalar certbot
+sudo apt install certbot python3-certbot-nginx
+
+# Obtener certificado
+sudo certbot --nginx -d tu-dominio.com
+
+# Renovación automática (ya configurada)
+sudo certbot renew --dry-run
 ```
 
 ### 5.2 Configurar el Webhook en Meta
