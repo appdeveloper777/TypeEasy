@@ -120,7 +120,7 @@ TypeEasy te permite crear endpoints REST con clases, tipado fuerte y sintaxis si
 
 Crea `typeeasycode/apis/proveedores_endpoint.te`:
 
-```te
+```ts
 class OrdenDeCompra {
     proveedor: string; 
     fecha: string;
@@ -176,7 +176,7 @@ La guía incluye:
 
 Crea scripts para automatizar tareas:
 
-```te
+```ts
 // typeeasycode/backup.te
 print("Iniciando backup...");
 // Tu lógica aquí
@@ -189,7 +189,7 @@ docker compose run --rm typeeasy backup.te
 
 ### Integración con Bases de Datos
 
-```te
+```ts
 import "models/Usuario.te";
 import "settings/mysql_config.te";
 
