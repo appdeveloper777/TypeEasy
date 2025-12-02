@@ -292,8 +292,8 @@ TypeEasy es un proyecto de código abierto desarrollado con pasión. Tu apoyo no
 
 Si TypeEasy te ha ahorrado tiempo o te ha ayudado en tu proyecto, considera invitarnos un café:
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Apoyar-yellow?logo=buy-me-a-coffee&logoColor=white)](https://www.buymeacoffee.com/appdeveloper777)
-[![PayPal](https://img.shields.io/badge/PayPal-Donar-blue?logo=paypal&logoColor=white)](https://paypal.me/appdeveloper777)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Apoyar-yellow?logo=buy-me-a-coffee&logoColor=white)](https://www.paypal.com/paypalme/fingunza)
+[![PayPal](https://img.shields.io/badge/PayPal-Donar-blue?logo=paypal&logoColor=white)](https://www.paypal.com/paypalme/fingunza)
 
 #### 💎 Conviértete en Sponsor
 
