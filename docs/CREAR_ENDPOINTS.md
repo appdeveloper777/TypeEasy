@@ -62,7 +62,7 @@ endpoint {
     [HttpGet("/api/proveedores")]
     GetProveedores() {
         let mi_orden = new OrdenDeCompra("Suministros Industriales S.A.", "2025-09-06");
-        return jsonl(mi_orden);
+        return json(mi_orden);
     }
 }
 ```
