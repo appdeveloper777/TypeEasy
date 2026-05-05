@@ -1,0 +1,17 @@
+// Configuracion TypeEasy para una tarea pesada ejecutada en Wasm.
+// El navegador consulta este endpoint y usa la respuesta para cargar el modulo correcto.
+
+endpoint {
+    [HttpGet("/api/wasm/heavy-filter")]
+    GetHeavyWasmFilter() {
+        println("{");
+        println("\"module\": \"heavy_pixels.wasm\",");
+        println("\"function\": \"invert_rgba\",");
+        println("\"width\": 320,");
+        println("\"height\": 180,");
+        println("\"description\": \"TypeEasy decide que filtro Wasm ejecutar en el navegador\"");
+        println("}");
+
+        return json();
+    }
+}

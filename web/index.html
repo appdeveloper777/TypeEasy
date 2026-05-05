@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TypeEasy API + Wasm</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f7fb;
+      color: #14213d;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      padding: 28px;
+      background:
+        radial-gradient(circle at 12% 18%, rgba(0, 137, 123, 0.16), transparent 28%),
+        radial-gradient(circle at 88% 74%, rgba(239, 71, 111, 0.14), transparent 30%),
+        #f6f7fb;
+    }
+
+    main {
+      width: min(980px, 100%);
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
+
+    header {
+      display: grid;
+      gap: 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 48px;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      color: #506176;
+      font-size: 18px;
+      line-height: 1.5;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      border: 1px solid #d7ddea;
+      border-radius: 8px;
+      background: #ffffff;
+      box-shadow: 0 18px 50px rgba(20, 33, 61, 0.10);
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: #506176;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    input,
+    select {
+      width: min(460px, 82vw);
+      border: 1px solid #c7cfdd;
+      border-radius: 8px;
+      padding: 11px 12px;
+      color: #14213d;
+      font: inherit;
+      background: #fdfefe;
+    }
+
+    .editor-shell {
+      position: relative;
+      min-height: 380px;
+      border-radius: 8px;
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      overflow: hidden;
+    }
+
+    .editor-highlight,
+    .editor-input {
+      width: 100%;
+      height: 380px;
+      margin: 0;
+      padding: 14px;
+      border: 0;
+      font: 13px/1.5 Consolas, Monaco, "Courier New", monospace;
+      tab-size: 4;
+      white-space: pre;
+      overflow: auto;
+    }
+
+    .editor-highlight {
+      background: transparent;
+      color: #dbeafe;
+    }
+
+    .editor-input {
+      position: absolute;
+      inset: 0;
+      resize: none;
+      background: transparent;
+      color: transparent;
+      caret-color: #ffffff;
+      outline: none;
+    }
+
+    .editor-input::selection {
+      background: rgba(125, 211, 252, 0.26);
+    }
+
+    .token-comment { color: #6b7280; }
+    .token-attribute { color: #f472b6; }
+    .token-keyword { color: #60a5fa; font-weight: 800; }
+    .token-type { color: #22d3ee; font-weight: 800; }
+    .token-class { color: #facc15; }
+    .token-string { color: #86efac; }
+    .token-number { color: #fbbf24; }
+    .token-method { color: #c084fc; }
+    .token-this { color: #f97316; font-weight: 800; }
+
+    .code-block .token-comment { color: #94a3b8; }
+    .code-block .token-string { color: #bbf7d0; }
+    .code-block .token-keyword { color: #7dd3fc; }
+    .code-block .token-type { color: #67e8f9; }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .secondary {
+      background: #475569;
+    }
+
+    .secondary:hover {
+      background: #334155;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 12px 16px;
+      background: #00897b;
+      color: white;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #00695c;
+    }
+
+    button:disabled {
+      cursor: progress;
+      opacity: 0.68;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .panel {
+      min-height: 230px;
+      display: grid;
+      align-content: start;
+      gap: 12px;
+      padding: 16px;
+      border: 1px solid #d7ddea;
+      border-radius: 8px;
+      background: #ffffff;
+      box-shadow: 0 14px 42px rgba(20, 33, 61, 0.08);
+    }
+
+    .wide {
+      grid-column: 1 / -1;
+    }
+
+    .canvas-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    canvas {
+      width: 100%;
+      border: 1px solid #d7ddea;
+      border-radius: 8px;
+      background: #eef2f7;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .metric {
+      display: grid;
+      gap: 4px;
+    }
+
+    .metric span {
+      color: #65758b;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .metric strong {
+      color: #14213d;
+      font-size: 24px;
+      letter-spacing: 0;
+      overflow-wrap: anywhere;
+    }
+
+    pre {
+      max-height: 310px;
+      margin: 0;
+      padding: 14px;
+      overflow: auto;
+      border-radius: 8px;
+      background: #14213d;
+      color: #f8fafc;
+      font-size: 14px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    details {
+      border: 1px solid #d7ddea;
+      border-radius: 8px;
+      background: #f8fafc;
+      overflow: hidden;
+    }
+
+    summary {
+      padding: 10px 12px;
+      color: #14213d;
+      font-size: 13px;
+      font-weight: 800;
+      cursor: pointer;
+      list-style-position: inside;
+    }
+
+    .code-block {
+      max-height: 360px;
+      border-radius: 0;
+      background: #0f172a;
+      color: #dbeafe;
+      font-size: 13px;
+    }
+
+    .status {
+      color: #65758b;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .error {
+      color: #c92a2a;
+    }
+
+    @media (max-width: 780px) {
+      body {
+        padding: 18px;
+      }
+
+      h1 {
+        font-size: 36px;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .canvas-row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>TypeEasy API + Wasm</h1>
+      <p>La web consume XML, parsea JSON y ejecuta una regla Wasm generada desde TypeEasy.</p>
+    </header>
+
+    <section class="toolbar" aria-label="Controles">
+      <label>
+        Endpoint XML
+        <input id="endpointInput" value="http://localhost:8080/api/dynamic">
+      </label>
+      <label>
+        Endpoint JSON
+        <input id="jsonEndpointInput" value="http://localhost:8080/api/usuario_json/segundo-perfil">
+      </label>
+      <label>
+        Endpoint Wasm
+        <input id="wasmConfigInput" value="http://localhost:8080/api/wasm/heavy-filter">
+      </label>
+      <button id="runButton" type="button">Ejecutar demo</button>
+      <span id="status" class="status">Listo.</span>
+    </section>
+
+    <section class="grid" aria-label="Resultados">
+      <article class="panel wide">
+        <h2>Editor TypeEasy</h2>
+        <p>Edita el codigo `.te`, guardalo en disco y reinicia el API para que TypeEasy redescubra la ruta.</p>
+        <label>
+          Archivo
+          <select id="teFileSelect">
+            <option value="typeeasycode/apis/wasm_filter_endpoint.te">Orquestador Wasm pesado</option>
+            <option value="typeeasycode/apis/dynamic_test_endpoint.te">Endpoint XML dynamic</option>
+            <option value="typeeasycode/apis/user_json_endpoint_endpoint.te">Endpoint JSON perfiles</option>
+            <option value="typeeasycode/wasm/demo_suma.te">Codigo compilado a demo_suma.wasm</option>
+          </select>
+        </label>
+        <div class="editor-shell">
+          <pre id="teHighlighted" class="editor-highlight" aria-hidden="true"></pre>
+          <textarea id="teEditor" class="editor-input" spellcheck="false" wrap="off" aria-label="Codigo TypeEasy editable"></textarea>
+        </div>
+        <div class="button-row">
+          <button id="loadTeButton" type="button" class="secondary">Cargar archivo</button>
+          <button id="saveTeButton" type="button">Guardar .te</button>
+          <button id="restartApiButton" type="button" class="secondary">Reiniciar API</button>
+        </div>
+        <pre id="editorLog">Servidor editor: ejecuta python web/dev_server.py y abre http://localhost:8001</pre>
+      </article>
+
+      <article class="panel">
+        <h2>Objeto API</h2>
+        <div class="metric">
+          <span>id</span>
+          <strong id="personId">-</strong>
+        </div>
+        <div class="metric">
+          <span>name</span>
+          <strong id="personName">-</strong>
+        </div>
+        <div class="metric">
+          <span>company</span>
+          <strong id="personCompany">-</strong>
+        </div>
+        <details>
+          <summary>Codigo TypeEasy ejecutado</summary>
+          <pre class="code-block"><code>class Person {
+    id: int;
+    name: string;
+    company: string;
+
+    __constructor(id: int, name: string, company: string) {
+        this.id = id;
+        this.name = name;
+        this.company = company;
+    }
+}
+
+endpoint {
+    [HttpGet("/api/dynamic")]
+    GetDynamic() {
+        let p = new Person(101, "Dynamic User", "TypeEasy Inc");
+        return xml(p);
+    }
+}</code></pre>
+        </details>
+      </article>
+
+      <article class="panel">
+        <h2>Wasm</h2>
+        <div class="metric">
+          <span>demo_suma.te</span>
+          <strong id="wasmResult">-</strong>
+        </div>
+        <pre id="wasmLog">Esperando ejecucion.</pre>
+        <details>
+          <summary>Codigo TypeEasy compilado a Wasm</summary>
+          <pre class="code-block"><code>int x = 5;
+int y = 7;
+println(x + y + 1);</code></pre>
+        </details>
+      </article>
+
+      <article class="panel">
+        <h2>Respuesta XML</h2>
+        <pre id="apiRaw">Esperando respuesta.</pre>
+      </article>
+
+      <article class="panel">
+        <h2>JSON parseado</h2>
+        <div class="metric">
+          <span>nombre</span>
+          <strong id="jsonName">-</strong>
+        </div>
+        <div class="metric">
+          <span>company</span>
+          <strong id="jsonCompany">-</strong>
+        </div>
+        <div class="metric">
+          <span>edad</span>
+          <strong id="jsonAge">-</strong>
+        </div>
+        <pre id="jsonRaw">Esperando JSON.</pre>
+        <details>
+          <summary>Codigo TypeEasy que responde JSON</summary>
+          <pre class="code-block"><code>class PersonJson {
+      nombre: string;
+      company: string;
+      edad: int;
+
+      __constructor(_edad: int, _nombre: string, _company: string) {
+        this.edad = _edad;
+        this.nombre = _nombre;
+        this.company = _company;
+      }
+    }
+
+    endpoint {
+      [HttpGet("/api/usuario_json/segundo-perfil")]
+      GetUserProfileDos() {
+        let usuario = new PersonJson(36, "Fernando Ingunza", "Roussecloud");
+        return json(usuario);
+      }
+    }</code></pre>
+        </details>
+      </article>
+
+      <article class="panel wide">
+        <h2>Logica pesada en Wasm</h2>
+        <p>TypeEasy entrega la configuracion y el navegador ejecuta el modulo Wasm indicado.</p>
+        <div class="canvas-row">
+          <div>
+            <div class="metric">
+              <span>entrada</span>
+              <strong>Canvas original</strong>
+            </div>
+            <canvas id="sourceCanvas" width="320" height="180"></canvas>
+          </div>
+          <div>
+            <div class="metric">
+              <span>salida</span>
+              <strong id="heavyMetric">-</strong>
+            </div>
+            <canvas id="resultCanvas" width="320" height="180"></canvas>
+          </div>
+        </div>
+        <pre id="heavyLog">Esperando filtro Wasm.</pre>
+        <details open>
+          <summary>Codigo TypeEasy que orquesta el Wasm pesado</summary>
+          <pre class="code-block"><code>endpoint {
+    [HttpGet("/api/wasm/heavy-filter")]
+    GetHeavyWasmFilter() {
+        println("{");
+        println("\"module\": \"heavy_pixels.wasm\",");
+        println("\"function\": \"invert_rgba\",");
+        println("\"width\": 320,");
+        println("\"height\": 180,");
+        println("\"description\": \"TypeEasy decide que filtro Wasm ejecutar en el navegador\"");
+        println("}");
+
+        return json();
+    }
+}</code></pre>
+        </details>
+      </article>
+
+    </section>
+  </main>
+
+  <script>
+    const endpointInput = document.getElementById('endpointInput');
+    const jsonEndpointInput = document.getElementById('jsonEndpointInput');
+    const wasmConfigInput = document.getElementById('wasmConfigInput');
+    const runButton = document.getElementById('runButton');
+    const status = document.getElementById('status');
+    const personId = document.getElementById('personId');
+    const personName = document.getElementById('personName');
+    const personCompany = document.getElementById('personCompany');
+    const wasmResult = document.getElementById('wasmResult');
+    const wasmLog = document.getElementById('wasmLog');
+    const apiRaw = document.getElementById('apiRaw');
+    const jsonName = document.getElementById('jsonName');
+    const jsonCompany = document.getElementById('jsonCompany');
+    const jsonAge = document.getElementById('jsonAge');
+    const jsonRaw = document.getElementById('jsonRaw');
+    const sourceCanvas = document.getElementById('sourceCanvas');
+    const resultCanvas = document.getElementById('resultCanvas');
+    const heavyMetric = document.getElementById('heavyMetric');
+    const heavyLog = document.getElementById('heavyLog');
+    const teFileSelect = document.getElementById('teFileSelect');
+    const teEditor = document.getElementById('teEditor');
+    const teHighlighted = document.getElementById('teHighlighted');
+    const loadTeButton = document.getElementById('loadTeButton');
+    const saveTeButton = document.getElementById('saveTeButton');
+    const restartApiButton = document.getElementById('restartApiButton');
+    const editorLog = document.getElementById('editorLog');
+
+    function setStatus(message, isError = false) {
+      status.textContent = message;
+      status.classList.toggle('error', isError);
+    }
+
+    function readXmlValue(xml, tagName) {
+      const value = xml.querySelector(tagName);
+      return value ? value.textContent.trim() : '-';
+    }
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+    }
+
+    function highlightTypeEasy(source) {
+      const pattern = /(\/\/.*)|(\[[^\]]+\])|("(?:\\.|[^"\\])*")|(\b(?:class|endpoint|let|new|return|if|else|for|while|print|println)\b)|(\b(?:int|string|float|double|bool|json|xml)\b)|(\bthis\b)|(\b\d+(?:\.\d+)?\b)|(\b[A-Z][A-Za-z0-9_]*\b)|(\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\())/g;
+
+      return escapeHtml(source).replace(pattern, match => {
+        if (match.startsWith('//')) return `<span class="token-comment">${match}</span>`;
+        if (match.startsWith('[')) return `<span class="token-attribute">${match}</span>`;
+        if (match.startsWith('"')) return `<span class="token-string">${match}</span>`;
+        if (/^(class|endpoint|let|new|return|if|else|for|while|print|println)$/.test(match)) return `<span class="token-keyword">${match}</span>`;
+        if (/^(int|string|float|double|bool|json|xml)$/.test(match)) return `<span class="token-type">${match}</span>`;
+        if (match === 'this') return `<span class="token-this">${match}</span>`;
+        if (/^\d/.test(match)) return `<span class="token-number">${match}</span>`;
+        if (/^[A-Z]/.test(match)) return `<span class="token-class">${match}</span>`;
+        return `<span class="token-method">${match}</span>`;
+      });
+    }
+
+    function syncEditorHighlight() {
+      const code = teEditor.value || '';
+      teHighlighted.innerHTML = `${highlightTypeEasy(code)}\n`;
+      teHighlighted.scrollTop = teEditor.scrollTop;
+      teHighlighted.scrollLeft = teEditor.scrollLeft;
+    }
+
+    async function fetchDynamicPerson() {
+      const response = await fetch(endpointInput.value.trim());
+      if (!response.ok) {
+        throw new Error(`API respondio ${response.status}`);
+      }
+
+      const text = await response.text();
+      const xml = new DOMParser().parseFromString(text, 'application/xml');
+      const parserError = xml.querySelector('parsererror');
+      if (parserError) {
+        throw new Error('La API no devolvio XML valido');
+      }
+
+      apiRaw.textContent = text.trim();
+      personId.textContent = readXmlValue(xml, 'id');
+      personName.textContent = readXmlValue(xml, 'name');
+      personCompany.textContent = readXmlValue(xml, 'company');
+    }
+
+    async function fetchJsonProfile() {
+      const response = await fetch(jsonEndpointInput.value.trim());
+      if (!response.ok) {
+        throw new Error(`API JSON respondio ${response.status}`);
+      }
+
+      const profile = await response.json();
+      jsonName.textContent = profile.nombre ?? '-';
+      jsonCompany.textContent = profile.company ?? '-';
+      jsonAge.textContent = profile.edad ?? '-';
+      jsonRaw.textContent = JSON.stringify(profile, null, 2);
+    }
+
+    async function runTypeEasyWasm() {
+      wasmResult.textContent = '-';
+      wasmLog.textContent = '';
+
+      const response = await fetch('demo_suma.wasm');
+      if (!response.ok) {
+        throw new Error(`No se pudo cargar demo_suma.wasm (${response.status})`);
+      }
+
+      const bytes = await response.arrayBuffer();
+      const { instance } = await WebAssembly.instantiate(bytes, {
+        env: {
+          print_i32: value => {
+            wasmLog.textContent += String(value);
+            wasmResult.textContent = String(value);
+          },
+          print_i32_ln: value => {
+            wasmLog.textContent += `${value}\n`;
+            wasmResult.textContent = String(value);
+          }
+        }
+      });
+
+      instance.exports.main();
+    }
+
+    function paintSourceImage(width, height) {
+      sourceCanvas.width = width;
+      sourceCanvas.height = height;
+      resultCanvas.width = width;
+      resultCanvas.height = height;
+
+      const ctx = sourceCanvas.getContext('2d');
+      const image = ctx.createImageData(sourceCanvas.width, sourceCanvas.height);
+
+      for (let y = 0; y < sourceCanvas.height; y++) {
+        for (let x = 0; x < sourceCanvas.width; x++) {
+          const offset = (y * sourceCanvas.width + x) * 4;
+          image.data[offset] = (x * 3 + y) & 255;
+          image.data[offset + 1] = (x + y * 2) & 255;
+          image.data[offset + 2] = ((x ^ y) * 2) & 255;
+          image.data[offset + 3] = 255;
+        }
+      }
+
+      ctx.putImageData(image, 0, 0);
+      return image;
+    }
+
+    async function runHeavyWasmFilter() {
+      heavyMetric.textContent = '-';
+      heavyLog.textContent = 'Consultando configuracion TypeEasy...';
+
+      const configResponse = await fetch(wasmConfigInput.value.trim());
+      if (!configResponse.ok) {
+        throw new Error(`Config Wasm respondio ${configResponse.status}`);
+      }
+
+      const config = await configResponse.json();
+      const moduleName = config.module ?? 'heavy_pixels.wasm';
+      const functionName = config.function ?? 'invert_rgba';
+      const width = Number(config.width ?? 320);
+      const height = Number(config.height ?? 180);
+
+      heavyLog.textContent = `TypeEasy configuro: ${moduleName} :: ${functionName}\nProcesando pixeles en Wasm...`;
+
+      const response = await fetch(moduleName);
+      if (!response.ok) {
+        throw new Error(`No se pudo cargar ${moduleName} (${response.status})`);
+      }
+
+      const sourceImage = paintSourceImage(width, height);
+      const bytes = await response.arrayBuffer();
+      const { instance } = await WebAssembly.instantiate(bytes, {});
+      const wasmFunction = instance.exports[functionName];
+
+      if (typeof wasmFunction !== 'function') {
+        throw new Error(`El modulo Wasm no exporta ${functionName}`);
+      }
+
+      const memory = new Uint8ClampedArray(instance.exports.memory.buffer);
+      const pixelCount = sourceCanvas.width * sourceCanvas.height;
+      const byteLength = pixelCount * 4;
+
+      memory.set(sourceImage.data, 0);
+      const start = performance.now();
+      wasmFunction(0, byteLength);
+      const elapsed = performance.now() - start;
+
+      const outputImage = new ImageData(
+        new Uint8ClampedArray(memory.slice(0, byteLength)),
+        sourceCanvas.width,
+        sourceCanvas.height
+      );
+      resultCanvas.getContext('2d').putImageData(outputImage, 0, 0);
+
+      heavyMetric.textContent = `${pixelCount.toLocaleString()} pixeles`;
+      heavyLog.textContent = `Configuracion TypeEasy\nModulo: ${moduleName}\nFuncion: ${functionName}\nDescripcion: ${config.description ?? '-'}\n\nEjecucion Wasm\nPixeles: ${pixelCount.toLocaleString()}\nBytes procesados: ${byteLength.toLocaleString()}\nTiempo: ${elapsed.toFixed(3)} ms`;
+    }
+
+    async function loadTeFile() {
+      const path = teFileSelect.value;
+      editorLog.textContent = `Cargando ${path}...`;
+
+      const response = await fetch(`/editor/file?path=${encodeURIComponent(path)}`);
+      const payload = await response.json();
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error ?? `No se pudo cargar ${path}`);
+      }
+
+      teEditor.value = payload.content;
+      syncEditorHighlight();
+      editorLog.textContent = `Archivo cargado: ${path}`;
+    }
+
+    async function saveTeFile() {
+      const path = teFileSelect.value;
+      editorLog.textContent = `Guardando ${path}...`;
+
+      const response = await fetch('/editor/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, content: teEditor.value })
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error ?? `No se pudo guardar ${path}`);
+      }
+
+      editorLog.textContent = `Guardado: ${path}\nReinicia el API si editaste un endpoint.`;
+    }
+
+    async function restartTypeEasyApi() {
+      editorLog.textContent = 'Reiniciando docker compose api...';
+
+      const response = await fetch('/editor/restart-api', { method: 'POST' });
+      const payload = await response.json();
+      if (!response.ok || payload.error || !payload.ok) {
+        throw new Error(payload.error ?? payload.stderr ?? 'No se pudo reiniciar el API');
+      }
+
+      editorLog.textContent = `API reiniciada.\n${payload.stdout || ''}`.trim();
+    }
+
+    async function runDemo() {
+      runButton.disabled = true;
+      setStatus('Ejecutando...');
+      apiRaw.textContent = 'Cargando API...';
+      jsonRaw.textContent = 'Cargando JSON...';
+      wasmLog.textContent = 'Cargando Wasm...';
+      heavyLog.textContent = 'Cargando filtro pesado...';
+
+      try {
+        await fetchDynamicPerson();
+        await fetchJsonProfile();
+        await runTypeEasyWasm();
+        await runHeavyWasmFilter();
+        setStatus('Completado.');
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        runButton.disabled = false;
+      }
+    }
+
+    runButton.addEventListener('click', runDemo);
+    teEditor.addEventListener('input', syncEditorHighlight);
+    teEditor.addEventListener('scroll', () => {
+      teHighlighted.scrollTop = teEditor.scrollTop;
+      teHighlighted.scrollLeft = teEditor.scrollLeft;
+    });
+    loadTeButton.addEventListener('click', () => loadTeFile().catch(error => {
+      editorLog.textContent = error.message;
+    }));
+    saveTeButton.addEventListener('click', () => saveTeFile().catch(error => {
+      editorLog.textContent = error.message;
+    }));
+    restartApiButton.addEventListener('click', () => restartTypeEasyApi().catch(error => {
+      editorLog.textContent = error.message;
+    }));
+    teFileSelect.addEventListener('change', () => loadTeFile().catch(error => {
+      editorLog.textContent = error.message;
+    }));
+    loadTeFile().catch(error => {
+      editorLog.textContent = `${error.message}\nEjecuta: python web/dev_server.py`;
+    });
+    document.querySelectorAll('.code-block code').forEach(block => {
+      block.innerHTML = highlightTypeEasy(block.textContent);
+    });
+  </script>
+</body>
+</html>

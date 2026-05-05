@@ -166,3 +166,23 @@ Si necesitas personalizar el proceso de compilación, puedes modificar el `Makef
 - `CXX`: Compilador de C++
 - `CFLAGS`: Flags de compilación para C
 - `CXXFLAGS`: Flags de compilación para C++
+
+## Backend WebAssembly
+
+TypeEasy incluye un backend inicial para generar WebAssembly Text Format (`.wat`) sin modificar el flujo normal del interprete.
+
+```bash
+cd src
+make
+./typeeasy --emit-wat ../typeeasycode/wasm/demo_suma.te -o demo_suma.wat
+./typeeasy --emit-wasm ../typeeasycode/wasm/demo_suma.te -o demo_suma.wasm
+```
+
+Para producir un binario `.wasm`, instala WABT. El modo `--emit-wasm` usa `wat2wasm` automaticamente; tambien puedes convertir manualmente:
+
+```bash
+wat2wasm demo_suma.wat -o demo_suma.wasm
+node ../tools/wasm_runner/run_wasm.js demo_suma.wasm
+```
+
+El alcance inicial soporta enteros, variables simples, asignaciones, aritmetica, comparaciones, `if`/`else` y `print`/`println` de enteros. Endpoints, ORM/MySQL, clases, strings avanzados, `for`, `json()` y `xml()` siguen ejecutandose con el runtime nativo actual.

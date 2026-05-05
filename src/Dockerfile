@@ -96,7 +96,7 @@ WORKDIR /typeeasy
 
 # Instala la librería 'libfl' que falta
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libfl2 default-libmysqlclient-dev && \
+    apt-get install -y --no-install-recommends libfl2 default-libmysqlclient-dev wabt && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

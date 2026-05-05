@@ -1,0 +1,7 @@
+int x = 10;
+
+if (x > 5) {
+  println(x);
+} else {
+  println(0);
+}

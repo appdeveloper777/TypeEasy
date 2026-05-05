@@ -3,11 +3,28 @@
 #include <string.h>
 #include <time.h>
 #include "ast.h" 
+#include "wasm_backend.h"
 
 /* --- Prototipos de las funciones en tu "Motor" --- */
 ASTNode* parse_file(FILE* file);
 extern int g_debug_mode; // Para acceder a la variable global de parser.y
 /* --- Fin Prototipos --- */
+
+static int convert_wat_to_wasm(const char *wat_path, const char *wasm_path) {
+    char command[1024];
+    int written = snprintf(command, sizeof(command), "wat2wasm \"%s\" -o \"%s\"", wat_path, wasm_path);
+    if (written < 0 || written >= (int)sizeof(command)) {
+        fprintf(stderr, "[WASM] Error: comando wat2wasm demasiado largo.\n");
+        return 0;
+    }
+
+    int result = system(command);
+    if (result != 0) {
+        fprintf(stderr, "[WASM] Error: no se pudo ejecutar wat2wasm. Instala WABT o usa --emit-wat.\n");
+        return 0;
+    }
+    return 1;
+}
 
 // Helper function to detect response type from AST
 const char* detect_response_type(ASTNode *body) {
@@ -61,12 +78,49 @@ int main(int argc, char *argv[]) {
     clock_t inicio = clock();
     
     if (argc < 2) {
-        fprintf(stderr, "Uso: %s <archivo.te> [--discover | --invoke <funcName> | --run]\n", argv[0]);
+        fprintf(stderr, "Uso: %s <archivo.te> [--discover | --invoke <funcName> | --run | --emit-wat | --emit-wasm [-o salida]]\n", argv[0]);
+        fprintf(stderr, "     %s --emit-wat <archivo.te> [-o salida.wat]\n", argv[0]);
+        fprintf(stderr, "     %s --emit-wasm <archivo.te> [-o salida.wasm]\n", argv[0]);
         return 1;
     }
 
+    const char *script_path = NULL;
+    const char *output_path = NULL;
+    int emit_wat_mode = 0;
+    int emit_wasm_mode = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--emit-wat") == 0) {
+            emit_wat_mode = 1;
+        } else if (strcmp(argv[i], "--emit-wasm") == 0) {
+            emit_wasm_mode = 1;
+        } else if (strcmp(argv[i], "-o") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: -o requiere una ruta de salida.\n");
+                return 1;
+            }
+            output_path = argv[++i];
+        } else if (argv[i][0] != '-' && !script_path) {
+            script_path = argv[i];
+        }
+    }
+
+    if (!script_path) {
+        fprintf(stderr, "Error: se requiere un archivo .te.\n");
+        return 1;
+    }
+
+    if (emit_wat_mode && emit_wasm_mode) {
+        fprintf(stderr, "Error: usa --emit-wat o --emit-wasm, no ambos.\n");
+        return 1;
+    }
+
+    if (!output_path) {
+        output_path = emit_wasm_mode ? "out.wasm" : "out.wat";
+    }
+
     // 1. Parsear el archivo
-    FILE *file = fopen(argv[1], "r");
+    FILE *file = fopen(script_path, "r");
     if (!file) {
         perror("Error al abrir el archivo");
         return 1;
@@ -74,6 +128,40 @@ int main(int argc, char *argv[]) {
 
     ASTNode *script_ast = parse_file(file);
     fclose(file);
+
+    if (!script_ast) {
+        fprintf(stderr, "Error: no se pudo parsear el archivo '%s'.\n", script_path);
+        return 1;
+    }
+
+    if (emit_wat_mode || emit_wasm_mode) {
+        char temp_wat_path[512];
+        const char *wat_path = output_path;
+
+        if (emit_wasm_mode) {
+            int written = snprintf(temp_wat_path, sizeof(temp_wat_path), "%s.wat.tmp", output_path);
+            if (written < 0 || written >= (int)sizeof(temp_wat_path)) {
+                fprintf(stderr, "[WASM] Error: ruta temporal demasiado larga.\n");
+                free_ast(script_ast);
+                return 1;
+            }
+            wat_path = temp_wat_path;
+        }
+
+        int ok = wasm_emit_wat(script_ast, wat_path);
+        free_ast(script_ast);
+        if (!ok) return 1;
+
+        if (emit_wasm_mode) {
+            ok = convert_wat_to_wasm(wat_path, output_path);
+            remove(wat_path);
+            if (!ok) return 1;
+            printf("[WASM] Wasm generado: %s\n", output_path);
+        } else {
+            printf("[WASM] WAT generado: %s\n", output_path);
+        }
+        return 0;
+    }
 
     // 2. Verificar flags
     int discover_mode = 0;
