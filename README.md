@@ -120,7 +120,7 @@ TypeEasy te permite crear endpoints REST con clases, tipado fuerte y sintaxis si
 
 Crea `typeeasycode/apis/proveedores_endpoint.te`:
 
-```te
+```ts
 class OrdenDeCompra {
     proveedor: string; 
     fecha: string;
@@ -135,7 +135,7 @@ endpoint {
     [HttpGet("/api/proveedores")]
     GetProveedores() {
         let mi_orden = new OrdenDeCompra("Suministros Industriales S.A.", "2025-09-06");
-        return jsonl(mi_orden);
+        return json(mi_orden);
     }
 }
 ```
@@ -176,7 +176,7 @@ La guía incluye:
 
 Crea scripts para automatizar tareas:
 
-```te
+```ts
 // typeeasycode/backup.te
 print("Iniciando backup...");
 // Tu lógica aquí
@@ -189,7 +189,7 @@ docker compose run --rm typeeasy backup.te
 
 ### Integración con Bases de Datos
 
-```te
+```ts
 import "models/Usuario.te";
 import "settings/mysql_config.te";
 
@@ -292,8 +292,8 @@ TypeEasy es un proyecto de código abierto desarrollado con pasión. Tu apoyo no
 
 Si TypeEasy te ha ahorrado tiempo o te ha ayudado en tu proyecto, considera invitarnos un café:
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Apoyar-yellow?logo=buy-me-a-coffee&logoColor=white)](https://www.buymeacoffee.com/appdeveloper777)
-[![PayPal](https://img.shields.io/badge/PayPal-Donar-blue?logo=paypal&logoColor=white)](https://paypal.me/appdeveloper777)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Apoyar-yellow?logo=buy-me-a-coffee&logoColor=white)](https://www.paypal.com/paypalme/fingunza)
+[![PayPal](https://img.shields.io/badge/PayPal-Donar-blue?logo=paypal&logoColor=white)](https://www.paypal.com/paypalme/fingunza)
 
 #### 💎 Conviértete en Sponsor
 

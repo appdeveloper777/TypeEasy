@@ -1120,6 +1120,7 @@ ASTNode *create_var_decl_node(char *id, ASTNode *value) {
     node->id = strdup(id);
     node->left = value;
     node->right = NULL;
+    node->str_value = NULL; // Fix: Initialize to NULL to avoid garbage access
     //printf("[DEBUG] create_var_decl_node success\n"); fflush(stdout);
     return node;
 }
@@ -1383,6 +1384,36 @@ ParameterNode *add_parameter(ParameterNode *list, char *name, char *type) {
 
 // ====================== INTERPRETACIÓN DEL AST ======================
 
+// Helper to check if node resolves to a string
+int is_string_type(ASTNode *node) {
+    if (!node) return 0;
+    if (node->type && (strcmp(node->type, "STRING") == 0 || strcmp(node->type, "STRING_LITERAL") == 0)) return 1;
+    if (node->type && (strcmp(node->type, "IDENTIFIER") == 0 || strcmp(node->type, "ID") == 0)) {
+        Variable *v = find_variable(node->id);
+        if (v && v->vtype == VAL_STRING) return 1;
+    }
+    if (node->type && strcmp(node->type, "ACCESS_ATTR") == 0) {
+        ASTNode *o = node->left;
+        ASTNode *a = node->right;
+        Variable *v = find_variable(o->id);
+        if (v && v->vtype == VAL_OBJECT) {
+            ObjectNode *obj = v->value.object_value;
+             if (!obj) {
+                ASTNode *wrapper = (ASTNode*)(intptr_t)v->value.object_value;
+                if (wrapper && wrapper->extra) obj = (ObjectNode *)wrapper->extra;
+            }
+            if (obj) {
+                for (int i = 0; i < obj->class->attr_count; i++) {
+                    if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
+                        if (obj->attributes[i].vtype == VAL_STRING) return 1;
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 double evaluate_expression(ASTNode *node) {
     if (!node) return 0;
 
@@ -1421,6 +1452,13 @@ double evaluate_expression(ASTNode *node) {
         return evaluate_expression(node->left) < evaluate_expression(node->right);
     }
     if (strcmp(node->type, "EQ") == 0) {
+        if (is_string_type(node->left) || is_string_type(node->right)) {
+             char *s1 = get_node_string(node->left);
+             char *s2 = get_node_string(node->right);
+             int res = (strcmp(s1, s2) == 0);
+             free(s1); free(s2);
+             return (double)res;
+        }
         return evaluate_expression(node->left) == evaluate_expression(node->right);
     }
     if (strcmp(node->type, "GT_EQ") == 0) {
@@ -1430,6 +1468,13 @@ double evaluate_expression(ASTNode *node) {
         return evaluate_expression(node->left) >= evaluate_expression(node->right);
     }
     if (strcmp(node->type, "DIFF") == 0) {
+        if (is_string_type(node->left) || is_string_type(node->right)) {
+             char *s1 = get_node_string(node->left);
+             char *s2 = get_node_string(node->right);
+             int res = (strcmp(s1, s2) != 0);
+             free(s1); free(s2);
+             return (double)res;
+        }
         return evaluate_expression(node->left) != evaluate_expression(node->right);
     }
     
@@ -1975,16 +2020,8 @@ void interpret_match(ASTNode *node) {
 
 int evaluate_condition(ASTNode* condition) {
     if (!condition) return 0;
-    if (strcmp(condition->type, "GT") == 0 ||
-        strcmp(condition->type, "LT") == 0 ||
-        strcmp(condition->type, "EQ") == 0) {
-        int left_val = evaluate_expression(condition->left);
-        int right_val = evaluate_expression(condition->right);
-        if (strcmp(condition->type, "GT") == 0) return left_val > right_val;
-        if (strcmp(condition->type, "LT") == 0) return left_val < right_val;
-        if (strcmp(condition->type, "EQ") == 0) return left_val == right_val;
-    }
-    return evaluate_expression(condition);
+    // Delegate to evaluate_expression which now supports string comparisons
+    return (int)evaluate_expression(condition);
 }
 
 void generate_plot(double *values, int count) {
