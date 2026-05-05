@@ -27,7 +27,7 @@ RUN make -C /app/src clean && make -C /app/src all
 # =================================================================
 # ETAPA: COMPILAR EL SHIM RUST (motor_nlu_shim)
 # =================================================================
-FROM rust:1.83-slim AS shim_builder
+FROM rust:1.87-slim AS shim_builder
 WORKDIR /shim
 # Copiamos sólo la carpeta del shim para mantener el contexto pequeño
 COPY tools/motor_nlu_shim ./motor_nlu_shim

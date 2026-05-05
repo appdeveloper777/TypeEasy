@@ -5,7 +5,7 @@ SHIM_DIR="$ROOT/tools/motor_nlu_shim"
 OUT_DIR="$ROOT/src/native_libs"
 
 echo "Building Rust shim inside container..."
-docker run --rm -v "$SHIM_DIR":/src -w /src rust:1.72-bullseye sh -c "apt-get update >/dev/null && apt-get install -y pkg-config libssl-dev >/dev/null && cargo build --release"
+docker run --rm -v "$SHIM_DIR":/src -w /src rust:1.87-slim sh -c "apt-get update >/dev/null && apt-get install -y pkg-config libssl-dev >/dev/null && cargo build --release"
 
 mkdir -p "$OUT_DIR"
 echo "Copying built library to $OUT_DIR"
