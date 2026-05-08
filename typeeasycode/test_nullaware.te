@@ -1,0 +1,7 @@
+var x = null;
+var y = x ?? "default";
+println(y);
+var z = "real";
+var w = z ?? "fallback";
+println(w);
+println(null ?? 99);

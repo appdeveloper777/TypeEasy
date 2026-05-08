@@ -9,6 +9,40 @@ class Producto {
         this.nombre = _nombre;
         this.categoria = _categoria;
     }
+
+    // Retorna un string con la descripción del producto
+    Descripcion() : string {
+        string desc = "Producto en categoria: ";
+        return desc;
+    }
+
+    // Retorna el nombre del producto (string)
+    GetNombre() : string {
+        return this.nombre;
+    }
+
+    // Retorna la categoria (string)
+    GetCategoria() : string {
+        return this.categoria;
+    }
+
+    // Retorna el precio actual (int)
+    GetPrecio() : int {
+        return this.precio;
+    }
+
+    // Retorna el precio con IGV 18% incluido (int)
+    PrecioConIGV() : int {
+        int total = this.precio + (this.precio * 18) / 100;
+        return total;
+    }
+
+    // Retorna el precio con descuento de 10% (int)
+    PrecioConDescuento() : int {
+        int rebaja = (this.precio * 10) / 100;
+        int final_precio = this.precio - rebaja;
+        return final_precio;
+    }
 }
 
 endpoint {

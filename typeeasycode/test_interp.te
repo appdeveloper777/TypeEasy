@@ -1,0 +1,9 @@
+var nombre = "Ana";
+var edad = 30;
+println($"Hola {nombre}, edad {edad}");
+var saludo = $"Hello, {nombre}!";
+println(saludo);
+println($"Sin variables");
+println($"Llaves literales: \{x\} y valor {edad}");
+var x = null;
+println($"x es {x}");

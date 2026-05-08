@@ -1,0 +1,46 @@
+class Producto {
+    precio: int;
+    nombre: string;
+    categoria: string;
+    __constructor(_precio: int, _nombre: string, _categoria: string) {
+        this.precio = _precio;
+        this.nombre = _nombre;
+        this.categoria = _categoria;
+    }
+    GetNombre() : dynamic {
+        return this.nombre;
+    }
+    GetCategoria() : dynamic {
+        return this.categoria;
+    }
+    GetPrecio() : dynamic {
+        return this.precio;
+    }
+    PrecioConIGV() : dynamic {
+        int total = this.precio + (this.precio * 18) / 100;
+        return total;
+    }
+    PrecioConDescuento() : dynamic {
+        int rebaja = (this.precio * 10) / 100;
+        int final_precio = this.precio - rebaja;
+        return final_precio;
+    }
+}
+
+let p = new Producto(100, "Teclado RGB", "Perifericos");
+string nom = p.GetNombre();
+string cat = p.GetCategoria();
+int pre = p.GetPrecio();
+int igv = p.PrecioConIGV();
+int desc = p.PrecioConDescuento();
+
+print("Nombre: ");
+println(nom);
+print("Categoria: ");
+println(cat);
+print("Precio base: ");
+println(pre);
+print("Precio con IGV: ");
+println(igv);
+print("Precio con 10% desc: ");
+println(desc);

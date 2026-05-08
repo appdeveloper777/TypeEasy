@@ -9,7 +9,7 @@ class UsuarioModel {
     this.email = _email;
   }
 
-  MiNombre() {
+  MiNombre() : dynamic {
     let nombre = this.usuario;
     println(nombre);    
   }

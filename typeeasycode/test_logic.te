@@ -1,0 +1,7 @@
+var a = 1;
+var b = 0;
+if (a == 1 && b == 0) { println("AND ok"); }
+if (a == 2 || b == 0) { println("OR ok"); }
+if (!(a == 2)) { println("NOT ok"); }
+if (a == 1 && (b == 0 || a == 9)) { println("compound ok"); }
+println("--end--");

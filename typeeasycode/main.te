@@ -23,7 +23,7 @@ class Factura {
     // --- MÉTODO MODIFICADO ---
     // Esta versión ya no usa el bucle 'for'.
     // Genera un XML de prueba con datos fijos (mock).
-    generarXML() {
+    generarXML() : dynamic {
         println("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
         println("<Factura>");
         

@@ -100,6 +100,8 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
             output_path = argv[++i];
+        } else if (strcmp(argv[i], "--debug") == 0) {
+            g_debug_mode = 1;
         } else if (argv[i][0] != '-' && !script_path) {
             script_path = argv[i];
         }
@@ -211,6 +213,17 @@ int main(int argc, char *argv[]) {
     // Esto es necesario para inicializar variables globales, clases, etc.
     if (script_ast) {
         interpret_ast(script_ast); 
+    }
+
+    /* Fase 2: si quedó un throw sin capturar, imprimir y salir con código de error */
+    {
+        extern int throw_flag;
+        extern char *get_throw_message(void);
+        if (throw_flag) {
+            const char *m = get_throw_message();
+            fprintf(stderr, "Uncaught: %s\n", m ? m : "(sin mensaje)");
+            return 1;
+        }
     }
 
     // 6. Modo Invocación

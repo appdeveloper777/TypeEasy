@@ -1,0 +1,29 @@
+// Fase 1b: arr[i] = x, push, pop
+var nums = [10, 20, 30];
+
+// Asignación por índice
+nums[1] = 99;
+println(nums[0]);
+println(nums[1]);
+println(nums[2]);
+
+// Push
+nums.push(40);
+nums.push(50);
+println(nums.length);
+println(nums[3]);
+println(nums[4]);
+
+// Pop
+nums.pop();
+println(nums.length);
+println(nums[3]);
+
+// Strings
+var names = ["Ana", "Luis"];
+names.push("Pedro");
+names[0] = "Maria";
+println(names[0]);
+println(names[1]);
+println(names[2]);
+println(names.length);

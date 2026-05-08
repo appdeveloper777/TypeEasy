@@ -1,0 +1,5 @@
+var user = { "nombre": "Ana", "edad": 30 };
+var hN = user.has("nombre");
+var hM = user.has("email");
+println(hN);
+println(hM);

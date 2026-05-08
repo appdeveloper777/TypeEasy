@@ -1,0 +1,7 @@
+var hello = "hello";
+var world = "world";
+var greet = hello + " " + world;
+println(greet);
+var n = 42;
+var msg = "n=" + n;
+println(msg);

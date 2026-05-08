@@ -4,8 +4,15 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <math.h>
+#include <ctype.h>
 #include "bytecode.h"
 #include "mysql_bridge.h"
+
+/* Forward decls used in helpers below */
+char* expand_interp_string(const char *raw);
+int is_string_type(struct ASTNode *node);
+extern int g_debug_mode;
 
 // Helper: Recursively evaluate arguments for native calls
 void evaluate_native_args(ASTNode *arg) {
@@ -55,7 +62,7 @@ void append_to_stdout(const char *str) {
 }
 
 void native_json(ASTNode *arg) {
-    fprintf(stderr, "[DEBUG] native_json called\n"); fflush(stderr);
+    if (g_debug_mode) { fprintf(stderr, "[DEBUG] native_json called\n"); fflush(stderr); }
     
     // Handle empty argument (return json())
     if (!arg) {
@@ -189,7 +196,7 @@ void native_json(ASTNode *arg) {
     
     ASTNode *result_node = create_ast_leaf("STRING", 0, json_buffer, NULL);
     add_or_update_variable("__ret__", result_node);
-    fprintf(stderr, "[DEBUG] native_json: __ret__ set to %s\n", json_buffer); fflush(stderr);
+    if (g_debug_mode) { fprintf(stderr, "[DEBUG] native_json: __ret__ set to %s\n", json_buffer); fflush(stderr); }
     free_ast(result_node);
     free(json_buffer);
 }
@@ -197,7 +204,7 @@ void native_json(ASTNode *arg) {
 // --- Hook para funciones nativas ---
 
 void native_xml(ASTNode *arg) {
-    fprintf(stderr, "[DEBUG] native_xml called\n"); fflush(stderr);
+    if (g_debug_mode) { fprintf(stderr, "[DEBUG] native_xml called\n"); fflush(stderr); }
     
     // Handle empty argument (return xml())
     if (!arg) {
@@ -244,6 +251,24 @@ char* get_node_string(ASTNode* node) {
     
     if (node->type && (strcmp(node->type, "STRING") == 0 || strcmp(node->type, "STRING_LITERAL") == 0)) {
         return node->str_value ? strdup(node->str_value) : strdup("");
+    }
+
+    if (node->type && strcmp(node->type, "STRING_INTERP") == 0) {
+        return expand_interp_string(node->str_value ? node->str_value : "");
+    }
+
+    if (node->type && strcmp(node->type, "NULL") == 0) {
+        return strdup("null");
+    }
+
+    if (node->type && strcmp(node->type, "ADD") == 0) {
+        char *l = get_node_string(node->left);
+        char *r = get_node_string(node->right);
+        size_t n = strlen(l) + strlen(r) + 1;
+        char *out = malloc(n);
+        snprintf(out, n, "%s%s", l, r);
+        free(l); free(r);
+        return out;
     }
     
     if (node->type && (strcmp(node->type, "NUMBER") == 0 || strcmp(node->type, "INT") == 0)) {
@@ -300,7 +325,7 @@ char* get_node_string(ASTNode* node) {
 }
 
 void native_concat(ASTNode *arg) {
-    fprintf(stderr, "[DEBUG] native_concat called\n"); fflush(stderr);
+    if (g_debug_mode) { fprintf(stderr, "[DEBUG] native_concat called\n"); fflush(stderr); }
     
     // Start with a reasonable buffer size
     size_t buffer_size = 1024;
@@ -312,7 +337,7 @@ void native_concat(ASTNode *arg) {
     while (curr) {
         char *s_temp = get_node_string(curr);
         if (s_temp) {
-            fprintf(stderr, "[DEBUG] concat appending: '%s'\n", s_temp);
+            if (g_debug_mode) fprintf(stderr, "[DEBUG] concat appending: '%s'\n", s_temp);
             size_t len = strlen(s_temp);
             if (current_len + len >= buffer_size) {
                 buffer_size = (current_len + len) * 2;
@@ -468,6 +493,19 @@ int class_count = 0;
 int return_flag = 0;
 
 static ASTNode *return_node = NULL;
+
+/* Fase 2: throw/try-catch */
+int throw_flag = 0;
+static char *throw_message = NULL;
+
+const char *get_throw_message(void) { return throw_message; }
+
+/* Fase 4: break/continue */
+static int break_flag = 0;
+static int continue_flag = 0;
+
+/* Fase 3a: forward decl */
+char* expand_interp_string(const char *raw);
 
 // --- INICIO MEJORA: Punteros a los manejadores de bridges ---
 static BridgeHandlers g_bridge_handlers = {NULL, NULL, NULL};
@@ -631,7 +669,7 @@ ClassNode *find_class(char *name) {
             return classes[i];
         }
     }
-    printf("Error: Clase '%s' no encontrada.\n", name);
+    printf("Error: class '%s' not found.\n", name);
     return NULL;
 }
 
@@ -644,12 +682,16 @@ void add_attribute_to_class(ClassNode *class, char *attr_name, char *attr_type) 
     class->attr_count++;
 }
 
-void add_method_to_class(ClassNode *cls, char *method, ParameterNode *params, ASTNode *body) {
+void add_method_to_class(ClassNode *cls, char *method, ParameterNode *params, ASTNode *body, char *return_type) {
     MethodNode *m = malloc(sizeof(MethodNode));
     if (!m) exit(1);
     m->name = strdup(method);
     m->params = params;
     m->body = body;
+    m->route_path = NULL;
+    m->http_method = NULL;
+    m->cache_ttl = 0;
+    m->return_type = return_type ? strdup(return_type) : NULL;
     m->next = cls->methods;
     cls->methods = m;
 }
@@ -661,6 +703,10 @@ void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *
     ctor->name = strdup("__constructor");
     ctor->params = params;
     ctor->body = body;
+    ctor->route_path = NULL;
+    ctor->http_method = NULL;
+    ctor->cache_ttl = 0;
+    ctor->return_type = strdup("void");
     ctor->next = class->methods;
     class->methods = ctor;
 }
@@ -756,7 +802,7 @@ Variable *find_variable_for(char *id) {
 
 void declare_variable(char *id, ASTNode *value, int is_const) {
     if (var_count >= MAX_VARS) {
-        printf("Error: Demasiadas variables declaradas.\n");
+        printf("Error: too many declared variables.\n");
         return;
     }
 
@@ -780,6 +826,13 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
    if (strcmp(value->type, "STRING") == 0 || strcmp(value->type, "STRING_LITERAL") == 0) {
         vars[my_index].vtype = VAL_STRING;
         vars[my_index].value.string_value = strdup(value->str_value);
+    }
+    else if (strcmp(value->type, "STRING_INTERP") == 0) {
+        /* Fase 3a: expandir interpolación */
+        free(vars[my_index].type);
+        vars[my_index].type = strdup("STRING");
+        vars[my_index].vtype = VAL_STRING;
+        vars[my_index].value.string_value = expand_interp_string(value->str_value);
     }
     else if (strcmp(value->type, "LIST") == 0) {
         /* debug print removed */
@@ -820,7 +873,7 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
                     else if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
                         Variable *v = find_variable(arg->id);
                         if (!v) {
-                            printf("Error: Variable '%s' no encontrada.\n", arg->id);
+                            printf("Error: variable '%s' not found.\n", arg->id);
                             return;
                         }
                         if (v->vtype == VAL_STRING) {
@@ -849,12 +902,35 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         }
     /* debug print removed */
     }
+    else if (strcmp(value->type, "OBJECT_LITERAL") == 0) {
+        /* Fase 1c: Maps — almacenado como tipo "MAP", lista enlazada de KV_PAIR en value->left */
+        free(vars[my_index].type);
+        vars[my_index].type = strdup("MAP");
+        vars[my_index].vtype = VAL_OBJECT;
+        vars[my_index].value.object_value = (void *)(intptr_t)value;
+    }
+    else if (strcmp(value->type, "NULL") == 0) {
+        /* Fase 1d: null */
+        free(vars[my_index].type);
+        vars[my_index].type = strdup("NULL");
+        vars[my_index].vtype = VAL_OBJECT;
+        vars[my_index].value.object_value = NULL;
+    }
     else if (strcmp(value->type, "FLOAT") == 0) {
         vars[my_index].vtype = VAL_FLOAT;
         vars[my_index].value.float_value = atof(value->str_value);
     }
     else if (strcmp(value->type, "ADD") == 0 || strcmp(value->type, "SUB") == 0 || 
              strcmp(value->type, "MUL") == 0 || strcmp(value->type, "DIV") == 0) {
+        /* Fase 6: string concatenation if ADD with strings */
+        if (strcmp(value->type, "ADD") == 0 && is_string_type(value)) {
+            char *s = get_node_string(value);
+            free(vars[my_index].type);
+            vars[my_index].type = strdup("STRING");
+            vars[my_index].vtype = VAL_STRING;
+            vars[my_index].value.string_value = s;
+            return;
+        }
         double result = evaluate_expression(value);
         if (result == (int)result) {
             vars[my_index].vtype = VAL_INT;
@@ -882,7 +958,7 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         Variable *v = find_variable(o->id);
         
         if (!v || v->vtype != VAL_OBJECT) {
-            printf("Error: Objeto '%s' no encontrado para asignación.\n", o->id);
+            printf("Error: object '%s' not found for assignment.\n", o->id);
             vars[my_index].vtype = VAL_INT;
             vars[my_index].value.int_value = 0; // Valor de error
             return;
@@ -920,6 +996,14 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
 
 void add_or_update_variable(char *id, ASTNode *value) {
     if (!value) return;
+    /* Fase 3a: si es STRING_INTERP, expandir a STRING antes de almacenar */
+    ASTNode *expanded_holder = NULL;
+    if (value->type && strcmp(value->type, "STRING_INTERP") == 0) {
+        char *s = expand_interp_string(value->str_value);
+        expanded_holder = create_ast_leaf("STRING", 0, s, NULL);
+        free(s);
+        value = expanded_holder;
+    }
     // printf("[DEBUG] add_or_update_variable: id=%s, type=%s, value=%d, str_value=%s\n", id, value->type ? value->type : "NULL", value->value, value->str_value ? value->str_value : "NULL");
 
     if (strcmp(id, "__ret__") == 0) {
@@ -959,7 +1043,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
     Variable *var = find_variable_for(id);
     if (var) {        
         if (var->is_const) {
-            fprintf(stderr, "Error: No se puede asignar a la variable constante '%s'.\n", id);
+            fprintf(stderr, "Error: cannot assign to constant variable '%s'.\n", id);
             exit(1);
         }
         free(var->type);
@@ -971,13 +1055,16 @@ void add_or_update_variable(char *id, ASTNode *value) {
         } else if (strcmp(value->type, "OBJECT") == 0) {
             var->vtype = VAL_OBJECT;
             var->value.object_value = (ObjectNode *)value->extra;
+        } else if (strcmp(value->type, "FLOAT") == 0) {
+            var->vtype = VAL_FLOAT;
+            var->value.float_value = value->str_value ? atof(value->str_value) : 0.0;
         } else {
             var->vtype = VAL_INT;
             var->value.int_value = value->value;
         }
     } else {
         if (var_count >= MAX_VARS) {
-            printf("Error: Demasiadas variables declaradas.\n");
+            printf("Error: too many declared variables.\n");
             return;
         }
         vars[var_count].id = strdup(id);
@@ -1043,25 +1130,6 @@ ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right) {
     node->str_value = NULL;
 
    if (strcmp(type, "ADD") == 0) {
-        if ((left->type && strcmp(left->type, "STRING") == 0) ||
-            (right->type && strcmp(right->type, "STRING") == 0)) {
-            printf("Error: Suma de cadenas no permitida.\n");
-            
-            char *s1 = (left->type && strcmp(left->type, "STRING") == 0) ? 
-                       left->str_value : int_to_string(left->value);
-            char *s2 = (right->type && strcmp(right->type, "STRING") == 0) ? 
-                       right->str_value : int_to_string(right->value);
-            
-            size_t len = strlen(s1) + strlen(s2) + 1;
-            char *res = malloc(len);
-            strcpy(res, s1);
-            strcat(res, s2);
-            
-            if (s1 != left->str_value) free(s1);
-            if (s2 != right->str_value) free(s2);
-            
-            return create_ast_leaf("STRING", 0, res, NULL);
-        }
         node->value = left->value + right->value;
     } 
     else if (strcmp(type, "SUB") == 0) {
@@ -1074,7 +1142,7 @@ ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right) {
         if (right->value != 0) {
             node->value = left->value / right->value;
         } else {
-            printf("Error: División por cero.\n");
+            printf("Error: division by zero.\n");
             node->value = 0;
         }
     } 
@@ -1387,7 +1455,7 @@ ParameterNode *add_parameter(ParameterNode *list, char *name, char *type) {
 // Helper to check if node resolves to a string
 int is_string_type(ASTNode *node) {
     if (!node) return 0;
-    if (node->type && (strcmp(node->type, "STRING") == 0 || strcmp(node->type, "STRING_LITERAL") == 0)) return 1;
+    if (node->type && (strcmp(node->type, "STRING") == 0 || strcmp(node->type, "STRING_LITERAL") == 0 || strcmp(node->type, "STRING_INTERP") == 0)) return 1;
     if (node->type && (strcmp(node->type, "IDENTIFIER") == 0 || strcmp(node->type, "ID") == 0)) {
         Variable *v = find_variable(node->id);
         if (v && v->vtype == VAL_STRING) return 1;
@@ -1411,28 +1479,189 @@ int is_string_type(ASTNode *node) {
             }
         }
     }
+    if (node->type && strcmp(node->type, "ADD") == 0) {
+        if (is_string_type(node->left) || is_string_type(node->right)) return 1;
+    }
+    if (node->type && strcmp(node->type, "STRING_INTERP") == 0) return 1;
     return 0;
+}
+
+/* --- Helpers para LIST (Fase 1a: Arrays) --- */
+static ASTNode* list_get_item(ASTNode *list, int idx) {
+    if (!list || !list->type || strcmp(list->type, "LIST") != 0) return NULL;
+    ASTNode *cur = list->left;
+    int i = 0;
+    while (cur && i < idx) { cur = cur->next; i++; }
+    return cur;
+}
+
+static int list_length(ASTNode *list) {
+    if (!list || !list->type || strcmp(list->type, "LIST") != 0) return 0;
+    int n = 0;
+    ASTNode *cur = list->left;
+    while (cur) { n++; cur = cur->next; }
+    return n;
+}
+
+/* Resolve an expression node to the underlying LIST ASTNode, or NULL. */
+static ASTNode* resolve_to_list(ASTNode *node) {
+    if (!node) return NULL;
+    if (node->type && strcmp(node->type, "LIST") == 0) return node;
+    if (node->type && (strcmp(node->type, "IDENTIFIER") == 0 || strcmp(node->type, "ID") == 0)) {
+        Variable *v = find_variable(node->id);
+        if (!v || !v->type || strcmp(v->type, "LIST") != 0) return NULL;
+        return (ASTNode*)(intptr_t)v->value.object_value;
+    }
+    return NULL;
+}
+
+/* --- Helpers para MAP (Fase 1c) --- */
+static ASTNode* resolve_to_map(ASTNode *node) {
+    if (!node) return NULL;
+    if (node->type && strcmp(node->type, "OBJECT_LITERAL") == 0) return node;
+    if (node->type && (strcmp(node->type, "IDENTIFIER") == 0 || strcmp(node->type, "ID") == 0)) {
+        Variable *v = find_variable(node->id);
+        if (!v || !v->type || strcmp(v->type, "MAP") != 0) return NULL;
+        return (ASTNode*)(intptr_t)v->value.object_value;
+    }
+    return NULL;
+}
+
+static int map_length(ASTNode *map) {
+    if (!map) return 0;
+    int n = 0;
+    ASTNode *cur = map->left;
+    while (cur) { n++; cur = cur->right; }
+    return n;
+}
+
+/* Find a KV_PAIR by key string. Returns the pair node, or NULL. */
+static ASTNode* map_find_pair(ASTNode *map, const char *key) {
+    if (!map || !key) return NULL;
+    ASTNode *cur = map->left;
+    while (cur) {
+        if (cur->id && strcmp(cur->id, key) == 0) return cur;
+        cur = cur->right;
+    }
+    return NULL;
+}
+
+/* Fase 3a: Expand string interpolation. Input contains {var} placeholders.
+   Special chars: \1 = literal '{', \2 = literal '}'. Returns malloc'd string. */
+char* expand_interp_string(const char *raw) {
+    if (!raw) return strdup("");
+    size_t cap = strlen(raw) + 64;
+    char *out = (char*)malloc(cap);
+    size_t len = 0;
+    const char *p = raw;
+    while (*p) {
+        if (*p == '\1') {
+            if (len+1 >= cap) { cap *= 2; out = realloc(out, cap); }
+            out[len++] = '{'; p++;
+            continue;
+        }
+        if (*p == '\2') {
+            if (len+1 >= cap) { cap *= 2; out = realloc(out, cap); }
+            out[len++] = '}'; p++;
+            continue;
+        }
+        if (*p == '{') {
+            const char *end = strchr(p, '}');
+            if (!end) {
+                if (len+1 >= cap) { cap *= 2; out = realloc(out, cap); }
+                out[len++] = *p++;
+                continue;
+            }
+            char name[128]; size_t nlen = end - p - 1;
+            if (nlen >= sizeof(name)) nlen = sizeof(name)-1;
+            memcpy(name, p+1, nlen); name[nlen] = '\0';
+            char *s = name; while (*s == ' ') s++;
+            char *e = s + strlen(s); while (e > s && (e[-1]==' ')) { e--; *e='\0'; }
+            char buf[256]; const char *valstr = "";
+            Variable *v = find_variable(s);
+            if (v) {
+                if (v->type && strcmp(v->type, "NULL") == 0) valstr = "null";
+                else if (v->vtype == VAL_STRING) valstr = v->value.string_value ? v->value.string_value : "";
+                else if (v->vtype == VAL_INT) { snprintf(buf,256,"%d",v->value.int_value); valstr = buf; }
+                else if (v->vtype == VAL_FLOAT) { snprintf(buf,256,"%g",v->value.float_value); valstr = buf; }
+                else valstr = "";
+            }
+            size_t vl = strlen(valstr);
+            while (len + vl + 1 >= cap) { cap *= 2; out = realloc(out, cap); }
+            memcpy(out + len, valstr, vl); len += vl;
+            p = end + 1;
+            continue;
+        }
+        if (len+1 >= cap) { cap *= 2; out = realloc(out, cap); }
+        out[len++] = *p++;
+    }
+    out[len] = '\0';
+    return out;
+}
+
+/* Build a fresh ASTNode item from a runtime value (used for index assign / push). */
+static ASTNode* build_item_from_value(ASTNode *value) {
+    ASTNode *new_item = (ASTNode*)malloc(sizeof(ASTNode));
+    memset(new_item, 0, sizeof(ASTNode));
+    if (!value) { new_item->type = strdup("NUMBER"); return new_item; }
+    if (value->type && strcmp(value->type, "STRING") == 0) {
+        new_item->type = strdup("STRING");
+        new_item->str_value = strdup(value->str_value ? value->str_value : "");
+    } else if (value->type && (strcmp(value->type, "IDENTIFIER") == 0 || strcmp(value->type, "ID") == 0)) {
+        Variable *vv = find_variable(value->id);
+        if (vv && vv->vtype == VAL_STRING) {
+            new_item->type = strdup("STRING");
+            new_item->str_value = strdup(vv->value.string_value ? vv->value.string_value : "");
+        } else if (vv && vv->vtype == VAL_FLOAT) {
+            new_item->type = strdup("FLOAT");
+            char buf[64]; snprintf(buf, 64, "%f", vv->value.float_value);
+            new_item->str_value = strdup(buf);
+        } else if (vv) {
+            new_item->type = strdup("NUMBER");
+            new_item->value = vv->value.int_value;
+        } else {
+            new_item->type = strdup("NUMBER");
+        }
+    } else {
+        double v_ = evaluate_expression(value);
+        if (v_ == (int)v_) {
+            new_item->type = strdup("NUMBER");
+            new_item->value = (int)v_;
+        } else {
+            new_item->type = strdup("FLOAT");
+            char buf[64]; snprintf(buf, 64, "%f", v_);
+            new_item->str_value = strdup(buf);
+        }
+    }
+    return new_item;
 }
 
 double evaluate_expression(ASTNode *node) {
     if (!node) return 0;
 
+    if (node->type && strcmp(node->type, "NULL") == 0) {
+        return 0; /* null como número = 0 */
+    }
+
     if (node->type && strcmp(node->type, "IDENTIFIER") == 0) {
         Variable *var = find_variable(node->id);
         if (var) {
+            if (var->type && strcmp(var->type, "NULL") == 0) {
+                return 0; /* variable null tratada como 0 numéricamente */
+            }
             if (var->vtype == VAL_INT) {
                 return var->value.int_value;
             } else if (var->vtype == VAL_FLOAT) {
                 return var->value.float_value;
             } else if (var->vtype == VAL_STRING) {
-                printf("Error: Variable '%s' es string, no se puede evaluar como número.\n", node->id);
+                printf("Error: variable '%s' is a string, cannot be evaluated as a number.\n", node->id);
                 return 0;
             } else {
-                printf("Error: Variable '%s' es un objeto, no se puede evaluar como número.\n", node->id);
+                printf("Error: variable '%s' is an object, cannot be evaluated as a number.\n", node->id);
                 return 0;
             }
         } else {
-            printf("Error: Variable '%s' no definida.\n", node->id);
+            printf("Error: variable '%s' is not defined.\n", node->id);
             return 0;
         }
     }
@@ -1452,6 +1681,19 @@ double evaluate_expression(ASTNode *node) {
         return evaluate_expression(node->left) < evaluate_expression(node->right);
     }
     if (strcmp(node->type, "EQ") == 0) {
+        /* Fase 1d: null comparisons */
+        int left_null = 0, right_null = 0;
+        if (node->left && node->left->type && strcmp(node->left->type, "NULL") == 0) left_null = 1;
+        if (node->right && node->right->type && strcmp(node->right->type, "NULL") == 0) right_null = 1;
+        if (node->left && node->left->type && strcmp(node->left->type, "IDENTIFIER") == 0) {
+            Variable *v = find_variable(node->left->id);
+            if (v && v->type && strcmp(v->type, "NULL") == 0) left_null = 1;
+        }
+        if (node->right && node->right->type && strcmp(node->right->type, "IDENTIFIER") == 0) {
+            Variable *v = find_variable(node->right->id);
+            if (v && v->type && strcmp(v->type, "NULL") == 0) right_null = 1;
+        }
+        if (left_null || right_null) return (double)(left_null && right_null);
         if (is_string_type(node->left) || is_string_type(node->right)) {
              char *s1 = get_node_string(node->left);
              char *s2 = get_node_string(node->right);
@@ -1468,6 +1710,18 @@ double evaluate_expression(ASTNode *node) {
         return evaluate_expression(node->left) >= evaluate_expression(node->right);
     }
     if (strcmp(node->type, "DIFF") == 0) {
+        int left_null = 0, right_null = 0;
+        if (node->left && node->left->type && strcmp(node->left->type, "NULL") == 0) left_null = 1;
+        if (node->right && node->right->type && strcmp(node->right->type, "NULL") == 0) right_null = 1;
+        if (node->left && node->left->type && strcmp(node->left->type, "IDENTIFIER") == 0) {
+            Variable *v = find_variable(node->left->id);
+            if (v && v->type && strcmp(v->type, "NULL") == 0) left_null = 1;
+        }
+        if (node->right && node->right->type && strcmp(node->right->type, "IDENTIFIER") == 0) {
+            Variable *v = find_variable(node->right->id);
+            if (v && v->type && strcmp(v->type, "NULL") == 0) right_null = 1;
+        }
+        if (left_null || right_null) return (double)!(left_null && right_null);
         if (is_string_type(node->left) || is_string_type(node->right)) {
              char *s1 = get_node_string(node->left);
              char *s2 = get_node_string(node->right);
@@ -1478,6 +1732,29 @@ double evaluate_expression(ASTNode *node) {
         return evaluate_expression(node->left) != evaluate_expression(node->right);
     }
     
+    if (strcmp(node->type, "AND") == 0) {
+        if (!evaluate_expression(node->left)) return 0;
+        return evaluate_expression(node->right) ? 1 : 0;
+    }
+    if (strcmp(node->type, "OR") == 0) {
+        if (evaluate_expression(node->left)) return 1;
+        return evaluate_expression(node->right) ? 1 : 0;
+    }
+    if (strcmp(node->type, "NOT") == 0) {
+        return evaluate_expression(node->left) ? 0 : 1;
+    }
+    if (strcmp(node->type, "NULL_COALESCE") == 0) {
+        ASTNode *l = node->left;
+        int is_null = 0;
+        if (l && l->type && strcmp(l->type, "NULL") == 0) is_null = 1;
+        else if (l && l->type && strcmp(l->type, "IDENTIFIER") == 0) {
+            Variable *v = find_variable(l->id);
+            if (!v || (v->type && strcmp(v->type, "NULL") == 0)) is_null = 1;
+        }
+        if (is_null) return evaluate_expression(node->right);
+        return evaluate_expression(l);
+    }
+
     if (strcmp(node->type, "ADD") == 0) {
         return evaluate_expression(node->left) + evaluate_expression(node->right);
     } else if (strcmp(node->type, "SUB") == 0) {
@@ -1487,7 +1764,7 @@ double evaluate_expression(ASTNode *node) {
     } else if (strcmp(node->type, "DIV") == 0) {
         double right = evaluate_expression(node->right);
         if (right == 0.0) {
-            printf("Error: División por cero.\n");
+            printf("Error: division by zero.\n");
             return 0;
         }
         return evaluate_expression(node->left) / right;
@@ -1497,10 +1774,24 @@ double evaluate_expression(ASTNode *node) {
     if (strcmp(node->type, "ACCESS_ATTR") == 0) {
         ASTNode *objRef = node->left;
         ASTNode *attr   = node->right;
+
+        /* Fase 7: null-safe ?. — return 0 (null-as-number) if obj is null */
+        if (node->value == 1 && objRef && objRef->type && strcmp(objRef->type, "IDENTIFIER") == 0) {
+            Variable *vv = find_variable(objRef->id);
+            if (!vv || (vv->type && strcmp(vv->type, "NULL") == 0)) return 0;
+        }
+
+        /* Fase 1a: arr.length sobre listas */
+        if (attr && attr->id && strcmp(attr->id, "length") == 0) {
+            ASTNode *list = resolve_to_list(objRef);
+            if (list) return (double)list_length(list);
+            ASTNode *map = resolve_to_map(objRef);
+            if (map) return (double)map_length(map);
+        }
     
         Variable *v = find_variable(objRef->id);
         if (!v || v->vtype != VAL_OBJECT) {
-            printf("Error: '%s' no es un objeto válido para acceder atributo.\n", objRef->id);
+            printf("Error: '%s' is not a valid object to access an attribute.\n", objRef->id);
             return 0;
         }
     
@@ -1517,7 +1808,7 @@ double evaluate_expression(ASTNode *node) {
         }
         
         if (!obj) {
-            printf("Error: No se pudo obtener el objeto para acceder al atributo.\n");
+            printf("Error: could not get the object to access the attribute.\n");
             return 0;
         }
         for (int i = 0; i < obj->class->attr_count; i++) {
@@ -1529,10 +1820,58 @@ double evaluate_expression(ASTNode *node) {
             }
         }
     
-        printf("Error: Atributo '%s' no encontrado en objeto '%s'.\n", attr->id, objRef->id);
+        printf("Error: attribute '%s' not found in object '%s'.\n", attr->id, objRef->id);
         return 0;
     }
     
+    /* Fase 1a: indexado de listas — arr[i] como expresión numérica */
+    if (strcmp(node->type, "ACCESS_EXPR") == 0) {
+        /* Fase 1c: m["key"] sobre Map — devuelve numérico si valor es numérico */
+        ASTNode *map = resolve_to_map(node->left);
+        if (map) {
+            const char *key = NULL;
+            if (node->right && node->right->type && strcmp(node->right->type, "STRING") == 0) key = node->right->str_value;
+            else if (node->right && (strcmp(node->right->type, "IDENTIFIER") == 0 || strcmp(node->right->type, "ID") == 0)) {
+                Variable *kv = find_variable(node->right->id);
+                if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+            }
+            if (!key) {
+                fprintf(stderr, "Error: Map key must be a string.\n");
+                return 0;
+            }
+            ASTNode *pair = map_find_pair(map, key);
+            if (!pair) {
+                fprintf(stderr, "Error: key '%s' not found in Map.\n", key);
+                return 0;
+            }
+            ASTNode *val = pair->left;
+            if (val && val->type && strcmp(val->type, "STRING") == 0) {
+                fprintf(stderr, "Error: value at Map['%s'] is a string; use print/println.\n", key);
+                return 0;
+            }
+            return evaluate_expression(val);
+        }
+
+        ASTNode *list = resolve_to_list(node->left);
+        if (!list) {
+            fprintf(stderr, "Error: indexed object is neither a list nor a Map.\n");
+            return 0;
+        }
+        int idx = (int)evaluate_expression(node->right);
+        int len = list_length(list);
+        if (idx < 0 || idx >= len) {
+            fprintf(stderr, "Error: index %d out of range (length=%d).\n", idx, len);
+            return 0;
+        }
+        ASTNode *item = list_get_item(list, idx);
+        if (!item) return 0;
+        if (item->type && strcmp(item->type, "STRING") == 0) {
+            fprintf(stderr, "Error: item is a string; use print/println to display it.\n");
+            return 0;
+        }
+        return evaluate_expression(item);
+    }
+
     return (double)node->value;
 }
 
@@ -1555,23 +1894,23 @@ void call_method(ObjectNode *obj, char *method) {
         }
         m = m->next;
     }
-    printf("Error: Método '%s' no encontrado en la clase '%s'.\n",
+    printf("Error: method '%s' not found in class '%s'.\n",
            method, obj->class->name);
 }
 
 void execute_predict(ASTNode* model_node, ASTNode* input_node) {
     if (!model_node || !input_node) {
-        printf("Error: predict necesita dos argumentos.\n");
+        printf("Error: predict requires two arguments.\n");
         return;
     }
     Variable* model_var = find_variable(model_node->id);
     if (!model_var || model_var->vtype != VAL_OBJECT) {
-        printf("Error: Modelo '%s' no encontrado o no es válido.\n", model_node->id);
+        printf("Error: model '%s' not found or invalid.\n", model_node->id);
         return;
     }
     Variable* input_var = find_variable(input_node->id);
     if (!input_var) {
-        printf("Error: Input '%s' no encontrado.\n", input_node->id);
+        printf("Error: input '%s' not found.\n", input_node->id);
         return;
     }
     /* predict debug logs removed */
@@ -1617,14 +1956,14 @@ static void interpret_filter_call(ASTNode *node) {
     if (list_expr->type && (strcmp(list_expr->type, "ID") == 0 || strcmp(list_expr->type, "IDENTIFIER") == 0)) {
         Variable *v = find_variable(list_expr->id);
         if (!v || v->vtype != VAL_OBJECT || strcmp(v->type, "LIST") != 0) {
-            printf("Error: '%s' no es una lista válida para filter.\n", list_expr->id);
+            printf("Error: '%s' is not a valid list for filter.\n", list_expr->id);
             return;
         }
         list_node = (ASTNode *)(intptr_t)v->value.object_value;
     } else if (list_expr->type && strcmp(list_expr->type, "LIST") == 0) {
         list_node = list_expr;
     } else {
-        printf("Error: Expresión no soportada para filter (tipo: %s).\n", list_expr->type);
+        printf("Error: unsupported expression for filter (type: %s).\n", list_expr->type);
         return;
     }
     if (!list_node || strcmp(list_node->type, "LIST") != 0) {
@@ -1694,7 +2033,7 @@ static void interpret_for_in(ASTNode *node) {
             return;
         }       
         if (!v || v->vtype != VAL_OBJECT || strcmp(v->type, "LIST") != 0) {
-            printf("Error: '%s' no es una lista válida.\n", list_expr->id);
+            printf("Error: '%s' is not a valid list.\n", list_expr->id);
             return;
         }
         listNode = (ASTNode *)(intptr_t)v->value.object_value;
@@ -1703,11 +2042,11 @@ static void interpret_for_in(ASTNode *node) {
         listNode = list_expr;
     }
     else {
-        printf("Error: expresión de for-in no soportada (tipo: %s).\n", list_expr->type);
+        printf("Error: unsupported for-in expression (type: %s).\n", list_expr->type);
         return;
     }
     if (!listNode || strcmp(listNode->type, "LIST") != 0) {
-        printf("Error: El nodo no es una lista válida.\n");
+        printf("Error: node is not a valid list.\n");
         return;
     }
     ASTNode *items = listNode->left;   
@@ -1734,6 +2073,9 @@ static void interpret_for_in(ASTNode *node) {
             /* debug print removed */
             interpret_ast(node->right);
         }
+        if (break_flag) { break_flag = 0; break; }
+        if (continue_flag) { continue_flag = 0; continue; }
+        if (throw_flag || return_flag) break;
     }
 }
 
@@ -1751,7 +2093,7 @@ void interpret_bridge_decl(ASTNode *node) {
     char* bridge_name = node->id;
     ASTNode* call_node = node->left;
     if (call_node == NULL || strcmp(call_node->type, "CALL_METHOD") != 0) {
-        fprintf(stderr, "Error: La declaración del bridge '%s' debe ser una llamada a método.\n", bridge_name);
+        fprintf(stderr, "Error: bridge declaration '%s' must be a method call.\n", bridge_name);
         return;
     }
     char* lib_name = call_node->left->id;
@@ -1873,8 +2215,7 @@ void print_object_as_json_by_id(const char* id);
 void interpret_ast(ASTNode *node) {
     if (!node) return;
     if (return_flag) return; 
-
-    // fprintf(stderr, "[DEBUG] interpret_ast: node->type=%s\n", node->type ? node->type : "NULL"); fflush(stderr);
+    if (throw_flag) return;
 
     if (strcmp(node->type, "STATE_DECL") == 0) {
         printf("[TypeEasy] 'state' '%s' tratado como 'var' en modo script.\n", node->id);
@@ -1953,11 +2294,125 @@ void interpret_ast(ASTNode *node) {
     else if (strcmp(node->type, "VAR_DECL") == 0)       interpret_var_decl(node);
     else if (strcmp(node->type, "ASSIGN_ATTR") == 0)    interpret_assign_attr(node);
     else if (strcmp(node->type, "ASSIGN") == 0)         interpret_assign(node);
+    else if (strcmp(node->type, "INDEX_ASSIGN") == 0) {
+        /* Fase 1b: arr[i] = x   |   Fase 1c: m["k"] = x */
+        ASTNode *access = node->left;   /* ACCESS_EXPR(base, index) */
+        ASTNode *value  = node->right;
+        if (!access || !access->left) return;
+
+        /* Map first */
+        ASTNode *map = resolve_to_map(access->left);
+        if (map) {
+            const char *key = NULL;
+            if (access->right && access->right->type && strcmp(access->right->type, "STRING") == 0) key = access->right->str_value;
+            else if (access->right && (strcmp(access->right->type, "IDENTIFIER") == 0 || strcmp(access->right->type, "ID") == 0)) {
+                Variable *kv = find_variable(access->right->id);
+                if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+            }
+            if (!key) { fprintf(stderr, "Error: Map key must be a string.\n"); return; }
+            ASTNode *new_val = build_item_from_value(value);
+            ASTNode *pair = map_find_pair(map, key);
+            if (pair) {
+                /* reemplazar el valor */
+                pair->left = new_val;  /* leak old, ok por ahora */
+            } else {
+                /* crear nuevo KV_PAIR y agregarlo al final (siguiendo enlaces 'right') */
+                ASTNode *new_pair = create_kv_pair_node((char*)key, new_val);
+                if (!map->left) {
+                    map->left = new_pair;
+                } else {
+                    ASTNode *cur = map->left;
+                    while (cur->right) cur = cur->right;
+                    cur->right = new_pair;
+                }
+            }
+            return;
+        }
+
+        ASTNode *list = resolve_to_list(access->left);
+        if (!list) {
+            fprintf(stderr, "Error: variable is neither a list nor a Map.\n");
+            return;
+        }
+        int idx = (int)evaluate_expression(access->right);
+        int len = list_length(list);
+        if (idx < 0 || idx >= len) {
+            fprintf(stderr, "Error: index %d out of range (length=%d).\n", idx, len);
+            return;
+        }
+        ASTNode *new_item = build_item_from_value(value);
+        /* reemplazar el item en la posición idx */
+        ASTNode *cur = list->left;
+        ASTNode *prev = NULL;
+        for (int k = 0; k < idx && cur; k++) { prev = cur; cur = cur->next; }
+        new_item->next = cur ? cur->next : NULL;
+        if (prev) prev->next = new_item; else list->left = new_item;
+    }
     else if (strcmp(node->type, "PRINT") == 0)          interpret_print(node);
     else if (strcmp(node->type, "PRINTLN") == 0)        interpret_println(node);
     else if (strcmp(node->type, "FPRINT") == 0)          interpret_fprint(node);
     else if (strcmp(node->type, "FPRINTLN") == 0)        interpret_fprintln(node);
     else if (strcmp(node->type, "STATEMENT_LIST") == 0) interpret_statement_list(node);
+    else if (strcmp(node->type, "THROW") == 0) {
+        /* throw <expr>: si es STRING usa str_value; si es identifier de variable string idem; si no, formatear número */
+        ASTNode *e = node->left;
+        char *msg = NULL;
+        if (e && e->type && strcmp(e->type, "STRING") == 0) msg = strdup(e->str_value ? e->str_value : "");
+        else if (e && e->type && strcmp(e->type, "IDENTIFIER") == 0) {
+            Variable *v = find_variable(e->id);
+            if (v && v->vtype == VAL_STRING) msg = strdup(v->value.string_value ? v->value.string_value : "");
+            else if (v && v->vtype == VAL_INT) { char b[32]; snprintf(b,32,"%d",v->value.int_value); msg = strdup(b); }
+            else msg = strdup("");
+        } else if (e) {
+            double d = evaluate_expression(e);
+            char b[64]; if (d == (int)d) snprintf(b,64,"%d",(int)d); else snprintf(b,64,"%f",d);
+            msg = strdup(b);
+        } else msg = strdup("");
+        if (throw_message) free(throw_message);
+        throw_message = msg;
+        throw_flag = 1;
+    }
+    else if (strcmp(node->type, "TRY_CATCH") == 0) {
+        ASTNode *try_body = node->left;
+        ASTNode *catch_body = node->right;
+        ASTNode *finally_body = node->extra;
+        const char *err_var_name = node->id; /* nombre var del catch (puede ser NULL si solo finally) */
+
+        interpret_ast(try_body);
+        if (throw_flag && catch_body) {
+            /* limpiar flag, exponer variable */
+            char *msg = throw_message ? strdup(throw_message) : strdup("");
+            throw_flag = 0;
+            if (throw_message) { free(throw_message); throw_message = NULL; }
+            if (err_var_name) {
+                ASTNode *lit = create_ast_leaf("STRING", 0, msg, NULL);
+                add_or_update_variable((char*)err_var_name, lit);
+            }
+            free(msg);
+            interpret_ast(catch_body);
+        }
+        if (finally_body) {
+            int saved_throw = throw_flag;
+            char *saved_msg = throw_message; throw_message = NULL; throw_flag = 0;
+            interpret_ast(finally_body);
+            /* re-raise pending throw if finally didn't throw a new one */
+            if (!throw_flag && saved_throw) { throw_flag = 1; throw_message = saved_msg; }
+            else if (saved_msg) free(saved_msg);
+        }
+    }
+    else if (strcmp(node->type, "WHILE") == 0) {
+        while (1) {
+            if (throw_flag || return_flag) break;
+            int cond = evaluate_condition(node->left);
+            if (!cond) break;
+            interpret_ast(node->right);
+            if (break_flag) { break_flag = 0; break; }
+            if (continue_flag) { continue_flag = 0; continue; }
+            if (throw_flag || return_flag) break;
+        }
+    }
+    else if (strcmp(node->type, "BREAK") == 0)    { break_flag = 1; }
+    else if (strcmp(node->type, "CONTINUE") == 0) { continue_flag = 1; }
     else if (strcmp(node->type, "PLOT") == 0) {
     /* plot generation debug log removed */
         double values[100];
@@ -2041,7 +2496,7 @@ static void interpret_for(ASTNode *node) {
     add_or_update_variable(node->id, node->left);
     Variable *var = find_variable(node->id);
     if (!var || var->vtype != VAL_INT) {
-        printf("Error: Variable de control inválida en FOR.\n");
+        printf("Error: invalid control variable in FOR.\n");
         return;
     }
     int incremento = node->right->right->left->value;
@@ -2056,8 +2511,12 @@ static void interpret_for(ASTNode *node) {
         while (stmt) {
             if (var->value.int_value >= limite) break;
             interpret_ast(stmt);
+            if (throw_flag || return_flag || break_flag || continue_flag) break;
             stmt = stmt->right;
         }
+        if (break_flag) { break_flag = 0; break; }
+        if (continue_flag) { continue_flag = 0; }
+        if (throw_flag || return_flag) break;
         var->value.int_value += incremento;
     }
 }
@@ -2118,15 +2577,125 @@ static void interpret_call_func(ASTNode *node) {
         // For now, let's assume it's not needed for orm_query.
          printf("Warning: Calling user function '%s' as expression is not fully supported yet.\n", node->id);
     } else {
-        printf("Error: Función '%s' no definida.\n", node->id);
+        printf("Error: function '%s' not defined.\n", node->id);
     }
 }
 
 static void interpret_call_method(ASTNode *node) {
     ASTNode *objNode = node->left;
-    Variable *v = find_variable(objNode->id);
+    Variable *v = (objNode && objNode->id) ? find_variable(objNode->id) : NULL;
     return_flag = 0;
     return_node = NULL;
+
+    /* Fase 7: null-safe ?. — if obj is null, set __ret__ = null and return */
+    if (node->value == 1) {
+        if (!v || (v->type && strcmp(v->type, "NULL") == 0)) {
+            ASTNode *r = create_ast_leaf("NULL", 0, NULL, NULL);
+            add_or_update_variable("__ret__", r);
+            return;
+        }
+    }
+
+    /* Fase 8: Math.* — pseudo-static methods on identifier "Math" */
+    if (objNode && objNode->id && strcmp(objNode->id, "Math") == 0) {
+        ASTNode *arg = node->right;
+        double a = arg ? evaluate_expression(arg) : 0;
+        double b = (arg && arg->right) ? evaluate_expression(arg->right) : 0;
+        double res = 0;
+        const char *m = node->id;
+        if      (strcmp(m, "sqrt") == 0)  res = sqrt(a);
+        else if (strcmp(m, "abs") == 0)   res = fabs(a);
+        else if (strcmp(m, "floor") == 0) res = floor(a);
+        else if (strcmp(m, "ceil") == 0)  res = ceil(a);
+        else if (strcmp(m, "round") == 0) res = floor(a + 0.5);
+        else if (strcmp(m, "pow") == 0)   res = pow(a, b);
+        else if (strcmp(m, "min") == 0)   res = (a < b) ? a : b;
+        else if (strcmp(m, "max") == 0)   res = (a > b) ? a : b;
+        else { printf("Error: Math.%s not supported.\n", m); return; }
+        ASTNode *r;
+        if (res == (int)res) r = create_ast_leaf_number("INT", (int)res, NULL, NULL);
+        else { char buf[64]; snprintf(buf, 64, "%f", res); r = create_ast_leaf("FLOAT", 0, buf, NULL); }
+        add_or_update_variable("__ret__", r);
+        return;
+    }
+
+    /* Fase 8: string methods .upper/.lower/.trim/.contains/.split */
+    const char *raw_str_lit = NULL;
+    if (objNode && objNode->type && strcmp(objNode->type, "STRING") == 0) {
+        raw_str_lit = objNode->str_value ? objNode->str_value : "";
+    }
+    if ((raw_str_lit || (v && v->vtype == VAL_STRING)) && node->id) {
+        const char *m = node->id;
+        const char *s = raw_str_lit ? raw_str_lit : (v->value.string_value ? v->value.string_value : "");
+        if (strcmp(m, "upper") == 0) {
+            char *out = strdup(s);
+            for (char *p = out; *p; p++) *p = toupper((unsigned char)*p);
+            ASTNode *r = create_ast_leaf("STRING", 0, out, NULL);
+            add_or_update_variable("__ret__", r);
+            return;
+        }
+        if (strcmp(m, "lower") == 0) {
+            char *out = strdup(s);
+            for (char *p = out; *p; p++) *p = tolower((unsigned char)*p);
+            ASTNode *r = create_ast_leaf("STRING", 0, out, NULL);
+            add_or_update_variable("__ret__", r);
+            return;
+        }
+        if (strcmp(m, "trim") == 0) {
+            const char *start = s;
+            while (*start && isspace((unsigned char)*start)) start++;
+            const char *end = s + strlen(s);
+            while (end > start && isspace((unsigned char)*(end - 1))) end--;
+            char *out = strndup(start, end - start);
+            ASTNode *r = create_ast_leaf("STRING", 0, out, NULL);
+            add_or_update_variable("__ret__", r);
+            return;
+        }
+        if (strcmp(m, "contains") == 0) {
+            const char *needle = NULL;
+            ASTNode *arg = node->right;
+            char *tmp = NULL;
+            if (arg && arg->type && strcmp(arg->type, "STRING") == 0) needle = arg->str_value;
+            else if (arg) { tmp = get_node_string(arg); needle = tmp; }
+            int found = (needle && strstr(s, needle)) ? 1 : 0;
+            if (tmp) free(tmp);
+            ASTNode *r = create_ast_leaf_number("INT", found, NULL, NULL);
+            add_or_update_variable("__ret__", r);
+            return;
+        }
+        if (strcmp(m, "split") == 0) {
+            const char *sep = NULL;
+            ASTNode *arg = node->right;
+            char *tmp = NULL;
+            if (arg && arg->type && strcmp(arg->type, "STRING") == 0) sep = arg->str_value;
+            else if (arg) { tmp = get_node_string(arg); sep = tmp; }
+            if (!sep || !*sep) sep = " ";
+            ASTNode *list = create_list_node(NULL);
+            const char *cur = s;
+            size_t seplen = strlen(sep);
+            while (1) {
+                const char *next = strstr(cur, sep);
+                size_t partlen = next ? (size_t)(next - cur) : strlen(cur);
+                char *part = strndup(cur, partlen);
+                ASTNode *item = (ASTNode*)malloc(sizeof(ASTNode));
+                memset(item, 0, sizeof(ASTNode));
+                item->type = strdup("STRING");
+                item->str_value = part;
+                if (!list->left) list->left = item;
+                else { ASTNode *t = list->left; while (t->next) t = t->next; t->next = item; }
+                if (!next) break;
+                cur = next + seplen;
+            }
+            if (tmp) free(tmp);
+            add_or_update_variable("__ret__", list);
+            return;
+        }
+        if (strcmp(m, "length") == 0) {
+            ASTNode *r = create_ast_leaf_number("INT", (int)strlen(s), NULL, NULL);
+            add_or_update_variable("__ret__", r);
+            return;
+        }
+    }
 
     if (__ret_var_active) {
         if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
@@ -2137,9 +2706,121 @@ static void interpret_call_method(ASTNode *node) {
         memset(&__ret_var, 0, sizeof(Variable));
         // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
     }
+
+    /* Fase 1b: métodos built-in en LIST: push, pop */
+    if (v && v->type && strcmp(v->type, "LIST") == 0) {
+        ASTNode *list = (ASTNode*)(intptr_t)v->value.object_value;
+        if (list && node->id && strcmp(node->id, "push") == 0) {
+            ASTNode *arg = node->right;
+            if (!arg) return;
+            ASTNode *new_item = (ASTNode*)malloc(sizeof(ASTNode));
+            memset(new_item, 0, sizeof(ASTNode));
+            if (arg->type && strcmp(arg->type, "STRING") == 0) {
+                new_item->type = strdup("STRING");
+                new_item->str_value = strdup(arg->str_value);
+            } else if (arg->type && (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0)) {
+                Variable *av = find_variable(arg->id);
+                if (av && av->vtype == VAL_STRING) {
+                    new_item->type = strdup("STRING");
+                    new_item->str_value = strdup(av->value.string_value);
+                } else if (av && av->vtype == VAL_FLOAT) {
+                    new_item->type = strdup("FLOAT");
+                    char buf[64]; snprintf(buf, 64, "%f", av->value.float_value);
+                    new_item->str_value = strdup(buf);
+                } else if (av) {
+                    new_item->type = strdup("NUMBER");
+                    new_item->value = av->value.int_value;
+                }
+            } else {
+                double vv = evaluate_expression(arg);
+                if (vv == (int)vv) { new_item->type = strdup("NUMBER"); new_item->value = (int)vv; }
+                else { new_item->type = strdup("FLOAT"); char buf[64]; snprintf(buf, 64, "%f", vv); new_item->str_value = strdup(buf); }
+            }
+            new_item->next = NULL;
+            ASTNode *cur = list->left;
+            if (!cur) list->left = new_item;
+            else { while (cur->next) cur = cur->next; cur->next = new_item; }
+            return;
+        }
+        if (list && node->id && strcmp(node->id, "pop") == 0) {
+            ASTNode *cur = list->left;
+            if (!cur) return;
+            if (!cur->next) { list->left = NULL; return; }
+            while (cur->next && cur->next->next) cur = cur->next;
+            cur->next = NULL;
+            return;
+        }
+    }
+
+    /* Fase 1c: métodos built-in en MAP: keys, values, has, remove */
+    if (v && v->type && strcmp(v->type, "MAP") == 0) {
+        ASTNode *map = (ASTNode*)(intptr_t)v->value.object_value;
+        if (map && node->id && strcmp(node->id, "keys") == 0) {
+            ASTNode *list = create_list_node(NULL);
+            ASTNode *cur = map->left;
+            while (cur) {
+                ASTNode *item = (ASTNode*)malloc(sizeof(ASTNode));
+                memset(item, 0, sizeof(ASTNode));
+                item->type = strdup("STRING");
+                item->str_value = strdup(cur->id ? cur->id : "");
+                if (!list->left) list->left = item;
+                else { ASTNode *t = list->left; while (t->next) t = t->next; t->next = item; }
+                cur = cur->right;
+            }
+            add_or_update_variable("__ret__", list);
+            return;
+        }
+        if (map && node->id && strcmp(node->id, "values") == 0) {
+            ASTNode *list = create_list_node(NULL);
+            ASTNode *cur = map->left;
+            while (cur) {
+                ASTNode *src = cur->left;
+                ASTNode *item = build_item_from_value(src);
+                if (!list->left) list->left = item;
+                else { ASTNode *t = list->left; while (t->next) t = t->next; t->next = item; }
+                cur = cur->right;
+            }
+            add_or_update_variable("__ret__", list);
+            return;
+        }
+        if (map && node->id && strcmp(node->id, "has") == 0) {
+            const char *key = NULL;
+            ASTNode *arg = node->right;
+            if (arg && arg->type && strcmp(arg->type, "STRING") == 0) key = arg->str_value;
+            else if (arg && (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0)) {
+                Variable *kv = find_variable(arg->id);
+                if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+            }
+            int found = (key && map_find_pair(map, key)) ? 1 : 0;
+            ASTNode *r = (ASTNode*)malloc(sizeof(ASTNode));
+            memset(r, 0, sizeof(ASTNode));
+            r->type = strdup("NUMBER"); r->value = found;
+            add_or_update_variable("__ret__", r);
+            return;
+        }
+        if (map && node->id && strcmp(node->id, "remove") == 0) {
+            const char *key = NULL;
+            ASTNode *arg = node->right;
+            if (arg && arg->type && strcmp(arg->type, "STRING") == 0) key = arg->str_value;
+            else if (arg && (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0)) {
+                Variable *kv = find_variable(arg->id);
+                if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+            }
+            if (!key) return;
+            ASTNode *prev = NULL, *cur = map->left;
+            while (cur) {
+                if (cur->id && strcmp(cur->id, key) == 0) {
+                    if (prev) prev->right = cur->right; else map->left = cur->right;
+                    return;
+                }
+                prev = cur; cur = cur->right;
+            }
+            return;
+        }
+    }
     
     if (!v || v->vtype != VAL_OBJECT) {
-        printf("Error: '%s' no es un objeto válido.\n", objNode->id);
+        printf("Error: '%s' is not a valid object.\n", objNode->id);
         return;
     }
     // Try to get ObjectNode from value.object_value first, then from extra
@@ -2192,7 +2873,7 @@ static void interpret_call_method(ASTNode *node) {
         } else if (strcmp(v->id, "Gemini") == 0) {
             if (g_bridge_handlers.handle_gemini_bridge) g_bridge_handlers.handle_gemini_bridge(node->id, node->right);
         } else {
-            printf("Advertencia: Bridge '%s' desconocido o no implementado en este ejecutable.\n", v->id);
+            printf("Advertencia: Bridge '%s' unknown o no implementado en este ejecutable.\n", v->id);
         }
         // Los bridges pueden o no devolver un valor. Si lo hacen, lo ponen en __ret_var.
         // Por ahora, no necesitamos un valor de retorno falso.
@@ -2206,7 +2887,7 @@ static void interpret_call_method(ASTNode *node) {
     MethodNode *m = obj->class->methods;
     while (m && strcmp(m->name, node->id) != 0) m = m->next;
     if (!m) {
-        printf("Error: Método '%s' no encontrado en clase '%s'.\n", node->id, obj->class->name);
+        printf("Error: method '%s' not found in class '%s'.\n", node->id, obj->class->name);
         return;
     }
 
@@ -2235,7 +2916,7 @@ static void interpret_call_method(ASTNode *node) {
         } else if (arg->type && (strcmp(arg->type,"ID")==0 || strcmp(arg->type,"IDENTIFIER")==0)) {
             Variable *v_arg = find_variable(arg->id);
             if (!v_arg) {
-                printf("Error: Variable '%s' no encontrada.\n", arg->id);
+                printf("Error: variable '%s' not found.\n", arg->id);
                 return;
             }
             if (v_arg->vtype == VAL_STRING) {
@@ -2253,6 +2934,31 @@ static void interpret_call_method(ASTNode *node) {
     }
 
     interpret_ast(m->body);
+
+    // --- TYPE CHECK: void method must NOT return a value ---
+    if (m->return_type && strcmp(m->return_type, "void") == 0 && return_flag && return_node) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "TypeError: method '%s' is declared as 'void' and cannot return a value.", m->name);
+        if (throw_message) free(throw_message);
+        throw_message = strdup(buf);
+        throw_flag = 1;
+        return_flag = 0; return_node = NULL;
+        return;
+    }
+    // --- TYPE CHECK: non-void method should produce a return value ---
+    // Optional types (T?) and dynamic allow no return (treated as null).
+    if (m->return_type
+        && strcmp(m->return_type, "void") != 0
+        && strcmp(m->return_type, "dynamic") != 0
+        && m->return_type[strlen(m->return_type)-1] != '?'
+        && (!return_flag || !return_node)) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "TypeError: method '%s' is declared as '%s' but does not return a value.", m->name, m->return_type);
+        if (throw_message) free(throw_message);
+        throw_message = strdup(buf);
+        throw_flag = 1;
+        return;
+    }
 
     // --- STORE RESULT IN CACHE IF NEEDED ---
     if (m->cache_ttl > 0 && __ret_var_active) {
@@ -2314,6 +3020,45 @@ static void interpret_call_method(ASTNode *node) {
                     }
                 }
                 if (lit) {
+                    // --- TYPE CHECK: validate lit->type against declared return_type ---
+                    if (m->return_type
+                        && strcmp(m->return_type, "dynamic") != 0
+                        && strcmp(m->return_type, "void") != 0
+                        && lit->type) {
+                        const char *expected = m->return_type;
+                        const char *actual = lit->type;
+                        /* T? : strip trailing '?' for the comparison; null is always OK for optional */
+                        char base_expected[64];
+                        size_t el = strlen(expected);
+                        int optional = (el > 0 && expected[el-1] == '?');
+                        if (optional) { strncpy(base_expected, expected, el-1); base_expected[el-1] = '\0'; }
+                        else { strncpy(base_expected, expected, sizeof(base_expected)-1); base_expected[sizeof(base_expected)-1]='\0'; }
+                        if (optional && strcmp(actual, "NULL") == 0) {
+                            /* OK: optional type returning null */
+                        } else {
+                            const char *expected_cmp = base_expected;
+                            int ok = 0;
+                            if (strcmp(expected_cmp, "int") == 0    && strcmp(actual, "INT") == 0)    ok = 1;
+                            if (strcmp(expected_cmp, "string") == 0 && strcmp(actual, "STRING") == 0) ok = 1;
+                            if (strcmp(expected_cmp, "float") == 0  && (strcmp(actual, "FLOAT") == 0 || strcmp(actual, "INT") == 0)) ok = 1;
+                            if (!ok) {
+                                const char *actual_lower = "?";
+                                if (strcmp(actual, "INT") == 0)    actual_lower = "int";
+                                else if (strcmp(actual, "STRING") == 0) actual_lower = "string";
+                                else if (strcmp(actual, "FLOAT") == 0)  actual_lower = "float";
+                                else if (strcmp(actual, "NULL") == 0)   actual_lower = "null";
+                                char buf[256];
+                                snprintf(buf, sizeof(buf),
+                                    "TypeError: method '%s' is declared as '%s' but returns a value of type '%s'.",
+                                    m->name, expected, actual_lower);
+                                if (throw_message) free(throw_message);
+                                throw_message = strdup(buf);
+                                throw_flag = 1;
+                                return_flag = 0; return_node = NULL;
+                                return;
+                            }
+                        }
+                    }
                     add_or_update_variable("__ret__", lit);
                 }
             }
@@ -2345,7 +3090,7 @@ static void interpret_call_method_alone(ASTNode *node) {
                 } else if (arg_class->type && (strcmp(arg_class->type,"ID")==0 || strcmp(arg_class->type,"IDENTIFIER")==0)) {
                     Variable *v_arg = find_variable(arg_class->id);
                     if (!v_arg) {
-                        printf("Error: Variable '%s' no encontrada.\n", arg_class->id);
+                        printf("Error: variable '%s' not found.\n", arg_class->id);
                         return;
                     }
                     if (v_arg->vtype == VAL_STRING) {
@@ -2377,7 +3122,7 @@ static void interpret_call_method_alone(ASTNode *node) {
     MethodNode *gm = global_methods;
     while (gm && strcmp(gm->name, node->id) != 0) gm = gm->next;
     if (!gm) {
-        printf("Error: Método '%s' no encontrado como método global.\n", node->id);
+        printf("Error: method '%s' not found as a global method.\n", node->id);
         return;
     }
     if (g_debug_mode) te_log_ast("[LOG] Ejecutando método global: %s", node->id);
@@ -2390,7 +3135,7 @@ static void interpret_call_method_alone(ASTNode *node) {
         } else if (arg_global->type && (strcmp(arg_global->type,"ID")==0 || strcmp(arg_global->type,"IDENTIFIER")==0)) {
             Variable *v_arg = find_variable(arg_global->id);
             if (!v_arg) {
-                printf("Error: Variable '%s' no encontrada.\n", arg_global->id);
+                printf("Error: variable '%s' not found.\n", arg_global->id);
                 return;
             }
             if (v_arg->vtype == VAL_STRING) {
@@ -2502,7 +3247,7 @@ static void interpret_call_method_alone(ASTNode *node) {
     }
     
     if (!v || v->vtype != VAL_OBJECT) {
-        printf("Error: '%s' no es un objeto válido.\n", objNode->id);
+        printf("Error: '%s' is not a valid object.\n", objNode->id);
         return;
     }
     ObjectNode *obj = v->value.object_value;
@@ -2529,7 +3274,7 @@ static void interpret_call_method_alone(ASTNode *node) {
         } else if (strcmp(v->id, "Gemini") == 0) {
             if (g_bridge_handlers.handle_gemini_bridge) g_bridge_handlers.handle_gemini_bridge(node->id, node->right);
         } else {
-            printf("Advertencia: Bridge '%s' desconocido o no implementado en este ejecutable.\n", v->id);
+            printf("Advertencia: Bridge '%s' unknown o no implementado en este ejecutable.\n", v->id);
         }
         return;
     }
@@ -2542,7 +3287,7 @@ static void interpret_call_method_alone(ASTNode *node) {
         MethodNode *gm = global_methods;
         while (gm && strcmp(gm->name, node->id) != 0) gm = gm->next;
         if (!gm) {
-            printf("Error: Método '%s' no encontrado en clase '%s' ni como método global.\n", node->id, obj->class->name);
+            printf("Error: method '%s' not found in class '%s' nor as a global method.\n", node->id, obj->class->name);
             return;
         }
         ParameterNode *p = gm->params;
@@ -2554,7 +3299,7 @@ static void interpret_call_method_alone(ASTNode *node) {
             } else if (arg->type && (strcmp(arg->type,"ID")==0 || strcmp(arg->type,"IDENTIFIER")==0)) {
                 Variable *v_arg = find_variable(arg->id);
                 if (!v_arg) {
-                    printf("Error: Variable '%s' no encontrada.\n", arg->id);
+                    printf("Error: variable '%s' not found.\n", arg->id);
                     return;
                 }
                 if (v_arg->vtype == VAL_STRING) {
@@ -2642,7 +3387,7 @@ static void interpret_call_method_alone(ASTNode *node) {
         } else if (arg->type && (strcmp(arg->type,"ID")==0 || strcmp(arg->type,"IDENTIFIER")==0)) {
             Variable *v_arg = find_variable(arg->id);
             if (!v_arg) {
-                printf("Error: Variable '%s' no encontrada.\n", arg->id);
+                printf("Error: variable '%s' not found.\n", arg->id);
                 return;
             }
             if (v_arg->vtype == VAL_STRING) {
@@ -2791,6 +3536,19 @@ static void interpret_var_decl(ASTNode *node) {
     ASTNode* value_node = node->left;
     Variable *evaluated_value_var = NULL;
 
+    /* Fase 7: NULL_COALESCE — pick the right side at decl time */
+    if (value_node && value_node->type && strcmp(value_node->type, "NULL_COALESCE") == 0) {
+        ASTNode *l = value_node->left;
+        int is_null = 0;
+        if (l && l->type && strcmp(l->type, "NULL") == 0) is_null = 1;
+        else if (l && l->type && strcmp(l->type, "IDENTIFIER") == 0) {
+            Variable *vv = find_variable(l->id);
+            if (!vv || (vv->type && strcmp(vv->type, "NULL") == 0)) is_null = 1;
+        }
+        value_node = is_null ? value_node->right : l;
+        node->left = value_node;
+    }
+
     // 1. Si el valor es una llamada a función, ejecútala primero
 if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0 || strcmp(value_node->type, "FILTER_CALL") == 0 || strcmp(value_node->type, "CALL_FUNC") == 0)) {        
         //printf("[DEBUG] interpret_var_decl: executing function call\n"); fflush(stdout);
@@ -2799,7 +3557,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         evaluated_value_var = find_variable("__ret__");
         //printf("[DEBUG] interpret_var_decl: find_variable returned %p\n", (void*)evaluated_value_var); fflush(stdout);
         if (!evaluated_value_var) {
-            fprintf(stderr, "Error: No se capturó valor de retorno de la expresión '%s'. __ret_var_active=%d\n", value_node->type ? value_node->type : "desconocido", __ret_var_active);
+            fprintf(stderr, "Error: no return value captured from expression '%s'. __ret_var_active=%d\n", value_node->type ? value_node->type : "unknown", __ret_var_active);
             exit(1);
         }
     }
@@ -2821,12 +3579,18 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
             effective_value_type_str = "INT";
         } else if (strcmp(value_node->type, "STRING_LITERAL") == 0 || strcmp(value_node->type, "STRING") == 0) {
             effective_value_type_str = "STRING";
+        } else if (strcmp(value_node->type, "STRING_INTERP") == 0) {
+            effective_value_type_str = "STRING";
         } else if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0) {
-            double result = evaluate_expression(value_node);
-            if (result == (int)result) {
-                effective_value_type_str = "INT";
+            if (strcmp(value_node->type, "ADD") == 0 && is_string_type(value_node)) {
+                effective_value_type_str = "STRING";
             } else {
-                effective_value_type_str = "FLOAT";
+                double result = evaluate_expression(value_node);
+                if (result == (int)result) {
+                    effective_value_type_str = "INT";
+                } else {
+                    effective_value_type_str = "FLOAT";
+                }
             }
         } else {
             effective_value_type_str = value_node->type;
@@ -2837,8 +3601,15 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         if (strcmp(declared_type, effective_value_type_str) != 0) {
             int allow_int_to_float = (strcmp(declared_type, "FLOAT") == 0 && strcmp(effective_value_type_str, "INT") == 0);
             if (!allow_int_to_float) {
-                fprintf(stderr, "Error de tipo: No se puede asignar un valor de tipo '%s' a una variable de tipo '%s'.\n", effective_value_type_str, declared_type);
-                exit(1);
+                /* Fase 2: lanzar como excepción capturable en lugar de abortar */
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                    "TypeError: cannot assign a value of type '%s' to a variable of type '%s'.",
+                    effective_value_type_str, declared_type);
+                if (throw_message) free(throw_message);
+                throw_message = strdup(buf);
+                throw_flag = 1;
+                return;
             }
         }
     }
@@ -2893,7 +3664,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 value_to_assign_node->next = NULL;
             }
         } else {
-            fprintf(stderr, "Error interno: Tipo de retorno desconocido para asignación de variable '%s'.\n", node->id);
+            fprintf(stderr, "Internal error: unknown return type for variable assignment '%s'.\n", node->id);
             exit(1);
         }
         
@@ -2954,7 +3725,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 } else if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
                     Variable *v = find_variable(arg->id);
                     if (!v) {
-                        fprintf(stderr, "Error: Variable '%s' no encontrada.\n", arg->id);
+                        fprintf(stderr, "Error: variable '%s' not found.\n", arg->id);
                         return;
                     }
                     if (v->vtype == VAL_STRING) {
@@ -2970,13 +3741,13 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                   //  fprintf(stderr, "[DEBUG] Constructor arg expr int val: %d\n", val);
                 }
                 add_or_update_variable(p->name, vn);
-                fprintf(stderr, "[DEBUG] Constructor param '%s' set\n", p->name);
+                if (g_debug_mode) fprintf(stderr, "[DEBUG] Constructor param '%s' set\n", p->name);
                 p   = p->next;
                 arg = arg->right;
             }
-            fprintf(stderr, "[DEBUG] Calling __constructor for class '%s'\n", var->value.object_value->class->name);
+            if (g_debug_mode) fprintf(stderr, "[DEBUG] Calling __constructor for class '%s'\n", var->value.object_value->class->name);
             call_method(var->value.object_value, "__constructor");
-            fprintf(stderr, "[DEBUG] __constructor completed\n");
+            if (g_debug_mode) fprintf(stderr, "[DEBUG] __constructor completed\n");
         }
     }
    // printf("[DEBUG] interpret_var_decl: done\n"); fflush(stdout);
@@ -3033,7 +3804,7 @@ ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
         return list;
     }
     if (list == item) {
-        printf("Error: Intento de insertar la misma lista dentro de sí misma.\n");
+        printf("Error: attempt to insert the same list into itself.\n");
         return list;
     }
     if (!list) {
@@ -3112,7 +3883,7 @@ static void interpret_assign_attr(ASTNode *node) {
     for(int i=0;i<obj->class->attr_count;i++){
         if(strcmp(obj->class->attributes[i].id,attr_name)==0){idx=i;break;}
     }
-    if(idx<0){ printf("Error: Atributo '%s' no encontrado en clase '%s'.\n", attr_name, obj->class->name); return; }
+    if(idx<0){ printf("Error: attribute '%s' not found in class '%s'.\n", attr_name, obj->class->name); return; }
     const char *declared = obj->attributes[idx].type; 
 
     /* detailed attribute assignment trace removed */
@@ -3125,42 +3896,42 @@ static void interpret_assign_attr(ASTNode *node) {
     if (strcmp(declared, "string") == 0) {
         if (value_node->type && strcmp(value_node->type, "STRING") == 0) {
           obj->attributes[idx].value.string_value = strdup(value_node->str_value);
-          fprintf(stderr, "[DEBUG] Assign attr %s = %s (STRING)\n", attr_name, value_node->str_value);
+          if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (STRING)\n", attr_name, value_node->str_value);
         }
         else if (value_node->type && (strcmp(value_node->type, "IDENTIFIER") == 0 || strcmp(value_node->type, "ID") == 0)) {
           Variable *v2 = find_variable(value_node->id ? value_node->id : value_node->str_value);
           if (!v2 || v2->vtype != VAL_STRING) {
-            fprintf(stderr, "Error: expresión no es una cadena válida o variable no encontrada.\n");
+            fprintf(stderr, "Error: expression is not a valid string or variable not found.\n");
             return;
           }
           obj->attributes[idx].value.string_value = strdup(v2->value.string_value);
-          fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR)\n", attr_name, v2->value.string_value);
+          if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR)\n", attr_name, v2->value.string_value);
         }
         else if (value_node->id) {
           Variable *v2 = find_variable(value_node->id);
           if (!v2 || v2->vtype != VAL_STRING) {
-            fprintf(stderr, "Error: expresión no es una cadena válida.\n");
+            fprintf(stderr, "Error: expression is not a valid string.\n");
             return;
           }
           obj->attributes[idx].value.string_value = strdup(v2->value.string_value);
-          fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR ID)\n", attr_name, v2->value.string_value);
+          if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR ID)\n", attr_name, v2->value.string_value);
         }
         else if (strcmp(value_node->type, "CALL_FUNC") == 0) {
           interpret_ast(value_node);
           Variable *r = find_variable("__ret__");
           if (!r || r->vtype != VAL_STRING) {
-            fprintf(stderr, "Error: resultado de función no es una cadena.\n");
+            fprintf(stderr, "Error: function result is not a string.\n");
             return;
           }
           obj->attributes[idx].value.string_value = strdup(r->value.string_value);
-          fprintf(stderr, "[DEBUG] Assign attr %s = %s (CALL)\n", attr_name, r->value.string_value);
+          if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (CALL)\n", attr_name, r->value.string_value);
         }
         obj->attributes[idx].vtype = VAL_STRING;
       } else {
         int val = evaluate_expression(value_node);
         obj->attributes[idx].value.int_value = val;
         obj->attributes[idx].vtype = VAL_INT;
-        fprintf(stderr, "[DEBUG] Assign attr %s = %d (INT)\n", attr_name, val);
+        if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %d (INT)\n", attr_name, val);
     }
 }
 
@@ -3169,7 +3940,7 @@ static void interpret_assign(ASTNode *node) {
     ASTNode *var_node = node->left;
     ASTNode *value_node = node->right;
     if (!var_node || !var_node->id || !value_node) {
-        printf("Error: Asignación inválida.\n"); 
+        printf("Error: invalid assignment.\n"); 
         return; 
     }
 
@@ -3184,7 +3955,7 @@ static void interpret_assign(ASTNode *node) {
         // 2. Obtener el resultado de __ret_var
         Variable *ret_val = find_variable("__ret__");
         if (!ret_val) {
-            printf("Error: Función en asignación no devolvió nada.\n");
+            printf("Error: function in assignment returned nothing.\n");
             return;
         }
 
@@ -3227,7 +3998,7 @@ static void interpret_assign(ASTNode *node) {
         ASTNode *o = value_node->left, *a = value_node->right;
         Variable *v = find_variable(o->id);
         if (!v || v->vtype != VAL_OBJECT) {
-             printf("Error: Objeto '%s' no encontrado para asignación.\n", o->id);
+             printf("Error: object '%s' not found for assignment.\n", o->id);
              return;
         }
         
@@ -3256,12 +4027,24 @@ static void interpret_assign(ASTNode *node) {
     }
     // ¿Es una expresión matemática?
     else if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0) {
+        if (strcmp(value_node->type, "ADD") == 0 && is_string_type(value_node)) {
+            char *s = get_node_string(value_node);
+            ASTNode* temp_node = create_ast_leaf("STRING", 0, s, NULL);
+            add_or_update_variable(var_node->id, temp_node);
+            free_ast(temp_node);
+            return;
+        }
         double result = evaluate_expression(value_node);
-        char* str_res = double_to_string(result);
-        ASTNode* temp_node = create_ast_leaf("FLOAT", 0, str_res, NULL);
+        ASTNode* temp_node = NULL;
+        if (result == (int)result) {
+            temp_node = create_ast_leaf_number("INT", (int)result, NULL, NULL);
+        } else {
+            char* str_res = double_to_string(result);
+            temp_node = create_ast_leaf("FLOAT", 0, str_res, NULL);
+            free(str_res);
+        }
         add_or_update_variable(var_node->id, temp_node);
         free_ast(temp_node);
-        free(str_res);
     } 
     // Es un valor simple (literal, variable)
     else {
@@ -3273,16 +4056,77 @@ static void interpret_assign(ASTNode *node) {
 static void interpret_print(ASTNode *node) {
     ASTNode *arg = node->left;
     if (!arg) {
-        printf("Error: print sin argumento\n");
+        printf("Error: print without argument\n");
         return;
+    }
+    if (arg->type && strcmp(arg->type, "NULL") == 0) {
+        printf("null");
+        append_to_stdout("null");
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "IDENTIFIER") == 0) {
+        Variable *_v = find_variable(arg->id);
+        if (_v && _v->type && strcmp(_v->type, "NULL") == 0) { printf("null"); append_to_stdout("null"); return; }
     }
     if (arg->type && strcmp(arg->type, "STRING") == 0) {
         printf("%s", arg->str_value);
         return;
     }
+    if (arg->type && strcmp(arg->type, "STRING_INTERP") == 0) {
+        char *s = expand_interp_string(arg->str_value);
+        printf("%s", s);
+        append_to_stdout(s);
+        free(s);
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "ADD") == 0 && is_string_type(arg)) {
+        char *s = get_node_string(arg);
+        printf("%s", s);
+        append_to_stdout(s);
+        free(s);
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "ACCESS_EXPR") == 0) {
+        ASTNode *map = resolve_to_map(arg->left);
+        if (map) {
+            const char *key = NULL;
+            if (arg->right && arg->right->type && strcmp(arg->right->type, "STRING") == 0) key = arg->right->str_value;
+            else if (arg->right && (strcmp(arg->right->type, "IDENTIFIER") == 0 || strcmp(arg->right->type, "ID") == 0)) {
+                Variable *kv = find_variable(arg->right->id);
+                if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+            }
+            if (!key) { printf("Error: clave Map debe ser string.\n"); return; }
+            ASTNode *pair = map_find_pair(map, key);
+            if (!pair) { printf("Error: clave '%s' no encontrada.\n", key); return; }
+            ASTNode *val = pair->left;
+            if (val && val->type && strcmp(val->type, "STRING") == 0) printf("%s", val->str_value);
+            else if (val && val->type && strcmp(val->type, "FLOAT") == 0) printf("%f", atof(val->str_value));
+            else { double v_ = evaluate_expression(val); if (v_ == (int)v_) printf("%d", (int)v_); else printf("%f", v_); }
+            return;
+        }
+        ASTNode *list = resolve_to_list(arg->left);
+        if (!list) { printf("Error: no es lista ni Map.\n"); return; }
+        int idx = (int)evaluate_expression(arg->right);
+        int len = list_length(list);
+        if (idx < 0 || idx >= len) { printf("Error: index %d out of range.\n", idx); return; }
+        ASTNode *item = list_get_item(list, idx);
+        if (!item) return;
+        if (item->type && strcmp(item->type, "STRING") == 0) printf("%s", item->str_value);
+        else if (item->type && strcmp(item->type, "FLOAT") == 0) printf("%f", atof(item->str_value));
+        else { double v_ = evaluate_expression(item); if (v_ == (int)v_) printf("%d", (int)v_); else printf("%f", v_); }
+        return;
+    }
+    /* Fase 1a: print(arr[i]) — soporta strings y números */
     if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
         ASTNode *o = arg->left;
         ASTNode *a = arg->right;
+        /* Fase 1a: arr.length */
+        if (a && a->id && strcmp(a->id, "length") == 0) {
+            ASTNode *list = resolve_to_list(o);
+            if (list) { printf("%d", list_length(list)); return; }
+            ASTNode *map = resolve_to_map(o);
+            if (map) { printf("%d", map_length(map)); return; }
+        }
         Variable *v = find_variable(o->id);
         if (!v || v->vtype != VAL_OBJECT) {
             printf("Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
@@ -3297,7 +4141,7 @@ static void interpret_print(ASTNode *node) {
             }
         }
         if (idx < 0) {
-            printf("Error: Atributo '%s' no encontrado en clase '%s'.\n", a->id, obj->class->name);
+            printf("Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
             return;
         }
         Variable *attr = &obj->attributes[idx];
@@ -3359,7 +4203,7 @@ static void interpret_print(ASTNode *node) {
 static void interpret_fprint(ASTNode *node) {
     ASTNode *arg = node->left;
     if (!arg) {
-        fprintf(stdout, "Error: print sin argumento\n");
+        fprintf(stdout, "Error: print without argument\n");
         return;
     }
     if (arg->type && strcmp(arg->type, "STRING") == 0) {
@@ -3383,7 +4227,7 @@ static void interpret_fprint(ASTNode *node) {
             }
         }
         if (idx < 0) {
-            fprintf(stderr, "Error: Atributo '%s' no encontrado en clase '%s'.\n", a->id, obj->class->name);
+            fprintf(stderr, "Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
             return;
         }
         Variable *attr = &obj->attributes[idx];
@@ -3445,7 +4289,7 @@ static void interpret_fprint(ASTNode *node) {
 static void interpret_fprintln(ASTNode *node) {
     ASTNode *arg = node->left;
     if (!arg) {
-        fprintf(stderr, "Error: print sin argumento\n");
+        fprintf(stderr, "Error: print without argument\n");
         return;
     }
     if (arg->type && strcmp(arg->type, "STRING") == 0) {
@@ -3469,7 +4313,7 @@ static void interpret_fprintln(ASTNode *node) {
             }
         }
         if (idx < 0) {
-            fprintf(stderr, "Error: Atributo '%s' no encontrado en clase '%s'.\n", a->id, obj->class->name);
+            fprintf(stderr, "Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
             return;
         }
         Variable *attr = &obj->attributes[idx];
@@ -3531,8 +4375,17 @@ static void interpret_fprintln(ASTNode *node) {
 static void interpret_println(ASTNode *node) {
     ASTNode *arg = node->left;
     if (!arg) {
-        printf("Error: print sin argumento\n");
+        printf("Error: print without argument\n");
         return;
+    }
+    if (arg->type && strcmp(arg->type, "NULL") == 0) {
+        printf("null\n");
+        append_to_stdout("null\n");
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "IDENTIFIER") == 0) {
+        Variable *_v = find_variable(arg->id);
+        if (_v && _v->type && strcmp(_v->type, "NULL") == 0) { printf("null\n"); append_to_stdout("null\n"); return; }
     }
     if (arg->type && strcmp(arg->type, "STRING") == 0) {
         printf("%s\n", arg->str_value);
@@ -3540,9 +4393,109 @@ static void interpret_println(ASTNode *node) {
         append_to_stdout("\n");
         return;
     }
+    if (arg->type && strcmp(arg->type, "STRING_INTERP") == 0) {
+        char *s = expand_interp_string(arg->str_value);
+        printf("%s\n", s);
+        append_to_stdout(s);
+        append_to_stdout("\n");
+        free(s);
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "ADD") == 0 && is_string_type(arg)) {
+        char *s = get_node_string(arg);
+        printf("%s\n", s);
+        append_to_stdout(s);
+        append_to_stdout("\n");
+        free(s);
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "CALL_METHOD") == 0) {
+        interpret_call_method(arg);
+        Variable *r = find_variable("__ret__");
+        if (!r) { printf("\n"); return; }
+        if (r->vtype == VAL_STRING) { printf("%s\n", r->value.string_value ? r->value.string_value : ""); return; }
+        if (r->vtype == VAL_INT) { printf("%d\n", r->value.int_value); return; }
+        if (r->vtype == VAL_FLOAT) { printf("%f\n", r->value.float_value); return; }
+        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) { printf("null\n"); return; }
+        printf("\n");
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "NULL_COALESCE") == 0) {
+        ASTNode *l = arg->left;
+        int is_null = 0;
+        if (l && l->type && strcmp(l->type, "NULL") == 0) is_null = 1;
+        else if (l && l->type && strcmp(l->type, "IDENTIFIER") == 0) {
+            Variable *vv = find_variable(l->id);
+            if (!vv || (vv->type && strcmp(vv->type, "NULL") == 0)) is_null = 1;
+        }
+        ASTNode *chosen = is_null ? arg->right : l;
+        ASTNode wrapper; memset(&wrapper, 0, sizeof(ASTNode));
+        wrapper.type = strdup("PRINTLN"); wrapper.left = chosen;
+        interpret_println(&wrapper);
+        free(wrapper.type);
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "ACCESS_EXPR") == 0) {
+        /* Fase 1c: println(m["k"]) */
+        ASTNode *map = resolve_to_map(arg->left);
+        if (map) {
+            const char *key = NULL;
+            if (arg->right && arg->right->type && strcmp(arg->right->type, "STRING") == 0) key = arg->right->str_value;
+            else if (arg->right && (strcmp(arg->right->type, "IDENTIFIER") == 0 || strcmp(arg->right->type, "ID") == 0)) {
+                Variable *kv = find_variable(arg->right->id);
+                if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+            }
+            if (!key) { printf("Error: clave Map debe ser string.\n"); return; }
+            ASTNode *pair = map_find_pair(map, key);
+            if (!pair) { printf("Error: clave '%s' no encontrada.\n", key); return; }
+            ASTNode *val = pair->left;
+            if (val && val->type && strcmp(val->type, "STRING") == 0) printf("%s\n", val->str_value);
+            else if (val && val->type && strcmp(val->type, "FLOAT") == 0) printf("%f\n", atof(val->str_value));
+            else { double v_ = evaluate_expression(val); if (v_ == (int)v_) printf("%d\n", (int)v_); else printf("%f\n", v_); }
+            return;
+        }
+        ASTNode *list = resolve_to_list(arg->left);
+        if (!list) { printf("Error: no es lista.\n"); return; }
+        int idx = (int)evaluate_expression(arg->right);
+        int len = list_length(list);
+        if (idx < 0 || idx >= len) {
+            printf("Error: index %d out of range (length=%d).\n", idx, len);
+            return;
+        }
+        ASTNode *item = list_get_item(list, idx);
+        if (!item) return;
+        if (item->type && strcmp(item->type, "STRING") == 0) {
+            printf("%s\n", item->str_value);
+        } else if (item->type && strcmp(item->type, "FLOAT") == 0) {
+            printf("%f\n", atof(item->str_value));
+        } else {
+            double v = evaluate_expression(item);
+            if (v == (int)v) printf("%d\n", (int)v); else printf("%f\n", v);
+        }
+        return;
+    }
     if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
         ASTNode *o = arg->left;
         ASTNode *a = arg->right;
+        /* Fase 1a: arr.length */
+        if (a && a->id && strcmp(a->id, "length") == 0) {
+            ASTNode *list = resolve_to_list(o);
+            if (list) {
+                int n = list_length(list);
+                printf("%d\n", n);
+                char tmp[32]; snprintf(tmp, 32, "%d\n", n);
+                append_to_stdout(tmp);
+                return;
+            }
+            ASTNode *map = resolve_to_map(o);
+            if (map) {
+                int n = map_length(map);
+                printf("%d\n", n);
+                char tmp[32]; snprintf(tmp, 32, "%d\n", n);
+                append_to_stdout(tmp);
+                return;
+            }
+        }
         Variable *v = find_variable(o->id);
         if (!v || v->vtype != VAL_OBJECT) {
             printf("Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
@@ -3557,7 +4510,7 @@ static void interpret_println(ASTNode *node) {
             }
         }
         if (idx < 0) {
-            printf("Error: Atributo '%s' no encontrado en clase '%s'.\n", a->id, obj->class->name);
+            printf("Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
             return;
         }
         Variable *attr = &obj->attributes[idx];
@@ -3636,6 +4589,7 @@ static void interpret_println(ASTNode *node) {
 
 static void interpret_statement_list(ASTNode *node) {
     interpret_ast(node->left);
+    if (throw_flag || return_flag || break_flag || continue_flag) return;
     interpret_ast(node->right);
 }
 
@@ -3648,7 +4602,7 @@ int get_attribute_value(ObjectNode *obj, const char *attr_name) {
             return obj->attributes[i].value.int_value;
         }
     }
-    printf("Error: Atributo '%s' no encontrado en clase '%s'.\n", attr_name, obj->class->name);
+    printf("Error: attribute '%s' not found in class '%s'.\n", attr_name, obj->class->name);
     return 0;
 }
 
@@ -3660,7 +4614,7 @@ void set_attribute_value(ObjectNode *obj, const char *attr_name, int value) {
             return;
         }
     }
-    printf("Error: Atributo '%s' no encontrado en clase '%s'.\n", attr_name, obj->class->name);
+    printf("Error: attribute '%s' not found in class '%s'.\n", attr_name, obj->class->name);
     }
 // ====================== LIBERACIÓN DE MEMORIA ======================
 
@@ -3817,7 +4771,7 @@ static void interpret_return_node(ASTNode *node) {
         //fprintf(stderr, "[DEBUG] interpret_return_node: expression executed\n"); fflush(stderr);
     } 
     /*else {
-        fprintf(stderr, "[DEBUG] interpret_return_node: no return expression\n"); fflush(stderr);
+        if (g_debug_mode) { fprintf(stderr, "[DEBUG] interpret_return_node: no return expression\n"); fflush(stderr); }
     }*/
     return_flag = 1;
 }

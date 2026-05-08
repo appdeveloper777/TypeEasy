@@ -10,7 +10,7 @@ class Person {
         this.edad = _edad;
         this.nombre = _nombre;        
     }
-    Imprimir(p_edad : int) {          
+    Imprimir(p_edad : int) : dynamic {
        
         const pi = 3.1416;
         print("EL VALOR DE PI ES: ");
@@ -23,7 +23,7 @@ class Person {
         println(this.company);
     }  
     
-    Saludar() {           
+    Saludar() : dynamic {
 
       int x = 10;
       int y = 5;
@@ -39,14 +39,27 @@ class Person {
         return test_local;   
     }
 
-    ObtenerEdad() {
+    ObtenerEdad() : dynamic {
         float edad_double = 3.4;
         return edad_double;
     }
 
-    Contar(){
+    Contar() : dynamic {
         int numero = 8 * 3;//2 * 2  / 2 + 1 + 1 + 1 - 1 ;
         return numero;
+    }
+
+    // Retorna un string formateado con el nombre
+    NombreFormateado() : dynamic {
+        string saludo = "Sr/Sra ";
+        int prueba = 5;
+        return prueba;
+    }
+
+    // Retorna el doble de la edad (int)
+    EdadDoble() : dynamic {
+        int doble = this.edad * 2;
+        return doble;
     }
 }
 
@@ -56,14 +69,16 @@ string mi_empresa = "Roussecloud";
 let obj = new Person(mi_edad, mi_nombre, mi_empresa);
 let persona = new Person(mi_edad, mi_nombre, mi_empresa);
 
-//int contarResult = obj.Contar();
-//float edadResult = obj.ObtenerEdad();
-
+int contarResult = obj.Contar();
 string saludarResult1 = persona.Saludar();
 string saludarResult2 = obj.Saludar();
+var nombreFmt = persona.NombreFormateado();
+int edadDoble = obj.EdadDoble();
+
 obj.Imprimir(12);
 println(saludarResult1);
 println(saludarResult2);
-//println(contarResult);
-//println(edadResult);
+println(contarResult);
+println(nombreFmt);
+println(edadDoble);
 

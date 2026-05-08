@@ -93,6 +93,7 @@ typedef struct MethodNode {
     char *route_path;    // For endpoints
     char *http_method;   // For endpoints
     int cache_ttl;       // For endpoint cache decorator
+    char *return_type;   // "int" | "string" | "float" | "void" | "dynamic" | NULL (legacy/internal)
     struct MethodNode *next;
 } MethodNode;
 
@@ -151,7 +152,8 @@ void add_attribute_to_class(ClassNode *class, char *attr_name, char *attr_type);
 void add_method_to_class(ClassNode *class,
                              char *method,
                              ParameterNode *params,
-                             ASTNode *body);
+                             ASTNode *body,
+                             char *return_type);
 ObjectNode *create_object(ClassNode *class);
 void call_method(ObjectNode *obj, char *method);
 ClassNode *find_class(char *name);

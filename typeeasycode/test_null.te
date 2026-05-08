@@ -1,0 +1,7 @@
+var x = null;
+println(x);
+if (x == null) { println("es null"); }
+if (x != null) { println("no null"); } else { println("confirmado null"); }
+
+var y = 5;
+if (y != null) { println("y no es null"); }

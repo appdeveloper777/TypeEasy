@@ -1,0 +1,25 @@
+try {
+  int x = "5";
+  println("antes");
+  
+  throw "fallo grave";
+  println("nunca");
+} catch (e) {
+  println("capturado:");
+  println(e);
+} finally {
+  println("siempre");
+}
+
+/*try {
+  println("ok");
+} catch (e) {
+  println("no debe imprimirse");
+}
+
+try {
+  throw "x";
+} catch (err) {
+  println(err);
+}
+println("fin");*/

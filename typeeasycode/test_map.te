@@ -1,0 +1,30 @@
+// Fase 1c: Maps - literal, lectura, escritura, keys/values/has/remove
+var user = { "nombre": "Ana", "rol": "admin", "edad": 30 };
+
+println(user["nombre"]);
+println(user["rol"]);
+println(user["edad"]);
+println(user.length);
+
+user["edad"] = 31;
+println(user["edad"]);
+
+user["pais"] = "Peru";
+println(user["pais"]);
+println(user.length);
+
+var ks = user.keys();
+println(ks.length);
+println(ks[0]);
+println(ks[1]);
+println(ks[2]);
+println(ks[3]);
+
+var vs = user.values();
+println(vs.length);
+
+user.remove("rol");
+println(user.length);
+
+var empty = {};
+println(empty.length);

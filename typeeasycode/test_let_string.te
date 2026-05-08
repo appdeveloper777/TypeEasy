@@ -1,0 +1,7 @@
+// Prueba: let con tipos primitivos
+let nombre = "Fernando";
+println(nombre);
+
+// Reasignar string a let: DEBE FALLAR
+nombre = "Otro";
+println(nombre);

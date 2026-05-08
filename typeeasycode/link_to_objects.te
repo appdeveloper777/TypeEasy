@@ -7,7 +7,7 @@ class Producto {
     this.precio = precio;
   }
 
-  Mostrar() {
+  Mostrar() : dynamic {
     print(this.nombre);
     println(this.precio);
   }

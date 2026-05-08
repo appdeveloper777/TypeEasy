@@ -1,0 +1,19 @@
+class C {
+    n : int;
+    __constructor(_n : int) {
+        this.n = _n;
+    }
+    Doble() : dynamic {
+        return this.n * 2;
+    }
+    Saludo() : dynamic {
+        string m = "hola";
+        return m;
+    }
+}
+
+let c = new C(7);
+int x = c.Doble();
+string s = c.Saludo();
+print(x);
+print(s);

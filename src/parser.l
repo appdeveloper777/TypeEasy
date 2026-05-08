@@ -142,6 +142,16 @@
 "int"                   { return INT; }
 "float"                 { return FLOAT; }
 "string"                { return STRING; }
+"void"                  { return VOID; }
+"dynamic"               { return DYNAMIC; }
+"null"                  { return NULLTOK; }
+"try"                   { return TRY; }
+"catch"                 { return CATCH; }
+"finally"               { return FINALLY; }
+"throw"                 { return THROW; }
+"while"                 { return WHILE; }
+"break"                 { return BREAK; }
+"continue"              { return CONTINUE; }
 
 ">"                     { return GT; }  
 "<"                     { return LT; } 
@@ -150,6 +160,18 @@
 "=="                    { return EQ; }
 "!="                    { return DIFF; }
 "=>"                    { return ARROW; }
+"+="                    { return PLUS_ASSIGN; }
+"-="                    { return MINUS_ASSIGN; }
+"*="                    { return STAR_ASSIGN; }
+"/="                    { return SLASH_ASSIGN; }
+"++"                    { return INCREMENT; }
+"--"                    { return DECREMENT; }
+"&&"                    { return AND; }
+"||"                    { return OR; }
+"!"                     { return NOT; }
+"?."                    { return QDOT; }
+"??"                    { return QQ; }
+"?"                     { return QMARK; }
 "["                     { return LSBRACKET;}
 "]"                     { return RSBRACKET;}
 "("                     { return LPAREN; }
@@ -168,6 +190,33 @@
 "if"                    { return IF; }    
 "else"                  { return ELSE; }  
 
+
+\$\"(\\.|[^\"])*\"      {
+    /* Fase 3a: string interpolation $"text {var}" — emitir STRING_INTERP con contenido crudo */
+    int max_len = strlen(yytext);
+    yylval.sval = (char *) malloc(max_len + 1);
+    char *w = yylval.sval;
+    char *s = yytext + 2; /* saltar $ y " */
+    while (*s != '\0' && !(*s == '"' && *(s-1) != '\\')) {
+        if (*s == '\\') {
+            s++;
+            switch (*s) {
+                case 'n': *w++ = '\n'; break;
+                case 't': *w++ = '\t'; break;
+                case '"': *w++ = '"'; break;
+                case '\\': *w++ = '\\'; break;
+                case '{': *w++ = '\1'; break; /* literal { */
+                case '}': *w++ = '\2'; break; /* literal } */
+                default: *w++ = *s; break;
+            }
+        } else {
+            *w++ = *s;
+        }
+        s++;
+    }
+    *w = '\0';
+    return STRING_INTERP;
+}
 
 \"(\\.|[^\"])*\"      {
     // Calcular longitud máxima necesaria

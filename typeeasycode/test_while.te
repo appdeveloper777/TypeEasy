@@ -1,0 +1,20 @@
+var i = 0;
+while (i < 5) {
+    println(i);
+    i++;
+}
+println("--break--");
+var j = 0;
+while (j < 10) {
+    if (j == 3) { break; }
+    println(j);
+    j++;
+}
+println("--continue--");
+var k = 0;
+while (k < 6) {
+    k++;
+    if (k == 3) { continue; }
+    println(k);
+}
+println("done");

@@ -1,0 +1,5 @@
+var x = Math.round(16.5);
+println(x);
+
+x = x + 0.5;
+println(x);

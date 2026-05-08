@@ -1,0 +1,20 @@
+// Prueba: let con objetos = referencia inmutable, atributos mutables
+class Person {
+    edad : int;
+    nombre : string;
+    __constructor(_edad : int, _nombre : string) {
+        this.edad = _edad;
+        this.nombre = _nombre;
+    }
+}
+
+let obj = new Person(36, "Fernando");
+let persona = new Person(40, "Ana");
+
+// 1) Mutar atributos: PERMITIDO (let no congela el objeto, solo la variable)
+obj.edad = 99;
+println(obj.edad);          // -> 99
+
+// 2) Reasignar la variable let: DEBE FALLAR
+obj = new Person(20, "Otro");
+println(obj.edad);          // no se imprime, sale con error antes

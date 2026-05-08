@@ -1,0 +1,19 @@
+println(Math.sqrt(16));
+println(Math.abs(0 - 7));
+println(Math.pow(2, 10));
+println(Math.floor(3.9));
+println(Math.ceil(3.1));
+println(Math.round(2.5));
+println(Math.min(3, 7));
+println(Math.max(3, 7));
+
+var s = "Hello World";
+println(s.upper());
+println(s.lower());
+println("  trim me  ".trim());
+println(s.contains("World"));
+println(s.contains("xyz"));
+let parts = "a,b,c,d".split(",");
+println(parts[0]);
+println(parts[3]);
+println(parts.length);
