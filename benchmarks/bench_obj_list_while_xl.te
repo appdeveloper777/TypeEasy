@@ -1,0 +1,28 @@
+class Punto {
+    x : int;
+    y : int;
+    __constructor(_x : int, _y : int) {
+        this.x = _x;
+        this.y = _y;
+    }
+}
+
+let arr = [];
+var i = 0;
+while (i < 100000) {
+    arr.push(new Punto(i, i));
+    i = i + 1;
+}
+
+var total = 0;
+var k = 0;
+var j = 0;
+while (k < 100) {
+    j = 0;
+    while (j < 100000) {
+        total = total + arr[j].x;
+        j = j + 1;
+    }
+    k = k + 1;
+}
+println(total);

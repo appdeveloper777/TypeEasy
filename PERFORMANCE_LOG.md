@@ -675,18 +675,22 @@ Ganancia Ola 4 sola sobre Ola 3: **+19%**.
 
 | Runtime | Wall best | Per call |
 |---|---:|---:|
-| **Python 3.13 nativo** | **2.52s** | **~126ns** |
+| **Python 3.13 nativo** (esta corrida) | **2.52s** | **~126ns** |
 | TypeEasy Ola 4 wall | 8.09s | ~405ns |
 | TypeEasy Ola 4 net (-1.8s Docker) | ~6.3s | ~315ns |
 
-**Brecha vs Python**:
-- Antes de Ola 4: Python ~5.6× más rápido en method calls
-- **Después de Ola 4: Python ~2.5× más rápido**
+**Brecha vs Python (cociente "Python le gana N×", NO regresión de TypeEasy)**:
+- Antes de Ola 4: TypeEasy 17.72s vs Python 2.52s → Python ~5.6× más rápido
+- **Después de Ola 4: TypeEasy 8.09s vs Python 2.52s → Python ~2.5× más rápido**
 
-Ola 4 cortó la brecha **a la mitad**. Para cerrarla del todo hace
-falta Frames + bytecode-de-call (Ola 5), donde el loop entero
-`for(...) { r = c.add(3); total = total + r; }` viva en un único
-programa de bytecode sin volver al AST walker entre iteraciones.
+Ola 4 cortó la brecha **a la mitad**. TypeEasy bajó de 17.72s a 8.09s
+(mejora real ~2.2×); el cociente vs Python pasó de 5.6× a 2.5× porque
+se comparó contra el mismo wall-time de Python (2.52s).
+
+Para cerrarla del todo hace falta Frames + bytecode-de-call (Ola 5),
+donde el loop entero `for(...) { r = c.add(3); total = total + r; }`
+viva en un único programa de bytecode sin volver al AST walker entre
+iteraciones.
 
 ### Regresión
 
@@ -768,12 +772,21 @@ Wall-time (incluye ~1.8 s overhead Docker), best of 3:
 
 | Sistema | Best (s) | ns / iter aprox |
 |---|---|---|
-| Python 3.13.5 nativo | 2.07 | ~104 |
+| Python 3.13.5 nativo (esta corrida) | 2.07 | ~104 |
 | TypeEasy Ola 5b wall | 9.50 | ~475 |
 | TypeEasy Ola 5b net (-1.8s Docker) | ~7.7 | ~385 |
 | TypeEasy Ola 4 net (sin Ola 5) | ~7.6 | ~380 |
 
-**Brecha vs Python: ~3.7× (sin cambio respecto a Ola 4).**
+**Brecha vs Python: ~3.7×.**
+
+⚠️ **Cuidado al comparar con la sección de Ola 4**: ahí el cociente daba
+2.5× porque la corrida de Python midió 2.52s. Aquí Python midió 2.07s
+(mismo bench, distinta corrida/máquina), así que el cociente sube a 3.7×
+aunque **TypeEasy esté igual o ligeramente mejor que en Ola 4**
+(7.7s neto vs 7.6s neto). Es decir: el "empeoramiento" del cociente
+NO es una regresión de TypeEasy, es un cambio de la baseline de Python.
+Para que los cocientes inter-Ola sean comparables hay que medir Python
+en la **misma corrida** que TypeEasy, no reusar números de Olas previas.
 
 ### Análisis honesto del resultado neutro
 

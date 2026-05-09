@@ -1,0 +1,22 @@
+class Punto {
+    x : int;
+    y : int;
+    __constructor(_x : int, _y : int) {
+        this.x = _x;
+        this.y = _y;
+    }
+}
+
+let arr = [];
+for (i = 0; 50000; 1) {
+    arr.push(new Punto(i, i));
+}
+
+var total = 0;
+// 20 read passes — amplifica el efecto del JIT en el hot loop.
+for (k = 0; 20; 1) {
+    for (j = 0; 50000; 1) {
+        total = total + arr[j].x;
+    }
+}
+println(total);

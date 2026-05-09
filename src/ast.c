@@ -899,6 +899,7 @@ static void te_sym_reset_to(int initial_count) {
 }
 
 Variable *find_variable(char *id) {    
+    if (!id) return NULL;  /* Bug fix: caller paths sometimes pass NULL (e.g. arr[i].attr access where 'o' is ACCESS_EXPR with NULL id). */
     if (strcmp(id, "__ret__") == 0 && __ret_var_active) {
         return &__ret_var;
     }
@@ -1845,6 +1846,9 @@ int is_string_type(ASTNode *node) {
     if (node->type && strcmp(node->type, "ACCESS_ATTR") == 0) {
         ASTNode *o = node->left;
         ASTNode *a = node->right;
+        /* Bug fix: si o->id es NULL (p.ej. arr[i].attr donde o es ACCESS_EXPR),
+         * no podemos buscar variable; tratar como no-string. */
+        if (!o || !o->id) return 0;
         Variable *v = find_variable(o->id);
         if (v && v->vtype == VAL_OBJECT) {
             ObjectNode *obj = v->value.object_value;
@@ -1920,6 +1924,54 @@ static void te_invalidate_list_cache(ASTNode *root) {
     if (!root || !root->extra) return;
     te_list_idx_free((TEListIdx*)root->extra);
     root->extra = NULL;
+}
+
+/* Forward decl needed because te_list_get_idx is defined further below. */
+static TEListIdx* te_list_get_idx(ASTNode *list);
+
+/* Ola 14b: append `item` to a list AND keep the side-cache in sync.
+ * Brings push from O(n) (walk to tail + invalidate cache) to O(1) amortized. */
+static void te_list_append(ASTNode *list, ASTNode *item) {
+    if (!list || !item) return;
+    item->next = NULL;
+    TEListIdx *ix = (TEListIdx*)list->extra;
+    if (ix) {
+        /* Grow if needed (geometric). */
+        if (ix->len >= ix->cap) {
+            int newcap = ix->cap * 2;
+            if (newcap < 8) newcap = 8;
+            ASTNode **nb = (ASTNode**)realloc(ix->items, (size_t)newcap * sizeof(ASTNode*));
+            if (!nb) {
+                /* OOM: drop cache, fall back to walk. */
+                te_invalidate_list_cache(list);
+                ASTNode *cur = list->left;
+                if (!cur) list->left = item;
+                else { while (cur->next) cur = cur->next; cur->next = item; }
+                return;
+            }
+            ix->items = nb;
+            ix->cap = newcap;
+        }
+        if (ix->len == 0) {
+            list->left = item;
+        } else {
+            ASTNode *tail = ix->items[ix->len - 1];
+            tail->next = item;
+        }
+        ix->items[ix->len++] = item;
+    } else {
+        /* Sin caché: build it from scratch (one O(n) walk amortized over
+         * future appends), then append. */
+        ASTNode *cur = list->left;
+        if (!cur) {
+            list->left = item;
+        } else {
+            while (cur->next) cur = cur->next;
+            cur->next = item;
+        }
+        /* Construir caché perezosamente para que próximos push sean O(1). */
+        (void)te_list_get_idx(list);
+    }
 }
 static void te_invalidate_map_cache(ASTNode *root) {
     if (!root || !root->extra) return;
@@ -2198,7 +2250,10 @@ typedef enum {
     BC_CALL_METHOD,     /* operand=MethodCallSite* (precomputed, recursive bc_exec) */
     /* Ola 5b: inline-expanded method call (body opcodes copied in caller). */
     BC_SET_THIS,        /* operand=Variable* holding the object; pushes saved this */
-    BC_RESTORE_THIS     /* pops saved this back into g_bc_this */
+    BC_RESTORE_THIS,    /* pops saved this back into g_bc_this */
+    /* Ola 14d: arr[idx].attr fastpath. operand=ListItemAttrSite*.
+     * Pops idx from stack, pushes the (numeric) attribute value. */
+    BC_LIST_ITEM_ATTR
 } BCOp;
 
 /* Ola 5: precomputed call site for a `obj.method(args)` callable from
@@ -2216,6 +2271,19 @@ typedef struct MethodCallSite {
     struct Variable   *param_vars[8]; /* cached param Variable*s */
 } MethodCallSite;
 
+/* Ola 14d: precomputed call site for `list_var[idx].attr` (numeric attr).
+ * Resolved at compile time when we can prove (a) list_var is a LIST,
+ * (b) items[0] is an OBJECT of a known class, (c) the attribute exists
+ * with int/float type. At runtime BC_LIST_ITEM_ATTR pops idx, reads
+ * items[idx] from TEListIdx, validates class match (cheap pointer cmp),
+ * returns the attr value. Class mismatch → push 0 (homogeneous list
+ * assumption). */
+typedef struct ListItemAttrSite {
+    struct Variable  *list_var;        /* v->type=="LIST", v->value.object_value=(ASTNode*) LIST root */
+    struct ClassNode *expected_class;  /* class of items[0] at compile time */
+    int               attr_slot;       /* index in obj->attributes[] */
+} ListItemAttrSite;
+
 typedef struct {
     uint8_t op;
     union {
@@ -2224,6 +2292,7 @@ typedef struct {
         int32_t   offset;   /* for BC_JUMP / BC_JUMP_IF_FALSE (signed, relative to next ip) */
         int32_t   slot;     /* for BC_LOAD_THIS_ATTR */
         MethodCallSite *site; /* for BC_CALL_METHOD */
+        ListItemAttrSite *lia_site; /* for BC_LIST_ITEM_ATTR (Ola 14d) */
     } u;
 } Instr;
 
@@ -2362,6 +2431,57 @@ static int bc_compile(ASTNode *node, Instr *out, int *pos, int max) {
         return 1;
     }
     case NK_ACCESS_ATTR: {
+        ASTNode *objRef = node->left;
+        ASTNode *attr   = node->right;
+        if (!objRef || !attr || !attr->id) return 0;
+
+        /* Ola 14d: arr[idx_expr].attr fastpath. Detect when objRef is an
+         * ACCESS_EXPR whose left is an IDENTIFIER bound to a non-empty
+         * LIST whose items[0] is an OBJECT of a known class with a
+         * numeric attribute matching attr->id. Compile idx_expr onto the
+         * stack, then emit BC_LIST_ITEM_ATTR. */
+        if (nk_of(objRef) == NK_ACCESS_EXPR) {
+            ASTNode *list_id = objRef->left;
+            ASTNode *idx_exp = objRef->right;
+            if (!list_id || !idx_exp) return 0;
+            if (nk_of(list_id) != NK_IDENTIFIER && nk_of(list_id) != NK_ID) return 0;
+            Variable *lv = find_variable(list_id->id);
+            if (!lv || !lv->type || strcmp(lv->type, "LIST") != 0) return 0;
+            ASTNode *list = (ASTNode*)(intptr_t)lv->value.object_value;
+            if (!list) return 0;
+            TEListIdx *ix = (TEListIdx*)list->extra;
+            if (!ix || ix->len <= 0) return 0;
+            ASTNode *first = ix->items[0];
+            if (!first || !first->type || strcmp(first->type, "OBJECT") != 0) return 0;
+            ObjectNode *fobj = first->extra ? (ObjectNode*)first->extra
+                                            : (ObjectNode*)(intptr_t)first->value;
+            if (!fobj || !fobj->class) return 0;
+            int slot = -1;
+            for (int i = 0; i < fobj->class->attr_count; i++) {
+                if (strcmp(fobj->class->attributes[i].id, attr->id) == 0) {
+                    const char *t = fobj->class->attributes[i].type;
+                    if (!t || (strcmp(t, "int") != 0 && strcmp(t, "float") != 0
+                            && strcmp(t, "INT") != 0 && strcmp(t, "FLOAT") != 0))
+                        return 0;
+                    slot = i;
+                    break;
+                }
+            }
+            if (slot < 0) return 0;
+            /* Compile idx expression onto stack. */
+            if (!bc_compile(idx_exp, out, pos, max)) return 0;
+            if (*pos >= max) return 0;
+            ListItemAttrSite *s = (ListItemAttrSite*)calloc(1, sizeof(ListItemAttrSite));
+            if (!s) return 0;
+            s->list_var = lv;
+            s->expected_class = fobj->class;
+            s->attr_slot = slot;
+            out[*pos].op = BC_LIST_ITEM_ATTR;
+            out[*pos].u.lia_site = s;
+            (*pos)++;
+            return 1;
+        }
+
         /* Ola 4: support `this.attr` in method bodies. We compile only
          * when:
          *  - left is the identifier "this"
@@ -2370,9 +2490,7 @@ static int bc_compile(ASTNode *node, Instr *out, int *pos, int max) {
          *  - the attribute exists in the class and is INT or FLOAT
          * The attr slot index is baked into the instruction. At runtime
          * BC_LOAD_THIS_ATTR reads from g_bc_this->attributes[slot]. */
-        ASTNode *objRef = node->left;
-        ASTNode *attr   = node->right;
-        if (!objRef || !attr || !objRef->id || !attr->id) return 0;
+        if (!objRef->id) return 0;
         if (strcmp(objRef->id, "this") != 0) return 0;
         if (!g_bc_compile_class) return 0;
         int slot = -1;
@@ -2693,6 +2811,11 @@ typedef enum {
     /* Side effects */
     IR_STORE_VAR,       /* aux=Variable*, a=value ref */
     IR_RETURN,          /* a=value ref */
+    /* Ola 14e: list item attribute load (a = idx ref).
+     * aux=ListItemAttrSite*. type=T_INT. Has guards (deopt on bounds,
+     * null, class mismatch), so it's a side-effect op. Codegen inlines
+     * the full lookup in asm; bytecode handler also emits this IR. */
+    IR_LIST_ITEM_ATTR,
     /* Loop terminators */
     IR_LOOP_BACK,       /* close trace: jump al inicio si guards OK */
 } IROp;
@@ -2707,6 +2830,7 @@ typedef struct {
         Variable   *var;     /* IR_LOAD_VAR / IR_STORE_VAR */
         int32_t     slot;    /* IR_LOAD_THIS_ATTR */
         ClassNode  *cls;     /* IR_GUARD_OBJ */
+        ListItemAttrSite *lia; /* IR_LIST_ITEM_ATTR (Ola 14e) */
     } aux;
     /* Ola 9: flags por op (bit 0 = loop-invariant). */
     uint8_t flags;
@@ -2860,6 +2984,7 @@ static const char *ir_op_name(uint8_t op) {
     case IR_EQ: return "eq"; case IR_NEQ: return "neq";
     case IR_STORE_VAR: return "store_var";
     case IR_RETURN: return "return";
+    case IR_LIST_ITEM_ATTR: return "list_item_attr";
     case IR_LOOP_BACK: return "loop_back";
     default: return "??";
     }
@@ -2934,7 +3059,8 @@ static int ir_is_arith(uint8_t op) {
 static int ir_has_side_effect(uint8_t op) {
     return op == IR_STORE_VAR || op == IR_RETURN || op == IR_LOOP_BACK
         || op == IR_GUARD_INT || op == IR_GUARD_FLOAT || op == IR_GUARD_OBJ
-        || op == IR_GUARD_TRUE || op == IR_GUARD_FALSE;
+        || op == IR_GUARD_TRUE || op == IR_GUARD_FALSE
+        || op == IR_LIST_ITEM_ATTR;  /* deopt on guards => side effect */
 }
 
 static void opt_constant_fold(Trace *t, int *folded) {
@@ -3200,6 +3326,14 @@ static int jit_smoke_test(void) {
 _Static_assert(sizeof(Variable) == 32,           "JIT assumes sizeof(Variable)==32");
 _Static_assert(offsetof(Variable, value) == 24,  "JIT assumes Variable.value @ offset 24");
 _Static_assert(offsetof(ObjectNode, attributes) == 8, "JIT assumes ObjectNode.attributes @ offset 8");
+/* Ola 14e: extra-field offset of ASTNode used by IR_LIST_ITEM_ATTR codegen.
+ * We do NOT hardcode the value; it's read at compile time via offsetof(). */
+#define TE_AST_EXTRA_OFF   ((int32_t)offsetof(ASTNode, extra))
+#define TE_LISTIDX_LEN_OFF   ((int32_t)offsetof(TEListIdx, len))
+#define TE_LISTIDX_ITEMS_OFF ((int32_t)offsetof(TEListIdx, items))
+_Static_assert(offsetof(TEListIdx, len)   == 0,  "JIT assumes TEListIdx.len @ offset 0");
+_Static_assert(offsetof(TEListIdx, items) == 8,  "JIT assumes TEListIdx.items @ offset 8");
+_Static_assert(offsetof(ObjectNode, class) == 0, "JIT assumes ObjectNode.class @ offset 0");
 
 #define TE_JIT_FRAME_BYTES   256       /* multiple of 16 */
 #define TE_JIT_MAX_IDS       32        /* 32 * 8 = 256 */
@@ -3443,6 +3577,124 @@ static int jit_emit_store_var_float(uint8_t **p, Variable *v, int a) {
     return 0;
 }
 
+/* === Ola 14e — emit helpers para IR_LIST_ITEM_ATTR (asm puro) ===
+ * Nuevos opcodes x86_64 que no existían antes:
+ *   - mov rdx, [rsp+disp32]            48 8B 94 24 dd dd dd dd     (8 bytes)
+ *   - cmp edx, [rax]                   3B 10                       (2 bytes)
+ *   - jae rel32 (forward)              0F 83 dd dd dd dd           (6 bytes)
+ *   - jne rel32 (forward)              0F 85 dd dd dd dd           (6 bytes)
+ *   - mov rax, [rax + rdx*8]           48 8B 04 D0                 (4 bytes)
+ *   - cmp rdx, [rax]                   48 3B 10                    (3 bytes)
+ */
+static void emit_mov_rdx_rspdisp(uint8_t **p, int32_t disp) {
+    e8(p, 0x48); e8(p, 0x8B); e8(p, 0x94); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+static void emit_cmp_edx_memrax(uint8_t **p) {
+    e8(p, 0x3B); e8(p, 0x10);
+}
+static size_t emit_jae_rel32(uint8_t **p, uint8_t *base) {
+    e8(p, 0x0F); e8(p, 0x83);
+    size_t at = (size_t)(*p - base);
+    e32(p, 0);
+    return at;
+}
+static size_t emit_jne_rel32(uint8_t **p, uint8_t *base) {
+    e8(p, 0x0F); e8(p, 0x85);
+    size_t at = (size_t)(*p - base);
+    e32(p, 0);
+    return at;
+}
+/* mov rax, [rax + rdx*8]              48 8B 04 D0
+ * REX.W=48, op=8B (MOV r64,r/m64), ModRM=04 (mod=00 reg=000(rax) rm=100=SIB),
+ * SIB=D0 (scale=11=8, index=010=rdx, base=000=rax). */
+static void emit_mov_rax_memrax_rdx8(uint8_t **p) {
+    e8(p, 0x48); e8(p, 0x8B); e8(p, 0x04); e8(p, 0xD0);
+}
+/* cmp rdx, [rax]                      48 3B 10
+ * REX.W=48, op=3B (CMP r64,r/m64), ModRM=10 (mod=00 reg=010(rdx) rm=000(rax)). */
+static void emit_cmp_rdx_memrax(uint8_t **p) {
+    e8(p, 0x48); e8(p, 0x3B); e8(p, 0x10);
+}
+
+/* Emit el lookup completo de `arr[idx].attr` (T_INT) inline en asm.
+ *   - idx_disp:    desplazamiento en frame del slot que contiene idx (int).
+ *   - dst_disp:    desplazamiento en frame donde escribir el resultado.
+ *   - site:        ListItemAttrSite con list_var, expected_class, attr_slot.
+ *   - guard_patches/n_patches: arr donde acumular jumps a deopt_label.
+ * Retorna 0 OK, -1 si overflow de patches. */
+static int jit_emit_list_item_attr(uint8_t **p, uint8_t *base,
+                                   int32_t idx_disp, int32_t dst_disp,
+                                   ListItemAttrSite *site,
+                                   size_t *guard_patches, int *n_patches,
+                                   int max_patches) {
+    if (!site || !site->list_var || !site->expected_class) return -1;
+    int slot = site->attr_slot;
+    if (slot < 0) return -1;
+
+    /* 1) rax = list_var->value.object_value (que aquí es ASTNode*) */
+    emit_mov_rax_imm64(p, (uint64_t)(uintptr_t)&site->list_var->value.object_value);
+    emit_mov_rax_mem_rax(p);
+    emit_test_rax_rax(p);
+    if (*n_patches >= max_patches) return -1;
+    guard_patches[(*n_patches)++] = emit_je_rel32(p, base);
+
+    /* 2) rax = list->extra (TEListIdx*) */
+    emit_mov_rax_mem_rax_disp(p, TE_AST_EXTRA_OFF);
+    emit_test_rax_rax(p);
+    if (*n_patches >= max_patches) return -1;
+    guard_patches[(*n_patches)++] = emit_je_rel32(p, base);
+
+    /* 3) rdx = idx (lo cargamos como qword; usamos edx para bounds check) */
+    emit_mov_rdx_rspdisp(p, idx_disp);
+
+    /* 4) bounds check: cmp edx, [rax + len_off]; jae deopt
+     *    (unsigned compare cubre idx<0 e idx>=len en una sola rama) */
+    if (TE_LISTIDX_LEN_OFF == 0) {
+        emit_cmp_edx_memrax(p);
+    } else {
+        /* mov ecx,[rax+off]; cmp edx,ecx — no soportamos offset != 0 hoy */
+        return -1;
+    }
+    if (*n_patches >= max_patches) return -1;
+    guard_patches[(*n_patches)++] = emit_jae_rel32(p, base);
+
+    /* 5) rax = ix->items (puntero @ items_off) */
+    emit_mov_rax_mem_rax_disp(p, TE_LISTIDX_ITEMS_OFF);
+
+    /* 6) rax = items[idx] (ASTNode*) */
+    emit_mov_rax_memrax_rdx8(p);
+    emit_test_rax_rax(p);
+    if (*n_patches >= max_patches) return -1;
+    guard_patches[(*n_patches)++] = emit_je_rel32(p, base);
+
+    /* 7) rax = item->extra (ObjectNode*) */
+    emit_mov_rax_mem_rax_disp(p, TE_AST_EXTRA_OFF);
+    emit_test_rax_rax(p);
+    if (*n_patches >= max_patches) return -1;
+    guard_patches[(*n_patches)++] = emit_je_rel32(p, base);
+
+    /* 8) class guard: cmp rdx, [rax] (ObjectNode.class @ offset 0) */
+    emit_mov_rdx_imm64(p, (uint64_t)(uintptr_t)site->expected_class);
+    emit_cmp_rdx_memrax(p);
+    if (*n_patches >= max_patches) return -1;
+    guard_patches[(*n_patches)++] = emit_jne_rel32(p, base);
+
+    /* 9) rax = obj->attributes (Variable* @ offset 8) */
+    emit_mov_rax_mem_rax_disp(p, (int32_t)offsetof(ObjectNode, attributes));
+
+    /* 10) rax = attributes[slot].value.int_value
+     *     offset = slot * sizeof(Variable) + offsetof(Variable, value) */
+    {
+        int32_t attr_off = (int32_t)(slot * sizeof(Variable)
+                                   + offsetof(Variable, value));
+        emit_mov_rax_mem_rax_disp(p, attr_off);
+    }
+
+    /* 11) store al slot del frame */
+    emit_mov_rspdisp_rax(p, dst_disp);
+    return 0;
+}
+
 /* Intenta compilar la traza. Devuelve puntero a fn o NULL. */
 static void *jit_compile_trace(Trace *t) {
     if (!g_jit_on || !g_jit_slab || !t || !t->complete || t->len < 2) return NULL;
@@ -3495,6 +3747,15 @@ static void *jit_compile_trace(Trace *t) {
             break;
         case IR_GUARD_TRUE:
             if (ins->a >= t->len) return NULL;
+            break;
+        case IR_LIST_ITEM_ATTR:
+            /* Ola 14e: T_INT only por ahora. */
+            if (ins->type != T_INT)              return NULL;
+            if (ins->a >= t->len)                return NULL;
+            if (!ins->aux.lia)                   return NULL;
+            if (!ins->aux.lia->list_var)         return NULL;
+            if (!ins->aux.lia->expected_class)   return NULL;
+            if (ins->aux.lia->attr_slot < 0)     return NULL;
             break;
         case IR_STORE_VAR:
             if (!ins->aux.var)                   return NULL;
@@ -3737,6 +3998,17 @@ static void *jit_compile_trace(Trace *t) {
             emit_setl_dl(&p);
             emit_mov_rspdisp_rdx(&p, i * 8);
             break;
+        case IR_LIST_ITEM_ATTR: {
+            /* Ola 14e: inline asm para arr[idx].attr (T_INT).
+             * idx_ref = ins->a (slot del frame con el idx int).
+             * dst slot = i*8.  Genera 6 guards que saltan a deopt label. */
+            if (jit_emit_list_item_attr(&p, base,
+                    ins->a * 8, i * 8,
+                    ins->aux.lia,
+                    guard_patches, &n_patches,
+                    TE_JIT_MAX_IDS) < 0) goto fail;
+            break;
+        }
         case IR_GUARD_TRUE: {
             emit_mov_rax_rspdisp(&p, ins->a * 8);
             emit_test_rax_rax(&p);
@@ -3904,6 +4176,7 @@ static double bc_exec(Instr *code) {
         [BC_CALL_METHOD]    = &&do_call_method,
         [BC_SET_THIS]       = &&do_set_this,
         [BC_RESTORE_THIS]   = &&do_restore_this,
+        [BC_LIST_ITEM_ATTR] = &&do_list_item_attr,
     };
     double stack[64];
     int sp = 0;
@@ -4226,6 +4499,53 @@ do_set_this: {
 }
 do_restore_this: {
     g_bc_this = g_bc_this_stack[--g_bc_this_sp];
+    ip++; DISPATCH();
+}
+do_list_item_attr: {
+    /* Ola 14d: hot path for `arr[idx].attr` over a homogeneous list of
+     * objects. Pops idx, pushes the (numeric) attr value.
+     * Ola 14e: when recording a trace, emit IR_LIST_ITEM_ATTR (instead
+     * of aborting) so the JIT can inline the lookup in asm. */
+    ListItemAttrSite *s = ip->u.lia_site;
+    int idx = (int)stack[sp - 1];
+    /* Resolve list (Variable holds intptr_t to LIST ASTNode). */
+    ASTNode *list = (ASTNode*)(intptr_t)s->list_var->value.object_value;
+    TEListIdx *ix = list ? (TEListIdx*)list->extra : NULL;
+    double val = 0.0;
+    int matched = 0;          /* did the lookup succeed cleanly? */
+    int matched_int = 0;      /* and was the attr a VAL_INT? */
+    if (ix && idx >= 0 && idx < ix->len) {
+        ASTNode *item = ix->items[idx];
+        ObjectNode *obj = NULL;
+        if (item) {
+            if (item->extra) obj = (ObjectNode*)item->extra;
+            else             obj = (ObjectNode*)(intptr_t)item->value;
+        }
+        /* Cheap class match check; on mismatch fall back to 0 (caller can
+         * disable this opcode by setting TYPEEASY_NO_BC=1). */
+        if (obj && obj->class == s->expected_class &&
+            s->attr_slot >= 0 && s->attr_slot < obj->class->attr_count) {
+            Variable *attr = &obj->attributes[s->attr_slot];
+            matched = 1;
+            matched_int = (attr->vtype == VAL_INT);
+            val = matched_int ? (double)attr->value.int_value
+                              : attr->value.float_value;
+        }
+    }
+    stack[sp - 1] = val;
+    if (g_record_on) {
+        /* Only emit IR if the lookup matched cleanly AND the attr is
+         * VAL_INT (the asm path returns int64). Otherwise abort. */
+        if (matched && matched_int) {
+            uint16_t id = ir_emit(IR_LIST_ITEM_ATTR, T_INT,
+                                  rstack[sp - 1] /* idx ref */, 0);
+            if (id) g_cur_trace->ops[id].aux.lia = s;
+            rstack[sp - 1] = id;
+            rtype[sp - 1]  = T_INT;
+        } else {
+            TRACE_ABORT();
+        }
+    }
     ip++; DISPATCH();
 }
 do_halt:
@@ -4855,9 +5175,47 @@ double evaluate_expression(ASTNode *node) {
             if (map) return (double)map_length(map);
         }
 
+        /* Bug fix: arr[i].attr — objRef es un ACCESS_EXPR (indexing),
+         * no un identificador. Resolvemos el item de la lista a su
+         * ObjectNode y saltamos directo al lookup de atributo.
+         * Esto debe ir ANTES de find_variable porque o->id es NULL
+         * en este caso (find_variable hace strcmp con NULL → crash). */
+        if (objRef && objRef->type && nk_of(objRef) == NK_ACCESS_EXPR) {
+            ASTNode *list = resolve_to_list(objRef->left);
+            if (list && objRef->right) {
+                int idx = (int)evaluate_expression(objRef->right);
+                int len = list_length(list);
+                if (idx < 0 || idx >= len) {
+                    printf("Error: index %d out of range (length=%d).\n", idx, len);
+                    return 0;
+                }
+                ASTNode *item = list_get_item(list, idx);
+                ObjectNode *iobj = NULL;
+                if (item && item->type && strcmp(item->type, "OBJECT") == 0) {
+                    if (item->extra) iobj = (ObjectNode*)item->extra;
+                    else iobj = (ObjectNode*)(intptr_t)item->value;
+                }
+                if (iobj && iobj->class) {
+                    for (int i = 0; i < iobj->class->attr_count; i++) {
+                        if (strcmp(iobj->class->attributes[i].id, attr->id) == 0) {
+                            if (iobj->attributes[i].vtype == VAL_INT)
+                                return iobj->attributes[i].value.int_value;
+                            if (iobj->attributes[i].vtype == VAL_FLOAT)
+                                return iobj->attributes[i].value.float_value;
+                            return 0;
+                        }
+                    }
+                    printf("Error: attribute '%s' not found in indexed object.\n", attr->id);
+                    return 0;
+                }
+            }
+            printf("Error: cannot resolve indexed expression for attribute access.\n");
+            return 0;
+        }
         Variable *v = find_variable(objRef->id);
         if (!v || v->vtype != VAL_OBJECT) {
-            printf("Error: '%s' is not a valid object to access an attribute.\n", objRef->id);
+            printf("Error: '%s' is not a valid object to access an attribute.\n",
+                   (objRef && objRef->id) ? objRef->id : "<expr>");
             return 0;
         }
 
@@ -6212,12 +6570,67 @@ static void interpret_call_method(ASTNode *node) {
             if (!arg) return;
             ASTNode *new_item = (ASTNode*)calloc(1, sizeof(ASTNode));
             memset(new_item, 0, sizeof(ASTNode));
-            if (arg->type && strcmp(arg->type, "STRING") == 0) {
+            if (arg->type && strcmp(arg->type, "OBJECT") == 0) {
+                /* Fix: empujar objetos creados con `new ClaseX(args)`.
+                 * El parser eager-construye un OBJECT ASTNode con extra=ObjectNode*
+                 * y left=args, pero no corre el constructor. Para que cada push
+                 * en un loop produzca instancias independientes, clonamos el
+                 * objeto y corremos el constructor con los args reevaluados. */
+                ObjectNode *obj_orig = NULL;
+                if (arg->extra) obj_orig = (ObjectNode*)arg->extra;
+                else obj_orig = (ObjectNode*)(intptr_t)arg->value;
+                if (obj_orig && obj_orig->class) {
+                    ObjectNode *obj_clone = clone_object(obj_orig);
+                    MethodNode *m = obj_clone->class->methods;
+                    while (m && strcmp(m->name, "__constructor") != 0) m = m->next;
+                    if (m) {
+                        ParameterNode *p = m->params;
+                        ASTNode *carg = arg->left;
+                        while (p && carg) {
+                            ASTNode *vn = NULL;
+                            if (carg->type && strcmp(carg->type, "STRING") == 0) {
+                                vn = create_ast_leaf("STRING", 0, carg->str_value, NULL);
+                            } else if (carg->type && (strcmp(carg->type, "ID") == 0 || strcmp(carg->type, "IDENTIFIER") == 0)) {
+                                Variable *vv = find_variable(carg->id);
+                                if (vv && vv->vtype == VAL_STRING) {
+                                    vn = create_ast_leaf("STRING", 0, strdup(vv->value.string_value), NULL);
+                                } else if (vv) {
+                                    vn = create_ast_leaf_number("INT", vv->value.int_value, NULL, NULL);
+                                } else {
+                                    vn = create_ast_leaf_number("INT", 0, NULL, NULL);
+                                }
+                            } else {
+                                int val = (int)evaluate_expression(carg);
+                                vn = create_ast_leaf_number("INT", val, NULL, NULL);
+                            }
+                            add_or_update_variable(p->name, vn);
+                            p = p->next;
+                            carg = carg->right;
+                        }
+                        call_method(obj_clone, "__constructor");
+                        return_flag = 0;
+                        return_node = NULL;
+                    }
+                    new_item->type = strdup("OBJECT");
+                    new_item->extra = (struct ASTNode*)obj_clone;
+                    new_item->value = (int)(intptr_t)obj_clone;
+                } else {
+                    /* Sin clase resoluble: degradar a NUMBER 0 para no segfaultear */
+                    new_item->type = strdup("NUMBER");
+                    new_item->value = 0;
+                }
+            } else if (arg->type && strcmp(arg->type, "STRING") == 0) {
                 new_item->type = strdup("STRING");
                 new_item->str_value = strdup(arg->str_value);
             } else if (arg->type && (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0)) {
                 Variable *av = find_variable(arg->id);
-                if (av && av->vtype == VAL_STRING) {
+                if (av && av->vtype == VAL_OBJECT && av->value.object_value) {
+                    /* Push de variable que contiene un objeto: compartir referencia
+                     * (sin clonar — semántica de referencia, igual que asignación). */
+                    new_item->type = strdup("OBJECT");
+                    new_item->extra = (struct ASTNode*)av->value.object_value;
+                    new_item->value = (int)(intptr_t)av->value.object_value;
+                } else if (av && av->vtype == VAL_STRING) {
                     new_item->type = strdup("STRING");
                     new_item->str_value = strdup(av->value.string_value);
                 } else if (av && av->vtype == VAL_FLOAT) {
@@ -6234,10 +6647,7 @@ static void interpret_call_method(ASTNode *node) {
                 else { new_item->type = strdup("FLOAT"); char buf[64]; snprintf(buf, 64, "%f", vv); new_item->str_value = strdup(buf); }
             }
             new_item->next = NULL;
-            ASTNode *cur = list->left;
-            if (!cur) list->left = new_item;
-            else { while (cur->next) cur = cur->next; cur->next = new_item; }
-            te_invalidate_list_cache(list);  /* Ola 14 */
+            te_list_append(list, new_item);   /* Ola 14b: O(1) amortizado */
             return;
         }
         if (list && node->id && strcmp(node->id, "pop") == 0) {
@@ -7619,6 +8029,33 @@ ASTNode *create_list_node(ASTNode *items) {
             cur = temp;
         }
     }
+
+    /* Ola 14c: pre-build TEListIdx así el primer push es O(1) puro
+     * sin pasar por la rama lazy-build de te_list_append. */
+    {
+        TEListIdx *ix = (TEListIdx*)calloc(1, sizeof(TEListIdx));
+        if (ix) {
+            ix->cap = 8;
+            ix->len = 0;
+            ix->items = (ASTNode**)calloc((size_t)ix->cap, sizeof(ASTNode*));
+            if (!ix->items) { free(ix); ix = NULL; }
+            if (ix && items) {
+                /* poblar con items existentes */
+                ASTNode *cur = items;
+                while (cur) {
+                    if (ix->len >= ix->cap) {
+                        int nc = ix->cap * 2;
+                        ASTNode **nb = (ASTNode**)realloc(ix->items, (size_t)nc * sizeof(ASTNode*));
+                        if (!nb) { free(ix->items); free(ix); ix = NULL; break; }
+                        ix->items = nb; ix->cap = nc;
+                    }
+                    ix->items[ix->len++] = cur;
+                    cur = cur->next;
+                }
+            }
+        }
+        node->extra = ix;
+    }
     
     return node;
 }
@@ -8428,9 +8865,52 @@ static void interpret_println(ASTNode *node) {
                 return;
             }
         }
+        /* Bug fix: println(arr[i].attr) — o es ACCESS_EXPR.
+         * Va antes de find_variable porque o->id es NULL aquí. */
+        if (o && o->type && strcmp(o->type, "ACCESS_EXPR") == 0) {
+            ASTNode *list2 = resolve_to_list(o->left);
+            if (list2 && o->right) {
+                int idx2 = (int)evaluate_expression(o->right);
+                int len2 = list_length(list2);
+                if (idx2 < 0 || idx2 >= len2) {
+                    dbg_printf("Error: index %d out of range (length=%d).\n", idx2, len2);
+                    return;
+                }
+                ASTNode *item = list_get_item(list2, idx2);
+                ObjectNode *iobj = NULL;
+                if (item && item->type && strcmp(item->type, "OBJECT") == 0) {
+                    if (item->extra) iobj = (ObjectNode*)item->extra;
+                    else iobj = (ObjectNode*)(intptr_t)item->value;
+                }
+                if (iobj && iobj->class) {
+                    for (int i = 0; i < iobj->class->attr_count; i++) {
+                        if (strcmp(iobj->class->attributes[i].id, a->id) == 0) {
+                            Variable *attr2 = &iobj->attributes[i];
+                            if (attr2->vtype == VAL_STRING) {
+                                dbg_printf("%s\n", attr2->value.string_value);
+                                append_to_stdout(attr2->value.string_value);
+                                append_to_stdout("\n");
+                            } else if (attr2->vtype == VAL_FLOAT) {
+                                dbg_printf("%f\n", attr2->value.float_value);
+                            } else {
+                                dbg_printf("%d\n", attr2->value.int_value);
+                                char tmpx[32]; snprintf(tmpx, 32, "%d\n", attr2->value.int_value);
+                                append_to_stdout(tmpx);
+                            }
+                            return;
+                        }
+                    }
+                    dbg_printf("Error: attribute '%s' not found in indexed object.\n", a->id);
+                    return;
+                }
+            }
+            dbg_printf("Error: cannot resolve indexed expression for attribute access.\n");
+            return;
+        }
         Variable *v = find_variable(o->id);
         if (!v || v->vtype != VAL_OBJECT) {
-            dbg_printf("Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
+            dbg_printf("Error: Objeto '%s' no definido o no es un objeto.\n",
+                       (o && o->id) ? o->id : "<expr>");
             return;
         }
         ObjectNode *obj = v->value.object_value;
@@ -8551,16 +9031,21 @@ void set_attribute_value(ObjectNode *obj, const char *attr_name, int value) {
 // ====================== LIBERACIÓN DE MEMORIA ======================
 
 void free_ast(ASTNode *node) {
-    if (!node) return;
-    free(node->type);
-    /* Ola 3 Fase A: never free interned strings (immortal in global table). */
-    if (node->str_value && !node->str_interned) free(node->str_value);
-    /* Ola 15: same for id slot. */
-    if (node->id && !node->id_interned) free(node->id);
-    free_ast(node->left);
-    free_ast(node->right);
-    free_ast(node->next);
-    free(node);
+    /* Ola 14c: iterar la cadena `->next` en bucle (no recursión) para
+     * evitar stack overflow en listas grandes (50k+ items). `left`/`right`
+     * siguen siendo recursivos porque su profundidad es típicamente baja. */
+    while (node) {
+        ASTNode *next = node->next;
+        free(node->type);
+        /* Ola 3 Fase A: never free interned strings (immortal in global table). */
+        if (node->str_value && !node->str_interned) free(node->str_value);
+        /* Ola 15: same for id slot. */
+        if (node->id && !node->id_interned) free(node->id);
+        free_ast(node->left);
+        free_ast(node->right);
+        free(node);
+        node = next;
+    }
 }
 
 // Serializa un objeto a XML string dado su id y lo guarda en __ret__

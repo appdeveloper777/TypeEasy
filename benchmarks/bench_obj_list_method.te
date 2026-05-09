@@ -1,0 +1,35 @@
+class Punto {
+    x : int;
+    y : int;
+    __constructor(_x : int, _y : int) {
+        this.x = _x;
+        this.y = _y;
+    }
+}
+
+class Sumador {
+    n_dummy : int;
+    __constructor() {
+        this.n_dummy = 0;
+    }
+    sum_passes(arr, n_items, n_passes) {
+        var total = 0;
+        var k = 0;
+        while (k < n_passes) {
+            var j = 0;
+            while (j < n_items) {
+                total = total + arr[j].x;
+                j = j + 1;
+            }
+            k = k + 1;
+        }
+        return total;
+    }
+}
+
+let arr = [];
+for (i = 0; 100000; 1) {
+    arr.push(new Punto(i, i));
+}
+let s = new Sumador();
+println(s.sum_passes(arr, 100000, 100));

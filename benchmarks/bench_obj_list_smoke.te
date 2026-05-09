@@ -1,0 +1,20 @@
+class Punto {
+    x : int;
+    y : int;
+    __constructor(_x : int, _y : int) {
+        this.x = _x;
+        this.y = _y;
+    }
+}
+
+let arr = [
+    new Punto(1, 10),
+    new Punto(2, 20),
+    new Punto(3, 30)
+];
+
+var total = 0;
+for (let p in arr) {
+    total = total + p.x;
+}
+println(total);

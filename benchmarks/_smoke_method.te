@@ -1,0 +1,35 @@
+class Punto {
+    x : int;
+    y : int;
+    __constructor(_x : int, _y : int) {
+        this.x = _x;
+        this.y = _y;
+    }
+}
+
+class S {
+    n_dummy : int;
+    __constructor() {
+        this.n_dummy = 0;
+    }
+    run(a, n, k) {
+        var t = 0;
+        var p = 0;
+        while (p < k) {
+            var j = 0;
+            while (j < n) {
+                t = t + a[j].x;
+                j = j + 1;
+            }
+            p = p + 1;
+        }
+        return t;
+    }
+}
+
+let a = [];
+for (i = 0; 100; 1) {
+    a.push(new Punto(i, i));
+}
+let s = new S();
+println(s.run(a, 100, 2));

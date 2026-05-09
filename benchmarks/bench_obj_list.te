@@ -1,0 +1,25 @@
+/* Bench: crear N objetos y meterlos en una lista,
+ * luego recorrer la lista y sumar un atributo.
+ * N pequeño porque arr.push en TypeEasy es O(n) (linked-list).
+ */
+class Punto {
+    x : int;
+    y : int;
+    __constructor(_x : int, _y : int) {
+        this.x = _x;
+        this.y = _y;
+    }
+}
+
+let arr = [];
+
+for(i = 0; 10000; 1) {
+    arr.push(new Punto(i, i));
+}
+
+var total = 0;
+for (let p in arr) {
+    total = total + p.x;
+}
+
+println(total);

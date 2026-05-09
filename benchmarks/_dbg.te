@@ -1,0 +1,8 @@
+class Punto { x:int; y:int; __constructor(_x:int,_y:int){this.x=_x; this.y=_y;} }
+let arr = [];
+arr.push(new Punto(7, 70));
+arr.push(new Punto(8, 80));
+var j = 0;
+println(arr[j].x);
+j = 1;
+println(arr[j].x);

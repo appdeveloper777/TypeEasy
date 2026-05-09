@@ -1,0 +1,6 @@
+class Punto { x:int; y:int; __constructor(_x:int,_y:int){this.x=_x; this.y=_y;} }
+let arr = [];
+for (i=0; 100; 1) { arr.push(new Punto(i, i)); }
+var total = 0;
+for (j=0; 100; 1) { total = total + arr[j].x; }
+println(total);
