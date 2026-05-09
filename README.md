@@ -101,7 +101,7 @@ Por ejemplo `typeeasycode/link_to_objects.te`.
 ### 2. Pon un breakpoint
 Haz clic en el margen izquierdo de la línea (aparece un punto rojo) o pulsa **F9** sobre la línea.
 
-```te
+```ts
 class Producto {
   nombre : string;
   precio : int;
