@@ -1,0 +1,48 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "gdb: typeeasy (remote contenedor)",
+      "type": "cppdbg",
+      "request": "launch",
+      // Path al binario tal como lo ve gdbserver dentro del contenedor.
+      // Para resolución de símbolos VS Code lee el binario local; lo
+      // copiamos vía task pre-launch (ver tasks.json).
+      "program": "${workspaceFolder}/.debug/typeeasy",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "MIMode": "gdb",
+      // gdb instalado en WSL Ubuntu (no en Windows).
+      "miDebuggerPath": "C:\\Windows\\System32\\wsl.exe",
+      "miDebuggerArgs": "-e gdb --interpreter=mi",
+      "miDebuggerServerAddress": "localhost:2345",
+      "setupCommands": [
+        { "description": "Pretty printing", "text": "-enable-pretty-printing", "ignoreFailures": true },
+        { "description": "Map /app -> workspace dentro de WSL", "text": "set substitute-path /app /mnt/c/Users/FERNANDO INGUNZA/Documents/TypeEasy Staging 2/TypeEasy", "ignoreFailures": true },
+        { "description": "Map /typeeasy -> workspace dentro de WSL", "text": "set substitute-path /typeeasy /mnt/c/Users/FERNANDO INGUNZA/Documents/TypeEasy Staging 2/TypeEasy", "ignoreFailures": true }
+      ],
+      "preLaunchTask": "debug: start gdbserver in container"
+    },
+    {
+      "name": "TypeEasy: debug current .te (Docker)",
+      "type": "typeeasy",
+      "request": "launch",
+      "program": "${file}",
+      "stopOnEntry": false,
+      "port": 4711
+    },
+    {
+      "name": "Extension: TypeEasy debugger (Dev Host)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/tools/typeeasy-vscode",
+        "--disable-extension=Dart-Code.dart-code",
+        "--disable-extension=Dart-Code.flutter",
+        "${workspaceFolder}/typeeasycode"
+      ]
+    }
+  ]
+}

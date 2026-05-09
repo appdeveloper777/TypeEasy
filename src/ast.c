@@ -8,6 +8,7 @@
 #include <ctype.h>
 #include "bytecode.h"
 #include "mysql_bridge.h"
+#include "debugger.h"
 
 /* Ola 10: JIT availability — must be defined BEFORE any use further down. */
 #if defined(__linux__) && defined(__x86_64__)
@@ -23,6 +24,10 @@
 char* expand_interp_string(const char *raw);
 int is_string_type(struct ASTNode *node);
 extern int g_debug_mode;
+
+/* Debugger: lexer line counter (from flex). Used to stamp ASTNode->line at
+ * creation time so the runtime debugger can match breakpoints. */
+extern int yylineno;
 
 // Helper: Recursively evaluate arguments for native calls
 void evaluate_native_args(ASTNode *arg) {
@@ -52,6 +57,9 @@ size_t g_stdout_size = 0;
 
 void append_to_stdout(const char *str) {
     if (!str) return;
+    /* NOTE: emission to the VS Code Debug Console is handled by dbg_printf
+     * (so that we don't double-emit when call sites do both dbg_printf AND
+     * append_to_stdout for json() capture). */
     size_t len = strlen(str);
     if (!g_stdout_buffer) {
         g_stdout_size = len + 1024;
@@ -401,6 +409,67 @@ int call_native_function(const char *name, ASTNode *arg) {
 }
 
 #include <stdarg.h>
+
+/* Wrapper that does printf to real stdout AND mirrors the formatted text
+ * to append_to_stdout (which also forwards to the VS Code Debug Console
+ * via debugger_emit_output when the debugger is attached).
+ * Used by interpret_print/println/fprint/fprintln so EVERY output path
+ * shows up in the Debug Console — not just the few paths that historically
+ * called append_to_stdout. Returns the number of chars formatted (or -1). */
+static int dbg_printf(const char *fmt, ...) {
+    char stackbuf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    va_list ap2;
+    va_copy(ap2, ap);
+    int n = vsnprintf(stackbuf, sizeof(stackbuf), fmt, ap);
+    va_end(ap);
+    if (n < 0) { va_end(ap2); return n; }
+    if ((size_t)n < sizeof(stackbuf)) {
+        fputs(stackbuf, stdout);
+        append_to_stdout(stackbuf);
+        if (g_debug_enabled) debugger_emit_output("stdout", stackbuf);
+        va_end(ap2);
+        return n;
+    }
+    /* Output too big for stack buffer: allocate. */
+    char *buf = (char *)malloc((size_t)n + 1);
+    if (!buf) { va_end(ap2); return -1; }
+    vsnprintf(buf, (size_t)n + 1, fmt, ap2);
+    va_end(ap2);
+    fputs(buf, stdout);
+    append_to_stdout(buf);
+    if (g_debug_enabled) debugger_emit_output("stdout", buf);
+    free(buf);
+    return n;
+}
+
+/* Same as dbg_printf, but writes to stderr (used by fprint/fprintln). */
+static int dbg_eprintf(const char *fmt, ...) {
+    char stackbuf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    va_list ap2;
+    va_copy(ap2, ap);
+    int n = vsnprintf(stackbuf, sizeof(stackbuf), fmt, ap);
+    va_end(ap);
+    if (n < 0) { va_end(ap2); return n; }
+    if ((size_t)n < sizeof(stackbuf)) {
+        fputs(stackbuf, stderr);
+        if (g_debug_enabled) debugger_emit_output("stderr", stackbuf);
+        va_end(ap2);
+        return n;
+    }
+    char *buf = (char *)malloc((size_t)n + 1);
+    if (!buf) { va_end(ap2); return -1; }
+    vsnprintf(buf, (size_t)n + 1, fmt, ap2);
+    va_end(ap2);
+    fputs(buf, stderr);
+    if (g_debug_enabled) debugger_emit_output("stderr", buf);
+    free(buf);
+    return n;
+}
+
 MethodNode* global_methods = NULL;
 
 ASTNode* create_call_node(const char* funcName, ASTNode* args) {
@@ -1382,6 +1451,7 @@ ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para ASTNode.\n");
         exit(1);
     }
+    node->line = yylineno;
     node->type = strdup(type);
     node->kind = nk_from_str(type);
     node->left = NULL;
@@ -1409,6 +1479,7 @@ ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
 ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) return NULL;
+    node->line = yylineno;
     node->type = strdup(type);
     node->kind = nk_from_str(type);
     node->left = NULL;
@@ -1425,6 +1496,7 @@ ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id
 
 ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
+    node->line = yylineno;
     node->type = strdup(type);
     node->kind = nk_from_str(type);
     node->left = left;
@@ -1493,12 +1565,14 @@ ASTNode *create_var_decl_node(char *id, ASTNode *value) {
     node->left = value;
     node->right = NULL;
     node->str_value = NULL; // Fix: Initialize to NULL to avoid garbage access
+    node->line = yylineno;
     //printf("[DEBUG] create_var_decl_node success\n"); fflush(stdout);
     return node;
 }
 
 ASTNode *create_return_node(ASTNode *expr) {
     ASTNode *node = calloc(1, sizeof(ASTNode));
+    if (node) node->line = yylineno;
     node->type = strdup("RETURN");
     node->id = NULL;
     node->left = expr;
@@ -1510,6 +1584,7 @@ ASTNode *create_return_node(ASTNode *expr) {
 
 ASTNode *create_function_call_node(const char *funcName, ASTNode *args) {
     ASTNode *n = calloc(1, sizeof(ASTNode));
+    if (n) n->line = yylineno;
     n->type = strdup("CALL_FUNC");
     n->id = strdup(funcName);
     n->left = args;
@@ -1521,6 +1596,7 @@ ASTNode *create_function_call_node(const char *funcName, ASTNode *args) {
 
 ASTNode *create_method_call_node(ASTNode *objectNode, const char *methodName, ASTNode *args) {
     ASTNode *node = calloc(1, sizeof(ASTNode));
+    if (node) node->line = yylineno;
     node->type = strdup("CALL_METHOD");
     node->id = strdup(methodName);
     node->left = objectNode;
@@ -1551,6 +1627,7 @@ ASTNode *create_object_with_args(ClassNode *class, ASTNode *args) {
 
 ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *condition, ASTNode *update, ASTNode *body) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
+    if (node) node->line = yylineno;
     node->type = strdup("FOR");
     node->id = var->id;
     node->left = init;
@@ -4900,7 +4977,9 @@ void call_method(ObjectNode *obj, char *method) {
     while (m) {
         if (strcmp(m->name, method) == 0) {
             /* method invocation traces removed */
+            debugger_push_frame(m->name, NULL);
             interpret_ast(m->body);
+            debugger_pop_frame();
             return;
         }
         m = m->next;
@@ -5235,6 +5314,27 @@ void interpret_ast(ASTNode *node) {
     if (return_flag) return;
     if (throw_flag) return;
 
+    /* Debugger hook: only stop on "stoppable" statement-level nodes.
+     * Cheap when g_debug_enabled == 0 (single load+test). */
+    if (g_debug_enabled) {
+        switch (nk_of(node)) {
+            case NK_VAR_DECL:
+            case NK_ASSIGN: case NK_ASSIGN_ATTR: case NK_INDEX_ASSIGN:
+            case NK_IF: case NK_MATCH:
+            case NK_FOR: case NK_FOR_IN: case NK_WHILE:
+            case NK_BREAK: case NK_CONTINUE:
+            case NK_RETURN: case NK_THROW: case NK_TRY_CATCH:
+            case NK_PRINT: case NK_PRINTLN:
+            case NK_FPRINT: case NK_FPRINTLN:
+            case NK_CALL_FUNC: case NK_CALL_METHOD: case NK_METHOD_CALL_ALONE:
+            case NK_RETURN_JSON: case NK_RETURN_XML:
+                debugger_on_statement(node);
+                break;
+            default:
+                break;
+        }
+    }
+
     /* Fase 1 (perf): single dispatch via cached NodeKind enum. */
     switch (nk_of(node)) {
     case NK_STATE_DECL:
@@ -5304,7 +5404,9 @@ void interpret_ast(ASTNode *node) {
         MethodNode *m = global_methods;
         while (m) {
             if (strcmp(m->name, node->id) == 0) {
+                debugger_push_frame(m->name, node);
                 interpret_ast(m->body);
+                debugger_pop_frame();
                 break;
             }
             m = m->next;
@@ -6615,7 +6717,9 @@ fastcall_args_done:
         }
     }
 
+    debugger_push_frame(m->name, node);
     interpret_ast(m->body);
+    debugger_pop_frame();
 
     // --- TYPE CHECK: void method must NOT return a value ---
     if (m->return_type && strcmp(m->return_type, "void") == 0 && return_flag && return_node) {
@@ -6840,7 +6944,9 @@ static void interpret_call_method_alone(ASTNode *node) {
                 p_class   = p_class->next;
                 arg_class = arg_class->right;
             }
+            debugger_push_frame(m->name, node);
             interpret_ast(m->body);
+            debugger_pop_frame();
           //  printf("[DIAG] interpret_call_method_alone: después de interpretar cuerpo de método, return_flag=%d\n", return_flag);
             // ...manejo de return para método de clase si aplica...
             if (return_flag && return_node) {
@@ -6885,7 +6991,9 @@ static void interpret_call_method_alone(ASTNode *node) {
         p_global   = p_global->next;
         arg_global = arg_global->right;
     }
+    debugger_push_frame(gm->name, node);
     interpret_ast(gm->body);
+    debugger_pop_frame();
    // printf("[DIAG] interpret_call_method_alone: after interpret_ast(gm->body), about to check return_flag and return_node\n");
    // printf("[DIAG] interpret_call_method: después de interpretar gm->body, return_flag=%d, return_node=%p\n", return_flag, (void*)return_node);
    // if (return_node) {
@@ -7049,7 +7157,9 @@ static void interpret_call_method_alone(ASTNode *node) {
             p   = p->next;
             arg = arg->right;
         }
+        debugger_push_frame(gm->name, node);
         interpret_ast(gm->body);
+        debugger_pop_frame();
           //  printf("[DIAG] interpret_call_method_alone: antes de check, return_flag=%d, return_node=%p\n", return_flag, (void*)return_node);
             if (return_flag && return_node) {
            //     printf("[DIAG] interpret_call_method_alone: return_node type=%s id=%s\n", return_node->type ? return_node->type : "NULL", return_node->id ? return_node->id : "NULL");
@@ -7137,7 +7247,9 @@ static void interpret_call_method_alone(ASTNode *node) {
         p = p->next;
         arg = arg->right;
     }
+    debugger_push_frame(m->name, NULL);
     interpret_ast(m->body);
+    debugger_pop_frame();
     if (return_flag && return_node) {
         ASTNode *lit = NULL;
         if (return_node->type && strcmp(return_node->type, "STRING") == 0) {
@@ -7857,32 +7969,32 @@ static void interpret_assign(ASTNode *node) {
 static void interpret_print(ASTNode *node) {
     ASTNode *arg = node->left;
     if (!arg) {
-        printf("Error: print without argument\n");
+        dbg_printf("Error: print without argument\n");
         return;
     }
     if (arg->type && strcmp(arg->type, "NULL") == 0) {
-        printf("null");
+        dbg_printf("null");
         append_to_stdout("null");
         return;
     }
     if (arg->type && strcmp(arg->type, "IDENTIFIER") == 0) {
         Variable *_v = find_variable(arg->id);
-        if (_v && _v->type && strcmp(_v->type, "NULL") == 0) { printf("null"); append_to_stdout("null"); return; }
+        if (_v && _v->type && strcmp(_v->type, "NULL") == 0) { dbg_printf("null"); append_to_stdout("null"); return; }
     }
     if (arg->type && strcmp(arg->type, "STRING") == 0) {
-        printf("%s", arg->str_value);
+        dbg_printf("%s", arg->str_value);
         return;
     }
     if (arg->type && strcmp(arg->type, "STRING_INTERP") == 0) {
         char *s = expand_interp_string(arg->str_value);
-        printf("%s", s);
+        dbg_printf("%s", s);
         append_to_stdout(s);
         free(s);
         return;
     }
     if (arg->type && strcmp(arg->type, "ADD") == 0 && is_string_type(arg)) {
         char *s = get_node_string(arg);
-        printf("%s", s);
+        dbg_printf("%s", s);
         append_to_stdout(s);
         free(s);
         return;
@@ -7896,25 +8008,25 @@ static void interpret_print(ASTNode *node) {
                 Variable *kv = find_variable(arg->right->id);
                 if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
             }
-            if (!key) { printf("Error: clave Map debe ser string.\n"); return; }
+            if (!key) { dbg_printf("Error: clave Map debe ser string.\n"); return; }
             ASTNode *pair = map_find_pair(map, key);
-            if (!pair) { printf("Error: clave '%s' no encontrada.\n", key); return; }
+            if (!pair) { dbg_printf("Error: clave '%s' no encontrada.\n", key); return; }
             ASTNode *val = pair->left;
-            if (val && val->type && strcmp(val->type, "STRING") == 0) printf("%s", val->str_value);
-            else if (val && val->type && strcmp(val->type, "FLOAT") == 0) printf("%f", atof(val->str_value));
-            else { double v_ = evaluate_expression(val); if (v_ == (int)v_) printf("%d", (int)v_); else printf("%f", v_); }
+            if (val && val->type && strcmp(val->type, "STRING") == 0) dbg_printf("%s", val->str_value);
+            else if (val && val->type && strcmp(val->type, "FLOAT") == 0) dbg_printf("%f", atof(val->str_value));
+            else { double v_ = evaluate_expression(val); if (v_ == (int)v_) dbg_printf("%d", (int)v_); else dbg_printf("%f", v_); }
             return;
         }
         ASTNode *list = resolve_to_list(arg->left);
-        if (!list) { printf("Error: no es lista ni Map.\n"); return; }
+        if (!list) { dbg_printf("Error: no es lista ni Map.\n"); return; }
         int idx = (int)evaluate_expression(arg->right);
         int len = list_length(list);
-        if (idx < 0 || idx >= len) { printf("Error: index %d out of range.\n", idx); return; }
+        if (idx < 0 || idx >= len) { dbg_printf("Error: index %d out of range.\n", idx); return; }
         ASTNode *item = list_get_item(list, idx);
         if (!item) return;
-        if (item->type && strcmp(item->type, "STRING") == 0) printf("%s", item->str_value);
-        else if (item->type && strcmp(item->type, "FLOAT") == 0) printf("%f", atof(item->str_value));
-        else { double v_ = evaluate_expression(item); if (v_ == (int)v_) printf("%d", (int)v_); else printf("%f", v_); }
+        if (item->type && strcmp(item->type, "STRING") == 0) dbg_printf("%s", item->str_value);
+        else if (item->type && strcmp(item->type, "FLOAT") == 0) dbg_printf("%f", atof(item->str_value));
+        else { double v_ = evaluate_expression(item); if (v_ == (int)v_) dbg_printf("%d", (int)v_); else dbg_printf("%f", v_); }
         return;
     }
     /* Fase 1a: print(arr[i]) — soporta strings y números */
@@ -7924,13 +8036,13 @@ static void interpret_print(ASTNode *node) {
         /* Fase 1a: arr.length */
         if (a && a->id && strcmp(a->id, "length") == 0) {
             ASTNode *list = resolve_to_list(o);
-            if (list) { printf("%d", list_length(list)); return; }
+            if (list) { dbg_printf("%d", list_length(list)); return; }
             ASTNode *map = resolve_to_map(o);
-            if (map) { printf("%d", map_length(map)); return; }
+            if (map) { dbg_printf("%d", map_length(map)); return; }
         }
         Variable *v = find_variable(o->id);
         if (!v || v->vtype != VAL_OBJECT) {
-            printf("Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
+            dbg_printf("Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
             return;
         }
         ObjectNode *obj = v->value.object_value;
@@ -7942,28 +8054,28 @@ static void interpret_print(ASTNode *node) {
             }
         }
         if (idx < 0) {
-            printf("Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
+            dbg_printf("Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
             return;
         }
         Variable *attr = &obj->attributes[idx];
         if (attr->vtype == VAL_STRING)
-            printf("%s", attr->value.string_value);
+            dbg_printf("%s", attr->value.string_value);
         else
-            printf("%d", attr->value.int_value);
+            dbg_printf("%d", attr->value.int_value);
         return;
     }
 
     if (arg->id) { 
         Variable *v = find_variable(arg->id);
         if (!v) {
-            printf("Error: Variable '%s' no definida.\n", arg->id);
+            dbg_printf("Error: Variable '%s' no definida.\n", arg->id);
             return;
         }
         if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
             ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
             if (listNode && strcmp(listNode->type, "LIST") == 0) {
                 ASTNode *cur = listNode->left;
-                printf("[\n");
+                dbg_printf("[\n");
                 while (cur) {
                     if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
                         ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
@@ -7971,24 +8083,24 @@ static void interpret_print(ASTNode *node) {
                     }
                     cur = cur->next; // CORRECCIÓN
                 }
-                printf("]\n");
+                dbg_printf("]\n");
                 return;
             }
         }
         if (v->vtype == VAL_STRING)
-            printf("%s", v->value.string_value);
+            dbg_printf("%s", v->value.string_value);
         else if (v->vtype == VAL_INT)
-            printf("%d", v->value.int_value);
+            dbg_printf("%d", v->value.int_value);
         else if (v->vtype == VAL_FLOAT)
-            printf("%f", v->value.float_value);
+            dbg_printf("%f", v->value.float_value);
         else
-            printf("Objeto de clase: %s\n", v->value.object_value->class->name);
+            dbg_printf("Objeto de clase: %s\n", v->value.object_value->class->name);
     } else {
         double val = evaluate_expression(arg);
         if (val == (int)val) {
-            printf("%d", (int)val);
+            dbg_printf("%d", (int)val);
         } else {
-            printf("%f", val);
+            dbg_printf("%f", val);
         }
     }
 
@@ -8004,11 +8116,11 @@ static void interpret_print(ASTNode *node) {
 static void interpret_fprint(ASTNode *node) {
     ASTNode *arg = node->left;
     if (!arg) {
-        fprintf(stdout, "Error: print without argument\n");
+        dbg_printf( "Error: print without argument\n");
         return;
     }
     if (arg->type && strcmp(arg->type, "STRING") == 0) {
-        fprintf(stderr, "%s", arg->str_value);
+        dbg_eprintf( "%s", arg->str_value);
         return;
     }
     if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
@@ -8016,7 +8128,7 @@ static void interpret_fprint(ASTNode *node) {
         ASTNode *a = arg->right;
         Variable *v = find_variable(o->id);
         if (!v || v->vtype != VAL_OBJECT) {
-            fprintf(stderr, "Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
+            dbg_eprintf( "Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
             return;
         }
         ObjectNode *obj = v->value.object_value;
@@ -8028,28 +8140,28 @@ static void interpret_fprint(ASTNode *node) {
             }
         }
         if (idx < 0) {
-            fprintf(stderr, "Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
+            dbg_eprintf( "Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
             return;
         }
         Variable *attr = &obj->attributes[idx];
         if (attr->vtype == VAL_STRING)
-            fprintf(stderr, "%s", attr->value.string_value);
+            dbg_eprintf( "%s", attr->value.string_value);
         else
-            fprintf(stderr, "%d", attr->value.int_value);
+            dbg_eprintf( "%d", attr->value.int_value);
         return;
     }
 
     if (arg->id) { 
         Variable *v = find_variable(arg->id);
         if (!v) {
-            fprintf(stderr, "Error: Variable '%s' no definida.\n", arg->id);
+            dbg_eprintf( "Error: Variable '%s' no definida.\n", arg->id);
             return;
         }
         if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
             ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
             if (listNode && strcmp(listNode->type, "LIST") == 0) {
                 ASTNode *cur = listNode->left;
-                fprintf(stderr, "[\n");
+                dbg_eprintf( "[\n");
                 while (cur) {
                     if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
                         ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
@@ -8057,24 +8169,24 @@ static void interpret_fprint(ASTNode *node) {
                     }
                     cur = cur->next; // CORRECCIÓN
                 }
-                fprintf(stderr, "]\n");
+                dbg_eprintf( "]\n");
                 return;
             }
         }
         if (v->vtype == VAL_STRING)
-            fprintf(stderr, "%s", v->value.string_value);
+            dbg_eprintf( "%s", v->value.string_value);
         else if (v->vtype == VAL_INT)
-            fprintf(stderr, "%d", v->value.int_value);
+            dbg_eprintf( "%d", v->value.int_value);
         else if (v->vtype == VAL_FLOAT)
-            fprintf(stderr, "%f", v->value.float_value);
+            dbg_eprintf( "%f", v->value.float_value);
         else
-            fprintf(stderr, "Objeto de clase: %s\n", v->value.object_value->class->name);
+            dbg_eprintf( "Objeto de clase: %s\n", v->value.object_value->class->name);
     } else {
         double val = evaluate_expression(arg);
         if (val == (int)val) {
-            fprintf(stderr, "%d", (int)val);
+            dbg_eprintf( "%d", (int)val);
         } else {
-            fprintf(stderr, "%f", val);
+            dbg_eprintf( "%f", val);
         }
     }
 
@@ -8090,11 +8202,11 @@ static void interpret_fprint(ASTNode *node) {
 static void interpret_fprintln(ASTNode *node) {
     ASTNode *arg = node->left;
     if (!arg) {
-        fprintf(stderr, "Error: print without argument\n");
+        dbg_eprintf( "Error: print without argument\n");
         return;
     }
     if (arg->type && strcmp(arg->type, "STRING") == 0) {
-        fprintf(stderr, "%s\n", arg->str_value);
+        dbg_eprintf( "%s\n", arg->str_value);
         return;
     }
     if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
@@ -8102,7 +8214,7 @@ static void interpret_fprintln(ASTNode *node) {
         ASTNode *a = arg->right;
         Variable *v = find_variable(o->id);
         if (!v || v->vtype != VAL_OBJECT) {
-            fprintf(stderr, "Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
+            dbg_eprintf( "Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
             return;
         }
         ObjectNode *obj = v->value.object_value;
@@ -8114,28 +8226,28 @@ static void interpret_fprintln(ASTNode *node) {
             }
         }
         if (idx < 0) {
-            fprintf(stderr, "Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
+            dbg_eprintf( "Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
             return;
         }
         Variable *attr = &obj->attributes[idx];
         if (attr->vtype == VAL_STRING)
-            fprintf(stderr, "%s\n", attr->value.string_value);
+            dbg_eprintf( "%s\n", attr->value.string_value);
         else
-            fprintf(stderr, "%d\n", attr->value.int_value);
+            dbg_eprintf( "%d\n", attr->value.int_value);
         return;
     }
 
     if (arg->id) {
         Variable *v = find_variable(arg->id);
         if (!v) {
-            fprintf(stderr, "Error: Variable '%s' no definida.\n", arg->id);
+            dbg_eprintf( "Error: Variable '%s' no definida.\n", arg->id);
             return;
         }
         if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
             ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
             if (listNode && strcmp(listNode->type, "LIST") == 0) {
                 ASTNode *cur = listNode->left;
-                fprintf(stderr, "[\n");
+                dbg_eprintf( "[\n");
                 while (cur) {
                     if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
                         ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
@@ -8143,24 +8255,24 @@ static void interpret_fprintln(ASTNode *node) {
                     }
                     cur = cur->next; // CORRECCIÓN
                 }
-                fprintf(stderr, "]\n");
+                dbg_eprintf( "]\n");
                 return;
             }
         }
         if (v->vtype == VAL_STRING)
-            fprintf(stderr, "%s\n", v->value.string_value);
+            dbg_eprintf( "%s\n", v->value.string_value);
         else if (v->vtype == VAL_INT)
-            fprintf(stderr, "%d\n", v->value.int_value);
+            dbg_eprintf( "%d\n", v->value.int_value);
         else if (v->vtype == VAL_FLOAT)
-            fprintf(stderr, "%f\n", v->value.float_value);
+            dbg_eprintf( "%f\n", v->value.float_value);
         else
-            fprintf(stderr, "Objeto de clase: %s\n", v->value.object_value->class->name);
+            dbg_eprintf( "Objeto de clase: %s\n", v->value.object_value->class->name);
     } else {
         double val = evaluate_expression(arg);
         if (val == (int)val) {
-            fprintf(stderr, "%d\n", (int)val);
+            dbg_eprintf( "%d\n", (int)val);
         } else {
-            fprintf(stderr, "%f\n", val);
+            dbg_eprintf( "%f\n", val);
         }
     }
 
@@ -8176,27 +8288,27 @@ static void interpret_fprintln(ASTNode *node) {
 static void interpret_println(ASTNode *node) {
     ASTNode *arg = node->left;
     if (!arg) {
-        printf("Error: print without argument\n");
+        dbg_printf("Error: print without argument\n");
         return;
     }
     if (arg->type && strcmp(arg->type, "NULL") == 0) {
-        printf("null\n");
+        dbg_printf("null\n");
         append_to_stdout("null\n");
         return;
     }
     if (arg->type && strcmp(arg->type, "IDENTIFIER") == 0) {
         Variable *_v = find_variable(arg->id);
-        if (_v && _v->type && strcmp(_v->type, "NULL") == 0) { printf("null\n"); append_to_stdout("null\n"); return; }
+        if (_v && _v->type && strcmp(_v->type, "NULL") == 0) { dbg_printf("null\n"); append_to_stdout("null\n"); return; }
     }
     if (arg->type && strcmp(arg->type, "STRING") == 0) {
-        printf("%s\n", arg->str_value);
+        dbg_printf("%s\n", arg->str_value);
         append_to_stdout(arg->str_value);
         append_to_stdout("\n");
         return;
     }
     if (arg->type && strcmp(arg->type, "STRING_INTERP") == 0) {
         char *s = expand_interp_string(arg->str_value);
-        printf("%s\n", s);
+        dbg_printf("%s\n", s);
         append_to_stdout(s);
         append_to_stdout("\n");
         free(s);
@@ -8204,7 +8316,7 @@ static void interpret_println(ASTNode *node) {
     }
     if (arg->type && strcmp(arg->type, "ADD") == 0 && is_string_type(arg)) {
         char *s = get_node_string(arg);
-        printf("%s\n", s);
+        dbg_printf("%s\n", s);
         append_to_stdout(s);
         append_to_stdout("\n");
         free(s);
@@ -8213,31 +8325,31 @@ static void interpret_println(ASTNode *node) {
     if (arg->type && strcmp(arg->type, "CALL_METHOD") == 0) {
         interpret_call_method(arg);
         Variable *r = find_variable("__ret__");
-        if (!r) { printf("\n"); return; }
-        if (r->vtype == VAL_STRING) { printf("%s\n", r->value.string_value ? r->value.string_value : ""); return; }
-        if (r->vtype == VAL_INT) { printf("%d\n", r->value.int_value); return; }
-        if (r->vtype == VAL_FLOAT) { printf("%f\n", r->value.float_value); return; }
-        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) { printf("null\n"); return; }
-        printf("\n");
+        if (!r) { dbg_printf("\n"); return; }
+        if (r->vtype == VAL_STRING) { dbg_printf("%s\n", r->value.string_value ? r->value.string_value : ""); return; }
+        if (r->vtype == VAL_INT) { dbg_printf("%d\n", r->value.int_value); return; }
+        if (r->vtype == VAL_FLOAT) { dbg_printf("%f\n", r->value.float_value); return; }
+        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) { dbg_printf("null\n"); return; }
+        dbg_printf("\n");
         return;
     }
     /* Ola 13: println(builtin(...)) — dispatch via __ret__ */
     if (arg->type && strcmp(arg->type, "CALL_FUNC") == 0) {
         interpret_call_func(arg);
         Variable *r = find_variable("__ret__");
-        if (!r) { printf("\n"); return; }
-        if (r->vtype == VAL_STRING) { printf("%s\n", r->value.string_value ? r->value.string_value : ""); append_to_stdout(r->value.string_value ? r->value.string_value : ""); append_to_stdout("\n"); return; }
-        if (r->vtype == VAL_INT)    { printf("%d\n", r->value.int_value); char tmp[32]; snprintf(tmp,32,"%d\n",r->value.int_value); append_to_stdout(tmp); return; }
-        if (r->vtype == VAL_FLOAT)  { printf("%f\n", r->value.float_value); return; }
+        if (!r) { dbg_printf("\n"); return; }
+        if (r->vtype == VAL_STRING) { dbg_printf("%s\n", r->value.string_value ? r->value.string_value : ""); append_to_stdout(r->value.string_value ? r->value.string_value : ""); append_to_stdout("\n"); return; }
+        if (r->vtype == VAL_INT)    { dbg_printf("%d\n", r->value.int_value); char tmp[32]; snprintf(tmp,32,"%d\n",r->value.int_value); append_to_stdout(tmp); return; }
+        if (r->vtype == VAL_FLOAT)  { dbg_printf("%f\n", r->value.float_value); return; }
         if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
             ASTNode *listNode = (ASTNode*)(intptr_t)r->value.object_value;
-            if (listNode) { ASTNode *cur = listNode->left; printf("["); int first = 1;
-                while (cur) { if (!first) printf(","); first = 0;
-                    if (cur->type && strcmp(cur->type,"STRING")==0) printf("%s", cur->str_value ? cur->str_value : "");
-                    else if (cur->type && strcmp(cur->type,"FLOAT")==0) printf("%f", cur->str_value ? atof(cur->str_value) : 0.0);
-                    else printf("%d", cur->value); cur = cur->next; } printf("]\n"); return; }
+            if (listNode) { ASTNode *cur = listNode->left; dbg_printf("["); int first = 1;
+                while (cur) { if (!first) dbg_printf(","); first = 0;
+                    if (cur->type && strcmp(cur->type,"STRING")==0) dbg_printf("%s", cur->str_value ? cur->str_value : "");
+                    else if (cur->type && strcmp(cur->type,"FLOAT")==0) dbg_printf("%f", cur->str_value ? atof(cur->str_value) : 0.0);
+                    else dbg_printf("%d", cur->value); cur = cur->next; } dbg_printf("]\n"); return; }
         }
-        printf("\n");
+        dbg_printf("\n");
         return;
     }
     if (arg->type && strcmp(arg->type, "NULL_COALESCE") == 0) {
@@ -8265,32 +8377,32 @@ static void interpret_println(ASTNode *node) {
                 Variable *kv = find_variable(arg->right->id);
                 if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
             }
-            if (!key) { printf("Error: clave Map debe ser string.\n"); return; }
+            if (!key) { dbg_printf("Error: clave Map debe ser string.\n"); return; }
             ASTNode *pair = map_find_pair(map, key);
-            if (!pair) { printf("Error: clave '%s' no encontrada.\n", key); return; }
+            if (!pair) { dbg_printf("Error: clave '%s' no encontrada.\n", key); return; }
             ASTNode *val = pair->left;
-            if (val && val->type && strcmp(val->type, "STRING") == 0) printf("%s\n", val->str_value);
-            else if (val && val->type && strcmp(val->type, "FLOAT") == 0) printf("%f\n", atof(val->str_value));
-            else { double v_ = evaluate_expression(val); if (v_ == (int)v_) printf("%d\n", (int)v_); else printf("%f\n", v_); }
+            if (val && val->type && strcmp(val->type, "STRING") == 0) dbg_printf("%s\n", val->str_value);
+            else if (val && val->type && strcmp(val->type, "FLOAT") == 0) dbg_printf("%f\n", atof(val->str_value));
+            else { double v_ = evaluate_expression(val); if (v_ == (int)v_) dbg_printf("%d\n", (int)v_); else dbg_printf("%f\n", v_); }
             return;
         }
         ASTNode *list = resolve_to_list(arg->left);
-        if (!list) { printf("Error: no es lista.\n"); return; }
+        if (!list) { dbg_printf("Error: no es lista.\n"); return; }
         int idx = (int)evaluate_expression(arg->right);
         int len = list_length(list);
         if (idx < 0 || idx >= len) {
-            printf("Error: index %d out of range (length=%d).\n", idx, len);
+            dbg_printf("Error: index %d out of range (length=%d).\n", idx, len);
             return;
         }
         ASTNode *item = list_get_item(list, idx);
         if (!item) return;
         if (item->type && strcmp(item->type, "STRING") == 0) {
-            printf("%s\n", item->str_value);
+            dbg_printf("%s\n", item->str_value);
         } else if (item->type && strcmp(item->type, "FLOAT") == 0) {
-            printf("%f\n", atof(item->str_value));
+            dbg_printf("%f\n", atof(item->str_value));
         } else {
             double v = evaluate_expression(item);
-            if (v == (int)v) printf("%d\n", (int)v); else printf("%f\n", v);
+            if (v == (int)v) dbg_printf("%d\n", (int)v); else dbg_printf("%f\n", v);
         }
         return;
     }
@@ -8302,7 +8414,7 @@ static void interpret_println(ASTNode *node) {
             ASTNode *list = resolve_to_list(o);
             if (list) {
                 int n = list_length(list);
-                printf("%d\n", n);
+                dbg_printf("%d\n", n);
                 char tmp[32]; snprintf(tmp, 32, "%d\n", n);
                 append_to_stdout(tmp);
                 return;
@@ -8310,7 +8422,7 @@ static void interpret_println(ASTNode *node) {
             ASTNode *map = resolve_to_map(o);
             if (map) {
                 int n = map_length(map);
-                printf("%d\n", n);
+                dbg_printf("%d\n", n);
                 char tmp[32]; snprintf(tmp, 32, "%d\n", n);
                 append_to_stdout(tmp);
                 return;
@@ -8318,7 +8430,7 @@ static void interpret_println(ASTNode *node) {
         }
         Variable *v = find_variable(o->id);
         if (!v || v->vtype != VAL_OBJECT) {
-            printf("Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
+            dbg_printf("Error: Objeto '%s' no definido o no es un objeto.\n", o->id);
             return;
         }
         ObjectNode *obj = v->value.object_value;
@@ -8330,17 +8442,17 @@ static void interpret_println(ASTNode *node) {
             }
         }
         if (idx < 0) {
-            printf("Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
+            dbg_printf("Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
             return;
         }
         Variable *attr = &obj->attributes[idx];
         if (attr->vtype == VAL_STRING) {
-            printf("%s\n", attr->value.string_value);
+            dbg_printf("%s\n", attr->value.string_value);
             append_to_stdout(attr->value.string_value);
             append_to_stdout("\n");
         }
         else {
-            printf("%d\n", attr->value.int_value);
+            dbg_printf("%d\n", attr->value.int_value);
             char temp[32]; snprintf(temp, 32, "%d\n", attr->value.int_value);
             append_to_stdout(temp);
         }
@@ -8350,14 +8462,14 @@ static void interpret_println(ASTNode *node) {
     if (arg->id) {
         Variable *v = find_variable(arg->id);
         if (!v) {
-            printf("Error: Variable '%s' no definida.\n", arg->id);
+            dbg_printf("Error: Variable '%s' no definida.\n", arg->id);
             return;
         }
         if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
             ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
             if (listNode && strcmp(listNode->type, "LIST") == 0) {
                 ASTNode *cur = listNode->left;
-                printf("[\n");
+                dbg_printf("[\n");
                 while (cur) {
                     if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
                         ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
@@ -8365,35 +8477,35 @@ static void interpret_println(ASTNode *node) {
                     }
                     cur = cur->next; // CORRECCIÓN
                 }
-                printf("]\n");
+                dbg_printf("]\n");
                 return;
             }
         }
         if (v->vtype == VAL_STRING) {
-            printf("%s\n", v->value.string_value);
+            dbg_printf("%s\n", v->value.string_value);
             append_to_stdout(v->value.string_value);
             append_to_stdout("\n");
         }
         else if (v->vtype == VAL_INT) {
-            printf("%d\n", v->value.int_value);
+            dbg_printf("%d\n", v->value.int_value);
             char temp[32]; snprintf(temp, 32, "%d\n", v->value.int_value);
             append_to_stdout(temp);
         }
         else if (v->vtype == VAL_FLOAT) {
-            printf("%f\n", v->value.float_value);
+            dbg_printf("%f\n", v->value.float_value);
             char temp[64]; snprintf(temp, 64, "%f\n", v->value.float_value);
             append_to_stdout(temp);
         }
         else {
-            printf("Objeto de clase: %s\n", v->value.object_value->class->name);
+            dbg_printf("Objeto de clase: %s\n", v->value.object_value->class->name);
             // Don't append object description to stdout for API response usually
         }
     } else {
         double val = evaluate_expression(arg);
         if (val == (int)val) {
-            printf("%d\n", (int)val);
+            dbg_printf("%d\n", (int)val);
         } else {
-            printf("%f\n", val);
+            dbg_printf("%f\n", val);
         }
     }
 

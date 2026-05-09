@@ -72,6 +72,10 @@ typedef struct ASTNode {
      * map lookups can short-circuit with pointer-eq when the lookup key is
      * also interned. */
     int   id_interned;
+    /* Debugger: source line where this node was parsed (1-based, 0 if unknown).
+     * Set by create_ast_* constructors from yylineno. May be slightly off for
+     * multi-line constructs (lookahead token); good enough for breakpoint match. */
+    int   line;
 } ASTNode;
 
 // Prototipo nativo ORM debe ir después de ASTNode

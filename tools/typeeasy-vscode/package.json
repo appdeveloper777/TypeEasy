@@ -1,0 +1,95 @@
+{
+  "name": "typeeasy-debug",
+  "displayName": "TypeEasy Debugger",
+  "description": "Debug adapter for the TypeEasy language",
+  "version": "0.0.1",
+  "publisher": "typeeasy",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Debuggers", "Programming Languages"],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onDebugResolve:typeeasy",
+    "onLanguage:typeeasy"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "typeeasy",
+        "aliases": ["TypeEasy", "typeeasy"],
+        "extensions": [".te"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "configurationDefaults": {
+      "files.associations": {
+        "*.te": "typeeasy"
+      }
+    },
+    "breakpoints": [
+      { "language": "typeeasy" }
+    ],
+    "grammars": [
+      {
+        "language": "typeeasy",
+        "scopeName": "source.te",
+        "path": "./syntaxes/typeeasy.tmLanguage.json"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "typeeasy",
+        "label": "TypeEasy",
+        "languages": ["typeeasy"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Absolute path to the .te file to run.",
+                "default": "${file}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Pause at first statement.",
+                "default": false
+              },
+              "port": {
+                "type": "number",
+                "description": "TCP port for the debugger socket.",
+                "default": 4711
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "typeeasy",
+            "request": "launch",
+            "name": "TypeEasy: debug current .te (Docker)",
+            "program": "${file}",
+            "stopOnEntry": false,
+            "port": 4711
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "TypeEasy: launch current file",
+            "description": "Run the .te file open in editor under the TypeEasy debugger",
+            "body": {
+              "type": "typeeasy",
+              "request": "launch",
+              "name": "TypeEasy: debug current .te",
+              "program": "^\"\\${file}\"",
+              "stopOnEntry": false,
+              "port": 4711
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "dependencies": {
+    "@vscode/debugadapter": "^1.66.0"
+  }
+}

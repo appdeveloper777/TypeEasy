@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "TypeEasy: debug current .te (Docker)",
+      "type": "typeeasy",
+      "request": "launch",
+      "program": "${file}",
+      "stopOnEntry": false,
+      "port": 4711
+    },
+    {
+      "name": "TypeEasy: attach to running interpreter (port 4711)",
+      "type": "typeeasy",
+      "request": "launch",
+      "program": "${file}",
+      "stopOnEntry": false,
+      "port": 4711,
+      "attachOnly": true
+    }
+  ]
+}

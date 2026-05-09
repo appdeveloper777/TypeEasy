@@ -4,6 +4,7 @@
 #include <time.h>
 #include "ast.h" 
 #include "wasm_backend.h"
+#include "debugger.h"
 
 /* --- Prototipos de las funciones en tu "Motor" --- */
 ASTNode* parse_file(FILE* file);
@@ -88,6 +89,7 @@ int main(int argc, char *argv[]) {
     const char *output_path = NULL;
     int emit_wat_mode = 0;
     int emit_wasm_mode = 0;
+    int debug_port = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--emit-wat") == 0) {
@@ -102,6 +104,10 @@ int main(int argc, char *argv[]) {
             output_path = argv[++i];
         } else if (strcmp(argv[i], "--debug") == 0) {
             g_debug_mode = 1;
+        } else if (strcmp(argv[i], "--debug-port") == 0 && i + 1 < argc) {
+            debug_port = atoi(argv[++i]);
+        } else if (strncmp(argv[i], "--debug-port=", 13) == 0) {
+            debug_port = atoi(argv[i] + 13);
         } else if (argv[i][0] != '-' && !script_path) {
             script_path = argv[i];
         }
@@ -209,6 +215,12 @@ int main(int argc, char *argv[]) {
     // 4. Inicializar Runtime
     runtime_save_initial_var_count();
 
+    // 4b. Iniciar el debugger ANTES de ejecutar el script (bloquea hasta que
+    // el adapter se conecte y envíe `start`).
+    if (debug_port > 0) {
+        debugger_init(debug_port, script_path);
+    }
+
     // 5. Ejecutar Script (Global scope)
     // Esto es necesario para inicializar variables globales, clases, etc.
     if (script_ast) {
@@ -268,5 +280,6 @@ int main(int argc, char *argv[]) {
         printf("Tiempo de ejecución: %.6f segundos\n", tiempo);
     }
 
+    debugger_terminate(0);
     return 0;
 }

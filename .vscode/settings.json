@@ -2,7 +2,7 @@
     "C_Cpp.errorSquiggles": "disabled",
     "files.associations": {
         "*.embeddedhtml": "html",
-        "*.te": "dart",
+        "*.te": "typeeasy",
         "*.y": "c",
         "*.l": "c",
         "random": "c",

@@ -71,7 +71,106 @@ docker compose run --rm typeeasy hola.te
 
 ---
 
-## 💬 Chatbot WhatsApp con Gemini AI
+## 🎨 Soporte de VS Code (colores + debugger)
+
+El repo incluye una extensión local de VS Code que aporta **resaltado de sintaxis** y **debugger F5/F10/F11** para archivos `.te`. Para instalarla después de clonar:
+
+**Linux / macOS / Git Bash:**
+```bash
+bash scripts/install_vscode_extension.sh
+```
+
+**Windows PowerShell:**
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install_vscode_extension.ps1
+```
+
+Reinicia VS Code. Abre cualquier `.te` y verás colores. Pulsa **F5** para debug con breakpoints, step-over (F10), step-in (F11) y panel de Variables expandible (listas y objetos).
+
+> Requisitos: el comando `code` debe estar en el PATH (en VS Code: `Ctrl+Shift+P` → *Shell Command: Install 'code' command in PATH*) y Docker corriendo (el debugger se ejecuta dentro del contenedor `typeeasy`).
+
+---
+
+## � Cómo depurar (debug) un archivo `.te`
+
+Una vez instalada la extensión de VS Code (sección anterior), puedes depurar cualquier `.te` con breakpoints reales, step-over, step-in, inspección de variables y `print()` redirigido al **Debug Console**.
+
+### 1. Abre el archivo `.te` que quieres depurar
+Por ejemplo `typeeasycode/link_to_objects.te`.
+
+### 2. Pon un breakpoint
+Haz clic en el margen izquierdo de la línea (aparece un punto rojo) o pulsa **F9** sobre la línea.
+
+```te
+class Producto {
+  nombre : string;
+  precio : int;
+  __constructor(nombre : string, precio : int) {
+    this.nombre = nombre;
+    this.precio = precio;
+  }
+}
+
+let productos = from "productos.csv", Producto;   // ← breakpoint aquí
+for (let item in productos) {
+    print("Producto:");
+    item.Mostrar();
+}
+```
+
+### 3. Pulsa **F5** para iniciar el debug
+La primera vez VS Code te preguntará el tipo de configuración: elige **TypeEasy**. Esto crea automáticamente `.vscode/launch.json` con:
+
+```json
+{
+  "type": "typeeasy",
+  "request": "launch",
+  "name": "TypeEasy: debug current .te",
+  "program": "${file}",
+  "stopOnEntry": false,
+  "port": 4711
+}
+```
+
+VS Code lanzará el contenedor Docker, conectará el adapter al intérprete y se detendrá en tu breakpoint.
+
+### 4. Atajos disponibles
+
+| Acción | Tecla |
+|---|---|
+| Continuar | **F5** |
+| Step Over (siguiente línea) | **F10** |
+| Step Into (entrar al método) | **F11** |
+| Step Out (salir del método) | **Shift+F11** |
+| Pausar | **F6** |
+| Detener | **Shift+F5** |
+| Toggle breakpoint | **F9** |
+
+### 5. Panel de Variables
+En **Run and Debug → Variables → Locals** verás todas las variables locales del frame actual. Haz clic en la flecha para expandir:
+
+- **Listas** se muestran como `[N items]` y se expanden mostrando `[0]`, `[1]`, …
+- **Objetos** se muestran como `<NombreClase>` y se expanden mostrando sus atributos.
+- **Tipos primitivos** (`int`, `float`, `string`) se muestran inline.
+
+### 6. Debug Console
+Todo lo que imprima `print()` / `println()` aparece en la pestaña **Debug Console** abajo, junto con los logs del adapter (`[typeeasy-dap] ...`).
+
+### 7. Pila de llamadas (Call Stack)
+Cuando estés dentro de un método, el panel **Call Stack** muestra `Mostrar() → <main>` y puedes hacer clic para saltar entre frames.
+
+### Solución de problemas
+
+| Problema | Solución |
+|---|---|
+| `connect ECONNREFUSED 127.0.0.1:4711` | Puerto ocupado. Corre `docker rm -f $(docker ps -q --filter "publish=4711")` |
+| Breakpoint no se activa | Verifica que la línea sea una sentencia ejecutable (no comentario, no `}` cerrado) |
+| Sin colores en `.te` | Reinstala la extensión: `bash scripts/install_vscode_extension.sh` y reinicia VS Code |
+| `Docker daemon not running` | Inicia Docker Desktop |
+
+---
+
+## �💬 Chatbot WhatsApp con Gemini AI
 
 Crea un chatbot inteligente para WhatsApp en minutos usando Google Gemini AI.
 

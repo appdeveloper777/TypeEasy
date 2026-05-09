@@ -1,0 +1,135 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "TypeEasy",
+  "scopeName": "source.te",
+  "fileTypes": ["te"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#decorators" },
+    { "include": "#class-decl" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#function-call" },
+    { "include": "#operators" },
+    { "include": "#punctuation" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.block.te", "begin": "/\\*", "end": "\\*/" },
+        { "name": "comment.line.double-slash.te", "match": "//.*$" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.te",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.te", "match": "\\\\." },
+            { "name": "variable.other.interpolation.te", "match": "\\$\\{[^}]*\\}" },
+            { "name": "variable.other.interpolation.te", "match": "\\$[A-Za-z_][A-Za-z0-9_]*" }
+          ]
+        },
+        {
+          "name": "string.quoted.single.te",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            { "name": "constant.character.escape.te", "match": "\\\\." }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.float.te", "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?\\b" },
+        { "name": "constant.numeric.integer.te", "match": "\\b\\d+\\b" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.te",
+          "match": "\\b(if|else|for|while|do|in|return|break|continue|match|case|try|catch|finally|throw)\\b"
+        },
+        {
+          "name": "keyword.declaration.te",
+          "match": "\\b(let|var|const|class|new|this|__constructor|endpoint|agent|listener|bridge|state|node|layer|model|dataset|train|predict)\\b"
+        },
+        {
+          "name": "keyword.other.te",
+          "match": "\\b(from|filter|concat|print|println|fprint|fprintln|xml|json|plot|mysql_connect|mysql_close|mysql_query|orm_query|HttpGet|HttpPost|HTTPGET|HTTPPOST)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        { "name": "storage.type.primitive.te", "match": "\\b(int|float|string|void|dynamic|bool)\\b" },
+        { "name": "support.type.te", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.null.te", "match": "\\bnull\\b" },
+        { "name": "constant.language.boolean.te", "match": "\\b(true|false)\\b" }
+      ]
+    },
+    "decorators": {
+      "patterns": [
+        { "name": "entity.name.function.decorator.te", "match": "@[A-Za-z_][A-Za-z0-9_]*" }
+      ]
+    },
+    "class-decl": {
+      "patterns": [
+        {
+          "match": "\\b(class)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.te" },
+            "2": { "name": "entity.name.class.te" }
+          }
+        },
+        {
+          "match": "\\b(new)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.te" },
+            "2": { "name": "entity.name.class.te" }
+          }
+        }
+      ]
+    },
+    "function-call": {
+      "patterns": [
+        { "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()", "name": "entity.name.function.te" }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.arrow.te", "match": "=>" },
+        { "name": "keyword.operator.comparison.te", "match": "==|!=|<=|>=|<|>" },
+        { "name": "keyword.operator.logical.te", "match": "&&|\\|\\||!" },
+        { "name": "keyword.operator.assignment.te", "match": "\\+=|-=|\\*=|/=|=" },
+        { "name": "keyword.operator.increment.te", "match": "\\+\\+|--" },
+        { "name": "keyword.operator.arithmetic.te", "match": "\\+|-|\\*|/|%" },
+        { "name": "keyword.operator.null.te", "match": "\\?\\.|\\?\\?|\\?" }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.terminator.te", "match": ";" },
+        { "name": "punctuation.separator.te", "match": "[,:.]" },
+        { "name": "punctuation.section.brackets.te", "match": "[\\[\\]\\(\\){}]" }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        { "name": "variable.other.te", "match": "\\b[a-z_][A-Za-z0-9_]*\\b" }
+      ]
+    }
+  }
+}

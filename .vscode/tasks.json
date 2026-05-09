@@ -1,0 +1,48 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // Reconstruye la imagen del intérprete (incluye gdbserver desde el Dockerfile).
+      // Ejecutar manualmente cuando cambies código C o el Dockerfile.
+      "label": "debug: rebuild typeeasy image",
+      "type": "shell",
+      "command": "docker",
+      "args": ["compose", "build", "typeeasy"],
+      "problemMatcher": []
+    },
+    {
+      // Copia el binario con símbolos -g desde el contenedor al host.
+      // VS Code (cppdbg) lo lee localmente para resolver símbolos.
+      "label": "debug: copy binary from container",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-c",
+        "mkdir -p .debug && cid=$(MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker compose run -d --entrypoint sleep typeeasy 3600) && docker cp $cid:/typeeasy/typeeasy .debug/typeeasy && docker rm -f $cid"
+      ],
+      "problemMatcher": []
+    },
+    {
+      // Arranca gdbserver dentro del contenedor ejecutando el .te ABIERTO en VS Code.
+      // El archivo debe estar dentro de typeeasycode/ (que se monta como /code).
+      "label": "debug: start gdbserver in container",
+      "type": "shell",
+      "isBackground": true,
+      "command": "bash",
+      "args": [
+        "-c",
+        "MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker compose run --rm -p 2345:2345 -v \"$PWD/typeeasycode:/code\" --entrypoint gdbserver typeeasy :2345 /typeeasy/typeeasy /code/${fileBasename}"
+      ],
+      "problemMatcher": {
+        "owner": "gdbserver",
+        "pattern": [{ "regexp": "^(.*)$", "message": 1 }],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^(Process |Listening on port )",
+          "endsPattern": "^Listening on port"
+        }
+      },
+      "dependsOn": ["debug: copy binary from container"]
+    }
+  ]
+}

@@ -49,13 +49,13 @@ RUN cd /app/src && \
     bison -d -o parser.tab.c parser.y --warnings=none && \
     flex -o lex.yy.c parser.l && \
     gcc -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -c \
-    ast.c bytecode.c mysql_bridge.c orm_bridge.c typeeasy_api.c \
+    ast.c bytecode.c mysql_bridge.c orm_bridge.c typeeasy_api.c debugger.c \
     parser.tab.c lex.yy.c strvars.c && \
     cd /app && \
     gcc -I/app/api_server -I/app/src -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 \
     /app/api_server/servidor_api.c /app/api_server/typeeasy.c /app/api_server/civetweb.c \
     /app/src/ast.o /app/src/bytecode.o /app/src/mysql_bridge.o /app/src/orm_bridge.o \
-    /app/src/typeeasy_api.o /app/src/parser.tab.o /app/src/lex.yy.o /app/src/strvars.o \
+    /app/src/typeeasy_api.o /app/src/debugger.o /app/src/parser.tab.o /app/src/lex.yy.o /app/src/strvars.o \
     -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto -lmysqlclient -lfl -lm
 
 # =================================================================
@@ -94,9 +94,9 @@ FROM debian:12-slim AS typeeasy
 
 WORKDIR /typeeasy
 
-# Instala la librería 'libfl' que falta
+# Instala la librería 'libfl' que falta (+ gdbserver para depuración remota)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libfl2 default-libmysqlclient-dev wabt && \
+    apt-get install -y --no-install-recommends libfl2 default-libmysqlclient-dev wabt gdbserver && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
