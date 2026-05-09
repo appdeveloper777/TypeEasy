@@ -1,0 +1,8 @@
+// Mega bench: 100M iter — fuerza al intérprete a dominar sobre Docker
+var total = 0;
+var i = 0;
+while (i < 100000000) {
+    total = total + i;
+    i = i + 1;
+}
+println(total);

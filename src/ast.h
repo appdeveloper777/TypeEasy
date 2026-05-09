@@ -8,16 +8,70 @@
 typedef struct MethodNode MethodNode;
 typedef struct ParameterNode ParameterNode;
 
+/* --- Fase 1: NodeKind enum (perf optimization) ---
+ * Cached enum for AST node types. Set automatically by create_ast_node*
+ * from the string `type`. Allows hot dispatch via switch instead of strcmp.
+ * NK_UNKNOWN = 0 = node type string did not match a known kind (still works
+ * via strcmp fallback in non-hot paths).
+ */
+typedef enum {
+    NK_UNKNOWN = 0,
+    NK_ADD, NK_SUB, NK_MUL, NK_DIV,
+    NK_GT, NK_LT, NK_EQ, NK_DIFF, NK_GT_EQ, NK_LT_EQ,
+    NK_AND, NK_OR, NK_NOT, NK_NULL_COALESCE,
+    NK_NUMBER, NK_INT, NK_FLOAT, NK_STRING, NK_STRING_LITERAL, NK_STRING_INTERP,
+    NK_NULL, NK_IDENTIFIER, NK_ID,
+    NK_ACCESS_ATTR, NK_ACCESS_EXPR, NK_ASSIGN, NK_ASSIGN_ATTR, NK_INDEX_ASSIGN,
+    NK_VAR_DECL, NK_STATE_DECL, NK_BRIDGE_DECL,
+    NK_IF, NK_MATCH, NK_FOR, NK_FOR_IN, NK_WHILE, NK_BREAK, NK_CONTINUE,
+    NK_RETURN, NK_THROW, NK_TRY_CATCH,
+    NK_PRINT, NK_PRINTLN, NK_FPRINT, NK_FPRINTLN,
+    NK_CALL_FUNC, NK_CALL_METHOD, NK_METHOD_CALL_ALONE,
+    NK_LIST, NK_LIST_FUNC_CALL, NK_FILTER_CALL,
+    NK_OBJECT, NK_OBJECT_LITERAL, NK_KV_PAIR,
+    NK_AGENT, NK_AGENT_LIST, NK_LISTENER,
+    NK_DATASET, NK_MODEL, NK_TRAIN, NK_PREDICT, NK_PLOT,
+    NK_RETURN_JSON, NK_RETURN_XML,
+    NK_EXPRESSION, NK_STATEMENT_LIST
+} NodeKind;
+
+/* Resolve a type-string to its NodeKind (call once at node creation). */
+NodeKind nk_from_str(const char *type);
+
 /* --- 1. LA DEFINICIÓN DE ASTNode --- */
 typedef struct ASTNode {
     char *type;
+    NodeKind kind;        /* Fase 1: cached enum kind */
     char *id;
     int value;
     char *str_value;
     struct ASTNode *left;
     struct ASTNode *right;
     struct ASTNode *next;    
-    struct ASTNode *extra; 
+    struct ASTNode *extra;
+    /* Fase 2 (perf): cached Variable* for NK_IDENTIFIER nodes.
+     * vars[] entries are append-only and never relocated, so the pointer
+     * stays valid for the program lifetime once resolved. */
+    void *cached_var;
+    /* Fase 3 (perf): bytecode cache for compilable numeric expressions.
+     *   NULL          -> not compiled yet (try on first evaluation)
+     *   (void*)0x1    -> tried and failed (do not retry; fall back to AST)
+     *   other         -> heap-allocated BCInfo*: a tiny stack-VM program */
+    void *bc;
+    /* Ola 2 (perf): inline cache for NK_ACCESS_ATTR (obj.attr).
+     * On first access we store the ClassNode* of the object and the
+     * resolved attribute index. Next accesses validate the class pointer
+     * and skip the strcmp loop entirely. */
+    void *cached_class;
+    int   cached_attr_idx;
+    /* Ola 3 Fase A (perf): str_value points into the global intern table
+     * (immortal, deduplicated). When set, free_ast must NOT free str_value,
+     * and string equality may compare pointers directly. */
+    int   str_interned;
+    /* Ola 15 (perf): same flag for `id` slot. Used by KV_PAIR keys so that
+     * map lookups can short-circuit with pointer-eq when the lookup key is
+     * also interned. */
+    int   id_interned;
 } ASTNode;
 
 // Prototipo nativo ORM debe ir después de ASTNode
@@ -94,6 +148,9 @@ typedef struct MethodNode {
     char *http_method;   // For endpoints
     int cache_ttl;       // For endpoint cache decorator
     char *return_type;   // "int" | "string" | "float" | "void" | "dynamic" | NULL (legacy/internal)
+    /* Ola 4 (perf): cached bytecode for simple `return <numeric expr>;` bodies.
+     * NULL = not yet attempted. (void*)0x1 = tried, not compilable. Else BCInfo*. */
+    void *bc_body;
     struct MethodNode *next;
 } MethodNode;
 
@@ -114,6 +171,11 @@ void invalidate_cache(MethodNode *method);
 typedef struct ParameterNode {
     char *name;
     char *type;
+    /* Ola 3 Fase B (perf): cached pointer to the Variable* used by this
+     * parameter slot. Resolved on the first call; subsequent calls write
+     * the value directly into that Variable, skipping
+     * create_ast_leaf*+add_or_update_variable allocations. */
+    void *cached_var;
     struct ParameterNode *next;
 } ParameterNode;
 extern MethodNode *global_methods;

@@ -1,0 +1,7 @@
+// Bench FOR puro: 100M iter usando sintaxis nativa de TypeEasy
+int total = 0;
+int i = 0;
+for(i = 0; 100000000; 1) {
+    total = total + i;
+}
+println(total);

@@ -1,0 +1,19 @@
+let m = {};
+m["one"] = 1;
+m["two"] = 2;
+m["three"] = 3;
+m["four"] = 4;
+m["five"] = 5;
+m["six"] = 6;
+m["seven"] = 7;
+m["eight"] = 8;
+
+let xs = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+
+int total = 0;
+int i = 0;
+for(i = 0; 5000000; 1) {
+  total = total + m["five"];
+  total = total + xs[7];
+}
+println(total);

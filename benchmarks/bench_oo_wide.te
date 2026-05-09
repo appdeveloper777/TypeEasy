@@ -1,0 +1,34 @@
+/* Bench OO: clase con muchos atributos, acceso al último (peor caso para strcmp).
+ * 100M iteraciones de obj.h dentro de un FOR.
+ * Sin inline cache: 8 strcmp por iteración para encontrar "h".
+ * Con inline cache: 1 comparación de puntero + acceso por índice.
+ */
+class Wide {
+    a : int;
+    b : int;
+    c : int;
+    d : int;
+    e : int;
+    f : int;
+    g : int;
+    h : int;
+    __constructor(_a : int, _b : int, _c : int, _d : int, _e : int, _f : int, _g : int, _h : int) {
+        this.a = _a;
+        this.b = _b;
+        this.c = _c;
+        this.d = _d;
+        this.e = _e;
+        this.f = _f;
+        this.g = _g;
+        this.h = _h;
+    }
+}
+
+let w = new Wide(1, 2, 3, 4, 5, 6, 7, 9);
+int total = 0;
+
+for(i = 0; 100000000; 1) {
+    total = total + w.h;
+}
+
+println(total);

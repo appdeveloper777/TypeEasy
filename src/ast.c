@@ -9,6 +9,16 @@
 #include "bytecode.h"
 #include "mysql_bridge.h"
 
+/* Ola 10: JIT availability — must be defined BEFORE any use further down. */
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/mman.h>
+#include <unistd.h>
+#include <stddef.h>
+#define TE_JIT_AVAILABLE 1
+#else
+#define TE_JIT_AVAILABLE 0
+#endif
+
 /* Forward decls used in helpers below */
 char* expand_interp_string(const char *raw);
 int is_string_type(struct ASTNode *node);
@@ -395,7 +405,7 @@ MethodNode* global_methods = NULL;
 
 ASTNode* create_call_node(const char* funcName, ASTNode* args) {
     //printf("[DEBUG] Entering create_call_node: %s\n", funcName); fflush(stdout);
-    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     if (!node) { printf("[DEBUG] malloc failed in create_call_node\n"); fflush(stdout); return NULL; }
     //printf("[DEBUG] malloc success\n"); fflush(stdout);
     node->type = strdup("CALL_FUNC");
@@ -414,7 +424,7 @@ ASTNode* create_call_node(const char* funcName, ASTNode* args) {
 }
 
 ASTNode* create_call_node_return_json(const char* funcName, ASTNode* args) {
-    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     node->type = strdup("RETURN_JSON");
     node->id = strdup(funcName);
     node->left = args;
@@ -430,7 +440,7 @@ ASTNode* create_call_node_return_json(const char* funcName, ASTNode* args) {
 }
 
 ASTNode* create_call_node_return_xml(const char* funcName, ASTNode* args) {
-    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     node->type = strdup("RETURN_XML");
     node->id = strdup(funcName);
     node->left = args;
@@ -446,7 +456,7 @@ ASTNode* create_call_node_return_xml(const char* funcName, ASTNode* args) {
 }
 
 ASTNode* create_method_call_node_alone(ASTNode* objectNode, const char* methodName, ASTNode* args) {
-    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     node->type = strdup("METHOD_CALL_ALONE");
     node->left = objectNode;
     node->right = args;
@@ -507,6 +517,9 @@ static int continue_flag = 0;
 /* Fase 3a: forward decl */
 char* expand_interp_string(const char *raw);
 
+/* Ola 16: forward decl (defined in symtab block below). */
+static void te_sym_reset_to(int initial_count);
+
 // --- INICIO MEJORA: Punteros a los manejadores de bridges ---
 static BridgeHandlers g_bridge_handlers = {NULL, NULL, NULL};
 void runtime_save_initial_var_count() {
@@ -533,6 +546,8 @@ void runtime_reset_vars_to_initial_state() {
 
     // Resetea el contador de variables a su estado "limpio"
     var_count = g_initial_var_count;
+    /* Ola 16: drop hash entries beyond initial state. */
+    te_sym_reset_to(g_initial_var_count);
 
     // También limpia la variable de retorno global
     if (__ret_var_active) {
@@ -692,6 +707,7 @@ void add_method_to_class(ClassNode *cls, char *method, ParameterNode *params, AS
     m->http_method = NULL;
     m->cache_ttl = 0;
     m->return_type = return_type ? strdup(return_type) : NULL;
+    m->bc_body = NULL; /* Ola 4: lazy bytecode cache */
     m->next = cls->methods;
     cls->methods = m;
 }
@@ -707,6 +723,7 @@ void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *
     ctor->http_method = NULL;
     ctor->cache_ttl = 0;
     ctor->return_type = strdup("void");
+    ctor->bc_body = NULL; /* Ola 4: lazy bytecode cache */
     ctor->next = class->methods;
     class->methods = ctor;
 }
@@ -736,25 +753,106 @@ ObjectNode *create_object(ClassNode *class) {
 
 // ====================== MANEJO DE VARIABLES ======================
 
+/* Forward decl: defined below in Ola 14 helpers block. */
+static uint64_t te_str_hash(const char *s);
+
+/* ============================================================
+ * Ola 16 — Hash-indexed symbol table.
+ *   Side-index over `vars[]` mapping (FNV-1a hash, key) -> index.
+ *   Variable identifier strings are NOT moved; we just index them.
+ *   When a string is interned, the hash slot's `key` will point to
+ *   the interned copy (immortal), enabling pointer-eq fast paths.
+ * ============================================================*/
+typedef struct TESymSlot {
+    uint64_t hash;
+    const char *key;  /* alias to vars[idx].id */
+    int idx;
+} TESymSlot;
+
+#define TE_SYM_CAP 256  /* MAX_VARS=100 → cap 256 keeps load < 0.5 */
+static TESymSlot g_sym_slots[TE_SYM_CAP];
+static int g_sym_init = 0;
+
+static inline void te_sym_clear(void) {
+    for (int i = 0; i < TE_SYM_CAP; i++) {
+        g_sym_slots[i].key = NULL;
+        g_sym_slots[i].hash = 0;
+        g_sym_slots[i].idx = -1;
+    }
+    g_sym_init = 1;
+}
+
+static inline int te_sym_lookup(const char *id) {
+    if (!g_sym_init) return -1;
+    if (!id) return -1;
+    uint64_t h = te_str_hash(id);
+    int mask = TE_SYM_CAP - 1;
+    int i = (int)(h & (uint64_t)mask);
+    for (;;) {
+        const char *sk = g_sym_slots[i].key;
+        if (sk == NULL) return -1;
+        if (sk == id) return g_sym_slots[i].idx;          /* ptr-eq */
+        if (g_sym_slots[i].hash == h && strcmp(sk, id) == 0) return g_sym_slots[i].idx;
+        i = (i + 1) & mask;
+    }
+}
+
+static inline void te_sym_insert(const char *id, int idx) {
+    if (!g_sym_init) te_sym_clear();
+    if (!id) return;
+    uint64_t h = te_str_hash(id);
+    int mask = TE_SYM_CAP - 1;
+    int i = (int)(h & (uint64_t)mask);
+    for (;;) {
+        const char *sk = g_sym_slots[i].key;
+        if (sk == NULL) {
+            g_sym_slots[i].key = id;
+            g_sym_slots[i].hash = h;
+            g_sym_slots[i].idx = idx;
+            return;
+        }
+        if (sk == id || (g_sym_slots[i].hash == h && strcmp(sk, id) == 0)) {
+            g_sym_slots[i].idx = idx;  /* update */
+            g_sym_slots[i].key = id;
+            return;
+        }
+        i = (i + 1) & mask;
+    }
+}
+
+/* Drop all entries whose idx >= initial_count and rebuild from the
+ * remaining vars[]. Called from runtime_reset_vars_to_initial_state. */
+static void te_sym_reset_to(int initial_count) {
+    te_sym_clear();
+    for (int i = 0; i < initial_count && i < MAX_VARS; i++) {
+        if (vars[i].id) te_sym_insert(vars[i].id, i);
+    }
+}
+
 Variable *find_variable(char *id) {    
     if (strcmp(id, "__ret__") == 0 && __ret_var_active) {
         return &__ret_var;
     }
 
+    /* Ola 16: hash side-index. */
+    int idx = te_sym_lookup(id);
+    if (idx >= 0 && idx < var_count) {
+        return &vars[idx];
+    }
+    /* Fallback: linear scan (also primes the hash if absent). */
     for (int i = 0; i < var_count; i++) {
         if (vars[i].id) {           
             if (strcmp(vars[i].id, id) == 0) {                
+                te_sym_insert(vars[i].id, i);
                 return &vars[i];
             }
         }
     }
-    // Comentado para reducir ruido, pero es útil para debug:
-    // printf("El ID '%s' no fue encontrado.\n", id); 
     return NULL;
 }
 
 ASTNode *create_agent_node(char *name, ASTNode *body) {
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para AGENT node.\n");
         exit(1);
@@ -771,7 +869,7 @@ ASTNode *create_agent_node(char *name, ASTNode *body) {
 }
 
 ASTNode *create_listener_node(ASTNode *event_expr, ASTNode *body) {
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para LISTENER node.\n");
         exit(1);
@@ -792,8 +890,14 @@ Variable *find_variable_for(char *id) {
         return &__ret_var;
     }
 
+    /* Ola 16: hash side-index. */
+    int idx = te_sym_lookup(id);
+    if (idx >= 0 && idx < var_count) {
+        return &vars[idx];
+    }
     for (int i = 0; i < var_count; i++) {
         if (strcmp(vars[i].id, id) == 0) {
+            te_sym_insert(vars[i].id, i);
             return &vars[i];
         }
     }
@@ -811,6 +915,8 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
 
     vars[my_index].id = strdup(id);
     vars[my_index].is_const = is_const;
+    /* Ola 16: index in symtab. */
+    te_sym_insert(vars[my_index].id, my_index);
 
     // Aseguramos que el tipo siempre sea una copia dinámica para poder liberarlo después
     if (strcmp(value->type, "NUMBER") == 0) {
@@ -1070,6 +1176,8 @@ void add_or_update_variable(char *id, ASTNode *value) {
         vars[var_count].id = strdup(id);
         vars[var_count].type = strdup(value->type);
         vars[var_count].is_const = 0;
+        /* Ola 16 */
+        te_sym_insert(vars[var_count].id, var_count);
         if (strcmp(value->type, "STRING") == 0) {
             vars[var_count].vtype = VAL_STRING;
             vars[var_count].value.string_value = strdup(value->str_value);
@@ -1086,17 +1194,210 @@ void add_or_update_variable(char *id, ASTNode *value) {
 
 // ====================== CREACIÓN DE NODOS AST ======================
 
+/* Fase 1 (perf): lazy NodeKind resolver. Looks up node->kind, computes
+ * from node->type if still NK_UNKNOWN, and caches the result on the node.
+ * Use this in hot dispatch paths instead of strcmp(node->type, "X"). */
+static inline NodeKind nk_of(ASTNode *n) {
+    if (!n) return NK_UNKNOWN;
+    if (n->kind != NK_UNKNOWN) return n->kind;
+    if (n->type) n->kind = nk_from_str(n->type);
+    return n->kind;
+}
+
+/* Fase 1 (perf): map type-string -> NodeKind. Called once per node creation.
+ * Uses first-character switch to keep dispatch O(1) on the common path. */
+NodeKind nk_from_str(const char *t) {
+    if (!t) return NK_UNKNOWN;
+    switch (t[0]) {
+        case 'A':
+            if (!strcmp(t, "ADD")) return NK_ADD;
+            if (!strcmp(t, "AND")) return NK_AND;
+            if (!strcmp(t, "ASSIGN")) return NK_ASSIGN;
+            if (!strcmp(t, "ASSIGN_ATTR")) return NK_ASSIGN_ATTR;
+            if (!strcmp(t, "ACCESS_ATTR")) return NK_ACCESS_ATTR;
+            if (!strcmp(t, "ACCESS_EXPR")) return NK_ACCESS_EXPR;
+            if (!strcmp(t, "AGENT")) return NK_AGENT;
+            if (!strcmp(t, "AGENT_LIST")) return NK_AGENT_LIST;
+            break;
+        case 'B':
+            if (!strcmp(t, "BREAK")) return NK_BREAK;
+            if (!strcmp(t, "BRIDGE_DECL")) return NK_BRIDGE_DECL;
+            break;
+        case 'C':
+            if (!strcmp(t, "CALL_FUNC")) return NK_CALL_FUNC;
+            if (!strcmp(t, "CALL_METHOD")) return NK_CALL_METHOD;
+            if (!strcmp(t, "CONTINUE")) return NK_CONTINUE;
+            break;
+        case 'D':
+            if (!strcmp(t, "DIV")) return NK_DIV;
+            if (!strcmp(t, "DIFF")) return NK_DIFF;
+            if (!strcmp(t, "DATASET")) return NK_DATASET;
+            break;
+        case 'E':
+            if (!strcmp(t, "EQ")) return NK_EQ;
+            if (!strcmp(t, "EXPRESSION")) return NK_EXPRESSION;
+            break;
+        case 'F':
+            if (!strcmp(t, "FOR")) return NK_FOR;
+            if (!strcmp(t, "FOR_IN")) return NK_FOR_IN;
+            if (!strcmp(t, "FLOAT")) return NK_FLOAT;
+            if (!strcmp(t, "FILTER_CALL")) return NK_FILTER_CALL;
+            if (!strcmp(t, "FPRINT")) return NK_FPRINT;
+            if (!strcmp(t, "FPRINTLN")) return NK_FPRINTLN;
+            break;
+        case 'G':
+            if (!strcmp(t, "GT")) return NK_GT;
+            if (!strcmp(t, "GT_EQ")) return NK_GT_EQ;
+            break;
+        case 'I':
+            if (!strcmp(t, "IDENTIFIER")) return NK_IDENTIFIER;
+            if (!strcmp(t, "ID")) return NK_ID;
+            if (!strcmp(t, "INT")) return NK_INT;
+            if (!strcmp(t, "IF")) return NK_IF;
+            if (!strcmp(t, "INDEX_ASSIGN")) return NK_INDEX_ASSIGN;
+            break;
+        case 'K':
+            if (!strcmp(t, "KV_PAIR")) return NK_KV_PAIR;
+            break;
+        case 'L':
+            if (!strcmp(t, "LT")) return NK_LT;
+            if (!strcmp(t, "LT_EQ")) return NK_LT_EQ;
+            if (!strcmp(t, "LIST")) return NK_LIST;
+            if (!strcmp(t, "LIST_FUNC_CALL")) return NK_LIST_FUNC_CALL;
+            if (!strcmp(t, "LISTENER")) return NK_LISTENER;
+            break;
+        case 'M':
+            if (!strcmp(t, "MUL")) return NK_MUL;
+            if (!strcmp(t, "MATCH")) return NK_MATCH;
+            if (!strcmp(t, "MODEL")) return NK_MODEL;
+            if (!strcmp(t, "METHOD_CALL_ALONE")) return NK_METHOD_CALL_ALONE;
+            break;
+        case 'N':
+            if (!strcmp(t, "NUMBER")) return NK_NUMBER;
+            if (!strcmp(t, "NULL")) return NK_NULL;
+            if (!strcmp(t, "NULL_COALESCE")) return NK_NULL_COALESCE;
+            if (!strcmp(t, "NOT")) return NK_NOT;
+            break;
+        case 'O':
+            if (!strcmp(t, "OR")) return NK_OR;
+            if (!strcmp(t, "OBJECT")) return NK_OBJECT;
+            if (!strcmp(t, "OBJECT_LITERAL")) return NK_OBJECT_LITERAL;
+            break;
+        case 'P':
+            if (!strcmp(t, "PRINT")) return NK_PRINT;
+            if (!strcmp(t, "PRINTLN")) return NK_PRINTLN;
+            if (!strcmp(t, "PREDICT")) return NK_PREDICT;
+            if (!strcmp(t, "PLOT")) return NK_PLOT;
+            break;
+        case 'R':
+            if (!strcmp(t, "RETURN")) return NK_RETURN;
+            if (!strcmp(t, "RETURN_JSON")) return NK_RETURN_JSON;
+            if (!strcmp(t, "RETURN_XML")) return NK_RETURN_XML;
+            break;
+        case 'S':
+            if (!strcmp(t, "SUB")) return NK_SUB;
+            if (!strcmp(t, "STRING")) return NK_STRING;
+            if (!strcmp(t, "STRING_LITERAL")) return NK_STRING_LITERAL;
+            if (!strcmp(t, "STRING_INTERP")) return NK_STRING_INTERP;
+            if (!strcmp(t, "STATE_DECL")) return NK_STATE_DECL;
+            if (!strcmp(t, "STATEMENT_LIST")) return NK_STATEMENT_LIST;
+            break;
+        case 'T':
+            if (!strcmp(t, "THROW")) return NK_THROW;
+            if (!strcmp(t, "TRAIN")) return NK_TRAIN;
+            if (!strcmp(t, "TRY_CATCH")) return NK_TRY_CATCH;
+            break;
+        case 'V':
+            if (!strcmp(t, "VAR_DECL")) return NK_VAR_DECL;
+            break;
+        case 'W':
+            if (!strcmp(t, "WHILE")) return NK_WHILE;
+            break;
+    }
+    return NK_UNKNOWN;
+}
+
+/* ====================================================================
+ * Ola 3 Fase A: STRING INTERNING TABLE
+ * --------------------------------------------------------------------
+ * Global hash set of immortal const char*. Calling tee_intern("hola")
+ * always returns the same pointer for the same content. Strings are
+ * never freed (Lua/Python style). Used for STRING literals to enable
+ * O(1) pointer-equality in `==` / `!=` comparisons.
+ *
+ * Switch: TYPEEASY_NO_INTERN=1 disables interning.
+ * ==================================================================== */
+typedef struct InternEntry {
+    char *str;
+    size_t len;
+    uint32_t hash;
+    struct InternEntry *next;
+} InternEntry;
+
+#define INTERN_BUCKETS 1024
+static InternEntry *g_intern_table[INTERN_BUCKETS];
+static int g_intern_init = 0;
+static int g_intern_enabled = 1;
+
+static inline uint32_t intern_hash(const char *s, size_t len) {
+    /* FNV-1a */
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < len; i++) {
+        h ^= (unsigned char)s[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+const char *tee_intern(const char *s) {
+    if (!s) return NULL;
+    if (!g_intern_init) {
+        const char *e = getenv("TYPEEASY_NO_INTERN");
+        if (e && e[0] && e[0] != '0') g_intern_enabled = 0;
+        g_intern_init = 1;
+    }
+    if (!g_intern_enabled) return s; /* caller must still own the memory */
+
+    size_t len = strlen(s);
+    uint32_t h = intern_hash(s, len);
+    InternEntry *e = g_intern_table[h % INTERN_BUCKETS];
+    while (e) {
+        if (e->hash == h && e->len == len && memcmp(e->str, s, len) == 0)
+            return e->str;
+        e = e->next;
+    }
+    /* Not found -> insert. We strdup so the caller's memory is independent. */
+    InternEntry *ne = (InternEntry*)malloc(sizeof(InternEntry));
+    ne->str  = strdup(s);
+    ne->len  = len;
+    ne->hash = h;
+    ne->next = g_intern_table[h % INTERN_BUCKETS];
+    g_intern_table[h % INTERN_BUCKETS] = ne;
+    return ne->str;
+}
+
 ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para ASTNode.\n");
         exit(1);
     }
     node->type = strdup(type);
+    node->kind = nk_from_str(type);
     node->left = NULL;
     node->right = NULL;
     node->value = value;
-    node->str_value = str_value ? strdup(str_value) : NULL;
+    /* Ola 3 Fase A: intern STRING literals so equality can be pointer-compared. */
+    if (str_value) {
+        if (node->kind == NK_STRING) {
+            node->str_value    = (char*)tee_intern(str_value);
+            node->str_interned = g_intern_enabled ? 1 : 0;
+        } else {
+            node->str_value = strdup(str_value);
+        }
+    } else {
+        node->str_value = NULL;
+    }
     node->id = id ? strdup(id) : NULL;
 
     node->next = NULL;
@@ -1106,9 +1407,10 @@ ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
 }
 
 ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id) {
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) return NULL;
     node->type = strdup(type);
+    node->kind = nk_from_str(type);
     node->left = NULL;
     node->right = NULL;
     node->value = value;
@@ -1122,8 +1424,9 @@ ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id
 }
 
 ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right) {
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     node->type = strdup(type);
+    node->kind = nk_from_str(type);
     node->left = left;
     node->right = right;
     node->id = NULL;
@@ -1167,8 +1470,9 @@ ASTNode *create_string_node(char *value) {
 }
 
 ASTNode *create_identifier_node(const char* name) {
-    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     node->type = strdup("ID");
+    node->kind = NK_ID;
     node->id = strdup(name);
     node->left = NULL;
     node->right = NULL;
@@ -1179,7 +1483,7 @@ ASTNode *create_identifier_node(const char* name) {
 
 ASTNode *create_var_decl_node(char *id, ASTNode *value) {
     //printf("[DEBUG] Entering create_var_decl_node: %s\n", id); fflush(stdout);
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para VAR_DECL node.\n");
         exit(1);
@@ -1194,7 +1498,7 @@ ASTNode *create_var_decl_node(char *id, ASTNode *value) {
 }
 
 ASTNode *create_return_node(ASTNode *expr) {
-    ASTNode *node = malloc(sizeof(ASTNode));
+    ASTNode *node = calloc(1, sizeof(ASTNode));
     node->type = strdup("RETURN");
     node->id = NULL;
     node->left = expr;
@@ -1205,7 +1509,7 @@ ASTNode *create_return_node(ASTNode *expr) {
 }
 
 ASTNode *create_function_call_node(const char *funcName, ASTNode *args) {
-    ASTNode *n = malloc(sizeof(ASTNode));
+    ASTNode *n = calloc(1, sizeof(ASTNode));
     n->type = strdup("CALL_FUNC");
     n->id = strdup(funcName);
     n->left = args;
@@ -1216,7 +1520,7 @@ ASTNode *create_function_call_node(const char *funcName, ASTNode *args) {
 }
 
 ASTNode *create_method_call_node(ASTNode *objectNode, const char *methodName, ASTNode *args) {
-    ASTNode *node = malloc(sizeof(ASTNode));
+    ASTNode *node = calloc(1, sizeof(ASTNode));
     node->type = strdup("CALL_METHOD");
     node->id = strdup(methodName);
     node->left = objectNode;
@@ -1233,7 +1537,7 @@ ASTNode *create_object_with_args(ClassNode *class, ASTNode *args) {
     }
 
     ObjectNode *real_obj = create_object(class);
-    ASTNode *obj = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *obj = (ASTNode *)calloc(1, sizeof(ASTNode));
     obj->type = strdup("OBJECT");
     obj->left = args;
     obj->right = NULL;
@@ -1246,13 +1550,13 @@ ASTNode *create_object_with_args(ClassNode *class, ASTNode *args) {
 }
 
 ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *condition, ASTNode *update, ASTNode *body) {
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     node->type = strdup("FOR");
     node->id = var->id;
     node->left = init;
     node->right = condition;
     
-    ASTNode *update_body = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *update_body = (ASTNode *)calloc(1, sizeof(ASTNode));
     update_body->type = strdup("FOR_BODY");
     update_body->left = update;
     update_body->right = body;
@@ -1263,7 +1567,7 @@ ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *c
 
 
 ASTNode* create_layer_node(const char* layer_type, int units, const char* activation) {
-    ASTNode* node = malloc(sizeof(ASTNode));
+    ASTNode* node = calloc(1, sizeof(ASTNode));
     node->type = strdup("LAYER");
     node->id = strdup(layer_type);
     node->value = units;
@@ -1289,7 +1593,7 @@ ASTNode* create_model_node(const char* name, ASTNode* layer_list) {
         m->layers[i] = ln;
     }
 
-    ASTNode* node = malloc(sizeof(ASTNode));
+    ASTNode* node = calloc(1, sizeof(ASTNode));
     node->type = strdup("OBJECT");
     node->id = strdup(name);
     node->value = (int)(intptr_t)m;
@@ -1304,7 +1608,7 @@ ASTNode* create_dataset_node(const char* name, const char* path) {
     ds->inputs = NULL;
     ds->labels = NULL;
 
-    ASTNode* node = malloc(sizeof(ASTNode));
+    ASTNode* node = calloc(1, sizeof(ASTNode));
     node->type = strdup("DATASET");
     node->id = strdup(name);
     node->str_value = strdup(path);
@@ -1317,7 +1621,7 @@ ASTNode* create_dataset_node(const char* name, const char* path) {
 ASTNode* create_train_node(const char* model_name,
     const char* data_name,
     ASTNode* options) {
-    ASTNode* n = malloc(sizeof(ASTNode));
+    ASTNode* n = calloc(1, sizeof(ASTNode));
     n->type = strdup("TRAIN");
     n->id   = NULL;
     n->left = create_identifier_node(model_name);
@@ -1329,7 +1633,7 @@ ASTNode* create_train_node(const char* model_name,
 
 
 ASTNode* create_train_option_node(const char* key, int val) {
-    ASTNode* n = malloc(sizeof(ASTNode));
+    ASTNode* n = calloc(1, sizeof(ASTNode));
     n->type = strdup("TRAIN_OPTION");
     n->id = strdup(key);
     n->value = val;
@@ -1338,7 +1642,7 @@ ASTNode* create_train_option_node(const char* key, int val) {
 }
 
 ASTNode* create_predict_node(const char* model_name, const char* input_name) {
-    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     node->type = strdup("PREDICT");
     node->left = create_identifier_node(model_name);
     node->right = create_identifier_node(input_name);
@@ -1348,7 +1652,7 @@ ASTNode* create_predict_node(const char* model_name, const char* input_name) {
 // ====================== CREACIÓN DE NODOS IF ======================
 
 ASTNode* create_if_node(ASTNode* condition, ASTNode* if_branch, ASTNode* else_branch) {
-    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error: No se pudo asignar memoria para el nodo if\n");
         exit(1);
@@ -1364,7 +1668,7 @@ ASTNode* create_if_node(ASTNode* condition, ASTNode* if_branch, ASTNode* else_br
 }
 
 ASTNode* create_match_node(ASTNode* condition, ASTNode* case_list) {
-    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error: No se pudo asignar memoria para el nodo match\n");
         exit(1);
@@ -1380,7 +1684,7 @@ ASTNode* create_match_node(ASTNode* condition, ASTNode* case_list) {
 }
 
 ASTNode* create_case_node(ASTNode* condition, ASTNode* body) {
-    ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
+    ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error: No se pudo asignar memoria para el nodo case\n");
         exit(1);    }
@@ -1436,6 +1740,7 @@ ParameterNode *create_parameter_node(char *name, char *type) {
     ParameterNode *param = (ParameterNode *)malloc(sizeof(ParameterNode));
     param->name = strdup(name);
     param->type = strdup(type);
+    param->cached_var = NULL;
     param->next = NULL;
     return param;
 }
@@ -1487,8 +1792,136 @@ int is_string_type(ASTNode *node) {
 }
 
 /* --- Helpers para LIST (Fase 1a: Arrays) --- */
+
+/* ============================================================
+ * Ola 14 \u2014 Side-cache O(1) para LIST y MAP.
+ *   Estructura paralela almacenada en `node->extra` del root
+ *   (LIST root o OBJECT_LITERAL root). Construida lazy en la
+ *   primera lectura post-mutaci\u00f3n. Invalidada (extra=NULL +
+ *   free) al mutar la estructura subyacente.
+ * ============================================================*/
+typedef struct TEListIdx {
+    int len;
+    int cap;
+    ASTNode **items;
+} TEListIdx;
+
+typedef struct TEMapSlot {
+    uint64_t hash;
+    const char *key;   /* alias to pair->id, do NOT free */
+    ASTNode *pair;
+} TEMapSlot;
+
+typedef struct TEMapHash {
+    int cap;          /* power of 2 */
+    int count;
+    TEMapSlot *slots;
+} TEMapHash;
+
+static uint64_t te_str_hash(const char *s) {
+    /* FNV-1a 64 */
+    uint64_t h = 1469598103934665603ULL;
+    while (*s) { h ^= (unsigned char)*s++; h *= 1099511628211ULL; }
+    return h;
+}
+
+static void te_list_idx_free(TEListIdx *ix) {
+    if (!ix) return;
+    if (ix->items) free(ix->items);
+    free(ix);
+}
+
+static void te_map_hash_free(TEMapHash *h) {
+    if (!h) return;
+    if (h->slots) free(h->slots);
+    free(h);
+}
+
+/* Invalidate side cache on `root` (LIST or OBJECT_LITERAL). Safe to call
+ * even when extra is NULL or root is NULL. Distinguishes by node->type. */
+static void te_invalidate_list_cache(ASTNode *root) {
+    if (!root || !root->extra) return;
+    te_list_idx_free((TEListIdx*)root->extra);
+    root->extra = NULL;
+}
+static void te_invalidate_map_cache(ASTNode *root) {
+    if (!root || !root->extra) return;
+    te_map_hash_free((TEMapHash*)root->extra);
+    root->extra = NULL;
+}
+
+/* Build / get list index. Returns NULL on OOM. Idempotent. */
+static TEListIdx* te_list_get_idx(ASTNode *list) {
+    if (!list) return NULL;
+    if (list->extra) return (TEListIdx*)list->extra;
+    /* count */
+    int n = 0;
+    ASTNode *cur = list->left;
+    while (cur) { n++; cur = cur->next; }
+    int cap = n < 8 ? 8 : n;
+    TEListIdx *ix = (TEListIdx*)calloc(1, sizeof(TEListIdx));
+    if (!ix) return NULL;
+    ix->len = n;
+    ix->cap = cap;
+    ix->items = (ASTNode**)calloc((size_t)cap, sizeof(ASTNode*));
+    if (!ix->items) { free(ix); return NULL; }
+    cur = list->left;
+    for (int i = 0; i < n; i++) { ix->items[i] = cur; cur = cur->next; }
+    list->extra = (struct ASTNode*)ix;
+    return ix;
+}
+
+/* Insert key->pair into hash table; assumes capacity available. */
+static void te_map_hash_insert(TEMapHash *h, uint64_t hh, const char *k, ASTNode *p) {
+    int mask = h->cap - 1;
+    int i = (int)(hh & (uint64_t)mask);
+    while (h->slots[i].key != NULL) {
+        i = (i + 1) & mask;
+    }
+    h->slots[i].hash = hh;
+    h->slots[i].key  = k;
+    h->slots[i].pair = p;
+    h->count++;
+}
+
+/* Build / get map hash. Returns NULL on OOM. */
+static TEMapHash* te_map_get_hash(ASTNode *map) {
+    if (!map) return NULL;
+    if (map->extra) return (TEMapHash*)map->extra;
+    /* count entries */
+    int n = 0;
+    ASTNode *cur = map->left;
+    while (cur) { n++; cur = cur->right; }
+    int cap = 16;
+    while (cap < n * 2) cap <<= 1;
+    TEMapHash *h = (TEMapHash*)calloc(1, sizeof(TEMapHash));
+    if (!h) return NULL;
+    h->cap = cap;
+    h->count = 0;
+    h->slots = (TEMapSlot*)calloc((size_t)cap, sizeof(TEMapSlot));
+    if (!h->slots) { free(h); return NULL; }
+    cur = map->left;
+    while (cur) {
+        if (cur->id) {
+            uint64_t hh = te_str_hash(cur->id);
+            te_map_hash_insert(h, hh, cur->id, cur);
+        }
+        cur = cur->right;
+    }
+    map->extra = (struct ASTNode*)h;
+    return h;
+}
+
 static ASTNode* list_get_item(ASTNode *list, int idx) {
     if (!list || !list->type || strcmp(list->type, "LIST") != 0) return NULL;
+    if (idx < 0) return NULL;
+    /* Ola 14: O(1) via side-cache index. */
+    TEListIdx *ix = te_list_get_idx(list);
+    if (ix) {
+        if (idx >= ix->len) return NULL;
+        return ix->items[idx];
+    }
+    /* Fallback (OOM): legacy O(n) walk. */
     ASTNode *cur = list->left;
     int i = 0;
     while (cur && i < idx) { cur = cur->next; i++; }
@@ -1497,6 +1930,10 @@ static ASTNode* list_get_item(ASTNode *list, int idx) {
 
 static int list_length(ASTNode *list) {
     if (!list || !list->type || strcmp(list->type, "LIST") != 0) return 0;
+    /* Ola 14: O(1) via side-cache index. */
+    TEListIdx *ix = te_list_get_idx(list);
+    if (ix) return ix->len;
+    /* Fallback. */
     int n = 0;
     ASTNode *cur = list->left;
     while (cur) { n++; cur = cur->next; }
@@ -1529,6 +1966,9 @@ static ASTNode* resolve_to_map(ASTNode *node) {
 
 static int map_length(ASTNode *map) {
     if (!map) return 0;
+    /* Ola 14: O(1) via side-cache hash. */
+    TEMapHash *h = te_map_get_hash(map);
+    if (h) return h->count;
     int n = 0;
     ASTNode *cur = map->left;
     while (cur) { n++; cur = cur->right; }
@@ -1538,9 +1978,28 @@ static int map_length(ASTNode *map) {
 /* Find a KV_PAIR by key string. Returns the pair node, or NULL. */
 static ASTNode* map_find_pair(ASTNode *map, const char *key) {
     if (!map || !key) return NULL;
+    /* Ola 14: O(1) via side-cache hash. */
+    TEMapHash *h = te_map_get_hash(map);
+    if (h && h->cap > 0) {
+        uint64_t hh = te_str_hash(key);
+        int mask = h->cap - 1;
+        int i = (int)(hh & (uint64_t)mask);
+        for (;;) {
+            const char *sk = h->slots[i].key;
+            if (sk == NULL) return NULL;
+            /* Ola 15: pointer-eq fast-path (interned keys). */
+            if (sk == key) return h->slots[i].pair;
+            if (h->slots[i].hash == hh && strcmp(sk, key) == 0) return h->slots[i].pair;
+            i = (i + 1) & mask;
+        }
+    }
+    /* Fallback O(n). */
     ASTNode *cur = map->left;
     while (cur) {
-        if (cur->id && strcmp(cur->id, key) == 0) return cur;
+        if (cur->id) {
+            if (cur->id == key) return cur;  /* Ola 15: ptr-eq */
+            if (strcmp(cur->id, key) == 0) return cur;
+        }
         cur = cur->right;
     }
     return NULL;
@@ -1601,7 +2060,7 @@ char* expand_interp_string(const char *raw) {
 
 /* Build a fresh ASTNode item from a runtime value (used for index assign / push). */
 static ASTNode* build_item_from_value(ASTNode *value) {
-    ASTNode *new_item = (ASTNode*)malloc(sizeof(ASTNode));
+    ASTNode *new_item = (ASTNode*)calloc(1, sizeof(ASTNode));
     memset(new_item, 0, sizeof(ASTNode));
     if (!value) { new_item->type = strdup("NUMBER"); return new_item; }
     if (value->type && strcmp(value->type, "STRING") == 0) {
@@ -1636,18 +2095,2502 @@ static ASTNode* build_item_from_value(ASTNode *value) {
     return new_item;
 }
 
+/* ===================== Fase 3: bytecode mini-VM (numeric expressions) =====================
+ * Goal: speed up hot numeric expressions in loops by lazily compiling them
+ * into a flat opcode stream and executing via computed-goto dispatch.
+ * Eligible: ADD/SUB/MUL/DIV/comparisons over numeric variables and constants
+ * (no strings, no NULL, no method calls, no attribute access). Anything else
+ * sets bc=BC_NOT_COMPILABLE on the node and falls back to the AST walker. */
+
+typedef enum {
+    BC_HALT = 0,
+    BC_LOAD_CONST,
+    BC_LOAD_VAR,        /* numeric var (INT/FLOAT) — pointer cached at compile time */
+    BC_ADD, BC_SUB, BC_MUL, BC_DIV,
+    BC_LT, BC_GT, BC_LE, BC_GE, BC_EQ, BC_NEQ,
+    BC_AND, BC_OR, BC_NOT,
+    BC_NEG,             /* unary minus (compiled from SUB(0, x)) — currently unused */
+    /* Fase 4: full-statement bytecode (assign / while / if / blocks). */
+    BC_STORE_VAR,       /* pop top, write to numeric Variable* (auto INT/FLOAT) */
+    BC_JUMP,            /* ip += offset (relative, signed) */
+    BC_JUMP_IF_FALSE,   /* pop; if 0, ip += offset; else fall through */
+    BC_POP,             /* discard top of stack */
+    /* Ola 4: load this.attr where attr slot is known at compile time. */
+    BC_LOAD_THIS_ATTR,  /* operand=int slot index in obj->attributes */
+    /* Ola 5: inline call to a method whose body is already bytecode. */
+    BC_CALL_METHOD,     /* operand=MethodCallSite* (precomputed, recursive bc_exec) */
+    /* Ola 5b: inline-expanded method call (body opcodes copied in caller). */
+    BC_SET_THIS,        /* operand=Variable* holding the object; pushes saved this */
+    BC_RESTORE_THIS     /* pops saved this back into g_bc_this */
+} BCOp;
+
+/* Ola 5: precomputed call site for a `obj.method(args)` callable from
+ * inside another bytecode program. The compiler resolves obj's Variable*,
+ * the target MethodNode, its compiled body BCInfo*, and the parameter
+ * Variable* slots — all at compile time. At runtime BC_CALL_METHOD pops
+ * args from stack, writes them into param slots, sets g_bc_this, runs
+ * bc_exec on the body, and pushes the result. No interpret_call_method,
+ * no AST walker. */
+typedef struct MethodCallSite {
+    struct Variable   *obj_var;       /* var holding ObjectNode* */
+    struct MethodNode *method;        /* target method (informational) */
+    void              *body_bc;       /* BCInfo* (compiled return expression) */
+    int                n_params;      /* number of params */
+    struct Variable   *param_vars[8]; /* cached param Variable*s */
+} MethodCallSite;
+
+typedef struct {
+    uint8_t op;
+    union {
+        Variable *var;      /* for BC_LOAD_VAR / BC_STORE_VAR */
+        double    constant; /* for BC_LOAD_CONST */
+        int32_t   offset;   /* for BC_JUMP / BC_JUMP_IF_FALSE (signed, relative to next ip) */
+        int32_t   slot;     /* for BC_LOAD_THIS_ATTR */
+        MethodCallSite *site; /* for BC_CALL_METHOD */
+    } u;
+} Instr;
+
+typedef struct BCInfo {
+    Instr *code;
+    int    len;
+} BCInfo;
+
+#define BC_NOT_COMPILABLE ((void*)0x1)
+
+/* Ola 4: per-call current `this` for BC_LOAD_THIS_ATTR. Set by
+ * interpret_call_method before invoking bc_exec on a compiled method body. */
+static ObjectNode *g_bc_this = NULL;
+/* Ola 5b: small save/restore stack for inline-expanded method calls. */
+static ObjectNode *g_bc_this_stack[16];
+static int         g_bc_this_sp = 0;
+/* Ola 4: class context for compiling method bodies — used to resolve
+ * `this.attr` to a fixed slot index at compile time. */
+static ClassNode *g_bc_compile_class = NULL;
+
+/* Forward decl */
+static int bc_compile(ASTNode *node, Instr *out, int *pos, int max);
+typedef struct BCInfo BCInfo;
+static BCInfo *bc_get_or_compile_method(MethodNode *m, ClassNode *cls);
+
+/* Try to compile `node` as a numeric expression. Returns 1 on success,
+ * appending instructions to out[*pos..]. On failure returns 0 and *pos may
+ * be partially advanced — caller discards the buffer. */
+static int bc_compile(ASTNode *node, Instr *out, int *pos, int max) {
+    if (!node || *pos >= max - 1) return 0;
+    NodeKind k = nk_of(node);
+    switch (k) {
+    case NK_NUMBER:
+    case NK_INT:
+        out[*pos].op = BC_LOAD_CONST;
+        out[*pos].u.constant = (double)node->value;
+        (*pos)++;
+        return 1;
+    case NK_FLOAT:
+        out[*pos].op = BC_LOAD_CONST;
+        out[*pos].u.constant = node->str_value ? atof(node->str_value) : 0.0;
+        (*pos)++;
+        return 1;
+    case NK_IDENTIFIER: {
+        Variable *v = (Variable *)node->cached_var;
+        if (!v) {
+            v = find_variable(node->id);
+            if (v) node->cached_var = v;
+        }
+        if (!v) return 0;
+        if (v->vtype != VAL_INT && v->vtype != VAL_FLOAT) return 0;
+        out[*pos].op = BC_LOAD_VAR;
+        out[*pos].u.var = v;
+        (*pos)++;
+        return 1;
+    }
+    case NK_ADD: case NK_SUB: case NK_MUL: case NK_DIV:
+    case NK_LT:  case NK_GT:
+    case NK_LT_EQ: case NK_GT_EQ:
+    case NK_EQ:  case NK_DIFF:
+    case NK_AND: case NK_OR: {
+        /* String concat must NOT use bytecode path (handled by AST walker). */
+        if (k == NK_ADD && is_string_type(node)) return 0;
+        int saved = *pos;
+        if (!bc_compile(node->left,  out, pos, max)) return 0;
+        if (!bc_compile(node->right, out, pos, max)) return 0;
+
+        /* Constant folding (#3): if both operands are LOAD_CONST, evaluate
+         * at compile time and replace with a single LOAD_CONST. */
+        if (*pos >= saved + 2 &&
+            out[*pos - 2].op == BC_LOAD_CONST &&
+            out[*pos - 1].op == BC_LOAD_CONST) {
+            double a = out[*pos - 2].u.constant;
+            double b = out[*pos - 1].u.constant;
+            double r = 0;
+            int folded = 1;
+            switch (k) {
+                case NK_ADD:   r = a + b; break;
+                case NK_SUB:   r = a - b; break;
+                case NK_MUL:   r = a * b; break;
+                case NK_DIV:   if (b == 0) { folded = 0; } else r = a / b; break;
+                case NK_LT:    r = (a <  b); break;
+                case NK_GT:    r = (a >  b); break;
+                /* NK_GT_EQ / NK_LT_EQ have inverted semantics in TypeEasy
+                 * (GT_EQ is evaluated as <=, LT_EQ as >=). Mirror that. */
+                case NK_GT_EQ: r = (a <= b); break;
+                case NK_LT_EQ: r = (a >= b); break;
+                case NK_EQ:    r = (a == b); break;
+                case NK_DIFF:  r = (a != b); break;
+                case NK_AND:   r = (a && b) ? 1 : 0; break;
+                case NK_OR:    r = (a || b) ? 1 : 0; break;
+                default:       folded = 0; break;
+            }
+            if (folded) {
+                *pos -= 2;
+                out[*pos].op = BC_LOAD_CONST;
+                out[*pos].u.constant = r;
+                (*pos)++;
+                return 1;
+            }
+        }
+
+        BCOp op;
+        switch (k) {
+            case NK_ADD:   op = BC_ADD; break;
+            case NK_SUB:   op = BC_SUB; break;
+            case NK_MUL:   op = BC_MUL; break;
+            case NK_DIV:   op = BC_DIV; break;
+            case NK_LT:    op = BC_LT;  break;
+            case NK_GT:    op = BC_GT;  break;
+            /* Inverted: GT_EQ in TypeEasy means <=, LT_EQ means >=. */
+            case NK_GT_EQ: op = BC_LE;  break;
+            case NK_LT_EQ: op = BC_GE;  break;
+            case NK_EQ:    op = BC_EQ;  break;
+            case NK_DIFF:  op = BC_NEQ; break;
+            case NK_AND:   op = BC_AND; break;
+            case NK_OR:    op = BC_OR;  break;
+            default:       return 0;
+        }
+        out[*pos].op = op;
+        (*pos)++;
+        return 1;
+    }
+    case NK_NOT: {
+        if (!node->left) return 0;
+        int saved = *pos;
+        if (!bc_compile(node->left, out, pos, max)) return 0;
+        /* Constant fold: !const → folded */
+        if (*pos == saved + 1 && out[saved].op == BC_LOAD_CONST) {
+            out[saved].u.constant = (out[saved].u.constant == 0.0) ? 1 : 0;
+            return 1;
+        }
+        if (*pos >= max) return 0;
+        out[*pos].op = BC_NOT;
+        (*pos)++;
+        return 1;
+    }
+    case NK_ACCESS_ATTR: {
+        /* Ola 4: support `this.attr` in method bodies. We compile only
+         * when:
+         *  - left is the identifier "this"
+         *  - g_bc_compile_class is set (we know which class the method
+         *    belongs to)
+         *  - the attribute exists in the class and is INT or FLOAT
+         * The attr slot index is baked into the instruction. At runtime
+         * BC_LOAD_THIS_ATTR reads from g_bc_this->attributes[slot]. */
+        ASTNode *objRef = node->left;
+        ASTNode *attr   = node->right;
+        if (!objRef || !attr || !objRef->id || !attr->id) return 0;
+        if (strcmp(objRef->id, "this") != 0) return 0;
+        if (!g_bc_compile_class) return 0;
+        int slot = -1;
+        for (int i = 0; i < g_bc_compile_class->attr_count; i++) {
+            if (strcmp(g_bc_compile_class->attributes[i].id, attr->id) == 0) {
+                /* Only numeric attrs supported. */
+                const char *t = g_bc_compile_class->attributes[i].type;
+                if (!t || (strcmp(t, "int") != 0 && strcmp(t, "float") != 0
+                        && strcmp(t, "INT") != 0 && strcmp(t, "FLOAT") != 0))
+                    return 0;
+                slot = i;
+                break;
+            }
+        }
+        if (slot < 0) return 0;
+        out[*pos].op = BC_LOAD_THIS_ATTR;
+        out[*pos].u.slot = slot;
+        (*pos)++;
+        return 1;
+    }
+    case NK_CALL_METHOD: {
+        /* Ola 5: inline method call. We compile to BC_CALL_METHOD when:
+         *  - left side is an identifier resolving to an object Variable*
+         *  - the method exists in that class with int/float return
+         *  - its body is bytecode-compilable via bc_get_or_compile_method
+         *  - all params are int/float
+         *  - all args are leaf nodes (NUMBER/INT/FLOAT/IDENTIFIER) since
+         *    args are linked via ->right which makes complex expressions
+         *    in multi-arg lists ambiguous in TypeEasy's AST.
+         * Switch: TYPEEASY_NO_BCCALL=1 disables. */
+        if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] entering NK_CALL_METHOD case\n");
+        static int bcc_init = 0;
+        static int bcc_enabled = 1;
+        if (!bcc_init) {
+            const char *e = getenv("TYPEEASY_NO_BCCALL");
+            if (e && e[0] && e[0] != '0') bcc_enabled = 0;
+            bcc_init = 1;
+        }
+        if (!bcc_enabled) return 0;
+
+        ASTNode *objRef = node->left;
+        if (!objRef || !objRef->id || !node->id) {
+            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: no obj or method id\n");
+            return 0;
+        }
+        Variable *ov = find_variable(objRef->id);
+        if (!ov || ov->vtype != VAL_OBJECT) {
+            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: obj '%s' not VAL_OBJECT (ov=%p vtype=%d)\n", objRef->id, (void*)ov, ov?ov->vtype:-1);
+            return 0;
+        }
+        ObjectNode *obj = ov->value.object_value;
+        if (!obj || !obj->class) {
+            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: no class\n");
+            return 0;
+        }
+
+        MethodNode *mm = NULL;
+        for (MethodNode *it = obj->class->methods; it; it = it->next) {
+            if (it->name && strcmp(it->name, node->id) == 0) { mm = it; break; }
+        }
+        if (!mm) {
+            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: method '%s' not found\n", node->id);
+            return 0;
+        }
+        if (!mm->return_type
+            || (strcmp(mm->return_type, "int")   != 0
+             && strcmp(mm->return_type, "float") != 0)) {
+            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: return_type=%s\n", mm->return_type?mm->return_type:"(null)");
+            return 0;
+        }
+
+        BCInfo *body = bc_get_or_compile_method(mm, obj->class);
+        if (!body) {
+            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: body bc_compile failed\n");
+            return 0;
+        }
+
+        if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] body compiled, len=%d\n", body->len);
+
+        /* Validate params.
+         * NOTE: TypeEasy's lexer does NOT set yylval.sval for INT/FLOAT
+         * tokens, so p->type may end up holding the param NAME instead of
+         * "int"/"float". We therefore skip the type-string check and
+         * rely on BC_STORE_VAR's runtime int/float detection. We just need
+         * each param to have a name and a slot of some numeric kind. */
+        int n_params = 0;
+        for (ParameterNode *p = mm->params; p; p = p->next) {
+            if (n_params >= 8) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: too many params\n"); return 0; }
+            if (!p->name) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: param no name\n"); return 0; }
+            n_params++;
+        }
+
+        /* Count args */
+        int n_args = 0;
+        ASTNode *a = node->right;
+        while (a) { n_args++; a = a->right; }
+        if (n_args != n_params) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: n_args=%d n_params=%d\n", n_args, n_params); return 0; }
+
+        /* Emit args (leaves only) */
+        a = node->right;
+        while (a) {
+            NodeKind ak = nk_of(a);
+            if (*pos >= max - 2) return 0;
+            if (ak == NK_NUMBER || ak == NK_INT) {
+                out[*pos].op = BC_LOAD_CONST;
+                out[*pos].u.constant = (double)a->value;
+                (*pos)++;
+            } else if (ak == NK_FLOAT) {
+                out[*pos].op = BC_LOAD_CONST;
+                out[*pos].u.constant = a->str_value ? atof(a->str_value) : 0.0;
+                (*pos)++;
+            } else if (ak == NK_IDENTIFIER || ak == NK_ID) {
+                Variable *v = (Variable *)a->cached_var;
+                if (!v) { v = find_variable(a->id); if (v) a->cached_var = v; }
+                if (!v) return 0;
+                if (v->vtype != VAL_INT && v->vtype != VAL_FLOAT) return 0;
+                out[*pos].op = BC_LOAD_VAR;
+                out[*pos].u.var = v;
+                (*pos)++;
+            } else {
+                return 0;
+            }
+            a = a->right;
+        }
+
+        /* Build site (cached param Variable*s) */
+        MethodCallSite *site = (MethodCallSite *)calloc(1, sizeof(MethodCallSite));
+        site->obj_var  = ov;
+        site->method   = mm;
+        site->body_bc  = body;
+        site->n_params = n_params;
+        int idx = 0;
+        for (ParameterNode *p = mm->params; p; p = p->next) {
+            Variable *pv = (Variable *)p->cached_var;
+            if (!pv) {
+                pv = find_variable_for(p->name);
+                if (!pv) {
+                    if (var_count < MAX_VARS) {
+                        int is_float = (p->type
+                                      && (strcmp(p->type, "float") == 0
+                                       || strcmp(p->type, "FLOAT") == 0));
+                        vars[var_count].id       = strdup(p->name);
+                        vars[var_count].type     = strdup(is_float ? "FLOAT" : "INT");
+                        vars[var_count].is_const = 0;
+                        vars[var_count].vtype    = is_float ? VAL_FLOAT : VAL_INT;
+                        if (is_float) vars[var_count].value.float_value = 0.0;
+                        else          vars[var_count].value.int_value   = 0;
+                        pv = &vars[var_count];
+                        var_count++;
+                    }
+                }
+                p->cached_var = pv;
+            }
+            if (!pv) { free(site); return 0; }
+            site->param_vars[idx++] = pv;
+        }
+
+        /* Ola 5b: INLINE EXPANSION instead of recursive bc_exec.
+         * After args are on stack we:
+         *   1) STORE_VAR each arg into its param slot (in reverse so last
+         *      pushed = last param).
+         *   2) BC_SET_THIS (pushes saved g_bc_this on this-stack, sets new).
+         *   3) Inline body opcodes (excluding the trailing HALT).
+         *   4) BC_RESTORE_THIS (pops this-stack back into g_bc_this).
+         * Stack net: -n_params (consumed) +1 (return value) = +1.
+         */
+        int body_len_no_halt = body->len - 1; /* drop trailing HALT */
+        if (body_len_no_halt < 0) body_len_no_halt = 0;
+        if (*pos + n_params + 2 + body_len_no_halt >= max) {
+            free(site);
+            return 0;
+        }
+        for (int i = n_params - 1; i >= 0; i--) {
+            out[*pos].op    = BC_STORE_VAR;
+            out[*pos].u.var = site->param_vars[i];
+            (*pos)++;
+        }
+        out[*pos].op    = BC_SET_THIS;
+        out[*pos].u.var = ov;
+        (*pos)++;
+        if (body_len_no_halt > 0) {
+            memcpy(&out[*pos], body->code, body_len_no_halt * sizeof(Instr));
+            *pos += body_len_no_halt;
+        }
+        out[*pos].op = BC_RESTORE_THIS;
+        (*pos)++;
+        /* site is no longer needed (we inlined); free it. */
+        free(site);
+        {
+            static int reported = 0;
+            if (!reported && getenv("TYPEEASY_BCDEBUG")) {
+                fprintf(stderr, "[OLA5] inlined call %s.%s n_params=%d body_len=%d\n",
+                        objRef->id, mm->name, n_params, body_len_no_halt);
+                reported = 1;
+            }
+        }
+        return 1;
+    }
+    default:
+        return 0;
+    }
+}
+
+/* ============================================================ */
+/* Ola 6: hot-path profiler (gateado por TYPEEASY_PROFILE=1).    */
+/* ============================================================ */
+/* Conteo de regiones calientes — entradas a bc_exec (loops/methods)
+ * y backward jumps (loop back-edges). Usamos open-addressing con
+ * lineal probing sobre el puntero del code/target (clave). El overhead
+ * es cero cuando g_profile_on == 0 (un único if por evento profilable).
+ *
+ * Sin esto no hay JIT posible: un Tracing JIT necesita saber QUÉ
+ * recompilar antes de generar código. Esta Ola sólo mide; no compila. */
+#define HOT_TABLE_SZ 1024  /* potencia de 2 */
+typedef struct {
+    Instr   *key;
+    uint64_t count;
+    uint8_t  kind; /* 0=unused, 1=bc_exec entry, 2=backward jump target */
+} HotEntry;
+static HotEntry g_hot[HOT_TABLE_SZ];
+static int      g_profile_on = -1; /* -1 = no inicializado, 0=off, 1=on */
+
+static void profile_dump(void); /* fwd */
+
+static void profile_init_once(void) {
+    if (g_profile_on != -1) return;
+    g_profile_on = (getenv("TYPEEASY_PROFILE") != NULL) ? 1 : 0;
+    if (g_profile_on) {
+        memset(g_hot, 0, sizeof(g_hot));
+        atexit(profile_dump);
+    }
+}
+
+static inline void profile_bump(Instr *key, uint8_t kind) {
+    /* Open-addressing por puntero. Cae al primer slot libre o al match. */
+    uintptr_t h = (uintptr_t)key;
+    h ^= (h >> 16);
+    h *= 0x9E3779B1u;
+    int idx = (int)(h & (HOT_TABLE_SZ - 1));
+    for (int probe = 0; probe < HOT_TABLE_SZ; probe++) {
+        HotEntry *e = &g_hot[(idx + probe) & (HOT_TABLE_SZ - 1)];
+        if (e->key == key) { e->count++; return; }
+        if (e->key == NULL) {
+            e->key = key; e->count = 1; e->kind = kind; return;
+        }
+    }
+    /* tabla llena — silenciosamente ignora (sólo profiling) */
+}
+
+static int hot_cmp(const void *a, const void *b) {
+    const HotEntry *ea = (const HotEntry *)a;
+    const HotEntry *eb = (const HotEntry *)b;
+    if (eb->count > ea->count) return 1;
+    if (eb->count < ea->count) return -1;
+    return 0;
+}
+
+static void profile_dump(void) {
+    if (!g_profile_on) return;
+    HotEntry sorted[HOT_TABLE_SZ];
+    memcpy(sorted, g_hot, sizeof(g_hot));
+    qsort(sorted, HOT_TABLE_SZ, sizeof(HotEntry), hot_cmp);
+    fprintf(stderr, "\n=== TypeEasy Ola 6 — hot regions (top 20) ===\n");
+    fprintf(stderr, "%-6s %-18s %-18s %s\n", "rank", "kind", "key(Instr*)", "hits");
+    int shown = 0;
+    for (int i = 0; i < HOT_TABLE_SZ && shown < 20; i++) {
+        if (!sorted[i].key || sorted[i].count == 0) continue;
+        const char *k = (sorted[i].kind == 1) ? "bc_exec entry"
+                       : (sorted[i].kind == 2) ? "backward jump"
+                       : "?";
+        fprintf(stderr, "  #%-3d %-18s %-18p %llu\n",
+                shown + 1, k, (void*)sorted[i].key,
+                (unsigned long long)sorted[i].count);
+        shown++;
+    }
+    if (shown == 0)
+        fprintf(stderr, "  (no hot regions recorded)\n");
+    fprintf(stderr, "=============================================\n");
+}
+
+/* ============================================================ */
+/* Ola 7: IR SSA tipado + buffer de trazas (infraestructura).   */
+/* ============================================================ */
+/* Esta Ola NO graba ni ejecuta trazas todavía — sólo define la
+ * estructura de datos y el trigger por threshold. Ola 8 conectará
+ * los hooks de cada opcode handler para emitir IR.
+ *
+ * Diseño SSA: cada IR op tiene un id (índice en buffer), un tipo
+ * (T_INT/T_FLOAT/T_BOOL/T_OBJ/T_UNK), un opcode y hasta 2 refs a
+ * otros IR ops por id. Las constantes y vars se materializan como
+ * ops también para mantener forma SSA. */
+typedef enum {
+    T_UNK = 0,
+    T_INT,
+    T_FLOAT,
+    T_BOOL,
+    T_OBJ,
+} IRType;
+
+typedef enum {
+    IR_NOP = 0,
+    /* Loads (sin operandos) */
+    IR_LOAD_CONST,      /* aux=double constant value */
+    IR_LOAD_VAR,        /* aux=Variable* */
+    IR_LOAD_THIS_ATTR,  /* aux=int slot */
+    /* Guards (1 ref): si el tipo dinámico no coincide, deopt */
+    IR_GUARD_INT,       /* a=ref a checkear */
+    IR_GUARD_FLOAT,
+    IR_GUARD_OBJ,       /* aux=ClassNode* esperado */
+    /* Ola 11: guards de control (deopt si la cond no coincide). */
+    IR_GUARD_TRUE,      /* a=valor; deopt si valor==0  (loop continues iff true) */
+    IR_GUARD_FALSE,     /* a=valor; deopt si valor!=0 */
+    /* Aritmética tipada (2 refs) */
+    IR_ADD_INT, IR_SUB_INT, IR_MUL_INT, IR_DIV_INT,
+    IR_ADD_FLOAT, IR_SUB_FLOAT, IR_MUL_FLOAT, IR_DIV_FLOAT,
+    /* Comparaciones */
+    IR_LT, IR_GT, IR_LE, IR_GE, IR_EQ, IR_NEQ,
+    /* Side effects */
+    IR_STORE_VAR,       /* aux=Variable*, a=value ref */
+    IR_RETURN,          /* a=value ref */
+    /* Loop terminators */
+    IR_LOOP_BACK,       /* close trace: jump al inicio si guards OK */
+} IROp;
+
+typedef struct {
+    uint8_t op;        /* IROp */
+    uint8_t type;      /* IRType — tipo del valor producido */
+    uint16_t a;        /* ref a IR id (o 0 si no usa) */
+    uint16_t b;        /* ref a IR id (o 0 si no usa) */
+    union {
+        double      cst;     /* IR_LOAD_CONST */
+        Variable   *var;     /* IR_LOAD_VAR / IR_STORE_VAR */
+        int32_t     slot;    /* IR_LOAD_THIS_ATTR */
+        ClassNode  *cls;     /* IR_GUARD_OBJ */
+    } aux;
+    /* Ola 9: flags por op (bit 0 = loop-invariant). */
+    uint8_t flags;
+    uint8_t _pad;
+} IRInst;
+
+#define TRACE_MAX 256
+typedef struct {
+    Instr   *anchor;            /* puntero al `code` que disparó la traza */
+    IRInst   ops[TRACE_MAX];
+    int      len;
+    int      complete;          /* 1 si terminó con LOOP_BACK o RETURN */
+    /* Ola 10b: codegen results. compiled==NULL && !compile_failed → not tried.
+     * compiled!=NULL → ready to call (signature: double (*)(void)).
+     * compile_failed==1 → trace doesn't fit JIT, never retry. */
+    void    *compiled;
+    int      compile_failed;
+} Trace;
+
+/* Tabla de trazas por anchor (open-addressing). Pequeña: 64 slots. */
+#define TRACE_TBL_SZ 64
+typedef struct {
+    Instr  *key;       /* anchor; NULL = libre */
+    Trace  *trace;
+    int     attempts;  /* veces que intentamos grabar (para evitar loop infinito) */
+} TraceSlot;
+static TraceSlot g_traces[TRACE_TBL_SZ];
+
+/* Estado de recording — UN solo trace activo a la vez (linear tracing). */
+static int     g_record_on = 0;       /* 1 = recording activo */
+static Trace  *g_cur_trace = NULL;
+static int     g_trace_threshold = 50;  /* hits antes de iniciar recording */
+static int     g_trace_dump = 0;        /* TYPEEASY_TRACE_DUMP=1 imprime trazas */
+static int     g_trace_opt_dump = 0;    /* Ola 9: TYPEEASY_TRACE_OPT_DUMP=1 */
+static int     g_trace_init_done = 0;
+/* Ola 11: estado de inlining durante recording. */
+static int     g_inline_depth = 0;       /* 0 = top-level, >0 = inlined call */
+static uint16_t g_inline_ret_id = 0;     /* ret value's IR id (set by inner do_halt) */
+static uint8_t  g_inline_ret_type = T_UNK;
+/* Ola 11: para identificar el "loop top" en la traza. Si la traza fue
+ * iniciada en un backward jump, anchor IS el loop top y el primer op
+ * (id=1) es el header. */
+
+static void trace_dump(Trace *t); /* fwd */
+static void trace_optimize(Trace *t); /* fwd (Ola 9) */
+static void *jit_compile_trace(Trace *t); /* fwd (Ola 10b) */
+/* Ola 10: JIT globals declared here so trace_optimize (above 10a section)
+ * can reference them. Real definitions still live in the Ola 10a section. */
+static int    g_jit_on        = -1;
+static int    g_jit_smoke_done = 0;
+static void  *g_jit_slab      = NULL;
+static size_t g_jit_slab_sz   = 0;
+static size_t g_jit_slab_used = 0;
+static int    g_jit_dump      = 0;
+
+static void trace_init_once(void) {
+    if (g_trace_init_done) return;
+    g_trace_init_done = 1;
+    const char *th = getenv("TYPEEASY_TRACE_THRESHOLD");
+    if (th) g_trace_threshold = atoi(th);
+    if (g_trace_threshold <= 0) g_trace_threshold = 50;
+    g_trace_dump = (getenv("TYPEEASY_TRACE_DUMP") != NULL) ? 1 : 0;
+    g_trace_opt_dump = (getenv("TYPEEASY_TRACE_OPT_DUMP") != NULL) ? 1 : 0;
+    memset(g_traces, 0, sizeof(g_traces));
+}
+
+static TraceSlot *trace_slot_for(Instr *anchor) {
+    uintptr_t h = (uintptr_t)anchor;
+    h ^= (h >> 16);
+    h *= 0x9E3779B1u;
+    int idx = (int)(h & (TRACE_TBL_SZ - 1));
+    for (int probe = 0; probe < TRACE_TBL_SZ; probe++) {
+        TraceSlot *s = &g_traces[(idx + probe) & (TRACE_TBL_SZ - 1)];
+        if (s->key == anchor || s->key == NULL) return s;
+    }
+    return NULL;
+}
+
+/* API que Ola 8 usará desde los opcode handlers para emitir IR.
+ * Devuelve el id de la op recién emitida (o 0 si recording fuera). */
+static uint16_t ir_emit(IROp op, IRType ty, uint16_t a, uint16_t b) {
+    if (!g_record_on || !g_cur_trace) return 0;
+    if (g_cur_trace->len >= TRACE_MAX) {
+        /* trace overflow — abortar grabación */
+        g_record_on = 0;
+        return 0;
+    }
+    int id = g_cur_trace->len++;
+    IRInst *ins = &g_cur_trace->ops[id];
+    ins->op = op; ins->type = ty; ins->a = a; ins->b = b;
+    memset(&ins->aux, 0, sizeof(ins->aux));
+    return (uint16_t)id;
+}
+
+/* Iniciar recording para un anchor que ya superó el threshold. */
+static void trace_begin(Instr *anchor) {
+    TraceSlot *s = trace_slot_for(anchor);
+    if (!s) return;
+    if (s->trace && s->trace->complete) return;        /* ya grabada */
+    if (s->attempts >= 3) return;                       /* abortó 3 veces */
+    if (!s->trace) s->trace = (Trace *)calloc(1, sizeof(Trace));
+    s->key = anchor;
+    s->attempts++;
+    s->trace->anchor = anchor;
+    s->trace->len = 0;
+    s->trace->complete = 0;
+    /* Ola 9 fix: reserve id 0 as a NOP sentinel so that "0" can mean
+     * "no operand" in IRInst.a/b without colliding with a real id. */
+    s->trace->ops[0].op = IR_NOP;
+    s->trace->ops[0].type = T_UNK;
+    s->trace->ops[0].a = 0;
+    s->trace->ops[0].b = 0;
+    s->trace->ops[0].flags = 0;
+    s->trace->len = 1;
+    g_cur_trace = s->trace;
+    g_record_on = 1;
+}
+
+/* Cerrar recording. complete=1 si la traza es válida y reusable. */
+static void trace_end(int complete) {
+    if (!g_record_on || !g_cur_trace) return;
+    g_cur_trace->complete = complete;
+    if (g_trace_dump) trace_dump(g_cur_trace);
+    /* Ola 9: si la traza es válida, optimizarla. */
+    if (complete) trace_optimize(g_cur_trace);
+    g_record_on = 0;
+    g_cur_trace = NULL;
+}
+
+static const char *ir_op_name(uint8_t op) {
+    switch (op) {
+    case IR_NOP: return "nop";
+    case IR_LOAD_CONST: return "load_const";
+    case IR_LOAD_VAR: return "load_var";
+    case IR_LOAD_THIS_ATTR: return "load_this_attr";
+    case IR_GUARD_INT: return "guard_int";
+    case IR_GUARD_FLOAT: return "guard_float";
+    case IR_GUARD_OBJ: return "guard_obj";
+    case IR_GUARD_TRUE: return "guard_true";
+    case IR_GUARD_FALSE: return "guard_false";
+    case IR_ADD_INT: return "add_int";
+    case IR_SUB_INT: return "sub_int";
+    case IR_MUL_INT: return "mul_int";
+    case IR_DIV_INT: return "div_int";
+    case IR_ADD_FLOAT: return "add_float";
+    case IR_SUB_FLOAT: return "sub_float";
+    case IR_MUL_FLOAT: return "mul_float";
+    case IR_DIV_FLOAT: return "div_float";
+    case IR_LT: return "lt"; case IR_GT: return "gt";
+    case IR_LE: return "le"; case IR_GE: return "ge";
+    case IR_EQ: return "eq"; case IR_NEQ: return "neq";
+    case IR_STORE_VAR: return "store_var";
+    case IR_RETURN: return "return";
+    case IR_LOOP_BACK: return "loop_back";
+    default: return "??";
+    }
+}
+
+static const char *ir_type_name(uint8_t ty) {
+    switch (ty) {
+    case T_UNK: return "?";
+    case T_INT: return "i";
+    case T_FLOAT: return "f";
+    case T_BOOL: return "b";
+    case T_OBJ: return "o";
+    default: return "?";
+    }
+}
+
+static void trace_dump(Trace *t) {
+    fprintf(stderr, "\n=== TypeEasy Ola 7 — trace dump (anchor=%p, len=%d, complete=%d) ===\n",
+            (void*)t->anchor, t->len, t->complete);
+    for (int i = 1; i < t->len; i++) {  /* skip id 0 (NOP sentinel) */
+        IRInst *ins = &t->ops[i];
+        fprintf(stderr, "  %3d: %-15s %-3s",
+                i, ir_op_name(ins->op), ir_type_name(ins->type));
+        if (ins->op == IR_LOAD_CONST) {
+            fprintf(stderr, "  cst=%g", ins->aux.cst);
+        } else if (ins->op == IR_LOAD_VAR || ins->op == IR_STORE_VAR) {
+            fprintf(stderr, "  var=%s", ins->aux.var ? ins->aux.var->id : "?");
+        } else if (ins->op == IR_LOAD_THIS_ATTR) {
+            fprintf(stderr, "  slot=%d", ins->aux.slot);
+        } else {
+            if (ins->a) fprintf(stderr, "  a=%%%d", ins->a);
+            if (ins->b) fprintf(stderr, "  b=%%%d", ins->b);
+        }
+        /* Ola 9: flags */
+        if (ins->flags & 0x01) fprintf(stderr, "  [INV]");   /* loop-invariant */
+        if (ins->flags & 0x02) fprintf(stderr, "  +guard_int");
+        if (ins->flags & 0x04) fprintf(stderr, "  +guard_float");
+        fprintf(stderr, "\n");
+    }
+    fprintf(stderr, "===========================================================\n");
+}
+
+/* ============================================================ */
+/* Ola 9: optimizador del IR (passes sobre Trace ya grabada).   */
+/* ============================================================ */
+/* Pases en orden:
+ *   1. Constant folding   — ops aritméticas con dos LOAD_CONST → LOAD_CONST
+ *   2. Guard marking      — bit en flags de cada LOAD_VAR/LOAD_THIS_ATTR
+ *                           tipado (T_INT/T_FLOAT). Codegen lo emitirá
+ *                           como test+jne deopt en Ola 10.
+ *   3. LICM marking       — bit INV en ops invariantes (LOAD_CONST,
+ *                           LOAD_VAR cuyo Variable* no se store-modifica
+ *                           en la traza, LOAD_THIS_ATTR, y aritmética
+ *                           cuyas operandos sean ambas invariantes).
+ *   4. DCE                — ops sin usuarios pasan a IR_NOP (mantiene
+ *                           IDs estables para no romper refs).
+ *
+ * No se reordena nada — los IDs sobreviven. Optimizaciones más
+ * agresivas (re-empaquetado, allocation removal) → Ola posterior. */
+
+#define IR_FLAG_INV         0x01
+#define IR_FLAG_GUARD_INT   0x02
+#define IR_FLAG_GUARD_FLOAT 0x04
+
+static int ir_is_arith(uint8_t op) {
+    return op == IR_ADD_INT || op == IR_SUB_INT || op == IR_MUL_INT || op == IR_DIV_INT
+        || op == IR_ADD_FLOAT || op == IR_SUB_FLOAT || op == IR_MUL_FLOAT || op == IR_DIV_FLOAT
+        || op == IR_LT || op == IR_GT || op == IR_LE || op == IR_GE
+        || op == IR_EQ || op == IR_NEQ;
+}
+
+static int ir_has_side_effect(uint8_t op) {
+    return op == IR_STORE_VAR || op == IR_RETURN || op == IR_LOOP_BACK
+        || op == IR_GUARD_INT || op == IR_GUARD_FLOAT || op == IR_GUARD_OBJ
+        || op == IR_GUARD_TRUE || op == IR_GUARD_FALSE;
+}
+
+static void opt_constant_fold(Trace *t, int *folded) {
+    *folded = 0;
+    for (int i = 0; i < t->len; i++) {
+        IRInst *ins = &t->ops[i];
+        if (!ir_is_arith(ins->op)) continue;
+        IRInst *A = &t->ops[ins->a];
+        IRInst *B = &t->ops[ins->b];
+        if (A->op != IR_LOAD_CONST || B->op != IR_LOAD_CONST) continue;
+        double r = 0; int ok = 1;
+        switch (ins->op) {
+        case IR_ADD_INT: case IR_ADD_FLOAT: r = A->aux.cst + B->aux.cst; break;
+        case IR_SUB_INT: case IR_SUB_FLOAT: r = A->aux.cst - B->aux.cst; break;
+        case IR_MUL_INT: case IR_MUL_FLOAT: r = A->aux.cst * B->aux.cst; break;
+        case IR_DIV_INT: case IR_DIV_FLOAT:
+            if (B->aux.cst == 0.0) { ok = 0; break; }
+            r = A->aux.cst / B->aux.cst; break;
+        case IR_LT:  r = (A->aux.cst <  B->aux.cst); break;
+        case IR_GT:  r = (A->aux.cst >  B->aux.cst); break;
+        case IR_LE:  r = (A->aux.cst <= B->aux.cst); break;
+        case IR_GE:  r = (A->aux.cst >= B->aux.cst); break;
+        case IR_EQ:  r = (A->aux.cst == B->aux.cst); break;
+        case IR_NEQ: r = (A->aux.cst != B->aux.cst); break;
+        default: ok = 0; break;
+        }
+        if (!ok) continue;
+        ins->op = IR_LOAD_CONST;
+        ins->a = 0; ins->b = 0;
+        ins->aux.cst = r;
+        (*folded)++;
+    }
+}
+
+static void opt_guard_mark(Trace *t, int *guards) {
+    *guards = 0;
+    for (int i = 0; i < t->len; i++) {
+        IRInst *ins = &t->ops[i];
+        if (ins->op == IR_LOAD_VAR || ins->op == IR_LOAD_THIS_ATTR) {
+            if (ins->type == T_INT) {
+                ins->flags |= IR_FLAG_GUARD_INT;
+                (*guards)++;
+            } else if (ins->type == T_FLOAT) {
+                ins->flags |= IR_FLAG_GUARD_FLOAT;
+                (*guards)++;
+            }
+        }
+    }
+}
+
+static void opt_licm_mark(Trace *t, int *invariants) {
+    *invariants = 0;
+    /* Set de Variable* que se store-modifica en la traza. */
+    Variable *stored[64]; int nstored = 0;
+    for (int i = 0; i < t->len; i++) {
+        IRInst *ins = &t->ops[i];
+        if (ins->op == IR_STORE_VAR && nstored < 64)
+            stored[nstored++] = ins->aux.var;
+    }
+    /* Pasada de propagación. Como las ops están en orden topológico
+     * (SSA append-only), una sola pasada basta. */
+    for (int i = 0; i < t->len; i++) {
+        IRInst *ins = &t->ops[i];
+        int inv = 0;
+        switch (ins->op) {
+        case IR_LOAD_CONST:
+            inv = 1; break;
+        case IR_LOAD_THIS_ATTR:
+            inv = 1; break;  /* no soportamos store_this_attr todavía */
+        case IR_LOAD_VAR: {
+            inv = 1;
+            for (int k = 0; k < nstored; k++)
+                if (stored[k] == ins->aux.var) { inv = 0; break; }
+            break;
+        }
+        default:
+            if (ir_is_arith(ins->op)) {
+                int ai = (t->ops[ins->a].flags & IR_FLAG_INV) ? 1 : 0;
+                int bi = (t->ops[ins->b].flags & IR_FLAG_INV) ? 1 : 0;
+                inv = (ai && bi);
+            }
+            break;
+        }
+        if (inv) {
+            ins->flags |= IR_FLAG_INV;
+            (*invariants)++;
+        }
+    }
+}
+
+static void opt_dce(Trace *t, int *killed) {
+    *killed = 0;
+    /* Mark phase: live = side-effect ops + sus operandos transitivos. */
+    uint8_t live[TRACE_MAX] = {0};
+    for (int i = 0; i < t->len; i++) {
+        if (ir_has_side_effect(t->ops[i].op))
+            live[i] = 1;
+    }
+    int changed = 1;
+    while (changed) {
+        changed = 0;
+        for (int i = t->len - 1; i >= 0; i--) {
+            if (!live[i]) continue;
+            IRInst *ins = &t->ops[i];
+            if (ins->a && !live[ins->a]) { live[ins->a] = 1; changed = 1; }
+            if (ins->b && !live[ins->b]) { live[ins->b] = 1; changed = 1; }
+        }
+    }
+    /* Sweep: ops no live → IR_NOP. Mantienen ID. */
+    for (int i = 0; i < t->len; i++) {
+        if (!live[i] && t->ops[i].op != IR_NOP) {
+            t->ops[i].op = IR_NOP;
+            t->ops[i].a = 0; t->ops[i].b = 0;
+            (*killed)++;
+        }
+    }
+}
+
+static void trace_optimize(Trace *t) {
+    if (!t || !t->complete || t->len == 0) return;
+    int folded = 0, guards = 0, invs = 0, killed = 0;
+    opt_constant_fold(t, &folded);
+    opt_guard_mark    (t, &guards);
+    opt_licm_mark     (t, &invs);
+    opt_dce           (t, &killed);
+    if (g_trace_opt_dump) {
+        fprintf(stderr, "[OLA9] optimized trace anchor=%p: folded=%d guards=%d invariants=%d killed=%d\n",
+                (void*)t->anchor, folded, guards, invs, killed);
+        trace_dump(t);
+    }
+#if TE_JIT_AVAILABLE
+    /* Ola 10b: intentar compilar la traza. Sólo si JIT está activo y
+     * la traza encaja con el patrón soportado. */
+    if (g_jit_on == 1 && !t->compiled && !t->compile_failed) {
+        void *code = jit_compile_trace(t);
+        if (code) t->compiled = code;
+        else      t->compile_failed = 1;
+    }
+#endif
+}
+
+/* ===========================================================================
+ * Ola 10a — JIT infrastructure (executable slab + raw x86_64 byte emitter)
+ *
+ * No DynASM yet. Direct byte emission, just enough to allocate an executable
+ * page, write a tiny function (mov rax,imm64; ret), and jump to it from C.
+ * Triggered only when TYPEEASY_JIT=1 is set; otherwise zero impact.
+ * Linux/x86_64 only (which matches the Docker build).
+ * =========================================================================*/
+/* TE_JIT_AVAILABLE and JIT-related includes are at the top of this file
+ * (must precede any earlier `#if TE_JIT_AVAILABLE`). */
+/* g_jit_on / g_jit_slab / g_jit_dump declared earlier (above trace_optimize). */
+
+static void jit_init_once(void) {
+    if (g_jit_on != -1) return;
+    const char *e = getenv("TYPEEASY_JIT");
+    g_jit_on = (e && *e && *e != '0') ? 1 : 0;
+    {
+        const char *d = getenv("TYPEEASY_JIT_DUMP");
+        g_jit_dump = (d && *d && *d != '0') ? 1 : 0;
+    }
+#if TE_JIT_AVAILABLE
+    if (g_jit_on) {
+        long ps = sysconf(_SC_PAGESIZE);
+        if (ps <= 0) ps = 4096;
+        g_jit_slab_sz = (size_t)ps * 16;  /* 64 KiB */
+        g_jit_slab = mmap(NULL, g_jit_slab_sz,
+                          PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (g_jit_slab == MAP_FAILED) {
+            fprintf(stderr, "[OLA10] mmap PROT_EXEC failed; JIT disabled\n");
+            g_jit_slab = NULL;
+            g_jit_on = 0;
+        } else {
+            fprintf(stderr, "[OLA10] JIT slab=%p size=%zu (PROT_EXEC ok)\n",
+                    g_jit_slab, g_jit_slab_sz);
+        }
+    }
+#else
+    if (g_jit_on) {
+        fprintf(stderr, "[OLA10] platform not supported; JIT disabled\n");
+        g_jit_on = 0;
+    }
+#endif
+}
+
+#if TE_JIT_AVAILABLE
+/* Bump-allocate `n` bytes from the executable slab and return a writable+
+ * executable pointer to it. Returns NULL on overflow. */
+static uint8_t *jit_alloc(size_t n) {
+    if (!g_jit_slab) return NULL;
+    if (g_jit_slab_used + n > g_jit_slab_sz) return NULL;
+    uint8_t *p = (uint8_t*)g_jit_slab + g_jit_slab_used;
+    g_jit_slab_used += (n + 15) & ~(size_t)15;  /* keep 16-byte aligned */
+    return p;
+}
+
+/* Tiny x86_64 byte emitter helpers. We only need a handful of opcodes
+ * for the smoke test in 10a; 10b will extend with mov [mem], add, ret. */
+static inline void e8(uint8_t **p, uint8_t v)  { *(*p)++ = v; }
+static inline void e64(uint8_t **p, uint64_t v) {
+    for (int i = 0; i < 8; i++) e8(p, (uint8_t)(v >> (i*8)));
+}
+
+/* Emit `mov rax, imm64`  (REX.W + B8+rd io)  — 10 bytes. */
+static void emit_mov_rax_imm64(uint8_t **p, uint64_t imm) {
+    e8(p, 0x48); e8(p, 0xB8); e64(p, imm);
+}
+
+/* Emit `ret` — 1 byte. */
+static void emit_ret(uint8_t **p) { e8(p, 0xC3); }
+
+/* Smoke test: build a function `int64_t (*)(void)` that returns 42 and
+ * call it. Proves slab is mapped PROT_EXEC and our bytes are valid. */
+static int jit_smoke_test(void) {
+    if (g_jit_smoke_done) return 0;
+    g_jit_smoke_done = 1;
+    uint8_t *code = jit_alloc(16);
+    if (!code) {
+        fprintf(stderr, "[OLA10] smoke: jit_alloc failed\n");
+        return -1;
+    }
+    uint8_t *p = code;
+    emit_mov_rax_imm64(&p, 42);
+    emit_ret(&p);
+    typedef int64_t (*fn_t)(void);
+    fn_t fn = (fn_t)(uintptr_t)code;
+    int64_t got = fn();
+    fprintf(stderr, "[OLA10] smoke: compiled fn @ %p returned %lld (expected 42) %s\n",
+            (void*)code, (long long)got, got == 42 ? "OK" : "FAIL");
+    return (got == 42) ? 0 : -1;
+}
+#endif  /* TE_JIT_AVAILABLE (Ola 10a) */
+
+/* ===========================================================================
+ * Ola 10b — codegen real x86_64 para una traza optimizada.
+ *
+ * Soporta exclusivamente trazas con la siguiente forma (que es justo lo
+ * que produce `bench_method_call.te` y, en general, métodos como
+ * `return self.attr + arg;`):
+ *
+ *   ops[1..N-2]: secuencia de IR_LOAD_VAR / IR_LOAD_THIS_ATTR (todos T_INT)
+ *                e IR_ADD_INT / IR_SUB_INT / IR_MUL_INT (T_INT)
+ *   ops[N-1]:    IR_RETURN T_INT, a=<ref>
+ *
+ * Sin guards (Ola 10c los añadirá): si el tipo cambia en runtime el
+ * resultado es indefinido. Para mitigar, sólo activamos compiled traces
+ * cuando los `IR_LOAD_VAR.aux.var->vtype == VAL_INT` se mantiene; el
+ * trampolín en bc_exec hace una verificación barata antes de saltar.
+ *
+ * Convención de llamada del código generado:
+ *   double fn(void);                    // SysV: result en xmm0
+ * Lee `g_bc_this` y los `Variable*` directamente desde direcciones
+ * absolutas embebidas en el código (mov rax, imm64).
+ *
+ * Frame: push rbp; mov rbp,rsp; sub rsp,256.  Cada IR id usa 8 bytes
+ * en [rsp + id*8]. Soporta hasta 32 IDs (TRACE_MAX más grande aborta).
+ * =========================================================================*/
+
+/* Compile-time guarantees sobre layout. Si esto falla, los offsets
+ * hardcodeados de abajo están equivocados. */
+#if TE_JIT_AVAILABLE
+_Static_assert(sizeof(Variable) == 32,           "JIT assumes sizeof(Variable)==32");
+_Static_assert(offsetof(Variable, value) == 24,  "JIT assumes Variable.value @ offset 24");
+_Static_assert(offsetof(ObjectNode, attributes) == 8, "JIT assumes ObjectNode.attributes @ offset 8");
+
+#define TE_JIT_FRAME_BYTES   256       /* multiple of 16 */
+#define TE_JIT_MAX_IDS       32        /* 32 * 8 = 256 */
+
+/* g_jit_dump declared above (outside #if so init code can write it) */
+
+/* --- micro-emisor --- */
+static inline void e32(uint8_t **p, uint32_t v) {
+    for (int i = 0; i < 4; i++) e8(p, (uint8_t)(v >> (i*8)));
+}
+
+/* mov rax, imm64                           48 B8 ib...  (10 bytes) */
+/* (already defined above as emit_mov_rax_imm64) */
+
+/* push rbp; mov rbp,rsp; sub rsp, imm32    55 48 89 E5 48 81 EC ii ii ii ii */
+static void emit_prologue(uint8_t **p, uint32_t frame) {
+    e8(p, 0x55);
+    e8(p, 0x48); e8(p, 0x89); e8(p, 0xE5);
+    e8(p, 0x48); e8(p, 0x81); e8(p, 0xEC); e32(p, frame);
+}
+/* mov rsp,rbp; pop rbp; ret                48 89 EC 5D C3 */
+static void emit_epilogue(uint8_t **p) {
+    e8(p, 0x48); e8(p, 0x89); e8(p, 0xEC);
+    e8(p, 0x5D); e8(p, 0xC3);
+}
+
+/* mov rax, [rax + disp32]                  48 8B 80 dd dd dd dd  (7 bytes) */
+static void emit_mov_rax_mem_rax_disp(uint8_t **p, int32_t disp) {
+    e8(p, 0x48); e8(p, 0x8B); e8(p, 0x80); e32(p, (uint32_t)disp);
+}
+/* mov rax, [rax]                           48 8B 00              (3 bytes) */
+static void emit_mov_rax_mem_rax(uint8_t **p) {
+    e8(p, 0x48); e8(p, 0x8B); e8(p, 0x00);
+}
+/* mov [rsp + disp32], rax                  48 89 84 24 dd dd dd dd  (8 bytes) */
+static void emit_mov_rspdisp_rax(uint8_t **p, int32_t disp) {
+    e8(p, 0x48); e8(p, 0x89); e8(p, 0x84); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+/* mov rax, [rsp + disp32]                  48 8B 84 24 dd dd dd dd  (8 bytes) */
+static void emit_mov_rax_rspdisp(uint8_t **p, int32_t disp) {
+    e8(p, 0x48); e8(p, 0x8B); e8(p, 0x84); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+/* add rax, [rsp + disp32]                  48 03 84 24 dd dd dd dd  (8 bytes) */
+static void emit_add_rax_rspdisp(uint8_t **p, int32_t disp) {
+    e8(p, 0x48); e8(p, 0x03); e8(p, 0x84); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+/* sub rax, [rsp + disp32]                  48 2B 84 24 dd dd dd dd  (8 bytes) */
+static void emit_sub_rax_rspdisp(uint8_t **p, int32_t disp) {
+    e8(p, 0x48); e8(p, 0x2B); e8(p, 0x84); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+/* imul rax, [rsp + disp32]                 48 0F AF 84 24 dd dd dd dd  (9 bytes) */
+static void emit_imul_rax_rspdisp(uint8_t **p, int32_t disp) {
+    e8(p, 0x48); e8(p, 0x0F); e8(p, 0xAF); e8(p, 0x84); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+/* cvtsi2sd xmm0, rax                       F2 48 0F 2A C0  (5 bytes) */
+static void emit_cvtsi2sd_xmm0_rax(uint8_t **p) {
+    e8(p, 0xF2); e8(p, 0x48); e8(p, 0x0F); e8(p, 0x2A); e8(p, 0xC0);
+}
+
+/* === Ola 11 helpers === */
+/* xor edx, edx                             31 D2                 (2 bytes) */
+static void emit_xor_edx_edx(uint8_t **p) { e8(p, 0x31); e8(p, 0xD2); }
+/* cmp rax, [rsp + disp32]                  48 3B 84 24 dd dd dd dd (8 bytes) */
+static void emit_cmp_rax_rspdisp(uint8_t **p, int32_t disp) {
+    e8(p, 0x48); e8(p, 0x3B); e8(p, 0x84); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+/* setl dl                                  0F 9C C2              (3 bytes) */
+static void emit_setl_dl(uint8_t **p) { e8(p, 0x0F); e8(p, 0x9C); e8(p, 0xC2); }
+/* mov [rsp + disp32], rdx                  48 89 94 24 dd dd dd dd (8 bytes) */
+static void emit_mov_rspdisp_rdx(uint8_t **p, int32_t disp) {
+    e8(p, 0x48); e8(p, 0x89); e8(p, 0x94); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+/* test rax, rax                            48 85 C0              (3 bytes) */
+static void emit_test_rax_rax(uint8_t **p) { e8(p, 0x48); e8(p, 0x85); e8(p, 0xC0); }
+/* je rel32 (forward, backpatch). Returns offset to disp32 field. */
+static size_t emit_je_rel32(uint8_t **p, uint8_t *base) {
+    e8(p, 0x0F); e8(p, 0x84);
+    size_t at = (size_t)(*p - base);
+    e32(p, 0); /* placeholder */
+    return at;
+}
+/* jmp rel32 (forward or backward). Returns offset to disp32 field. */
+static size_t emit_jmp_rel32(uint8_t **p, uint8_t *base) {
+    e8(p, 0xE9);
+    size_t at = (size_t)(*p - base);
+    e32(p, 0);
+    return at;
+}
+/* Patch a rel32 at base+at so it points to base+target (relative to end of disp). */
+static void patch_rel32(uint8_t *base, size_t at, size_t target) {
+    int32_t rel = (int32_t)((int64_t)target - (int64_t)(at + 4));
+    base[at + 0] = (uint8_t)(rel & 0xFF);
+    base[at + 1] = (uint8_t)((rel >> 8)  & 0xFF);
+    base[at + 2] = (uint8_t)((rel >> 16) & 0xFF);
+    base[at + 3] = (uint8_t)((rel >> 24) & 0xFF);
+}
+/* mov rdx, imm64                           48 BA ib...           (10 bytes) */
+static void emit_mov_rdx_imm64(uint8_t **p, uint64_t imm) {
+    e8(p, 0x48); e8(p, 0xBA);
+    for (int i = 0; i < 8; i++) e8(p, (uint8_t)(imm >> (i*8)));
+}
+/* mov [rdx], rax                           48 89 02              (3 bytes) */
+static void emit_mov_memrdx_rax(uint8_t **p) { e8(p, 0x48); e8(p, 0x89); e8(p, 0x02); }
+/* pxor xmm0, xmm0                          66 0F EF C0           (4 bytes) */
+static void emit_pxor_xmm0_xmm0(uint8_t **p) {
+    e8(p, 0x66); e8(p, 0x0F); e8(p, 0xEF); e8(p, 0xC0);
+}
+
+/* === Ola 12 — Register allocation helpers ===
+ * Una "lreg" (loop-carried reg) toma valores 0..4, mapeando a:
+ *   0 → rbx,  1 → r12,  2 → r13,  3 → r14,  4 → r15  (todos callee-saved).
+ * Estos cinco registros son los únicos que asumimos preservados a través
+ * de cualquier subrutina de C (aquí no hacemos calls, pero los guardamos
+ * en push/pop en el prólogo/epílogo para mantener el ABI de SysV). */
+#define TE_JIT_MAX_LREGS 5
+
+static void emit_push_lreg(uint8_t **p, int lreg) {
+    if (lreg == 0) e8(p, 0x53);                       /* push rbx */
+    else { e8(p, 0x41); e8(p, 0x54 + (lreg - 1)); }   /* push r12..r15 */
+}
+static void emit_pop_lreg(uint8_t **p, int lreg) {
+    if (lreg == 0) e8(p, 0x5B);                       /* pop rbx */
+    else { e8(p, 0x41); e8(p, 0x5C + (lreg - 1)); }   /* pop r12..r15 */
+}
+/* mov LREG, [rax]                          REX 8B ModRM */
+static void emit_mov_lreg_memrax(uint8_t **p, int lreg) {
+    uint8_t rex, modrm;
+    if (lreg == 0) { rex = 0x48; modrm = 0x18; }      /* rbx: reg=011 → 00 011 000 */
+    else { rex = 0x4C; modrm = 0x20 + ((lreg - 1) << 3); }  /* r12..r15 */
+    e8(p, rex); e8(p, 0x8B); e8(p, modrm);
+}
+/* mov [rax], LREG                          REX 89 ModRM */
+static void emit_mov_memrax_lreg(uint8_t **p, int lreg) {
+    uint8_t rex, modrm;
+    if (lreg == 0) { rex = 0x48; modrm = 0x18; }
+    else { rex = 0x4C; modrm = 0x20 + ((lreg - 1) << 3); }
+    e8(p, rex); e8(p, 0x89); e8(p, modrm);
+}
+/* mov [rsp+disp32], LREG */
+static void emit_mov_rspdisp_lreg(uint8_t **p, int32_t disp, int lreg) {
+    uint8_t rex, modrm;
+    if (lreg == 0) { rex = 0x48; modrm = 0x9C; }      /* rbx: mod=10 reg=011 rm=100 */
+    else { rex = 0x4C; modrm = 0xA4 + ((lreg - 1) << 3); }
+    e8(p, rex); e8(p, 0x89); e8(p, modrm); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+/* mov LREG, [rsp+disp32] */
+static void emit_mov_lreg_rspdisp(uint8_t **p, int lreg, int32_t disp) {
+    uint8_t rex, modrm;
+    if (lreg == 0) { rex = 0x48; modrm = 0x9C; }
+    else { rex = 0x4C; modrm = 0xA4 + ((lreg - 1) << 3); }
+    e8(p, rex); e8(p, 0x8B); e8(p, modrm); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+
+/* g_bc_this dirección (la conoce el linker, capturamos &g_bc_this). */
+static ObjectNode **jit_p_g_bc_this(void) { return &g_bc_this; }
+
+/* Emite "carga value.int_value en rax para la id `id` y guárdalo en
+ * el slot del frame [rsp + id*8]". */
+static int jit_emit_load_var(uint8_t **p, Variable *v, int id) {
+    if (!v) return -1;
+    /* mov rax, &v->value.int_value  (literal address) */
+    emit_mov_rax_imm64(p, (uint64_t)(uintptr_t)&v->value.int_value);
+    /* mov rax, [rax]                                          */
+    emit_mov_rax_mem_rax(p);
+    /* mov [rsp + id*8], rax                                   */
+    emit_mov_rspdisp_rax(p, id * 8);
+    return 0;
+}
+static int jit_emit_load_this_attr(uint8_t **p, int32_t slot, int id) {
+    /* mov rax, &g_bc_this           */
+    emit_mov_rax_imm64(p, (uint64_t)(uintptr_t)jit_p_g_bc_this());
+    /* mov rax, [rax]   ; rax = g_bc_this           */
+    emit_mov_rax_mem_rax(p);
+    /* mov rax, [rax+8] ; rax = g_bc_this->attributes */
+    emit_mov_rax_mem_rax_disp(p, 8);
+    /* mov rax, [rax + slot*32 + 24] ; rax = attributes[slot].value.int_value */
+    emit_mov_rax_mem_rax_disp(p, slot * 32 + 24);
+    emit_mov_rspdisp_rax(p, id * 8);
+    return 0;
+}
+
+/* === Ola 17 — Float fast-path codegen helpers ===
+ * Doubles viven en los slots del frame [rsp+id*8] como bits raw (8 bytes).
+ * xmm0 es scratch para todas las ops aritméticas; xmm1 no se usa.
+ * Sin register allocation para floats: cada op carga, opera, almacena. */
+
+/* movsd xmm0, [rsp + disp32]               F2 0F 10 84 24 dd dd dd dd  (9) */
+static void emit_movsd_xmm0_rspdisp(uint8_t **p, int32_t disp) {
+    e8(p, 0xF2); e8(p, 0x0F); e8(p, 0x10);
+    e8(p, 0x84); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+/* movsd [rsp + disp32], xmm0               F2 0F 11 84 24 dd dd dd dd  (9) */
+static void emit_movsd_rspdisp_xmm0(uint8_t **p, int32_t disp) {
+    e8(p, 0xF2); e8(p, 0x0F); e8(p, 0x11);
+    e8(p, 0x84); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+/* movsd xmm0, [rax]                        F2 0F 10 00              (4 bytes) */
+static void emit_movsd_xmm0_memrax(uint8_t **p) {
+    e8(p, 0xF2); e8(p, 0x0F); e8(p, 0x10); e8(p, 0x00);
+}
+/* movsd [rax], xmm0                        F2 0F 11 00              (4 bytes) */
+static void emit_movsd_memrax_xmm0(uint8_t **p) {
+    e8(p, 0xF2); e8(p, 0x0F); e8(p, 0x11); e8(p, 0x00);
+}
+/* addsd xmm0, [rsp + disp32]               F2 0F 58 84 24 ...       (9 bytes) */
+static void emit_addsd_xmm0_rspdisp(uint8_t **p, int32_t disp) {
+    e8(p, 0xF2); e8(p, 0x0F); e8(p, 0x58);
+    e8(p, 0x84); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+/* subsd xmm0, [rsp + disp32]               F2 0F 5C 84 24 ...       (9 bytes) */
+static void emit_subsd_xmm0_rspdisp(uint8_t **p, int32_t disp) {
+    e8(p, 0xF2); e8(p, 0x0F); e8(p, 0x5C);
+    e8(p, 0x84); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+/* mulsd xmm0, [rsp + disp32]               F2 0F 59 84 24 ...       (9 bytes) */
+static void emit_mulsd_xmm0_rspdisp(uint8_t **p, int32_t disp) {
+    e8(p, 0xF2); e8(p, 0x0F); e8(p, 0x59);
+    e8(p, 0x84); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+/* divsd xmm0, [rsp + disp32]               F2 0F 5E 84 24 ...       (9 bytes) */
+static void emit_divsd_xmm0_rspdisp(uint8_t **p, int32_t disp) {
+    e8(p, 0xF2); e8(p, 0x0F); e8(p, 0x5E);
+    e8(p, 0x84); e8(p, 0x24); e32(p, (uint32_t)disp);
+}
+
+/* Load Variable.value.float_value (offset 24 in Variable; same address as
+ * value.int_value via the union) into slot [rsp+id*8] as raw bits. */
+static int jit_emit_load_var_float(uint8_t **p, Variable *v, int id) {
+    if (!v) return -1;
+    emit_mov_rax_imm64(p, (uint64_t)(uintptr_t)&v->value.float_value);
+    emit_movsd_xmm0_memrax(p);
+    emit_movsd_rspdisp_xmm0(p, id * 8);
+    return 0;
+}
+/* Store slot [rsp+a*8] (raw double bits) into v->value.float_value. */
+static int jit_emit_store_var_float(uint8_t **p, Variable *v, int a) {
+    if (!v) return -1;
+    emit_movsd_xmm0_rspdisp(p, a * 8);
+    emit_mov_rax_imm64(p, (uint64_t)(uintptr_t)&v->value.float_value);
+    emit_movsd_memrax_xmm0(p);
+    return 0;
+}
+
+/* Intenta compilar la traza. Devuelve puntero a fn o NULL. */
+static void *jit_compile_trace(Trace *t) {
+    if (!g_jit_on || !g_jit_slab || !t || !t->complete || t->len < 2) return NULL;
+    if (t->len > TE_JIT_MAX_IDS) return NULL;
+
+    /* Detectar tipo de traza por op final. */
+    int last_idx = t->len - 1;
+    int is_loop = (t->ops[last_idx].op == IR_LOOP_BACK);
+    int is_ret  = (t->ops[last_idx].op == IR_RETURN);
+    if (!is_loop && !is_ret) return NULL;
+    /* Ola 17: aceptamos return T_INT o T_FLOAT. */
+    if (is_ret && t->ops[last_idx].type != T_INT && t->ops[last_idx].type != T_FLOAT) return NULL;
+
+    /* Validación de ops permitidas. */
+    for (int i = 1; i < last_idx; i++) {
+        IRInst *ins = &t->ops[i];
+        switch (ins->op) {
+        case IR_NOP: break;
+        case IR_LOAD_CONST:
+            /* Ola 17: T_INT o T_FLOAT. */
+            if (ins->type != T_INT && ins->type != T_FLOAT) return NULL;
+            break;
+        case IR_LOAD_VAR:
+            if (ins->type == T_INT) {
+                if (!ins->aux.var || ins->aux.var->vtype != VAL_INT) return NULL;
+            } else if (ins->type == T_FLOAT) {
+                /* Ola 17: aceptamos VAL_FLOAT (y VAL_INT con auto-promote
+                 * NO — sería write inconsistente). Estricto: VAL_FLOAT. */
+                if (!ins->aux.var || ins->aux.var->vtype != VAL_FLOAT) return NULL;
+            } else {
+                return NULL;
+            }
+            break;
+        case IR_LOAD_THIS_ATTR:
+            if (ins->type != T_INT)              return NULL;
+            if (ins->aux.slot < 0)               return NULL;
+            break;
+        case IR_ADD_INT:
+        case IR_SUB_INT:
+        case IR_MUL_INT:
+        case IR_LT:
+            if (ins->a >= t->len || ins->b >= t->len) return NULL;
+            break;
+        /* Ola 17: float arithmetic. */
+        case IR_ADD_FLOAT:
+        case IR_SUB_FLOAT:
+        case IR_MUL_FLOAT:
+        case IR_DIV_FLOAT:
+            if (ins->a >= t->len || ins->b >= t->len) return NULL;
+            break;
+        case IR_GUARD_TRUE:
+            if (ins->a >= t->len) return NULL;
+            break;
+        case IR_STORE_VAR:
+            if (!ins->aux.var)                   return NULL;
+            if (ins->type == T_INT) {
+                if (ins->aux.var->vtype != VAL_INT) return NULL;
+            } else if (ins->type == T_FLOAT) {
+                if (ins->aux.var->vtype != VAL_FLOAT) return NULL;
+            } else {
+                return NULL;
+            }
+            if (ins->a >= t->len)                return NULL;
+            break;
+        default:
+            return NULL;
+        }
+    }
+
+    /* Generosa cota superior: 64 bytes/op para ops + prologo/epilogo. */
+    size_t max_bytes = 128 + 64 * t->len;
+    uint8_t *base = jit_alloc(max_bytes);
+    if (!base) return NULL;
+    uint8_t *p = base;
+
+    /* === Ola 12 — register allocation para loop-carried vars ===
+     * Una "loop-carried var" es una Variable* que aparece como destino de
+     * algún IR_STORE_VAR dentro de la traza. La cacheamos en un registro
+     * callee-saved durante todo el loop:
+     *   - pre-loop: cargamos su valor desde memoria al registro UNA vez.
+     *   - body: IR_LOAD_VAR(v) → mov [rsp+id*8], reg_v   (sin tocar memoria)
+     *           IR_STORE_VAR(v=src) → mov reg_v, [rsp+src*8] (sin escribir mem)
+     *   - deopt: writeback reg_v → memoria, restauramos callee-saved, ret. */
+    struct LoopVar { Variable *var; int lreg; } lvars[TE_JIT_MAX_LREGS];
+    int n_lvars = 0;
+    if (is_loop) {
+        for (int i = 1; i < last_idx; i++) {
+            if (t->ops[i].op != IR_STORE_VAR) continue;
+            /* Ola 17: float vars no participan en lreg cache. */
+            if (t->ops[i].type == T_FLOAT) continue;
+            Variable *v = t->ops[i].aux.var;
+            int found = 0;
+            for (int k = 0; k < n_lvars; k++) if (lvars[k].var == v) { found = 1; break; }
+            if (!found && n_lvars < TE_JIT_MAX_LREGS) {
+                lvars[n_lvars].var = v;
+                lvars[n_lvars].lreg = n_lvars;  /* asigna 0..4 → rbx, r12..r15 */
+                n_lvars++;
+            }
+        }
+    }
+    /* Helper: ¿está esta Variable* cacheada? Devuelve lreg o -1. */
+    #define LREG_OF(V) ({ int _r = -1; \
+        for (int _k = 0; _k < n_lvars; _k++) if (lvars[_k].var == (V)) { _r = lvars[_k].lreg; break; } \
+        _r; })
+
+    /* === Prólogo === */
+    /* push rbp; mov rbp,rsp; <push callee-saved>; sub rsp, frame */
+    e8(&p, 0x55);                                              /* push rbp */
+    e8(&p, 0x48); e8(&p, 0x89); e8(&p, 0xE5);                  /* mov rbp, rsp */
+    for (int k = 0; k < n_lvars; k++) emit_push_lreg(&p, lvars[k].lreg);
+    e8(&p, 0x48); e8(&p, 0x81); e8(&p, 0xEC); e32(&p, TE_JIT_FRAME_BYTES);  /* sub rsp,frame */
+
+    /* === Pre-loop: cargar cada loop-carried var en su registro === */
+    for (int k = 0; k < n_lvars; k++) {
+        emit_mov_rax_imm64(&p, (uint64_t)(uintptr_t)&lvars[k].var->value.int_value);
+        emit_mov_lreg_memrax(&p, lvars[k].lreg);
+    }
+
+    /* Para loop traces: marcar loop_top después de los pre-loads + LICM hoist.
+     * Recolectar offsets de cada `je deopt` para backpatch. */
+    size_t guard_patches[TE_JIT_MAX_IDS];
+    int n_patches = 0;
+
+    /* Ola 11: HOIST de invariants. Si es loop trace, primero emitimos los
+     * ops marcados [INV] (LICM) UNA vez antes del loop_top; en pass 2 se
+     * skipean. Para ops con efectos de control (guard/store/return/loop_back)
+     * NO hoist nunca. */
+    for (int hoist_pass = (is_loop ? 0 : 1); hoist_pass < 2; hoist_pass++) {
+        if (hoist_pass == 1) break;  /* dummy: arrancamos pass 2 abajo */
+
+        for (int i = 1; i < t->len; i++) {
+            IRInst *ins = &t->ops[i];
+            if (!(ins->flags & IR_FLAG_INV)) continue;
+            if (ins->op == IR_GUARD_TRUE || ins->op == IR_GUARD_FALSE
+             || ins->op == IR_STORE_VAR  || ins->op == IR_RETURN
+             || ins->op == IR_LOOP_BACK) continue;
+            switch (ins->op) {
+            case IR_NOP: break;
+            case IR_LOAD_CONST: {
+                uint64_t imm;
+                if (ins->type == T_FLOAT) {
+                    /* Ola 17: raw bits del double. */
+                    double d = ins->aux.cst;
+                    memcpy(&imm, &d, 8);
+                } else {
+                    imm = (uint64_t)(int64_t)ins->aux.cst;
+                }
+                emit_mov_rax_imm64(&p, imm);
+                emit_mov_rspdisp_rax(&p, i * 8);
+                break;
+            }
+            case IR_LOAD_VAR:
+                if (ins->type == T_FLOAT) {
+                    if (jit_emit_load_var_float(&p, ins->aux.var, i) < 0) goto fail;
+                } else {
+                    if (jit_emit_load_var(&p, ins->aux.var, i) < 0) goto fail;
+                }
+                break;
+            case IR_LOAD_THIS_ATTR:
+                if (jit_emit_load_this_attr(&p, ins->aux.slot, i) < 0) goto fail;
+                break;
+            case IR_ADD_INT:
+                emit_mov_rax_rspdisp(&p, ins->a * 8);
+                emit_add_rax_rspdisp(&p, ins->b * 8);
+                emit_mov_rspdisp_rax(&p, i * 8);
+                break;
+            case IR_SUB_INT:
+                emit_mov_rax_rspdisp(&p, ins->a * 8);
+                emit_sub_rax_rspdisp(&p, ins->b * 8);
+                emit_mov_rspdisp_rax(&p, i * 8);
+                break;
+            case IR_MUL_INT:
+                emit_mov_rax_rspdisp(&p, ins->a * 8);
+                emit_imul_rax_rspdisp(&p, ins->b * 8);
+                emit_mov_rspdisp_rax(&p, i * 8);
+                break;
+            case IR_ADD_FLOAT:
+                emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+                emit_addsd_xmm0_rspdisp(&p, ins->b * 8);
+                emit_movsd_rspdisp_xmm0(&p, i * 8);
+                break;
+            case IR_SUB_FLOAT:
+                emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+                emit_subsd_xmm0_rspdisp(&p, ins->b * 8);
+                emit_movsd_rspdisp_xmm0(&p, i * 8);
+                break;
+            case IR_MUL_FLOAT:
+                emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+                emit_mulsd_xmm0_rspdisp(&p, ins->b * 8);
+                emit_movsd_rspdisp_xmm0(&p, i * 8);
+                break;
+            case IR_DIV_FLOAT:
+                emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+                emit_divsd_xmm0_rspdisp(&p, ins->b * 8);
+                emit_movsd_rspdisp_xmm0(&p, i * 8);
+                break;
+            case IR_LT:
+                emit_mov_rax_rspdisp(&p, ins->a * 8);
+                emit_xor_edx_edx(&p);
+                emit_cmp_rax_rspdisp(&p, ins->b * 8);
+                emit_setl_dl(&p);
+                emit_mov_rspdisp_rdx(&p, i * 8);
+                break;
+            default: goto fail;
+            }
+        }
+    }
+
+    /* Marcar loop_top después de los hoisted invariants (o justo después
+     * del prologue si no hay hoisting). */
+    size_t loop_top_off = (size_t)(p - base);
+
+    for (int i = 1; i < t->len; i++) {
+        IRInst *ins = &t->ops[i];
+        /* Skip ops ya emitidos en el hoist (sólo loop traces). */
+        if (is_loop && (ins->flags & IR_FLAG_INV)
+            && ins->op != IR_GUARD_TRUE && ins->op != IR_GUARD_FALSE
+            && ins->op != IR_STORE_VAR  && ins->op != IR_RETURN
+            && ins->op != IR_LOOP_BACK) continue;
+        switch (ins->op) {
+        case IR_NOP: break;
+        case IR_LOAD_CONST: {
+            uint64_t imm;
+            if (ins->type == T_FLOAT) {
+                double d = ins->aux.cst;
+                memcpy(&imm, &d, 8);
+            } else {
+                imm = (uint64_t)(int64_t)ins->aux.cst;
+            }
+            emit_mov_rax_imm64(&p, imm);
+            emit_mov_rspdisp_rax(&p, i * 8);
+            break;
+        }
+        case IR_LOAD_VAR: {
+            if (ins->type == T_FLOAT) {
+                /* Ola 17: float vars no participan en lreg cache (Ola 12). */
+                if (jit_emit_load_var_float(&p, ins->aux.var, i) < 0) goto fail;
+                break;
+            }
+            int lr = LREG_OF(ins->aux.var);
+            if (lr >= 0) {
+                /* Cached: el valor live está en reg, sólo spillear al slot
+                 * para que el consumidor lo lea desde [rsp+id*8]. */
+                emit_mov_rspdisp_lreg(&p, i * 8, lr);
+            } else {
+                if (jit_emit_load_var(&p, ins->aux.var, i) < 0) goto fail;
+            }
+            break;
+        }
+        case IR_LOAD_THIS_ATTR:
+            if (jit_emit_load_this_attr(&p, ins->aux.slot, i) < 0) goto fail;
+            break;
+        case IR_ADD_INT:
+            emit_mov_rax_rspdisp(&p, ins->a * 8);
+            emit_add_rax_rspdisp(&p, ins->b * 8);
+            emit_mov_rspdisp_rax(&p, i * 8);
+            break;
+        case IR_SUB_INT:
+            emit_mov_rax_rspdisp(&p, ins->a * 8);
+            emit_sub_rax_rspdisp(&p, ins->b * 8);
+            emit_mov_rspdisp_rax(&p, i * 8);
+            break;
+        case IR_MUL_INT:
+            emit_mov_rax_rspdisp(&p, ins->a * 8);
+            emit_imul_rax_rspdisp(&p, ins->b * 8);
+            emit_mov_rspdisp_rax(&p, i * 8);
+            break;
+        case IR_ADD_FLOAT:
+            emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+            emit_addsd_xmm0_rspdisp(&p, ins->b * 8);
+            emit_movsd_rspdisp_xmm0(&p, i * 8);
+            break;
+        case IR_SUB_FLOAT:
+            emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+            emit_subsd_xmm0_rspdisp(&p, ins->b * 8);
+            emit_movsd_rspdisp_xmm0(&p, i * 8);
+            break;
+        case IR_MUL_FLOAT:
+            emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+            emit_mulsd_xmm0_rspdisp(&p, ins->b * 8);
+            emit_movsd_rspdisp_xmm0(&p, i * 8);
+            break;
+        case IR_DIV_FLOAT:
+            emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+            emit_divsd_xmm0_rspdisp(&p, ins->b * 8);
+            emit_movsd_rspdisp_xmm0(&p, i * 8);
+            break;
+        case IR_LT:
+            emit_mov_rax_rspdisp(&p, ins->a * 8);
+            emit_xor_edx_edx(&p);
+            emit_cmp_rax_rspdisp(&p, ins->b * 8);
+            emit_setl_dl(&p);
+            emit_mov_rspdisp_rdx(&p, i * 8);
+            break;
+        case IR_GUARD_TRUE: {
+            emit_mov_rax_rspdisp(&p, ins->a * 8);
+            emit_test_rax_rax(&p);
+            size_t at = emit_je_rel32(&p, base);
+            if (n_patches >= TE_JIT_MAX_IDS) goto fail;
+            guard_patches[n_patches++] = at;
+            break;
+        }
+        case IR_STORE_VAR: {
+            if (ins->type == T_FLOAT) {
+                /* Ola 17: write directo a memoria, sin participar en lreg. */
+                if (jit_emit_store_var_float(&p, ins->aux.var, ins->a) < 0) goto fail;
+                break;
+            }
+            int lr = LREG_OF(ins->aux.var);
+            if (lr >= 0) {
+                /* Cached: actualizar reg desde slot. NO escribir a memoria;
+                 * el writeback se hace en el deopt label. */
+                emit_mov_lreg_rspdisp(&p, lr, ins->a * 8);
+            } else {
+                emit_mov_rax_rspdisp(&p, ins->a * 8);
+                emit_mov_rdx_imm64(&p, (uint64_t)(uintptr_t)&ins->aux.var->value.int_value);
+                emit_mov_memrdx_rax(&p);
+            }
+            break;
+        }
+        case IR_RETURN:
+            if (ins->type == T_FLOAT) {
+                /* Ola 17: ya está en bits raw double en el slot. */
+                emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+            } else {
+                emit_mov_rax_rspdisp(&p, ins->a * 8);
+                emit_cvtsi2sd_xmm0_rax(&p);
+            }
+            /* RET trace: n_lvars==0, así que el epílogo simple basta. */
+            emit_epilogue(&p);
+            break;
+        case IR_LOOP_BACK: {
+            size_t at = emit_jmp_rel32(&p, base);
+            patch_rel32(base, at, loop_top_off);
+            break;
+        }
+        default: goto fail;
+        }
+    }
+
+    /* Para loop traces: deopt label + writeback de cached regs + epílogo. */
+    if (is_loop) {
+        size_t deopt_off = (size_t)(p - base);
+        /* Writeback: por cada cached var, mov rax,&v.int ; mov [rax],reg. */
+        for (int k = 0; k < n_lvars; k++) {
+            emit_mov_rax_imm64(&p, (uint64_t)(uintptr_t)&lvars[k].var->value.int_value);
+            emit_mov_memrax_lreg(&p, lvars[k].lreg);
+        }
+        /* xor xmm0 (return value irrelevante) */
+        emit_pxor_xmm0_xmm0(&p);
+        /* add rsp, frame                       48 81 C4 ii ii ii ii */
+        e8(&p, 0x48); e8(&p, 0x81); e8(&p, 0xC4); e32(&p, TE_JIT_FRAME_BYTES);
+        /* pop callee-saved en orden inverso */
+        for (int k = n_lvars - 1; k >= 0; k--) emit_pop_lreg(&p, lvars[k].lreg);
+        e8(&p, 0x5D);                                          /* pop rbp */
+        e8(&p, 0xC3);                                          /* ret */
+        for (int k = 0; k < n_patches; k++) patch_rel32(base, guard_patches[k], deopt_off);
+    }
+
+    if (g_jit_dump) {
+        fprintf(stderr, "[OLA12] compiled %s trace anchor=%p code=%p bytes=%zd lvars=%d\n",
+                is_loop ? "LOOP" : "RET",
+                (void*)t->anchor, (void*)base, (ptrdiff_t)(p - base), n_lvars);
+    }
+    return (void*)base;
+
+fail:
+    return NULL;
+}
+
+/* Trampolín: dado un anchor (Instr*), busca en g_traces y devuelve la
+ * fn compilada (o NULL). Usa el mismo hashing que trace_slot_for. */
+static void *trace_lookup_compiled(Instr *anchor) {
+    uintptr_t h = (uintptr_t)anchor;
+    h ^= (h >> 16); h *= 0x9E3779B1u;
+    int idx = (int)(h & (TRACE_TBL_SZ - 1));
+    for (int probe = 0; probe < TRACE_TBL_SZ; probe++) {
+        TraceSlot *s = &g_traces[(idx + probe) & (TRACE_TBL_SZ - 1)];
+        if (s->key == anchor) {
+            Trace *tr = s->trace;
+            return (tr && tr->complete) ? tr->compiled : NULL;
+        }
+        if (s->key == NULL) return NULL;
+    }
+    return NULL;
+}
+#endif  /* TE_JIT_AVAILABLE */
+
+/* Stack-based VM with computed goto dispatch (GCC/Clang extension). */
+static double bc_exec(Instr *code) {
+    /* Ola 6: cuenta entrada a bc_exec (loop body o method body). */
+    if (g_profile_on == -1) profile_init_once();
+    if (!g_trace_init_done) trace_init_once();
+#if TE_JIT_AVAILABLE
+    if (g_jit_on == -1) {
+        jit_init_once();
+        if (g_jit_on) jit_smoke_test();
+    }
+#else
+    if (g_jit_on == -1) jit_init_once();
+#endif
+#if TE_JIT_AVAILABLE
+    /* Ola 10b: trampolín. Si hay una traza compilada para este anchor,
+     * saltar al código nativo y devolver su resultado. NOTA: esto
+     * cortocircuita el dispatch del bytecode. Sin guards (Ola 10c los
+     * añadirá): si los tipos cambian, el resultado es indefinido. */
+    if (g_jit_on && !g_record_on) {
+        void *fn = trace_lookup_compiled(code);
+        if (fn) {
+            return ((double (*)(void))(uintptr_t)fn)();
+        }
+    }
+#endif
+    if (g_profile_on > 0) {
+        profile_bump(code, 1);
+        /* Ola 7: si superamos el threshold y aún no estamos grabando
+         * y no hay traza completa, iniciar recording. */
+        if (!g_record_on) {
+            HotEntry *e = NULL;
+            uintptr_t h = (uintptr_t)code;
+            h ^= (h >> 16); h *= 0x9E3779B1u;
+            int idx = (int)(h & (HOT_TABLE_SZ - 1));
+            for (int probe = 0; probe < HOT_TABLE_SZ; probe++) {
+                HotEntry *cand = &g_hot[(idx + probe) & (HOT_TABLE_SZ - 1)];
+                if (cand->key == code) { e = cand; break; }
+                if (cand->key == NULL) break;
+            }
+            if (e && e->count >= (uint64_t)g_trace_threshold) {
+                TraceSlot *s = trace_slot_for(code);
+                if (s && (!s->trace || (!s->trace->complete && s->attempts < 3))) {
+                    trace_begin(code);
+                }
+            }
+        }
+    }
+    static void *table[] = {
+        [BC_HALT]           = &&do_halt,
+        [BC_LOAD_CONST]     = &&do_const,
+        [BC_LOAD_VAR]       = &&do_var,
+        [BC_ADD]            = &&do_add,
+        [BC_SUB]            = &&do_sub,
+        [BC_MUL]            = &&do_mul,
+        [BC_DIV]            = &&do_div,
+        [BC_LT]             = &&do_lt,
+        [BC_GT]             = &&do_gt,
+        [BC_LE]             = &&do_le,
+        [BC_GE]             = &&do_ge,
+        [BC_EQ]             = &&do_eq,
+        [BC_NEQ]            = &&do_neq,
+        [BC_NEG]            = &&do_neg,
+        [BC_AND]            = &&do_and,
+        [BC_OR]             = &&do_or,
+        [BC_NOT]            = &&do_not,
+        [BC_STORE_VAR]      = &&do_store,
+        [BC_JUMP]           = &&do_jump,
+        [BC_JUMP_IF_FALSE]  = &&do_jump_if_false,
+        [BC_POP]            = &&do_pop,
+        [BC_LOAD_THIS_ATTR] = &&do_this_attr,
+        [BC_CALL_METHOD]    = &&do_call_method,
+        [BC_SET_THIS]       = &&do_set_this,
+        [BC_RESTORE_THIS]   = &&do_restore_this,
+    };
+    double stack[64];
+    int sp = 0;
+    Instr *ip = code;
+
+    /* Ola 8: shadow stack de refs SSA paralelo a stack[].
+     * rstack[i] = id del IR op que produjo stack[i].
+     * rtype[i]  = tipo IR de stack[i] (T_INT/T_FLOAT/T_BOOL).
+     * Sólo se mantiene mientras g_record_on != 0. */
+    uint16_t rstack[64];
+    uint8_t  rtype[64];
+    /* Helpers locales: detección de tipo desde valor runtime. */
+    #define TY_OF(v) (((v) == (double)(int)(v)) ? T_INT : T_FLOAT)
+    /* Aborto de la traza desde cualquier handler no soportado. */
+    #define TRACE_ABORT() do { if (g_record_on) trace_end(0); } while (0)
+
+    #define DISPATCH() goto *table[ip->op]
+    DISPATCH();
+
+do_const: {
+    double c = ip->u.constant;
+    stack[sp] = c;
+    if (g_record_on) {
+        IRType ty = TY_OF(c);
+        uint16_t id = ir_emit(IR_LOAD_CONST, ty, 0, 0);
+        if (id) g_cur_trace->ops[id].aux.cst = c;
+        rstack[sp] = id; rtype[sp] = ty;
+    }
+    sp++; ip++; DISPATCH();
+}
+do_var: {
+    Variable *v = ip->u.var;
+    double val = (v->vtype == VAL_INT) ? (double)v->value.int_value
+                                       : v->value.float_value;
+    stack[sp] = val;
+    if (g_record_on) {
+        IRType ty = (v->vtype == VAL_INT) ? T_INT : T_FLOAT;
+        uint16_t id = ir_emit(IR_LOAD_VAR, ty, 0, 0);
+        if (id) g_cur_trace->ops[id].aux.var = v;
+        rstack[sp] = id; rtype[sp] = ty;
+    }
+    sp++; ip++; DISPATCH();
+}
+do_add:
+    stack[sp-2] = stack[sp-2] + stack[sp-1]; sp--;
+    if (g_record_on) {
+        IRType ta = rtype[sp-1] /* old sp-2 */, tb = rtype[sp];
+        IRType ty = (ta == T_INT && tb == T_INT) ? T_INT : T_FLOAT;
+        IROp op = (ty == T_INT) ? IR_ADD_INT : IR_ADD_FLOAT;
+        uint16_t id = ir_emit(op, ty, rstack[sp-1], rstack[sp]);
+        rstack[sp-1] = id; rtype[sp-1] = ty;
+    }
+    ip++; DISPATCH();
+do_sub:
+    stack[sp-2] = stack[sp-2] - stack[sp-1]; sp--;
+    if (g_record_on) {
+        IRType ta = rtype[sp-1], tb = rtype[sp];
+        IRType ty = (ta == T_INT && tb == T_INT) ? T_INT : T_FLOAT;
+        IROp op = (ty == T_INT) ? IR_SUB_INT : IR_SUB_FLOAT;
+        uint16_t id = ir_emit(op, ty, rstack[sp-1], rstack[sp]);
+        rstack[sp-1] = id; rtype[sp-1] = ty;
+    }
+    ip++; DISPATCH();
+do_mul:
+    stack[sp-2] = stack[sp-2] * stack[sp-1]; sp--;
+    if (g_record_on) {
+        IRType ta = rtype[sp-1], tb = rtype[sp];
+        IRType ty = (ta == T_INT && tb == T_INT) ? T_INT : T_FLOAT;
+        IROp op = (ty == T_INT) ? IR_MUL_INT : IR_MUL_FLOAT;
+        uint16_t id = ir_emit(op, ty, rstack[sp-1], rstack[sp]);
+        rstack[sp-1] = id; rtype[sp-1] = ty;
+    }
+    ip++; DISPATCH();
+do_div:
+    if (stack[sp-1] == 0.0) {
+        printf("Error: division by zero.\n");
+        stack[sp-2] = 0;
+        TRACE_ABORT();
+    } else {
+        stack[sp-2] = stack[sp-2] / stack[sp-1];
+        if (g_record_on) {
+            IRType ta = rtype[sp-2], tb = rtype[sp-1];
+            IRType ty = (ta == T_INT && tb == T_INT) ? T_INT : T_FLOAT;
+            IROp op = (ty == T_INT) ? IR_DIV_INT : IR_DIV_FLOAT;
+            uint16_t id = ir_emit(op, ty, rstack[sp-2], rstack[sp-1]);
+            rstack[sp-2] = id; rtype[sp-2] = ty;
+        }
+    }
+    sp--; ip++; DISPATCH();
+do_lt:  stack[sp-2] = (stack[sp-2] <  stack[sp-1]); sp--;
+        if (g_record_on) { uint16_t id = ir_emit(IR_LT, T_BOOL, rstack[sp-1], rstack[sp]); rstack[sp-1]=id; rtype[sp-1]=T_BOOL; }
+        ip++; DISPATCH();
+do_gt:  stack[sp-2] = (stack[sp-2] >  stack[sp-1]); sp--;
+        if (g_record_on) { uint16_t id = ir_emit(IR_GT, T_BOOL, rstack[sp-1], rstack[sp]); rstack[sp-1]=id; rtype[sp-1]=T_BOOL; }
+        ip++; DISPATCH();
+do_le:  stack[sp-2] = (stack[sp-2] <= stack[sp-1]); sp--;
+        if (g_record_on) { uint16_t id = ir_emit(IR_LE, T_BOOL, rstack[sp-1], rstack[sp]); rstack[sp-1]=id; rtype[sp-1]=T_BOOL; }
+        ip++; DISPATCH();
+do_ge:  stack[sp-2] = (stack[sp-2] >= stack[sp-1]); sp--;
+        if (g_record_on) { uint16_t id = ir_emit(IR_GE, T_BOOL, rstack[sp-1], rstack[sp]); rstack[sp-1]=id; rtype[sp-1]=T_BOOL; }
+        ip++; DISPATCH();
+do_eq:  stack[sp-2] = (stack[sp-2] == stack[sp-1]); sp--;
+        if (g_record_on) { uint16_t id = ir_emit(IR_EQ, T_BOOL, rstack[sp-1], rstack[sp]); rstack[sp-1]=id; rtype[sp-1]=T_BOOL; }
+        ip++; DISPATCH();
+do_neq: stack[sp-2] = (stack[sp-2] != stack[sp-1]); sp--;
+        if (g_record_on) { uint16_t id = ir_emit(IR_NEQ, T_BOOL, rstack[sp-1], rstack[sp]); rstack[sp-1]=id; rtype[sp-1]=T_BOOL; }
+        ip++; DISPATCH();
+do_neg:
+    stack[sp-1] = -stack[sp-1];
+    TRACE_ABORT();   /* unary neg no instrumentado en Ola 8 */
+    ip++; DISPATCH();
+do_and:
+    stack[sp-2] = (stack[sp-2] != 0.0 && stack[sp-1] != 0.0) ? 1 : 0; sp--;
+    TRACE_ABORT();
+    ip++; DISPATCH();
+do_or:
+    stack[sp-2] = (stack[sp-2] != 0.0 || stack[sp-1] != 0.0) ? 1 : 0; sp--;
+    TRACE_ABORT();
+    ip++; DISPATCH();
+do_not:
+    stack[sp-1] = (stack[sp-1] == 0.0) ? 1 : 0;
+    TRACE_ABORT();
+    ip++; DISPATCH();
+do_store: {
+    /* Pop top, write to var. Auto-detect INT vs FLOAT to keep parity with
+     * the Fase 2 fast-path: integral doubles stay as VAL_INT. */
+    Variable *v = ip->u.var;
+    double r = stack[--sp];
+    if (r == (double)(int)r) {
+        v->vtype = VAL_INT;
+        v->value.int_value = (int)r;
+    } else {
+        v->vtype = VAL_FLOAT;
+        v->value.float_value = r;
+    }
+    if (g_record_on) {
+        IRType ty = (v->vtype == VAL_INT) ? T_INT : T_FLOAT;
+        uint16_t id = ir_emit(IR_STORE_VAR, ty, rstack[sp], 0);
+        if (id) g_cur_trace->ops[id].aux.var = v;
+    }
+    ip++; DISPATCH();
+}
+do_jump:
+    /* Ola 6: si es backward jump, cuenta el target como hot. */
+    if (g_profile_on > 0 && ip->u.offset < 0)
+        profile_bump(ip + 1 + ip->u.offset, 2);
+    /* Ola 8: backward jump al anchor cierra la traza con LOOP_BACK. */
+    if (g_record_on) {
+        Instr *target = ip + 1 + ip->u.offset;
+        if (target == g_cur_trace->anchor) {
+            ir_emit(IR_LOOP_BACK, T_UNK, 0, 0);
+            trace_end(1);
+        } else {
+            TRACE_ABORT();
+        }
+    }
+    /* Ola 11: trampolín / start-of-trace en backward jump.
+     * El target del backward jump es el "loop top" — el lugar perfecto para
+     * (a) ejecutar nativo si ya hay traza compilada, o (b) iniciar recording. */
+    if (ip->u.offset < 0 && !g_record_on) {
+        Instr *target = ip + 1 + ip->u.offset;
+#if TE_JIT_AVAILABLE
+        if (g_jit_on) {
+            void *fn = trace_lookup_compiled(target);
+            if (fn) {
+                /* Native loop ejecuta hasta deopt natural (i==limit).
+                 * Estado vive en Variable*s; nada que restaurar.
+                 * NO tomamos el backward jump: caemos al instr siguiente
+                 * (HALT en el FOR canon), que retornará de bc_exec. */
+                ((double (*)(void))(uintptr_t)fn)();
+                ip++;
+                DISPATCH();
+            }
+        }
+#endif
+        /* Hot-loop detection: si el target es hot, iniciar recording allí. */
+        if (g_profile_on > 0) {
+            uintptr_t h = (uintptr_t)target;
+            h ^= (h >> 16); h *= 0x9E3779B1u;
+            int idx = (int)(h & (HOT_TABLE_SZ - 1));
+            HotEntry *e = NULL;
+            for (int probe = 0; probe < HOT_TABLE_SZ; probe++) {
+                HotEntry *cand = &g_hot[(idx + probe) & (HOT_TABLE_SZ - 1)];
+                if (cand->key == target) { e = cand; break; }
+                if (cand->key == NULL) break;
+            }
+            if (e && e->count >= (uint64_t)g_trace_threshold) {
+                TraceSlot *s = trace_slot_for(target);
+                if (s && (!s->trace || (!s->trace->complete && s->attempts < 3))) {
+                    trace_begin(target);
+                }
+            }
+        }
+    }
+    ip += 1 + ip->u.offset;
+    DISPATCH();
+do_jump_if_false: {
+    /* Ola 11: capturar IR id ANTES del decremento de sp. */
+    uint16_t cond_id = g_record_on ? rstack[sp-1] : 0;
+    double v = stack[--sp];
+    /* Ola 11: emitir GUARD_TRUE (deopt si cond es falsa).
+     * Si observamos v==0 (loop exit), abortamos limpio: la traza
+     * sólo cubre el path "stay in loop". */
+    if (g_record_on) {
+        if (v == 0.0) {
+            TRACE_ABORT();
+        } else {
+            ir_emit(IR_GUARD_TRUE, T_INT, cond_id, 0);
+        }
+    }
+    if (v == 0.0) {
+        if (g_profile_on > 0 && ip->u.offset < 0)
+            profile_bump(ip + 1 + ip->u.offset, 2);
+        ip += 1 + ip->u.offset;
+    } else {
+        ip++;
+    }
+    DISPATCH();
+}
+do_pop:
+    sp--;
+    if (g_record_on) TRACE_ABORT();
+    ip++; DISPATCH();
+do_this_attr: {
+    /* Ola 4: read this.attribute[slot] (numeric) onto stack. */
+    int slot = ip->u.slot;
+    Variable *a = &g_bc_this->attributes[slot];
+    double val = (a->vtype == VAL_INT) ? (double)a->value.int_value
+                                       : a->value.float_value;
+    stack[sp] = val;
+    if (g_record_on) {
+        /* Ola 11: emitir IR_LOAD_VAR con la Variable* del atributo
+         * (resuelve g_bc_this en compile-time). Esto hace que el codegen
+         * trate atributos exactamente como variables, y elimina la
+         * dependencia del compiled trace en g_bc_this — clave para
+         * que SET_THIS / RESTORE_THIS no necesiten emitir IR. */
+        IRType ty = (a->vtype == VAL_INT) ? T_INT : T_FLOAT;
+        uint16_t id = ir_emit(IR_LOAD_VAR, ty, 0, 0);
+        if (id) g_cur_trace->ops[id].aux.var = a;
+        rstack[sp] = id; rtype[sp] = ty;
+    }
+    sp++; ip++; DISPATCH();
+}
+do_call_method: {
+    /* Ola 5: inline-call a method whose body is precompiled bytecode.
+     *
+     * Stack layout on entry: ... arg0 arg1 ... arg(n-1)  (top)
+     * 1) Move args into the cached param Variable* slots.
+     * 2) Save/swap g_bc_this to the call's object.
+     * 3) Recursively run bc_exec on the method body.
+     * 4) Restore g_bc_this and push the return value.
+     *
+     * Ola 11: durante recording, INLINE el cuerpo del método en la traza
+     * actual. No abortar: emitir IR_STORE_VAR para cada arg → param Variable*,
+     * luego recurrir bc_exec con g_inline_depth>0 para que do_halt no cierre
+     * la traza, y empujar el ret id capturado en outer rstack. */
+    MethodCallSite *site = ip->u.site;
+    int n = site->n_params;
+    int recording = g_record_on;
+    /* Capturar IR ids de los args ANTES de mover (rstack[sp-n+i] son los args). */
+    uint16_t arg_ids[8] = {0};
+    if (recording && n <= 8) {
+        for (int i = 0; i < n; i++) arg_ids[i] = rstack[sp - n + i];
+    } else if (recording && n > 8) {
+        TRACE_ABORT();  /* >8 args: no soportado en inlining */
+    }
+    for (int i = 0; i < n; i++) {
+        Variable *pv = site->param_vars[i];
+        double v = stack[sp - n + i];
+        if (pv->vtype == VAL_FLOAT) {
+            pv->value.float_value = v;
+        } else {
+            pv->vtype = VAL_INT;
+            pv->value.int_value = (int)v;
+        }
+        if (recording) {
+            IRType ty = (pv->vtype == VAL_INT) ? T_INT : T_FLOAT;
+            uint16_t sid = ir_emit(IR_STORE_VAR, ty, arg_ids[i], 0);
+            if (sid) g_cur_trace->ops[sid].aux.var = pv;
+        }
+    }
+    sp -= n;
+    ObjectNode *saved_this = g_bc_this;
+    g_bc_this = site->obj_var->value.object_value;
+    double rv;
+    if (recording) {
+        /* Inlined recording: profundizar, evitar que el inner do_halt cierre. */
+        g_inline_depth++;
+        uint16_t saved_ret_id = g_inline_ret_id;
+        uint8_t saved_ret_ty  = g_inline_ret_type;
+        g_inline_ret_id = 0;
+        g_inline_ret_type = T_UNK;
+        rv = bc_exec(((BCInfo *)site->body_bc)->code);
+        /* push ret id en outer rstack ANTES de restaurar globals */
+        if (g_record_on) {
+            /* puede ser que la inline grabación abortara; sólo empujar si seguimos */
+            rstack[sp] = g_inline_ret_id;
+            rtype[sp]  = g_inline_ret_type;
+        }
+        g_inline_ret_id = saved_ret_id;
+        g_inline_ret_type = saved_ret_ty;
+        g_inline_depth--;
+    } else {
+        rv = bc_exec(((BCInfo *)site->body_bc)->code);
+    }
+    g_bc_this = saved_this;
+    stack[sp++] = rv;
+    ip++; DISPATCH();
+}
+do_set_this: {
+    /* Ola 5b: push current g_bc_this on the this-stack and set new from var.
+     * Ola 11: NO abortar durante recording. Las cargas de atributos durante
+     * recording se materializan como IR_LOAD_VAR con la Variable* concreta
+     * (do_this_attr resolvió g_bc_this), así que el compiled trace no depende
+     * del estado de g_bc_this. Aquí sólo hay que mantener el push/pop para
+     * cuando volvemos a interpretación. */
+    g_bc_this_stack[g_bc_this_sp++] = g_bc_this;
+    g_bc_this = ip->u.var->value.object_value;
+    ip++; DISPATCH();
+}
+do_restore_this: {
+    g_bc_this = g_bc_this_stack[--g_bc_this_sp];
+    ip++; DISPATCH();
+}
+do_halt:
+    /* Ola 8: si recording activo, cerrar la traza con IR_RETURN del top.
+     * Ola 11: si estamos inlined (depth>0), NO cerrar; sólo capturar el ret id. */
+    if (g_record_on) {
+        if (g_inline_depth > 0) {
+            if (sp > 0) { g_inline_ret_id = rstack[sp-1]; g_inline_ret_type = rtype[sp-1]; }
+            else        { g_inline_ret_id = 0; g_inline_ret_type = T_UNK; }
+        } else {
+            if (sp > 0) ir_emit(IR_RETURN, rtype[sp-1], rstack[sp-1], 0);
+            else        ir_emit(IR_RETURN, T_UNK, 0, 0);
+            trace_end(1);
+        }
+    }
+    return sp > 0 ? stack[sp-1] : 0;
+    #undef DISPATCH
+    #undef TY_OF
+    #undef TRACE_ABORT
+}
+
+/* Try to fetch (or build on first call) a compiled bytecode for `node`.
+ * Returns NULL if the node isn't compilable. Once a node is marked
+ * BC_NOT_COMPILABLE we never retry. */
+static BCInfo *bc_get_or_compile(ASTNode *node) {
+    if (!node) return NULL;
+    void *p = node->bc;
+    if (p == BC_NOT_COMPILABLE) return NULL;
+    if (p) return (BCInfo *)p;
+
+    /* Only attempt compilation for nodes likely to win: arithmetic and
+     * comparisons. Plain identifiers/numbers don't benefit (one VM step
+     * vs one switch case). NOTE: do NOT mark non-worth nodes as
+     * BC_NOT_COMPILABLE here — Fase 4 statement compiler also uses node->bc
+     * as cache and may want to compile WHILE/IF/STATEMENT_LIST nodes. */
+    NodeKind k = nk_of(node);
+    int worth = (k == NK_ADD || k == NK_SUB || k == NK_MUL || k == NK_DIV ||
+                 k == NK_LT  || k == NK_GT  ||
+                 k == NK_LT_EQ || k == NK_GT_EQ ||
+                 k == NK_EQ  || k == NK_DIFF ||
+                 k == NK_AND || k == NK_OR  || k == NK_NOT);
+    if (!worth) {
+        return NULL;
+    }
+
+    Instr buf[64];
+    int pos = 0;
+    if (!bc_compile(node, buf, &pos, 64)) {
+        node->bc = BC_NOT_COMPILABLE;
+        return NULL;
+    }
+    /* Append HALT */
+    if (pos >= 64) { node->bc = BC_NOT_COMPILABLE; return NULL; }
+    buf[pos].op = BC_HALT;
+    pos++;
+
+    BCInfo *info = (BCInfo *)malloc(sizeof(BCInfo));
+    info->code = (Instr *)malloc(sizeof(Instr) * pos);
+    memcpy(info->code, buf, sizeof(Instr) * pos);
+    info->len = pos;
+    node->bc = info;
+    return info;
+}
+
+/* ===================== Ola 4: method-body bytecode =========================
+ * Compile method bodies of the shape `{ return <numeric expr>; }` to a flat
+ * bytecode program. The expression may reference parameters (resolved via
+ * find_variable on identifier name — the same Variable* slot is reused
+ * across calls thanks to Ola 3 Fase B) and `this.attr` (resolved to a
+ * fixed slot index at compile time using the class context).
+ *
+ * Result is cached on MethodNode.bc_body. NULL = not yet attempted.
+ * BC_NOT_COMPILABLE = tried, gave up. Otherwise BCInfo*.
+ *
+ * Switch: TYPEEASY_NO_BCMETHOD=1 disables this path entirely. */
+
+/* Walk down the body looking for a single RETURN node, skipping
+ * STATEMENT_LIST wrappers that contain only one statement. Returns the
+ * RETURN node or NULL if the shape doesn't match. */
+static ASTNode *bc_find_single_return(ASTNode *body) {
+    while (body) {
+        NodeKind k = nk_of(body);
+        if (k == NK_RETURN) return body;
+        if (k == NK_STATEMENT_LIST) {
+            /* Two-child list: if right side is empty, descend into left.
+             * If left is empty, descend into right. Otherwise: more than
+             * one statement → not eligible. */
+            if (body->left && !body->right) { body = body->left; continue; }
+            if (body->right && !body->left) { body = body->right; continue; }
+            if (body->left && body->right) {
+                /* Allow the case where one side is itself empty STATEMENT_LIST. */
+                NodeKind lk = nk_of(body->left);
+                NodeKind rk = nk_of(body->right);
+                if (lk == NK_STATEMENT_LIST && !body->left->left && !body->left->right) {
+                    body = body->right; continue;
+                }
+                if (rk == NK_STATEMENT_LIST && !body->right->left && !body->right->right) {
+                    body = body->left; continue;
+                }
+                return NULL;
+            }
+            return NULL;
+        }
+        return NULL;
+    }
+    return NULL;
+}
+
+static BCInfo *bc_get_or_compile_method(MethodNode *m, ClassNode *cls) {
+    if (!m) return NULL;
+    if (m->bc_body == BC_NOT_COMPILABLE) return NULL;
+    if (m->bc_body) return (BCInfo *)m->bc_body;
+
+    /* Body must be a single `return <expr>;`. */
+    ASTNode *ret = bc_find_single_return(m->body);
+    if (!ret || !ret->left) { m->bc_body = BC_NOT_COMPILABLE; return NULL; }
+
+    /* Ola 5: pre-allocate Variable* slots for all params so that the
+     * NK_IDENTIFIER lookups inside the body compile succeed even if the
+     * method has never been invoked (and Fase B's fast-call hasn't yet
+     * created the slots). */
+    for (ParameterNode *p = m->params; p; p = p->next) {
+        if (!p->name) continue;
+        Variable *pv = (Variable *)p->cached_var;
+        if (!pv) pv = find_variable_for(p->name);
+        if (!pv && var_count < MAX_VARS) {
+            /* TypeEasy's lexer doesn't set yylval for INT/FLOAT tokens,
+             * so p->type can be garbage. Default to INT; BC_STORE_VAR
+             * will switch the slot to FLOAT at runtime if needed. */
+            int is_float = (p->type
+                          && (strcmp(p->type, "float") == 0
+                           || strcmp(p->type, "FLOAT") == 0));
+            vars[var_count].id       = strdup(p->name);
+            vars[var_count].type     = strdup(is_float ? "FLOAT" : "INT");
+            vars[var_count].is_const = 0;
+            vars[var_count].vtype    = is_float ? VAL_FLOAT : VAL_INT;
+            if (is_float) vars[var_count].value.float_value = 0.0;
+            else          vars[var_count].value.int_value   = 0;
+            pv = &vars[var_count];
+            var_count++;
+        }
+        if (pv) p->cached_var = pv;
+    }
+
+    Instr buf[64];
+    int pos = 0;
+    ClassNode *saved_cls = g_bc_compile_class;
+    g_bc_compile_class = cls;
+    int ok = bc_compile(ret->left, buf, &pos, 63);
+    g_bc_compile_class = saved_cls;
+    if (!ok) { m->bc_body = BC_NOT_COMPILABLE; return NULL; }
+
+    buf[pos].op = BC_HALT;
+    pos++;
+
+    BCInfo *info = (BCInfo *)malloc(sizeof(BCInfo));
+    info->code = (Instr *)malloc(sizeof(Instr) * pos);
+    memcpy(info->code, buf, sizeof(Instr) * pos);
+    info->len = pos;
+    m->bc_body = info;
+    return info;
+}
+
+/* ===================== Fase 4: full-statement bytecode =====================
+ * Compile entire ASSIGN / WHILE / IF / STATEMENT_LIST trees so a hot loop
+ * runs without ever returning to the AST walker. Eligible bodies must contain
+ * only: numeric ASSIGN to known-numeric vars, nested compilable IF/WHILE, and
+ * statement lists thereof. Anything else (PRINT, CALL, BREAK, RETURN, THROW,
+ * string ops, FOR, etc.) → fail compilation, fall back to AST walker. */
+
+#define BC_STMT_MAX 1024  /* max instructions per compiled statement tree */
+
+static int bc_compile_stmt(ASTNode *node, Instr *out, int *pos, int max);
+static int bc_compile_for(ASTNode *node, Instr *out, int *pos, int max);
+
+/* Compile an assignment "var = expr" where var must be an existing numeric
+ * Variable* and expr must be bytecode-compilable. */
+static int bc_compile_assign(ASTNode *node, Instr *out, int *pos, int max) {
+    ASTNode *var_node   = node->left;
+    ASTNode *value_node = node->right;
+    if (!var_node || !var_node->id || !value_node) return 0;
+
+    /* Resolve & cache the destination Variable*. Must be numeric and not const. */
+    Variable *fv = (Variable *)var_node->cached_var;
+    if (!fv) {
+        fv = find_variable_for(var_node->id);
+        if (fv) var_node->cached_var = fv;
+    }
+    if (!fv || fv->is_const) return 0;
+    if (fv->vtype != VAL_INT && fv->vtype != VAL_FLOAT) return 0;
+
+    /* Disallow string-typed ADD (concat) — handled by AST walker. */
+    NodeKind vk = nk_of(value_node);
+    if (vk == NK_ADD && is_string_type(value_node)) return 0;
+
+    /* Compile RHS expression onto stack. Reuse bc_compile from Fase 3. */
+    if (!bc_compile(value_node, out, pos, max)) return 0;
+
+    if (*pos >= max) return 0;
+    out[*pos].op = BC_STORE_VAR;
+    out[*pos].u.var = fv;
+    (*pos)++;
+    return 1;
+}
+
+/* Compile WHILE: emit cond → JUMP_IF_FALSE end → body → JUMP start → end:
+ * Backpatches the two jump offsets (relative). */
+static int bc_compile_while(ASTNode *node, Instr *out, int *pos, int max) {
+    if (!node->left || !node->right) return 0;
+    int start = *pos;
+    if (!bc_compile(node->left, out, pos, max)) return 0;  /* condition */
+    if (*pos >= max) return 0;
+    int jif_pos = (*pos)++;
+    out[jif_pos].op = BC_JUMP_IF_FALSE;
+    out[jif_pos].u.offset = 0;  /* backpatch later */
+
+    if (!bc_compile_stmt(node->right, out, pos, max)) return 0;  /* body */
+
+    if (*pos >= max) return 0;
+    int back_pos = (*pos)++;
+    out[back_pos].op = BC_JUMP;
+    out[back_pos].u.offset = start - (back_pos + 1);  /* relative to next ip */
+
+    /* Now backpatch JUMP_IF_FALSE to land at *pos (after the back-jump). */
+    out[jif_pos].u.offset = (*pos) - (jif_pos + 1);
+    return 1;
+}
+
+/* Compile IF: cond → JUMP_IF_FALSE else_or_end → then → [JUMP end → else] → end */
+static int bc_compile_if(ASTNode *node, Instr *out, int *pos, int max) {
+    if (!node->left) return 0;
+    if (!bc_compile(node->left, out, pos, max)) return 0;
+
+    if (*pos >= max) return 0;
+    int jif_pos = (*pos)++;
+    out[jif_pos].op = BC_JUMP_IF_FALSE;
+    out[jif_pos].u.offset = 0;
+
+    /* then-branch */
+    if (node->right) {
+        if (!bc_compile_stmt(node->right, out, pos, max)) return 0;
+    }
+
+    if (node->next) {
+        /* else-branch present: emit JUMP-over after then */
+        if (*pos >= max) return 0;
+        int jmp_pos = (*pos)++;
+        out[jmp_pos].op = BC_JUMP;
+        out[jmp_pos].u.offset = 0;
+
+        out[jif_pos].u.offset = (*pos) - (jif_pos + 1);
+
+        if (!bc_compile_stmt(node->next, out, pos, max)) return 0;
+
+        out[jmp_pos].u.offset = (*pos) - (jmp_pos + 1);
+    } else {
+        out[jif_pos].u.offset = (*pos) - (jif_pos + 1);
+    }
+    return 1;
+}
+
+/* Compile FOR loop. TypeEasy syntax: `for(i = INIT; LIMIT; STEP) { body }`,
+ * where LIMIT and STEP are stored as NUMBER literals (.value). The body is
+ * a linked list traversed via ->right (peculiar to interpret_for). We emit:
+ *     STORE init → top: LOAD var; LOAD limit; LT; JUMP_IF_FALSE end;
+ *     body... ; LOAD var; LOAD step; ADD; STORE var; JUMP top; end:
+ * If anything in the body is not bytecode-compilable, fail and let the AST
+ * walker run the loop. */
+static int bc_compile_for(ASTNode *node, Instr *out, int *pos, int max) {
+    if (!node || !node->id || !node->left || !node->right) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr,"[BCFOR] fail: shape\n"); return 0; }
+    ASTNode *update_body = node->right->right;
+    if (!update_body || !update_body->left) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr,"[BCFOR] fail: update_body\n"); return 0; }
+
+    /* Resolve / create the control variable as INT. We can't allocate a new
+     * variable from inside the bytecode hot-path (find_variable_for is fine
+     * but we need it to exist). Try lookup first; if not present, fail and
+     * let the AST walker create it (it will be cached on subsequent calls). */
+    Variable *fv = find_variable_for(node->id);
+    if (!fv && var_count < MAX_VARS) {
+        /* Ola 5: pre-allocate as INT so we can compile straight away. */
+        vars[var_count].id       = strdup(node->id);
+        vars[var_count].type     = strdup("INT");
+        vars[var_count].is_const = 0;
+        vars[var_count].vtype    = VAL_INT;
+        vars[var_count].value.int_value = 0;
+        fv = &vars[var_count];
+        var_count++;
+    }
+    if (!fv || fv->is_const) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr,"[BCFOR] fail: fv const/null\n"); return 0; }
+    if (fv->vtype != VAL_INT) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr,"[BCFOR] fail: fv not VAL_INT (vtype=%d)\n", fv->vtype); return 0; }
+
+    int init_val  = node->left->value;
+    int limit_val = node->right->value;
+    int step_val  = update_body->left->value;
+    if (step_val == 0) return 0;  /* would be infinite loop */
+
+    /* STORE init: push const, store to var. */
+    if (*pos + 2 >= max) return 0;
+    out[*pos].op = BC_LOAD_CONST; out[*pos].u.constant = (double)init_val; (*pos)++;
+    out[*pos].op = BC_STORE_VAR;  out[*pos].u.var      = fv;               (*pos)++;
+
+    /* top: */
+    int top = *pos;
+    /* LOAD var; LOAD limit; LT */
+    if (*pos + 4 >= max) return 0;
+    out[*pos].op = BC_LOAD_VAR;   out[*pos].u.var      = fv;                (*pos)++;
+    out[*pos].op = BC_LOAD_CONST; out[*pos].u.constant = (double)limit_val; (*pos)++;
+    out[*pos].op = BC_LT;                                                   (*pos)++;
+    int jif_pos = (*pos)++;
+    out[jif_pos].op = BC_JUMP_IF_FALSE;
+    out[jif_pos].u.offset = 0;  /* backpatch */
+
+    /* Compile body. body es node->right->right->right; puede ser NK_STATEMENT_LIST
+     * o un statement suelto. bc_compile_stmt maneja ambos casos recursivamente. */
+    ASTNode *body = update_body->right;
+    if (body && !bc_compile_stmt(body, out, pos, max)) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr,"[BCFOR] fail: body nk=%d\n", nk_of(body)); return 0; }
+
+    /* var = var + step */
+    if (*pos + 4 >= max) return 0;
+    out[*pos].op = BC_LOAD_VAR;   out[*pos].u.var      = fv;               (*pos)++;
+    out[*pos].op = BC_LOAD_CONST; out[*pos].u.constant = (double)step_val; (*pos)++;
+    out[*pos].op = BC_ADD;                                                 (*pos)++;
+    out[*pos].op = BC_STORE_VAR;  out[*pos].u.var      = fv;               (*pos)++;
+
+    /* JUMP top */
+    if (*pos >= max) return 0;
+    int back_pos = (*pos)++;
+    out[back_pos].op = BC_JUMP;
+    out[back_pos].u.offset = top - (back_pos + 1);
+
+    /* Backpatch JUMP_IF_FALSE to here. */
+    out[jif_pos].u.offset = (*pos) - (jif_pos + 1);
+    return 1;
+}
+
+/* Compile a statement (or statement list). Statements push nothing net. */
+static int bc_compile_stmt(ASTNode *node, Instr *out, int *pos, int max) {
+    if (!node) return 1;  /* empty body is OK */
+    NodeKind k = nk_of(node);
+    switch (k) {
+    case NK_STATEMENT_LIST:
+        if (!bc_compile_stmt(node->left,  out, pos, max)) return 0;
+        if (!bc_compile_stmt(node->right, out, pos, max)) return 0;
+        return 1;
+    case NK_ASSIGN:
+        return bc_compile_assign(node, out, pos, max);
+    case NK_WHILE:
+        return bc_compile_while(node, out, pos, max);
+    case NK_IF:
+        return bc_compile_if(node, out, pos, max);
+    case NK_FOR:
+        return bc_compile_for(node, out, pos, max);
+    default:
+        /* Anything else (PRINT, CALL, BREAK, RETURN, THROW, VAR_DECL,
+         * INDEX_ASSIGN, etc.) is not compilable. */
+        return 0;
+    }
+}
+
+/* Lazy compile-on-first-call for whole statement subtrees. */
+static BCInfo *bc_get_or_compile_stmt(ASTNode *node) {
+    if (!node) return NULL;
+    void *p = node->bc;
+    if (p == BC_NOT_COMPILABLE) return NULL;
+    if (p) return (BCInfo *)p;
+
+    /* Only worth attempting on WHILE/IF/FOR (huge win). Plain single ASSIGN
+     * already has a fast-path in interpret_assign. */
+    NodeKind k = nk_of(node);
+    if (k != NK_WHILE && k != NK_IF && k != NK_FOR) {
+        node->bc = BC_NOT_COMPILABLE;
+        return NULL;
+    }
+
+    Instr buf[BC_STMT_MAX];
+    int pos = 0;
+    if (k == NK_WHILE) {
+        if (!bc_compile_while(node, buf, &pos, BC_STMT_MAX)) {
+            node->bc = BC_NOT_COMPILABLE;
+            return NULL;
+        }
+    } else if (k == NK_FOR) {
+        if (!bc_compile_for(node, buf, &pos, BC_STMT_MAX)) {
+            node->bc = BC_NOT_COMPILABLE;
+            return NULL;
+        }
+    } else {
+        if (!bc_compile_if(node, buf, &pos, BC_STMT_MAX)) {
+            node->bc = BC_NOT_COMPILABLE;
+            return NULL;
+        }
+    }
+    if (pos >= BC_STMT_MAX) { node->bc = BC_NOT_COMPILABLE; return NULL; }
+    buf[pos].op = BC_HALT;
+    pos++;
+
+    BCInfo *info = (BCInfo *)malloc(sizeof(BCInfo));
+    info->code = (Instr *)malloc(sizeof(Instr) * pos);
+    memcpy(info->code, buf, sizeof(Instr) * pos);
+    info->len = pos;
+    node->bc = info;
+    return info;
+}
+
 double evaluate_expression(ASTNode *node) {
     if (!node) return 0;
 
-    if (node->type && strcmp(node->type, "NULL") == 0) {
-        return 0; /* null como número = 0 */
+    /* Fase 3 (perf): bytecode fast-path. Compile & cache on first hit;
+     * on subsequent calls (loop bodies, conditions) skip the AST walker
+     * entirely and run the flat opcode stream via computed goto. */
+    {
+        static int bc_init = 0;
+        static int bc_enabled = 1;
+        if (!bc_init) {
+            const char *e = getenv("TYPEEASY_NO_BC");
+            if (e && e[0] && e[0] != '0') bc_enabled = 0;
+            bc_init = 1;
+        }
+        if (bc_enabled) {
+            BCInfo *info = bc_get_or_compile(node);
+            if (info) return bc_exec(info->code);
+        }
     }
 
-    if (node->type && strcmp(node->type, "IDENTIFIER") == 0) {
-        Variable *var = find_variable(node->id);
+    /* Fase 1 (perf): single dispatch via cached NodeKind enum. */
+    NodeKind k = nk_of(node);
+
+    switch (k) {
+    case NK_NULL:
+        return 0; /* null como número = 0 */
+
+    case NK_IDENTIFIER: {
+        /* Fase 2 (perf): cache Variable* on first lookup.
+         * vars[] is append-only with stable pointers, so this is safe. */
+        Variable *var = (Variable *)node->cached_var;
+        if (!var) {
+            var = find_variable(node->id);
+            node->cached_var = var;
+        }
         if (var) {
             if (var->type && strcmp(var->type, "NULL") == 0) {
-                return 0; /* variable null tratada como 0 numéricamente */
+                return 0;
             }
             if (var->vtype == VAL_INT) {
                 return var->value.int_value;
@@ -1665,89 +4608,136 @@ double evaluate_expression(ASTNode *node) {
             return 0;
         }
     }
-    
-    if (node->type && strcmp(node->type, "NUMBER") == 0) {
-         return (double)node->value;
-    }
-    
-    if (node->type && strcmp(node->type, "FLOAT") == 0) {
-         return atof(node->str_value);
-    }
 
-    if (strcmp(node->type, "GT") == 0) {
+    case NK_NUMBER:
+    case NK_INT:
+        return (double)node->value;
+
+    case NK_FLOAT:
+        return atof(node->str_value);
+
+    case NK_GT:
         return evaluate_expression(node->left) > evaluate_expression(node->right);
-    }
-    if (strcmp(node->type, "LT") == 0) {
+    case NK_LT:
         return evaluate_expression(node->left) < evaluate_expression(node->right);
-    }
-    if (strcmp(node->type, "EQ") == 0) {
-        /* Fase 1d: null comparisons */
+    case NK_GT_EQ:
+        return evaluate_expression(node->left) <= evaluate_expression(node->right);
+    case NK_LT_EQ:
+        return evaluate_expression(node->left) >= evaluate_expression(node->right);
+
+    case NK_EQ: {
         int left_null = 0, right_null = 0;
-        if (node->left && node->left->type && strcmp(node->left->type, "NULL") == 0) left_null = 1;
-        if (node->right && node->right->type && strcmp(node->right->type, "NULL") == 0) right_null = 1;
-        if (node->left && node->left->type && strcmp(node->left->type, "IDENTIFIER") == 0) {
+        if (node->left  && nk_of(node->left)  == NK_NULL) left_null = 1;
+        if (node->right && nk_of(node->right) == NK_NULL) right_null = 1;
+        if (node->left  && nk_of(node->left)  == NK_IDENTIFIER) {
             Variable *v = find_variable(node->left->id);
             if (v && v->type && strcmp(v->type, "NULL") == 0) left_null = 1;
         }
-        if (node->right && node->right->type && strcmp(node->right->type, "IDENTIFIER") == 0) {
+        if (node->right && nk_of(node->right) == NK_IDENTIFIER) {
             Variable *v = find_variable(node->right->id);
             if (v && v->type && strcmp(v->type, "NULL") == 0) right_null = 1;
         }
         if (left_null || right_null) return (double)(left_null && right_null);
         if (is_string_type(node->left) || is_string_type(node->right)) {
-             char *s1 = get_node_string(node->left);
-             char *s2 = get_node_string(node->right);
-             int res = (strcmp(s1, s2) == 0);
-             free(s1); free(s2);
+             /* Ola 3 Fase A: zero-alloc string compare.
+              * Resolve both sides to const char* without strdup. If at least
+              * one side is an interned literal, pointer-equality is enough
+              * for the positive case; otherwise fall back to strcmp. */
+             const char *s1 = NULL, *s2 = NULL;
+             int s1_interned = 0, s2_interned = 0;
+             if (node->left) {
+                 NodeKind lk = nk_of(node->left);
+                 if (lk == NK_STRING) { s1 = node->left->str_value; s1_interned = node->left->str_interned; }
+                 else if (lk == NK_IDENTIFIER || lk == NK_ID) {
+                     Variable *vv = find_variable(node->left->id);
+                     if (vv && vv->vtype == VAL_STRING) s1 = vv->value.string_value;
+                 }
+             }
+             if (node->right) {
+                 NodeKind rk = nk_of(node->right);
+                 if (rk == NK_STRING) { s2 = node->right->str_value; s2_interned = node->right->str_interned; }
+                 else if (rk == NK_IDENTIFIER || rk == NK_ID) {
+                     Variable *vv = find_variable(node->right->id);
+                     if (vv && vv->vtype == VAL_STRING) s2 = vv->value.string_value;
+                 }
+             }
+             if (s1 && s2) {
+                 if (s1 == s2) return 1.0;
+                 /* If both are interned and pointers differ, contents differ. */
+                 if (s1_interned && s2_interned) return 0.0;
+                 return (strcmp(s1, s2) == 0) ? 1.0 : 0.0;
+             }
+             /* Fallback for the rare cases (e.g. CALL on a side). */
+             char *fs1 = get_node_string(node->left);
+             char *fs2 = get_node_string(node->right);
+             int res = (strcmp(fs1, fs2) == 0);
+             free(fs1); free(fs2);
              return (double)res;
         }
         return evaluate_expression(node->left) == evaluate_expression(node->right);
     }
-    if (strcmp(node->type, "GT_EQ") == 0) {
-        return evaluate_expression(node->left) <= evaluate_expression(node->right);
-    }
-    if (strcmp(node->type, "LT_EQ") == 0) {
-        return evaluate_expression(node->left) >= evaluate_expression(node->right);
-    }
-    if (strcmp(node->type, "DIFF") == 0) {
+
+    case NK_DIFF: {
         int left_null = 0, right_null = 0;
-        if (node->left && node->left->type && strcmp(node->left->type, "NULL") == 0) left_null = 1;
-        if (node->right && node->right->type && strcmp(node->right->type, "NULL") == 0) right_null = 1;
-        if (node->left && node->left->type && strcmp(node->left->type, "IDENTIFIER") == 0) {
+        if (node->left  && nk_of(node->left)  == NK_NULL) left_null = 1;
+        if (node->right && nk_of(node->right) == NK_NULL) right_null = 1;
+        if (node->left  && nk_of(node->left)  == NK_IDENTIFIER) {
             Variable *v = find_variable(node->left->id);
             if (v && v->type && strcmp(v->type, "NULL") == 0) left_null = 1;
         }
-        if (node->right && node->right->type && strcmp(node->right->type, "IDENTIFIER") == 0) {
+        if (node->right && nk_of(node->right) == NK_IDENTIFIER) {
             Variable *v = find_variable(node->right->id);
             if (v && v->type && strcmp(v->type, "NULL") == 0) right_null = 1;
         }
         if (left_null || right_null) return (double)!(left_null && right_null);
         if (is_string_type(node->left) || is_string_type(node->right)) {
-             char *s1 = get_node_string(node->left);
-             char *s2 = get_node_string(node->right);
-             int res = (strcmp(s1, s2) != 0);
-             free(s1); free(s2);
+             /* Ola 3 Fase A: zero-alloc string compare (mirror of NK_EQ). */
+             const char *s1 = NULL, *s2 = NULL;
+             int s1_interned = 0, s2_interned = 0;
+             if (node->left) {
+                 NodeKind lk = nk_of(node->left);
+                 if (lk == NK_STRING) { s1 = node->left->str_value; s1_interned = node->left->str_interned; }
+                 else if (lk == NK_IDENTIFIER || lk == NK_ID) {
+                     Variable *vv = find_variable(node->left->id);
+                     if (vv && vv->vtype == VAL_STRING) s1 = vv->value.string_value;
+                 }
+             }
+             if (node->right) {
+                 NodeKind rk = nk_of(node->right);
+                 if (rk == NK_STRING) { s2 = node->right->str_value; s2_interned = node->right->str_interned; }
+                 else if (rk == NK_IDENTIFIER || rk == NK_ID) {
+                     Variable *vv = find_variable(node->right->id);
+                     if (vv && vv->vtype == VAL_STRING) s2 = vv->value.string_value;
+                 }
+             }
+             if (s1 && s2) {
+                 if (s1 == s2) return 0.0;
+                 if (s1_interned && s2_interned) return 1.0;
+                 return (strcmp(s1, s2) != 0) ? 1.0 : 0.0;
+             }
+             char *fs1 = get_node_string(node->left);
+             char *fs2 = get_node_string(node->right);
+             int res = (strcmp(fs1, fs2) != 0);
+             free(fs1); free(fs2);
              return (double)res;
         }
         return evaluate_expression(node->left) != evaluate_expression(node->right);
     }
-    
-    if (strcmp(node->type, "AND") == 0) {
+
+    case NK_AND:
         if (!evaluate_expression(node->left)) return 0;
         return evaluate_expression(node->right) ? 1 : 0;
-    }
-    if (strcmp(node->type, "OR") == 0) {
+    case NK_OR:
         if (evaluate_expression(node->left)) return 1;
         return evaluate_expression(node->right) ? 1 : 0;
-    }
-    if (strcmp(node->type, "NOT") == 0) {
+    case NK_NOT:
         return evaluate_expression(node->left) ? 0 : 1;
-    }
-    if (strcmp(node->type, "NULL_COALESCE") == 0) {
+
+    case NK_NULL_COALESCE: {
         ASTNode *l = node->left;
         int is_null = 0;
-        if (l && l->type && strcmp(l->type, "NULL") == 0) is_null = 1;
-        else if (l && l->type && strcmp(l->type, "IDENTIFIER") == 0) {
+        if (l && nk_of(l) == NK_NULL) is_null = 1;
+        else if (l && nk_of(l) == NK_IDENTIFIER) {
             Variable *v = find_variable(l->id);
             if (!v || (v->type && strcmp(v->type, "NULL") == 0)) is_null = 1;
         }
@@ -1755,13 +4745,13 @@ double evaluate_expression(ASTNode *node) {
         return evaluate_expression(l);
     }
 
-    if (strcmp(node->type, "ADD") == 0) {
+    case NK_ADD:
         return evaluate_expression(node->left) + evaluate_expression(node->right);
-    } else if (strcmp(node->type, "SUB") == 0) {
+    case NK_SUB:
         return evaluate_expression(node->left) - evaluate_expression(node->right);
-    } else if (strcmp(node->type, "MUL") == 0) {
+    case NK_MUL:
         return evaluate_expression(node->left) * evaluate_expression(node->right);
-    } else if (strcmp(node->type, "DIV") == 0) {
+    case NK_DIV: {
         double right = evaluate_expression(node->right);
         if (right == 0.0) {
             printf("Error: division by zero.\n");
@@ -1770,13 +4760,12 @@ double evaluate_expression(ASTNode *node) {
         return evaluate_expression(node->left) / right;
     }
 
-
-    if (strcmp(node->type, "ACCESS_ATTR") == 0) {
+    case NK_ACCESS_ATTR: {
         ASTNode *objRef = node->left;
         ASTNode *attr   = node->right;
 
         /* Fase 7: null-safe ?. — return 0 (null-as-number) if obj is null */
-        if (node->value == 1 && objRef && objRef->type && strcmp(objRef->type, "IDENTIFIER") == 0) {
+        if (node->value == 1 && objRef && nk_of(objRef) == NK_IDENTIFIER) {
             Variable *vv = find_variable(objRef->id);
             if (!vv || (vv->type && strcmp(vv->type, "NULL") == 0)) return 0;
         }
@@ -1788,50 +4777,70 @@ double evaluate_expression(ASTNode *node) {
             ASTNode *map = resolve_to_map(objRef);
             if (map) return (double)map_length(map);
         }
-    
+
         Variable *v = find_variable(objRef->id);
         if (!v || v->vtype != VAL_OBJECT) {
             printf("Error: '%s' is not a valid object to access an attribute.\n", objRef->id);
             return 0;
         }
-    
-        // Try to get ObjectNode from value.object_value first, then from extra
-        // This supports both storage patterns: direct storage and wrapper pattern (used by for-in)
+
         ObjectNode *obj = v->value.object_value;
         if (!obj) {
-            // Fallback: The ObjectNode might be stored in an ASTNode wrapper's extra field
-            // This happens when objects are created by interpret_for_in()
             ASTNode *wrapper = (ASTNode*)(intptr_t)v->value.object_value;
             if (wrapper && wrapper->extra) {
                 obj = (ObjectNode *)wrapper->extra;
             }
         }
-        
+
         if (!obj) {
             printf("Error: could not get the object to access the attribute.\n");
             return 0;
         }
-        for (int i = 0; i < obj->class->attr_count; i++) {
-            if (strcmp(obj->class->attributes[i].id, attr->id) == 0) {
-                if(obj->attributes[i].vtype == VAL_INT)
-                    return obj->attributes[i].value.int_value;
-                if(obj->attributes[i].vtype == VAL_FLOAT)
-                    return obj->attributes[i].value.float_value;
+        /* Ola 2: inline cache. If the cached class matches, jump directly to
+         * the cached attribute index without scanning the attributes array. */
+        {
+            static int ic_init = 0;
+            static int ic_enabled = 1;
+            if (!ic_init) {
+                const char *e = getenv("TYPEEASY_NO_IC");
+                if (e && e[0] && e[0] != '0') ic_enabled = 0;
+                ic_init = 1;
+            }
+            if (ic_enabled && node->cached_class == (void*)obj->class) {
+                int idx = node->cached_attr_idx;
+                if (idx >= 0 && idx < obj->class->attr_count) {
+                    if (obj->attributes[idx].vtype == VAL_INT)
+                        return obj->attributes[idx].value.int_value;
+                    if (obj->attributes[idx].vtype == VAL_FLOAT)
+                        return obj->attributes[idx].value.float_value;
+                }
+            }
+            for (int i = 0; i < obj->class->attr_count; i++) {
+                if (strcmp(obj->class->attributes[i].id, attr->id) == 0) {
+                    /* Cache the resolved (class, idx) for next time. */
+                    if (ic_enabled) {
+                        node->cached_class    = (void*)obj->class;
+                        node->cached_attr_idx = i;
+                    }
+                    if(obj->attributes[i].vtype == VAL_INT)
+                        return obj->attributes[i].value.int_value;
+                    if(obj->attributes[i].vtype == VAL_FLOAT)
+                        return obj->attributes[i].value.float_value;
+                }
             }
         }
-    
+
         printf("Error: attribute '%s' not found in object '%s'.\n", attr->id, objRef->id);
         return 0;
     }
-    
-    /* Fase 1a: indexado de listas — arr[i] como expresión numérica */
-    if (strcmp(node->type, "ACCESS_EXPR") == 0) {
-        /* Fase 1c: m["key"] sobre Map — devuelve numérico si valor es numérico */
+
+    case NK_ACCESS_EXPR: {
+        /* Map indexing m["key"] */
         ASTNode *map = resolve_to_map(node->left);
         if (map) {
             const char *key = NULL;
-            if (node->right && node->right->type && strcmp(node->right->type, "STRING") == 0) key = node->right->str_value;
-            else if (node->right && (strcmp(node->right->type, "IDENTIFIER") == 0 || strcmp(node->right->type, "ID") == 0)) {
+            if (node->right && nk_of(node->right) == NK_STRING) key = node->right->str_value;
+            else if (node->right && (nk_of(node->right) == NK_IDENTIFIER || nk_of(node->right) == NK_ID)) {
                 Variable *kv = find_variable(node->right->id);
                 if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
             }
@@ -1845,7 +4854,7 @@ double evaluate_expression(ASTNode *node) {
                 return 0;
             }
             ASTNode *val = pair->left;
-            if (val && val->type && strcmp(val->type, "STRING") == 0) {
+            if (val && nk_of(val) == NK_STRING) {
                 fprintf(stderr, "Error: value at Map['%s'] is a string; use print/println.\n", key);
                 return 0;
             }
@@ -1865,19 +4874,21 @@ double evaluate_expression(ASTNode *node) {
         }
         ASTNode *item = list_get_item(list, idx);
         if (!item) return 0;
-        if (item->type && strcmp(item->type, "STRING") == 0) {
+        if (item->type && nk_of(item) == NK_STRING) {
             fprintf(stderr, "Error: item is a string; use print/println to display it.\n");
             return 0;
         }
         return evaluate_expression(item);
     }
 
-    return (double)node->value;
+    default:
+        return (double)node->value;
+    }
 }
 
 void call_method(ObjectNode *obj, char *method) {
     /* debug print removed */
-    ASTNode *thisNode = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *thisNode = (ASTNode *)calloc(1, sizeof(ASTNode));
     thisNode->type = strdup("OBJECT");
     thisNode->id = strdup("this");
     thisNode->left = thisNode->right = NULL;
@@ -2005,7 +5016,7 @@ void interpret_list_func_call(ASTNode *node) {
 }
 
 ASTNode* create_for_in_node(const char *var_name, ASTNode *list_expr, ASTNode *body) {
-    ASTNode *node = malloc(sizeof(ASTNode));
+    ASTNode *node = calloc(1, sizeof(ASTNode));
     node->type      = strdup("FOR_IN");
     node->id        = strdup(var_name);
     node->left      = list_expr;
@@ -2060,7 +5071,7 @@ static void interpret_for_in(ASTNode *node) {
                 obj = (ObjectNode *)(intptr_t)item->value;
             }
             if (strcmp(node->id, list_expr->id) != 0) {
-                ASTNode *wrapper = malloc(sizeof(ASTNode));
+                ASTNode *wrapper = calloc(1, sizeof(ASTNode));
                 wrapper->type = strdup("OBJECT");
                 wrapper->id = strdup(node->id);
                 wrapper->left = wrapper->right = NULL;
@@ -2080,7 +5091,7 @@ static void interpret_for_in(ASTNode *node) {
 }
 
 ASTNode *create_object_node(ObjectNode *obj) {
-    ASTNode *node = malloc(sizeof(ASTNode));
+    ASTNode *node = calloc(1, sizeof(ASTNode));
     node->type = strdup("OBJECT");
     node->value = (int)(intptr_t)obj;
     node->left = NULL;
@@ -2133,7 +5144,7 @@ void interpret_bridge_decl(ASTNode *node) {
 }
 
 ASTNode *create_bridge_node(char *name, ASTNode *call_expr_node) {
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para BRIDGE node.\n");
         exit(1);
@@ -2154,7 +5165,7 @@ void interpret_agent(ASTNode *agent_node) {
 }
 
 ASTNode *create_access_node(ASTNode *base, ASTNode *index_expr) {
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para ACCESS_EXPR node.\n");
         exit(1);
@@ -2171,7 +5182,7 @@ ASTNode *create_access_node(ASTNode *base, ASTNode *index_expr) {
 }
 
 ASTNode *create_object_literal_node(ASTNode *kv_list) {
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     node->type = strdup("OBJECT_LITERAL");
     node->left = kv_list;
     node->right = NULL;
@@ -2179,16 +5190,23 @@ ASTNode *create_object_literal_node(ASTNode *kv_list) {
 }
 
 ASTNode *create_kv_pair_node(char *key, ASTNode *value) {
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     node->type = strdup("KV_PAIR");
-    node->id = strdup(key);
+    /* Ola 15: intern map key for pointer-eq lookup fast-path. */
+    if (key && g_intern_enabled) {
+        node->id = (char*)tee_intern(key);
+        node->id_interned = 1;
+    } else {
+        node->id = key ? strdup(key) : NULL;
+        node->id_interned = 0;
+    }
     node->left = value;
     node->right = NULL;
     return node;
 }
 
 ASTNode *create_state_decl_node(char *name, ASTNode *value_expr) {
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     node->type = strdup("STATE_DECL");
     node->id = strdup(name);
     node->left = value_expr;
@@ -2214,109 +5232,110 @@ void print_object_as_json_by_id(const char* id);
 
 void interpret_ast(ASTNode *node) {
     if (!node) return;
-    if (return_flag) return; 
+    if (return_flag) return;
     if (throw_flag) return;
 
-    if (strcmp(node->type, "STATE_DECL") == 0) {
+    /* Fase 1 (perf): single dispatch via cached NodeKind enum. */
+    switch (nk_of(node)) {
+    case NK_STATE_DECL:
         printf("[TypeEasy] 'state' '%s' tratado como 'var' en modo script.\n", node->id);
         interpret_var_decl(node);
-    }
-    else if (strcmp(node->type, "BRIDGE_DECL") == 0) {
+        break;
+
+    case NK_BRIDGE_DECL:
         interpret_bridge_decl(node);
-    }
-    else if (strcmp(node->type, "AGENT") == 0) {
+        break;
+
+    case NK_AGENT:
         interpret_agent(node);
-    }
-    else if (strcmp(node->type, "ACCESS_EXPR") == 0) { }
-    else if (strcmp(node->type, "OBJECT_LITERAL") == 0) { }
-    else if (strcmp(node->type, "KV_PAIR") == 0) { }
-    else if (strcmp(node->type, "AGENT_LIST") == 0) {
+        break;
+
+    case NK_ACCESS_EXPR:
+    case NK_OBJECT_LITERAL:
+    case NK_KV_PAIR:
+        /* expression-only nodes; nothing to do at statement level */
+        break;
+
+    case NK_AGENT_LIST:
         interpret_ast(node->left);
         interpret_ast(node->right);
-    }
-    else if (strcmp(node->type, "LISTENER") == 0) {
-        // El 'main' puro ignora los listeners
-    }
-    else if (strcmp(node->type, "FOR") == 0)               {
-        interpret_for(node);
-    }
-    else if (strcmp(node->type, "IF") == 0)            interpret_if(node);
-    else if (strcmp(node->type, "MATCH") == 0)         interpret_match(node);
-    else if (strcmp(node->type, "FOR_IN") == 0)        interpret_for_in(node);  
-    else if (strcmp(node->type, "LIST_FUNC_CALL") == 0) interpret_list_func_call(node);
-    else if (strcmp(node->type, "FILTER_CALL") == 0)    interpret_filter_call(node);
-    else if (strcmp(node->type, "DATASET") == 0)        interpret_dataset(node);
-    else if (strcmp(node->type, "MODEL") == 0 || strcmp(node->type, "OBJECT") == 0) interpret_model_object(node);
-    else if (strcmp(node->type, "TRAIN") == 0)          interpret_train_node(node);
-    else if (strcmp(node->type, "PREDICT") == 0)        interpret_predict_node(node);
-    else if (strcmp(node->type, "RETURN_JSON") == 0)    native_json(node->left);
-    else if (strcmp(node->type, "RETURN_XML") == 0) {
+        break;
+
+    case NK_LISTENER:
+        /* main puro ignora los listeners */
+        break;
+
+    case NK_FOR:        interpret_for(node); break;
+    case NK_IF:         interpret_if(node); break;
+    case NK_MATCH:      interpret_match(node); break;
+    case NK_FOR_IN:     interpret_for_in(node); break;
+    case NK_LIST_FUNC_CALL: interpret_list_func_call(node); break;
+    case NK_FILTER_CALL:    interpret_filter_call(node); break;
+    case NK_DATASET:    interpret_dataset(node); break;
+    case NK_MODEL:
+    case NK_OBJECT:
+        interpret_model_object(node);
+        break;
+    case NK_TRAIN:      interpret_train_node(node); break;
+    case NK_PREDICT:    interpret_predict_node(node); break;
+    case NK_RETURN_JSON: native_json(node->left); break;
+
+    case NK_RETURN_XML:
         if (node->left && node->left->id) {
             print_object_as_xml_by_id(node->left->id);
         } else {
-            // No args: use captured stdout
             if (g_stdout_buffer) {
                 ASTNode *result_node = create_ast_leaf("STRING", 0, g_stdout_buffer, NULL);
                 add_or_update_variable("__ret__", result_node);
                 free_ast(result_node);
             } else {
-                // Empty response
-                 ASTNode *result_node = create_ast_leaf("STRING", 0, "", NULL);
-                 add_or_update_variable("__ret__", result_node);
-                 free_ast(result_node);
+                ASTNode *result_node = create_ast_leaf("STRING", 0, "", NULL);
+                add_or_update_variable("__ret__", result_node);
+                free_ast(result_node);
             }
         }
-    }
-    else if (strcmp(node->type, "CALL_FUNC") == 0)      interpret_call_func(node);
-    else if (strcmp(node->type, "RETURN") == 0)         interpret_return_node(node);
-    else if (strcmp(node->type, "CALL_METHOD") == 0) {
-      //  printf("[DIAG] interpret_ast: dispatching CALL_METHOD\n");
-        interpret_call_method(node);
-    }
-    else if (strcmp(node->type, "METHOD_CALL_ALONE") == 0) {
-      //  printf("[DIAG] interpret_ast: dispatching METHOD_CALL_ALONE\n");
+        break;
+
+    case NK_CALL_FUNC:    interpret_call_func(node); break;
+    case NK_RETURN:       interpret_return_node(node); break;
+    case NK_CALL_METHOD:  interpret_call_method(node); break;
+
+    case NK_METHOD_CALL_ALONE: {
         MethodNode *m = global_methods;
         while (m) {
             if (strcmp(m->name, node->id) == 0) {
-                // ¡Encontramos la función global!
-                // Aquí iría la lógica para configurar los argumentos
-                // (node->right) antes de ejecutar el cuerpo.
-                
-                // (Lógica de argumentos omitida por brevedad...)
-
-                // Ejecutar el cuerpo de la función
                 interpret_ast(m->body);
                 break;
             }
             m = m->next;
         }
+        break;
     }
-    else if (strcmp(node->type, "VAR_DECL") == 0)       interpret_var_decl(node);
-    else if (strcmp(node->type, "ASSIGN_ATTR") == 0)    interpret_assign_attr(node);
-    else if (strcmp(node->type, "ASSIGN") == 0)         interpret_assign(node);
-    else if (strcmp(node->type, "INDEX_ASSIGN") == 0) {
-        /* Fase 1b: arr[i] = x   |   Fase 1c: m["k"] = x */
-        ASTNode *access = node->left;   /* ACCESS_EXPR(base, index) */
-        ASTNode *value  = node->right;
-        if (!access || !access->left) return;
 
-        /* Map first */
+    case NK_VAR_DECL:    interpret_var_decl(node); break;
+    case NK_ASSIGN_ATTR: interpret_assign_attr(node); break;
+    case NK_ASSIGN:      interpret_assign(node); break;
+
+    case NK_INDEX_ASSIGN: {
+        /* Fase 1b: arr[i] = x   |   Fase 1c: m["k"] = x */
+        ASTNode *access = node->left;
+        ASTNode *value  = node->right;
+        if (!access || !access->left) break;
+
         ASTNode *map = resolve_to_map(access->left);
         if (map) {
             const char *key = NULL;
-            if (access->right && access->right->type && strcmp(access->right->type, "STRING") == 0) key = access->right->str_value;
-            else if (access->right && (strcmp(access->right->type, "IDENTIFIER") == 0 || strcmp(access->right->type, "ID") == 0)) {
+            if (access->right && nk_of(access->right) == NK_STRING) key = access->right->str_value;
+            else if (access->right && (nk_of(access->right) == NK_IDENTIFIER || nk_of(access->right) == NK_ID)) {
                 Variable *kv = find_variable(access->right->id);
                 if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
             }
-            if (!key) { fprintf(stderr, "Error: Map key must be a string.\n"); return; }
+            if (!key) { fprintf(stderr, "Error: Map key must be a string.\n"); break; }
             ASTNode *new_val = build_item_from_value(value);
             ASTNode *pair = map_find_pair(map, key);
             if (pair) {
-                /* reemplazar el valor */
-                pair->left = new_val;  /* leak old, ok por ahora */
+                pair->left = new_val;  /* same key, value changed: hash entry still valid */
             } else {
-                /* crear nuevo KV_PAIR y agregarlo al final (siguiendo enlaces 'right') */
                 ASTNode *new_pair = create_kv_pair_node((char*)key, new_val);
                 if (!map->left) {
                     map->left = new_pair;
@@ -2325,40 +5344,43 @@ void interpret_ast(ASTNode *node) {
                     while (cur->right) cur = cur->right;
                     cur->right = new_pair;
                 }
+                te_invalidate_map_cache(map);  /* Ola 14: new key */
             }
-            return;
+            break;
         }
 
         ASTNode *list = resolve_to_list(access->left);
         if (!list) {
             fprintf(stderr, "Error: variable is neither a list nor a Map.\n");
-            return;
+            break;
         }
         int idx = (int)evaluate_expression(access->right);
         int len = list_length(list);
         if (idx < 0 || idx >= len) {
             fprintf(stderr, "Error: index %d out of range (length=%d).\n", idx, len);
-            return;
+            break;
         }
         ASTNode *new_item = build_item_from_value(value);
-        /* reemplazar el item en la posición idx */
         ASTNode *cur = list->left;
         ASTNode *prev = NULL;
         for (int k = 0; k < idx && cur; k++) { prev = cur; cur = cur->next; }
         new_item->next = cur ? cur->next : NULL;
         if (prev) prev->next = new_item; else list->left = new_item;
+        te_invalidate_list_cache(list);  /* Ola 14: item replaced */
+        break;
     }
-    else if (strcmp(node->type, "PRINT") == 0)          interpret_print(node);
-    else if (strcmp(node->type, "PRINTLN") == 0)        interpret_println(node);
-    else if (strcmp(node->type, "FPRINT") == 0)          interpret_fprint(node);
-    else if (strcmp(node->type, "FPRINTLN") == 0)        interpret_fprintln(node);
-    else if (strcmp(node->type, "STATEMENT_LIST") == 0) interpret_statement_list(node);
-    else if (strcmp(node->type, "THROW") == 0) {
-        /* throw <expr>: si es STRING usa str_value; si es identifier de variable string idem; si no, formatear número */
+
+    case NK_PRINT:    interpret_print(node); break;
+    case NK_PRINTLN:  interpret_println(node); break;
+    case NK_FPRINT:   interpret_fprint(node); break;
+    case NK_FPRINTLN: interpret_fprintln(node); break;
+    case NK_STATEMENT_LIST: interpret_statement_list(node); break;
+
+    case NK_THROW: {
         ASTNode *e = node->left;
         char *msg = NULL;
-        if (e && e->type && strcmp(e->type, "STRING") == 0) msg = strdup(e->str_value ? e->str_value : "");
-        else if (e && e->type && strcmp(e->type, "IDENTIFIER") == 0) {
+        if (e && nk_of(e) == NK_STRING) msg = strdup(e->str_value ? e->str_value : "");
+        else if (e && nk_of(e) == NK_IDENTIFIER) {
             Variable *v = find_variable(e->id);
             if (v && v->vtype == VAL_STRING) msg = strdup(v->value.string_value ? v->value.string_value : "");
             else if (v && v->vtype == VAL_INT) { char b[32]; snprintf(b,32,"%d",v->value.int_value); msg = strdup(b); }
@@ -2371,16 +5393,17 @@ void interpret_ast(ASTNode *node) {
         if (throw_message) free(throw_message);
         throw_message = msg;
         throw_flag = 1;
+        break;
     }
-    else if (strcmp(node->type, "TRY_CATCH") == 0) {
+
+    case NK_TRY_CATCH: {
         ASTNode *try_body = node->left;
         ASTNode *catch_body = node->right;
         ASTNode *finally_body = node->extra;
-        const char *err_var_name = node->id; /* nombre var del catch (puede ser NULL si solo finally) */
+        const char *err_var_name = node->id;
 
         interpret_ast(try_body);
         if (throw_flag && catch_body) {
-            /* limpiar flag, exponer variable */
             char *msg = throw_message ? strdup(throw_message) : strdup("");
             throw_flag = 0;
             if (throw_message) { free(throw_message); throw_message = NULL; }
@@ -2395,12 +5418,29 @@ void interpret_ast(ASTNode *node) {
             int saved_throw = throw_flag;
             char *saved_msg = throw_message; throw_message = NULL; throw_flag = 0;
             interpret_ast(finally_body);
-            /* re-raise pending throw if finally didn't throw a new one */
             if (!throw_flag && saved_throw) { throw_flag = 1; throw_message = saved_msg; }
             else if (saved_msg) free(saved_msg);
         }
+        break;
     }
-    else if (strcmp(node->type, "WHILE") == 0) {
+
+    case NK_WHILE:
+        /* Fase 4: try compiled-bytecode loop. Only succeeds if the entire
+         * body is numeric (assigns/ifs/whiles). Falls back to AST walker
+         * for any non-trivial body. */
+        {
+            static int bc4_init = 0;
+            static int bc4_enabled = 1;
+            if (!bc4_init) {
+                const char *e = getenv("TYPEEASY_NO_BC");
+                if (e && e[0] && e[0] != '0') bc4_enabled = 0;
+                bc4_init = 1;
+            }
+            if (bc4_enabled) {
+                BCInfo *info = bc_get_or_compile_stmt(node);
+                if (info) { bc_exec(info->code); break; }
+            }
+        }
         while (1) {
             if (throw_flag || return_flag) break;
             int cond = evaluate_condition(node->left);
@@ -2410,11 +5450,12 @@ void interpret_ast(ASTNode *node) {
             if (continue_flag) { continue_flag = 0; continue; }
             if (throw_flag || return_flag) break;
         }
-    }
-    else if (strcmp(node->type, "BREAK") == 0)    { break_flag = 1; }
-    else if (strcmp(node->type, "CONTINUE") == 0) { continue_flag = 1; }
-    else if (strcmp(node->type, "PLOT") == 0) {
-    /* plot generation debug log removed */
+        break;
+
+    case NK_BREAK:    break_flag = 1; break;
+    case NK_CONTINUE: continue_flag = 1; break;
+
+    case NK_PLOT: {
         double values[100];
         int count = 0;
         ASTNode *child = node->left;
@@ -2423,8 +5464,14 @@ void interpret_ast(ASTNode *node) {
             child = child->next;
         }
         generate_plot(values, count);
+        break;
     }
+
+    default:
+        /* unknown / unhandled node type: silent no-op */
+        break;
     }
+}
 
 
 double evaluate_number(ASTNode *node) {
@@ -2499,6 +5546,23 @@ static void interpret_for(ASTNode *node) {
         printf("Error: invalid control variable in FOR.\n");
         return;
     }
+
+    /* Ola 1 (perf): try compiled-bytecode FOR. Fall back to AST walker if any
+     * statement in the body is not bytecode-compilable. */
+    {
+        static int bc_for_init = 0;
+        static int bc_for_enabled = 1;
+        if (!bc_for_init) {
+            const char *e = getenv("TYPEEASY_NO_BC");
+            if (e && e[0] && e[0] != '0') bc_for_enabled = 0;
+            bc_for_init = 1;
+        }
+        if (bc_for_enabled) {
+            BCInfo *info = bc_get_or_compile_stmt(node);
+            if (info) { bc_exec(info->code); return; }
+        }
+    }
+
     int incremento = node->right->right->left->value;
     int limite = node->right->value;
     ASTNode *body = node->right->right->right;
@@ -2538,7 +5602,196 @@ static void interpret_predict_node(ASTNode *node) {
     execute_predict(node->left, node->right);
 }
 
+/* ==========================================================================
+ * Ola 13 — Stdlib aditiva: builtins free-standing.
+ *   Devuelven valor v\u00eda __ret__ (igual que los m\u00e9todos existentes).
+ *   Hooked al inicio de interpret_call_func.  No modifican Variable.value
+ *   ni el AST de listas/maps existentes; son puramente aditivos.
+ * ========================================================================*/
+static int te_builtin_dispatch(ASTNode *node) {
+    if (!node || !node->id) return 0;
+    const char *fn = node->id;
+    ASTNode *a0 = node->left;
+    ASTNode *a1 = a0 ? a0->right : NULL;
+
+    /* ---- len(x): string | list | map ---- */
+    if (strcmp(fn, "len") == 0) {
+        int n = 0;
+        if (a0) {
+            if (a0->type && strcmp(a0->type, "STRING") == 0) {
+                n = (int)strlen(a0->str_value ? a0->str_value : "");
+            } else if (a0->type && (strcmp(a0->type,"IDENTIFIER")==0 || strcmp(a0->type,"ID")==0)) {
+                Variable *v = find_variable(a0->id);
+                if (v) {
+                    if (v->vtype == VAL_STRING) n = (int)strlen(v->value.string_value ? v->value.string_value : "");
+                    else if (v->type && (strcmp(v->type,"LIST")==0 || strcmp(v->type,"MAP")==0)) {
+                        ASTNode *root = (ASTNode*)(intptr_t)v->value.object_value;
+                        if (root) {
+                            ASTNode *cur = root->left;
+                            if (strcmp(v->type,"LIST")==0) { while (cur) { n++; cur = cur->next; } }
+                            else { while (cur) { n++; cur = cur->right; } }
+                        }
+                    } else if (v->vtype == VAL_INT) n = v->value.int_value;
+                }
+            } else {
+                /* fallback: number length is just its int value semantics */
+                n = (int)evaluate_expression(a0);
+            }
+        }
+        ASTNode *r = create_ast_leaf_number("INT", n, NULL, NULL);
+        add_or_update_variable("__ret__", r);
+        return 1;
+    }
+
+    /* ---- range(n) / range(start, end) / range(start, end, step) ---- */
+    if (strcmp(fn, "range") == 0) {
+        int start = 0, end = 0, step = 1;
+        if (a0 && !a1) { end = (int)evaluate_expression(a0); }
+        else if (a0 && a1) {
+            start = (int)evaluate_expression(a0);
+            end   = (int)evaluate_expression(a1);
+            if (a1->right) step = (int)evaluate_expression(a1->right);
+        }
+        if (step == 0) step = 1;
+        ASTNode *list = create_list_node(NULL);
+        ASTNode *tail = NULL;
+        for (int i = start; (step > 0 ? i < end : i > end); i += step) {
+            ASTNode *item = (ASTNode*)calloc(1, sizeof(ASTNode));
+            item->type = strdup("NUMBER");
+            item->value = i;
+            item->next = NULL;
+            if (!list->left) list->left = item;
+            else tail->next = item;
+            tail = item;
+        }
+        add_or_update_variable("__ret__", list);
+        return 1;
+    }
+
+    /* ---- read_file(path) -> string  /  write_file(path, content) -> int ---- */
+    if (strcmp(fn, "read_file") == 0) {
+        char *path = a0 ? get_node_string(a0) : NULL;
+        char *out = NULL;
+        if (path) {
+            FILE *fp = fopen(path, "rb");
+            if (fp) {
+                fseek(fp, 0, SEEK_END);
+                long sz = ftell(fp);
+                fseek(fp, 0, SEEK_SET);
+                if (sz < 0) sz = 0;
+                out = (char*)malloc((size_t)sz + 1);
+                if (out) {
+                    size_t r = fread(out, 1, (size_t)sz, fp);
+                    out[r] = 0;
+                }
+                fclose(fp);
+            }
+            free(path);
+        }
+        ASTNode *r = create_ast_leaf("STRING", 0, out ? out : "", NULL);
+        if (out) free(out);
+        add_or_update_variable("__ret__", r);
+        return 1;
+    }
+    if (strcmp(fn, "write_file") == 0) {
+        char *path = a0 ? get_node_string(a0) : NULL;
+        char *content = a1 ? get_node_string(a1) : NULL;
+        int ok = 0;
+        if (path && content) {
+            FILE *fp = fopen(path, "wb");
+            if (fp) {
+                size_t L = strlen(content);
+                ok = (fwrite(content, 1, L, fp) == L) ? 1 : 0;
+                fclose(fp);
+            }
+        }
+        if (path) free(path);
+        if (content) free(content);
+        ASTNode *r = create_ast_leaf_number("INT", ok, NULL, NULL);
+        add_or_update_variable("__ret__", r);
+        return 1;
+    }
+    if (strcmp(fn, "file_exists") == 0) {
+        char *path = a0 ? get_node_string(a0) : NULL;
+        int ok = 0;
+        if (path) { FILE *fp = fopen(path, "rb"); if (fp) { ok = 1; fclose(fp); } free(path); }
+        add_or_update_variable("__ret__", create_ast_leaf_number("INT", ok, NULL, NULL));
+        return 1;
+    }
+
+    /* ---- type conversions: to_int, to_str, to_float ---- */
+    if (strcmp(fn, "to_int") == 0) {
+        int v = 0;
+        if (a0) {
+            if (a0->type && strcmp(a0->type,"STRING")==0) v = atoi(a0->str_value ? a0->str_value : "0");
+            else if (a0->type && (strcmp(a0->type,"IDENTIFIER")==0 || strcmp(a0->type,"ID")==0)) {
+                Variable *vv = find_variable(a0->id);
+                if (vv) {
+                    if (vv->vtype == VAL_STRING) v = atoi(vv->value.string_value ? vv->value.string_value : "0");
+                    else if (vv->vtype == VAL_FLOAT) v = (int)vv->value.float_value;
+                    else v = vv->value.int_value;
+                }
+            } else v = (int)evaluate_expression(a0);
+        }
+        add_or_update_variable("__ret__", create_ast_leaf_number("INT", v, NULL, NULL));
+        return 1;
+    }
+    if (strcmp(fn, "to_float") == 0) {
+        double v = 0;
+        if (a0) {
+            if (a0->type && strcmp(a0->type,"STRING")==0) v = atof(a0->str_value ? a0->str_value : "0");
+            else if (a0->type && (strcmp(a0->type,"IDENTIFIER")==0 || strcmp(a0->type,"ID")==0)) {
+                Variable *vv = find_variable(a0->id);
+                if (vv) {
+                    if (vv->vtype == VAL_STRING) v = atof(vv->value.string_value ? vv->value.string_value : "0");
+                    else if (vv->vtype == VAL_FLOAT) v = vv->value.float_value;
+                    else v = (double)vv->value.int_value;
+                }
+            } else v = evaluate_expression(a0);
+        }
+        char buf[64]; snprintf(buf, 64, "%f", v);
+        add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+        return 1;
+    }
+    if (strcmp(fn, "to_str") == 0) {
+        char *s = a0 ? get_node_string(a0) : strdup("");
+        ASTNode *r = create_ast_leaf("STRING", 0, s ? s : "", NULL);
+        if (s) free(s);
+        add_or_update_variable("__ret__", r);
+        return 1;
+    }
+
+    /* ---- print_err(msg) -> writes to stderr (returns 0) ---- */
+    if (strcmp(fn, "print_err") == 0) {
+        char *s = a0 ? get_node_string(a0) : strdup("");
+        fprintf(stderr, "%s\n", s ? s : "");
+        if (s) free(s);
+        add_or_update_variable("__ret__", create_ast_leaf_number("INT", 0, NULL, NULL));
+        return 1;
+    }
+
+    /* ---- abs(x), min(a,b), max(a,b): top-level convenience ---- */
+    if (strcmp(fn, "abs") == 0) {
+        double v = a0 ? evaluate_expression(a0) : 0;
+        if (v == (int)v) add_or_update_variable("__ret__", create_ast_leaf_number("INT", abs((int)v), NULL, NULL));
+        else { char buf[64]; snprintf(buf, 64, "%f", v < 0 ? -v : v); add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL)); }
+        return 1;
+    }
+    if (strcmp(fn, "min") == 0 || strcmp(fn, "max") == 0) {
+        double va = a0 ? evaluate_expression(a0) : 0;
+        double vb = a1 ? evaluate_expression(a1) : va;
+        double r = (strcmp(fn,"min")==0) ? (va < vb ? va : vb) : (va > vb ? va : vb);
+        if (r == (int)r) add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)r, NULL, NULL));
+        else { char buf[64]; snprintf(buf, 64, "%f", r); add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL)); }
+        return 1;
+    }
+
+    return 0;
+}
+
 static void interpret_call_func(ASTNode *node) {
+    if (te_builtin_dispatch(node)) return;
+
     if (strcmp(node->id, "json") == 0) {
         native_json(node->left);
         return;
@@ -2611,6 +5864,25 @@ static void interpret_call_method(ASTNode *node) {
         else if (strcmp(m, "pow") == 0)   res = pow(a, b);
         else if (strcmp(m, "min") == 0)   res = (a < b) ? a : b;
         else if (strcmp(m, "max") == 0)   res = (a > b) ? a : b;
+        else if (strcmp(m, "log") == 0)   res = log(a);
+        else if (strcmp(m, "log2") == 0)  res = log2(a);
+        else if (strcmp(m, "log10") == 0) res = log10(a);
+        else if (strcmp(m, "exp") == 0)   res = exp(a);
+        else if (strcmp(m, "sin") == 0)   res = sin(a);
+        else if (strcmp(m, "cos") == 0)   res = cos(a);
+        else if (strcmp(m, "tan") == 0)   res = tan(a);
+        else if (strcmp(m, "asin") == 0)  res = asin(a);
+        else if (strcmp(m, "acos") == 0)  res = acos(a);
+        else if (strcmp(m, "atan") == 0)  res = atan(a);
+        else if (strcmp(m, "atan2") == 0) res = atan2(a, b);
+        else if (strcmp(m, "sinh") == 0)  res = sinh(a);
+        else if (strcmp(m, "cosh") == 0)  res = cosh(a);
+        else if (strcmp(m, "tanh") == 0)  res = tanh(a);
+        else if (strcmp(m, "sign") == 0)  res = (a > 0) - (a < 0);
+        else if (strcmp(m, "trunc") == 0) res = (double)(long long)a;
+        else if (strcmp(m, "mod") == 0)   res = fmod(a, b);
+        else if (strcmp(m, "PI") == 0)    res = 3.14159265358979323846;
+        else if (strcmp(m, "E") == 0)     res = 2.71828182845904523536;
         else { printf("Error: Math.%s not supported.\n", m); return; }
         ASTNode *r;
         if (res == (int)res) r = create_ast_leaf_number("INT", (int)res, NULL, NULL);
@@ -2677,7 +5949,7 @@ static void interpret_call_method(ASTNode *node) {
                 const char *next = strstr(cur, sep);
                 size_t partlen = next ? (size_t)(next - cur) : strlen(cur);
                 char *part = strndup(cur, partlen);
-                ASTNode *item = (ASTNode*)malloc(sizeof(ASTNode));
+                ASTNode *item = (ASTNode*)calloc(1, sizeof(ASTNode));
                 memset(item, 0, sizeof(ASTNode));
                 item->type = strdup("STRING");
                 item->str_value = part;
@@ -2693,6 +5965,129 @@ static void interpret_call_method(ASTNode *node) {
         if (strcmp(m, "length") == 0) {
             ASTNode *r = create_ast_leaf_number("INT", (int)strlen(s), NULL, NULL);
             add_or_update_variable("__ret__", r);
+            return;
+        }
+        /* ---- Ola 13: replace, substr, find, starts_with, ends_with, repeat, parse_int, parse_float ---- */
+        if (strcmp(m, "replace") == 0) {
+            ASTNode *arg = node->right;
+            ASTNode *arg2 = arg ? arg->right : NULL;
+            char *t1 = arg  ? get_node_string(arg)  : NULL;
+            char *t2 = arg2 ? get_node_string(arg2) : NULL;
+            const char *needle = t1 ? t1 : "";
+            const char *repl   = t2 ? t2 : "";
+            size_t nl = strlen(needle), rl = strlen(repl);
+            if (nl == 0) {
+                ASTNode *r = create_ast_leaf("STRING", 0, s, NULL);
+                add_or_update_variable("__ret__", r);
+            } else {
+                /* count occurrences */
+                int count = 0; const char *p = s;
+                while ((p = strstr(p, needle)) != NULL) { count++; p += nl; }
+                size_t out_len = strlen(s) + count * (rl > nl ? rl - nl : 0);
+                char *out = (char*)malloc(out_len + 1);
+                char *o = out; const char *cur = s;
+                while (1) {
+                    const char *next = strstr(cur, needle);
+                    if (!next) { strcpy(o, cur); break; }
+                    size_t pre = (size_t)(next - cur);
+                    memcpy(o, cur, pre); o += pre;
+                    memcpy(o, repl, rl); o += rl;
+                    cur = next + nl;
+                }
+                ASTNode *r = create_ast_leaf("STRING", 0, out, NULL);
+                free(out);
+                add_or_update_variable("__ret__", r);
+            }
+            if (t1) free(t1);
+            if (t2) free(t2);
+            return;
+        }
+        if (strcmp(m, "substr") == 0) {
+            ASTNode *arg = node->right;
+            ASTNode *arg2 = arg ? arg->right : NULL;
+            int start = arg  ? (int)evaluate_expression(arg)  : 0;
+            int slen = (int)strlen(s);
+            int len  = arg2 ? (int)evaluate_expression(arg2) : slen - start;
+            if (start < 0) start = 0;
+            if (start > slen) start = slen;
+            if (len < 0) len = 0;
+            if (start + len > slen) len = slen - start;
+            char *out = strndup(s + start, len);
+            ASTNode *r = create_ast_leaf("STRING", 0, out, NULL);
+            free(out);
+            add_or_update_variable("__ret__", r);
+            return;
+        }
+        if (strcmp(m, "find") == 0) {
+            ASTNode *arg = node->right;
+            char *t = arg ? get_node_string(arg) : NULL;
+            int idx = -1;
+            if (t) {
+                const char *p = strstr(s, t);
+                if (p) idx = (int)(p - s);
+                free(t);
+            }
+            add_or_update_variable("__ret__", create_ast_leaf_number("INT", idx, NULL, NULL));
+            return;
+        }
+        if (strcmp(m, "starts_with") == 0) {
+            ASTNode *arg = node->right;
+            char *t = arg ? get_node_string(arg) : NULL;
+            int ok = 0;
+            if (t) { ok = (strncmp(s, t, strlen(t)) == 0) ? 1 : 0; free(t); }
+            add_or_update_variable("__ret__", create_ast_leaf_number("INT", ok, NULL, NULL));
+            return;
+        }
+        if (strcmp(m, "ends_with") == 0) {
+            ASTNode *arg = node->right;
+            char *t = arg ? get_node_string(arg) : NULL;
+            int ok = 0;
+            if (t) {
+                size_t sl = strlen(s), tl = strlen(t);
+                ok = (tl <= sl && memcmp(s + sl - tl, t, tl) == 0) ? 1 : 0;
+                free(t);
+            }
+            add_or_update_variable("__ret__", create_ast_leaf_number("INT", ok, NULL, NULL));
+            return;
+        }
+        if (strcmp(m, "repeat") == 0) {
+            ASTNode *arg = node->right;
+            int n = arg ? (int)evaluate_expression(arg) : 0;
+            if (n < 0) n = 0;
+            size_t sl = strlen(s);
+            char *out = (char*)malloc(sl * (size_t)n + 1);
+            for (int i = 0; i < n; i++) memcpy(out + i * sl, s, sl);
+            out[sl * n] = 0;
+            ASTNode *r = create_ast_leaf("STRING", 0, out, NULL);
+            free(out);
+            add_or_update_variable("__ret__", r);
+            return;
+        }
+        if (strcmp(m, "parse_int") == 0) {
+            add_or_update_variable("__ret__", create_ast_leaf_number("INT", atoi(s), NULL, NULL));
+            return;
+        }
+        if (strcmp(m, "parse_float") == 0) {
+            char buf[64]; snprintf(buf, 64, "%f", atof(s));
+            add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+            return;
+        }
+        if (strcmp(m, "char_at") == 0) {
+            ASTNode *arg = node->right;
+            int idx = arg ? (int)evaluate_expression(arg) : 0;
+            int sl = (int)strlen(s);
+            char buf[2] = {0, 0};
+            if (idx >= 0 && idx < sl) buf[0] = s[idx];
+            ASTNode *r = create_ast_leaf("STRING", 0, buf, NULL);
+            add_or_update_variable("__ret__", r);
+            return;
+        }
+        if (strcmp(m, "char_code") == 0) {
+            ASTNode *arg = node->right;
+            int idx = arg ? (int)evaluate_expression(arg) : 0;
+            int sl = (int)strlen(s);
+            int c = (idx >= 0 && idx < sl) ? (unsigned char)s[idx] : 0;
+            add_or_update_variable("__ret__", create_ast_leaf_number("INT", c, NULL, NULL));
             return;
         }
     }
@@ -2713,7 +6108,7 @@ static void interpret_call_method(ASTNode *node) {
         if (list && node->id && strcmp(node->id, "push") == 0) {
             ASTNode *arg = node->right;
             if (!arg) return;
-            ASTNode *new_item = (ASTNode*)malloc(sizeof(ASTNode));
+            ASTNode *new_item = (ASTNode*)calloc(1, sizeof(ASTNode));
             memset(new_item, 0, sizeof(ASTNode));
             if (arg->type && strcmp(arg->type, "STRING") == 0) {
                 new_item->type = strdup("STRING");
@@ -2740,14 +6135,135 @@ static void interpret_call_method(ASTNode *node) {
             ASTNode *cur = list->left;
             if (!cur) list->left = new_item;
             else { while (cur->next) cur = cur->next; cur->next = new_item; }
+            te_invalidate_list_cache(list);  /* Ola 14 */
             return;
         }
         if (list && node->id && strcmp(node->id, "pop") == 0) {
             ASTNode *cur = list->left;
             if (!cur) return;
-            if (!cur->next) { list->left = NULL; return; }
+            if (!cur->next) { list->left = NULL; te_invalidate_list_cache(list); return; }
             while (cur->next && cur->next->next) cur = cur->next;
             cur->next = NULL;
+            te_invalidate_list_cache(list);  /* Ola 14 */
+            return;
+        }
+        /* ---- Ola 13: list extras: size/length, contains, reverse, sort, get ---- */
+        if (list && node->id && (strcmp(node->id, "size") == 0 || strcmp(node->id, "length") == 0)) {
+            int n = list_length(list);  /* uses cache */
+            add_or_update_variable("__ret__", create_ast_leaf_number("INT", n, NULL, NULL));
+            return;
+        }
+        if (list && node->id && strcmp(node->id, "contains") == 0) {
+            ASTNode *arg = node->right;
+            int found = 0;
+            if (arg) {
+                ASTNode *probe = build_item_from_value(arg);
+                /* compare as string if string, else as number */
+                ASTNode *cur = list->left;
+                while (cur) {
+                    if (cur->type && probe->type && strcmp(cur->type, probe->type) == 0) {
+                        if (strcmp(cur->type, "STRING") == 0) {
+                            if (cur->str_value && probe->str_value && strcmp(cur->str_value, probe->str_value) == 0) { found = 1; break; }
+                        } else {
+                            if (cur->value == probe->value) { found = 1; break; }
+                        }
+                    } else {
+                        /* loose compare via numeric */
+                        double cv = cur->str_value ? atof(cur->str_value) : (double)cur->value;
+                        double pv = probe->str_value ? atof(probe->str_value) : (double)probe->value;
+                        if (cv == pv) { found = 1; break; }
+                    }
+                    cur = cur->next;
+                }
+                if (probe->type) free(probe->type);
+                if (probe->str_value) free(probe->str_value);
+                free(probe);
+            }
+            add_or_update_variable("__ret__", create_ast_leaf_number("INT", found, NULL, NULL));
+            return;
+        }
+        if (list && node->id && strcmp(node->id, "reverse") == 0) {
+            ASTNode *prev = NULL, *cur = list->left, *nxt = NULL;
+            while (cur) { nxt = cur->next; cur->next = prev; prev = cur; cur = nxt; }
+            list->left = prev;
+            te_invalidate_list_cache(list);  /* Ola 14 */
+            return;
+        }
+        if (list && node->id && strcmp(node->id, "sort") == 0) {
+            /* Simple insertion sort on the linked list (numeric or string). OK for small lists.
+             * For benchmark needs, replace with merge sort later. */
+            int is_str = 0;
+            if (list->left && list->left->type && strcmp(list->left->type, "STRING") == 0) is_str = 1;
+            ASTNode *sorted = NULL;
+            ASTNode *cur = list->left;
+            while (cur) {
+                ASTNode *nxt = cur->next;
+                cur->next = NULL;
+                if (!sorted) { sorted = cur; }
+                else {
+                    int cmp_into_head;
+                    if (is_str) cmp_into_head = strcmp(cur->str_value ? cur->str_value : "", sorted->str_value ? sorted->str_value : "") < 0;
+                    else {
+                        double cv = cur->str_value ? atof(cur->str_value) : (double)cur->value;
+                        double sv = sorted->str_value ? atof(sorted->str_value) : (double)sorted->value;
+                        cmp_into_head = (cv < sv);
+                    }
+                    if (cmp_into_head) { cur->next = sorted; sorted = cur; }
+                    else {
+                        ASTNode *p = sorted;
+                        while (p->next) {
+                            int cmp_next;
+                            if (is_str) cmp_next = strcmp(cur->str_value ? cur->str_value : "", p->next->str_value ? p->next->str_value : "") < 0;
+                            else {
+                                double cv = cur->str_value ? atof(cur->str_value) : (double)cur->value;
+                                double sv = p->next->str_value ? atof(p->next->str_value) : (double)p->next->value;
+                                cmp_next = (cv < sv);
+                            }
+                            if (cmp_next) break;
+                            p = p->next;
+                        }
+                        cur->next = p->next;
+                        p->next = cur;
+                    }
+                }
+                cur = nxt;
+            }
+            list->left = sorted;
+            te_invalidate_list_cache(list);  /* Ola 14 */
+            return;
+        }
+        if (list && node->id && strcmp(node->id, "get") == 0) {
+            ASTNode *arg = node->right;
+            int idx = arg ? (int)evaluate_expression(arg) : 0;
+            ASTNode *cur = list_get_item(list, idx);  /* Ola 14: O(1) */
+            if (cur) { add_or_update_variable("__ret__", build_item_from_value(cur)); }
+            else { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); }
+            return;
+        }
+        if (list && node->id && strcmp(node->id, "join") == 0) {
+            ASTNode *arg = node->right;
+            char *sep = arg ? get_node_string(arg) : strdup("");
+            size_t cap = 64; size_t len = 0;
+            char *out = (char*)malloc(cap);
+            out[0] = 0;
+            ASTNode *cur = list->left;
+            int first = 1;
+            while (cur) {
+                char *piece = get_node_string(cur);
+                size_t pl = piece ? strlen(piece) : 0;
+                size_t sl = sep ? strlen(sep) : 0;
+                size_t need = len + pl + (first ? 0 : sl) + 1;
+                if (need > cap) { while (cap < need) cap *= 2; out = (char*)realloc(out, cap); }
+                if (!first && sep) { memcpy(out + len, sep, sl); len += sl; }
+                if (piece) { memcpy(out + len, piece, pl); len += pl; free(piece); }
+                out[len] = 0;
+                first = 0;
+                cur = cur->next;
+            }
+            ASTNode *r = create_ast_leaf("STRING", 0, out, NULL);
+            free(out);
+            if (sep) free(sep);
+            add_or_update_variable("__ret__", r);
             return;
         }
     }
@@ -2759,7 +6275,7 @@ static void interpret_call_method(ASTNode *node) {
             ASTNode *list = create_list_node(NULL);
             ASTNode *cur = map->left;
             while (cur) {
-                ASTNode *item = (ASTNode*)malloc(sizeof(ASTNode));
+                ASTNode *item = (ASTNode*)calloc(1, sizeof(ASTNode));
                 memset(item, 0, sizeof(ASTNode));
                 item->type = strdup("STRING");
                 item->str_value = strdup(cur->id ? cur->id : "");
@@ -2792,7 +6308,7 @@ static void interpret_call_method(ASTNode *node) {
                 if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
             }
             int found = (key && map_find_pair(map, key)) ? 1 : 0;
-            ASTNode *r = (ASTNode*)malloc(sizeof(ASTNode));
+            ASTNode *r = (ASTNode*)calloc(1, sizeof(ASTNode));
             memset(r, 0, sizeof(ASTNode));
             r->type = strdup("NUMBER"); r->value = found;
             add_or_update_variable("__ret__", r);
@@ -2811,10 +6327,22 @@ static void interpret_call_method(ASTNode *node) {
             while (cur) {
                 if (cur->id && strcmp(cur->id, key) == 0) {
                     if (prev) prev->right = cur->right; else map->left = cur->right;
+                    te_invalidate_map_cache(map);  /* Ola 14 */
                     return;
                 }
                 prev = cur; cur = cur->right;
             }
+            return;
+        }
+        /* ---- Ola 13: map size/length, clear ---- */
+        if (map && node->id && (strcmp(node->id, "size") == 0 || strcmp(node->id, "length") == 0)) {
+            int n = map_length(map);  /* uses cache */
+            add_or_update_variable("__ret__", create_ast_leaf_number("INT", n, NULL, NULL));
+            return;
+        }
+        if (map && node->id && strcmp(node->id, "clear") == 0) {
+            map->left = NULL;  /* leak: deliberate; lifetime tied to AST. */
+            te_invalidate_map_cache(map);  /* Ola 14 */
             return;
         }
     }
@@ -2900,15 +6428,114 @@ static void interpret_call_method(ASTNode *node) {
         }
     }
 
-    ASTNode *thisNode = malloc(sizeof(ASTNode));
-    thisNode->type = strdup("OBJECT");
-    thisNode->id = strdup("this");
-    thisNode->left = thisNode->right = NULL;
-    thisNode->extra = (struct ASTNode*)obj; /* store ObjectNode pointer in 'extra' for consistency */
-    thisNode->value = 0;
-    add_or_update_variable("this", thisNode);
+    /* ====================================================================
+     * Ola 3 Fase D (perf): FAST `this` setup.
+     * Cached: persistent Variable* "this" + single reusable wrapper.
+     * Hot path patches both pointers (no calloc/strdup/add_or_update).
+     * Switch: TYPEEASY_NO_FASTTHIS=1.
+     * ==================================================================== */
+    static int      ft_init        = 0;
+    static int      ft_enabled     = 1;
+    static Variable *g_this_var    = NULL;
+    static ASTNode  *g_this_wrap   = NULL;
+    if (!ft_init) {
+        const char *e = getenv("TYPEEASY_NO_FASTTHIS");
+        if (e && e[0] && e[0] != '0') ft_enabled = 0;
+        ft_init = 1;
+    }
+    if (ft_enabled && g_this_var && g_this_wrap) {
+        /* Hot path: just patch the cached objects. */
+        g_this_var->vtype              = VAL_OBJECT;
+        g_this_var->value.object_value = obj;
+        g_this_wrap->extra             = (struct ASTNode*)obj;
+    } else {
+        /* Cold path: original setup, plus capture the cache. */
+        ASTNode *thisNode = calloc(1, sizeof(ASTNode));
+        thisNode->type  = strdup("OBJECT");
+        thisNode->id    = strdup("this");
+        thisNode->left  = thisNode->right = NULL;
+        thisNode->extra = (struct ASTNode*)obj;
+        thisNode->value = 0;
+        add_or_update_variable("this", thisNode);
+        if (ft_enabled) {
+            g_this_var  = find_variable_for("this");
+            g_this_wrap = thisNode;
+        }
+    }
     ParameterNode *p = m->params;
     ASTNode      *arg = node->right; // CORRECCIÓN
+    /* ====================================================================
+     * Ola 3 Fase B: FAST CALL PATH
+     * --------------------------------------------------------------------
+     * If every declared parameter is numeric (int/float) we bypass
+     * create_ast_leaf_number + add_or_update_variable per arg and write
+     * directly into the param's cached Variable*. Switch TYPEEASY_NO_FASTCALL=1
+     * to disable.
+     * ==================================================================== */
+    {
+        static int fc_init = 0;
+        static int fc_enabled = 1;
+        if (!fc_init) {
+            const char *e = getenv("TYPEEASY_NO_FASTCALL");
+            if (e && e[0] && e[0] != '0') fc_enabled = 0;
+            fc_init = 1;
+        }
+        if (fc_enabled && p) {
+            int all_numeric = 1;
+            ParameterNode *pp = p;
+            while (pp) {
+                if (!pp->type
+                    || (strcmp(pp->type, "int")    != 0
+                     && strcmp(pp->type, "float")  != 0
+                     && strcmp(pp->type, "INT")    != 0
+                     && strcmp(pp->type, "FLOAT")  != 0)) {
+                    all_numeric = 0; break;
+                }
+                pp = pp->next;
+            }
+            if (all_numeric) {
+                ParameterNode *cur_p = p;
+                ASTNode       *cur_a = arg;
+                while (cur_p && cur_a) {
+                    Variable *fv = (Variable*)cur_p->cached_var;
+                    if (!fv) {
+                        fv = find_variable_for(cur_p->name);
+                        if (!fv) {
+                            /* Create a fresh slot only once. */
+                            if (var_count < MAX_VARS) {
+                                vars[var_count].id       = strdup(cur_p->name);
+                                vars[var_count].type     = strdup(cur_p->type);
+                                vars[var_count].is_const = 0;
+                                vars[var_count].vtype    = (strcmp(cur_p->type, "float")==0
+                                                           || strcmp(cur_p->type, "FLOAT")==0)
+                                                           ? VAL_FLOAT : VAL_INT;
+                                if (vars[var_count].vtype == VAL_FLOAT)
+                                    vars[var_count].value.float_value = 0.0;
+                                else
+                                    vars[var_count].value.int_value = 0;
+                                fv = &vars[var_count];
+                                var_count++;
+                            }
+                        }
+                        cur_p->cached_var = fv;
+                    }
+                    if (fv) {
+                        double d = evaluate_expression(cur_a);
+                        if (fv->vtype == VAL_FLOAT) {
+                            fv->value.float_value = d;
+                        } else {
+                            fv->vtype = VAL_INT;
+                            fv->value.int_value  = (int)d;
+                        }
+                    }
+                    cur_p = cur_p->next;
+                    cur_a = cur_a->right;
+                }
+                /* args bound directly; skip slow path */
+                goto fastcall_args_done;
+            }
+        }
+    }
     while (p && arg) {
         ASTNode *vn = NULL;
         if (arg->type && strcmp(arg->type, "STRING") == 0) {
@@ -2931,6 +6558,61 @@ static void interpret_call_method(ASTNode *node) {
         add_or_update_variable(p->name, vn);
         p   = p->next;
         arg = arg->right;
+    }
+fastcall_args_done:
+
+    /* ====================================================================
+     * Ola 4 (perf): METHOD-BODY BYTECODE.
+     * If the body is a single `return <numeric expr>;` and the declared
+     * return type is int/float, run a precompiled bytecode program that
+     * reads parameters and `this.attr` directly from cached pointers.
+     * Skips both interpret_ast(m->body) and the FAST RETURN evaluator.
+     * Switch: TYPEEASY_NO_BCMETHOD=1 disables.
+     * ==================================================================== */
+    {
+        static int bcm_init = 0;
+        static int bcm_enabled = 1;
+        if (!bcm_init) {
+            const char *e = getenv("TYPEEASY_NO_BCMETHOD");
+            if (e && e[0] && e[0] != '0') bcm_enabled = 0;
+            bcm_init = 1;
+        }
+        if (bcm_enabled
+            && m->return_type
+            && (strcmp(m->return_type, "int")   == 0
+             || strcmp(m->return_type, "float") == 0)
+            && obj && obj->class) {
+            BCInfo *bi = bc_get_or_compile_method(m, obj->class);
+            if (bi) {
+                ObjectNode *saved_this = g_bc_this;
+                g_bc_this = obj;
+                double rv = bc_exec(bi->code);
+                g_bc_this = saved_this;
+                /* Write __ret_var directly (mirrors FAST RETURN path). */
+                if (__ret_var_active) {
+                    if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
+                        free(__ret_var.value.string_value);
+                        __ret_var.value.string_value = NULL;
+                    }
+                    if (__ret_var.id)   { free(__ret_var.id);   __ret_var.id   = NULL; }
+                    if (__ret_var.type) { free(__ret_var.type); __ret_var.type = NULL; }
+                }
+                __ret_var.id = strdup("__ret__");
+                if (strcmp(m->return_type, "float") == 0) {
+                    __ret_var.type  = strdup("FLOAT");
+                    __ret_var.vtype = VAL_FLOAT;
+                    __ret_var.value.float_value = rv;
+                } else {
+                    __ret_var.type  = strdup("INT");
+                    __ret_var.vtype = VAL_INT;
+                    __ret_var.value.int_value = (int)rv;
+                }
+                __ret_var_active = 1;
+                return_flag = 0;
+                return_node = NULL;
+                return;
+            }
+        }
     }
 
     interpret_ast(m->body);
@@ -2970,6 +6652,58 @@ static void interpret_call_method(ASTNode *node) {
     }
    // printf("[DIAG] interpret_call_method: después de interpretar cuerpo de método, return_flag=%d\n", return_flag);
         if (return_flag && return_node) {
+            /* ============================================================
+             * Ola 3 Fase B: FAST RETURN path.
+             * If the declared return type is numeric and the return
+             * expression is NOT a special form (STRING/CALL/ACCESS_ATTR/
+             * pure identifier), write the result straight into __ret_var
+             * without allocating an intermediate ASTNode literal.
+             * Switch: TYPEEASY_NO_FASTRET=1
+             * ============================================================ */
+            {
+                static int fr_init = 0;
+                static int fr_enabled = 1;
+                if (!fr_init) {
+                    const char *e = getenv("TYPEEASY_NO_FASTRET");
+                    if (e && e[0] && e[0] != '0') fr_enabled = 0;
+                    fr_init = 1;
+                }
+                if (fr_enabled
+                    && m->return_type
+                    && (strcmp(m->return_type, "int")   == 0
+                     || strcmp(m->return_type, "float") == 0)
+                    && return_node->type
+                    && strcmp(return_node->type, "STRING")      != 0
+                    && strcmp(return_node->type, "CALL_FUNC")   != 0
+                    && strcmp(return_node->type, "CALL_METHOD") != 0
+                    && strcmp(return_node->type, "RETURN_JSON") != 0
+                    && strcmp(return_node->type, "RETURN_XML")  != 0) {
+                    double rv = evaluate_expression(return_node);
+                    /* Reset and write __ret_var directly. */
+                    if (__ret_var_active) {
+                        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
+                            free(__ret_var.value.string_value);
+                            __ret_var.value.string_value = NULL;
+                        }
+                        if (__ret_var.id) { free(__ret_var.id); __ret_var.id = NULL; }
+                        if (__ret_var.type) { free(__ret_var.type); __ret_var.type = NULL; }
+                    }
+                    __ret_var.id   = strdup("__ret__");
+                    if (strcmp(m->return_type, "float") == 0) {
+                        __ret_var.type  = strdup("FLOAT");
+                        __ret_var.vtype = VAL_FLOAT;
+                        __ret_var.value.float_value = rv;
+                    } else {
+                        __ret_var.type  = strdup("INT");
+                        __ret_var.vtype = VAL_INT;
+                        __ret_var.value.int_value = (int)rv;
+                    }
+                    __ret_var_active = 1;
+                    return_flag = 0;
+                    return_node = NULL;
+                    return;
+                }
+            }
             // If the return is a call to json, print the JSON output
             if (return_node && return_node->type && strcmp(return_node->type, "CALL_FUNC") == 0 && return_node->id && strcmp(return_node->id, "json") == 0) {
             //    printf("[DIAG] Entrando a native_json desde interpret_call_method\n");
@@ -3371,7 +7105,7 @@ static void interpret_call_method_alone(ASTNode *node) {
         }
         return;
     }
-    ASTNode *thisNode = malloc(sizeof(ASTNode));
+    ASTNode *thisNode = calloc(1, sizeof(ASTNode));
     thisNode->type = strdup("OBJECT");
     thisNode->id = strdup("this");
     thisNode->left = thisNode->right = NULL;
@@ -3516,7 +7250,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
     }
     fclose(fp);
     /* debug print removed */
-    ASTNode* listNode = malloc(sizeof(ASTNode));
+    ASTNode* listNode = calloc(1, sizeof(ASTNode));
     listNode->type = strdup("LIST");
     listNode->left = first;
     listNode->right = NULL;
@@ -3654,7 +7388,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 return_node = NULL;
                 return;
             } else {
-                value_to_assign_node = malloc(sizeof(ASTNode));
+                value_to_assign_node = calloc(1, sizeof(ASTNode));
                 value_to_assign_node->type = strdup(evaluated_value_var->type);
                 value_to_assign_node->extra = (struct ASTNode*)evaluated_value_var->value.object_value;
                 value_to_assign_node->id = evaluated_value_var->id ? strdup(evaluated_value_var->id) : NULL;
@@ -3754,7 +7488,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
 }
 
 ASTNode *create_list_node(ASTNode *items) {
-    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     node->type = strdup("LIST");
     node->left = items; // 'left' apunta al primer item
     node->right = NULL;
@@ -3813,7 +7547,7 @@ ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
             return NULL;
         }
         item->next = NULL;
-        ASTNode *listNode = malloc(sizeof(ASTNode));
+        ASTNode *listNode = calloc(1, sizeof(ASTNode));
         listNode->type = strdup("LIST");
         listNode->left = item;
         listNode->right = NULL;
@@ -3846,7 +7580,7 @@ ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
 
 
 ASTNode* create_list_function_call_node(ASTNode* list, const char* funcName, ASTNode* lambda) {
-    ASTNode *node = malloc(sizeof(ASTNode));
+    ASTNode *node = calloc(1, sizeof(ASTNode));
     node->type = strdup("FILTER_CALL");
     node->id = strdup(funcName);
     node->left = list;
@@ -3857,7 +7591,7 @@ ASTNode* create_list_function_call_node(ASTNode* list, const char* funcName, AST
 
 
 ASTNode* create_lambda_node(const char* argName, ASTNode* body) {
-    ASTNode *node = malloc(sizeof(ASTNode));
+    ASTNode *node = calloc(1, sizeof(ASTNode));
     node->type = strdup("LAMBDA");
     node->id = strdup(argName);
     node->left = body;
@@ -3944,6 +7678,35 @@ static void interpret_assign(ASTNode *node) {
         return; 
     }
 
+    /* Fase 2 (perf): fast-path for "x = numeric_expr" with cached Variable*.
+     * Hot in for/while loops. Skips strdup/find_variable_for/temp_node alloc. */
+    {
+        Variable *fv = (Variable *)var_node->cached_var;
+        if (!fv) {
+            fv = find_variable_for(var_node->id);
+            if (fv) var_node->cached_var = fv;
+        }
+        if (fv && !fv->is_const && (fv->vtype == VAL_INT || fv->vtype == VAL_FLOAT)) {
+            NodeKind vk = nk_of(value_node);
+            if (vk == NK_ADD || vk == NK_SUB || vk == NK_MUL || vk == NK_DIV
+                || vk == NK_NUMBER || vk == NK_INT || vk == NK_FLOAT
+                || vk == NK_IDENTIFIER) {
+                /* Avoid string-typed ADD (concat) which needs the slow path. */
+                if (!(vk == NK_ADD && is_string_type(value_node))) {
+                    double r = evaluate_expression(value_node);
+                    if (r == (double)(int)r) {
+                        fv->vtype = VAL_INT;
+                        fv->value.int_value = (int)r;
+                    } else {
+                        fv->vtype = VAL_FLOAT;
+                        fv->value.float_value = r;
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
     // --- INICIO DE LA CORRECCIÓN ---
 
     // ¿Es una llamada a función (como concat)?
@@ -3951,7 +7714,45 @@ static void interpret_assign(ASTNode *node) {
         
         // 1. Ejecutar la función (ej. concat)
         interpret_ast(value_node);
-        
+
+        /* ============================================================
+         * Ola 3 Fase B: FAST READ of __ret_var when target var is
+         * already int/float. Skip create_ast_leaf*+add_or_update+free.
+         * Switch: TYPEEASY_NO_FASTRET=1 (shared with FASTRET path)
+         * ============================================================ */
+        {
+            static int fr_init = 0;
+            static int fr_enabled = 1;
+            if (!fr_init) {
+                const char *e = getenv("TYPEEASY_NO_FASTRET");
+                if (e && e[0] && e[0] != '0') fr_enabled = 0;
+                fr_init = 1;
+            }
+            if (fr_enabled && __ret_var_active
+                && (__ret_var.vtype == VAL_INT || __ret_var.vtype == VAL_FLOAT)) {
+                Variable *fv = (Variable *)var_node->cached_var;
+                if (!fv) {
+                    fv = find_variable_for(var_node->id);
+                    if (fv) var_node->cached_var = fv;
+                }
+                if (fv && !fv->is_const
+                    && (fv->vtype == VAL_INT || fv->vtype == VAL_FLOAT)) {
+                    if (__ret_var.vtype == VAL_FLOAT) {
+                        fv->vtype = VAL_FLOAT;
+                        fv->value.float_value = __ret_var.value.float_value;
+                    } else {
+                        fv->vtype = VAL_INT;
+                        fv->value.int_value = __ret_var.value.int_value;
+                    }
+                    /* Reset return state but DO NOT free __ret_var fields:
+                     * leaving them avoids strdup/free churn. */
+                    return_flag = 0;
+                    return_node = NULL;
+                    return;
+                }
+            }
+        }
+
         // 2. Obtener el resultado de __ret_var
         Variable *ret_val = find_variable("__ret__");
         if (!ret_val) {
@@ -3968,7 +7769,7 @@ static void interpret_assign(ASTNode *node) {
         } else if (ret_val->vtype == VAL_FLOAT) {
             temp_node = create_ast_leaf("FLOAT", 0, double_to_string(ret_val->value.float_value), NULL);
         } else if (ret_val->vtype == VAL_OBJECT) {
-            temp_node = malloc(sizeof(ASTNode));
+            temp_node = calloc(1, sizeof(ASTNode));
             memset(temp_node, 0, sizeof(ASTNode));
             temp_node->type = strdup(ret_val->type);
             temp_node->extra = (struct ASTNode*)ret_val->value.object_value;
@@ -4420,6 +8221,25 @@ static void interpret_println(ASTNode *node) {
         printf("\n");
         return;
     }
+    /* Ola 13: println(builtin(...)) — dispatch via __ret__ */
+    if (arg->type && strcmp(arg->type, "CALL_FUNC") == 0) {
+        interpret_call_func(arg);
+        Variable *r = find_variable("__ret__");
+        if (!r) { printf("\n"); return; }
+        if (r->vtype == VAL_STRING) { printf("%s\n", r->value.string_value ? r->value.string_value : ""); append_to_stdout(r->value.string_value ? r->value.string_value : ""); append_to_stdout("\n"); return; }
+        if (r->vtype == VAL_INT)    { printf("%d\n", r->value.int_value); char tmp[32]; snprintf(tmp,32,"%d\n",r->value.int_value); append_to_stdout(tmp); return; }
+        if (r->vtype == VAL_FLOAT)  { printf("%f\n", r->value.float_value); return; }
+        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
+            ASTNode *listNode = (ASTNode*)(intptr_t)r->value.object_value;
+            if (listNode) { ASTNode *cur = listNode->left; printf("["); int first = 1;
+                while (cur) { if (!first) printf(","); first = 0;
+                    if (cur->type && strcmp(cur->type,"STRING")==0) printf("%s", cur->str_value ? cur->str_value : "");
+                    else if (cur->type && strcmp(cur->type,"FLOAT")==0) printf("%f", cur->str_value ? atof(cur->str_value) : 0.0);
+                    else printf("%d", cur->value); cur = cur->next; } printf("]\n"); return; }
+        }
+        printf("\n");
+        return;
+    }
     if (arg->type && strcmp(arg->type, "NULL_COALESCE") == 0) {
         ASTNode *l = arg->left;
         int is_null = 0;
@@ -4621,8 +8441,10 @@ void set_attribute_value(ObjectNode *obj, const char *attr_name, int value) {
 void free_ast(ASTNode *node) {
     if (!node) return;
     free(node->type);
-    if (node->str_value) free(node->str_value);
-    if (node->id) free(node->id);
+    /* Ola 3 Fase A: never free interned strings (immortal in global table). */
+    if (node->str_value && !node->str_interned) free(node->str_value);
+    /* Ola 15: same for id slot. */
+    if (node->id && !node->id_interned) free(node->id);
     free_ast(node->left);
     free_ast(node->right);
     free_ast(node->next);
@@ -4743,7 +8565,7 @@ void print_object_as_xml_by_id(const char* id) {
 }
 
 void print_object_as_json_by_id(const char* id) {
-    ASTNode *arg = (ASTNode*)malloc(sizeof(ASTNode));
+    ASTNode *arg = (ASTNode*)calloc(1, sizeof(ASTNode));
     if(!arg) return;
     arg->type = strdup("IDENTIFIER");
     arg->id = strdup(id);

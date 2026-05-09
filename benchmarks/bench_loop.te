@@ -1,0 +1,8 @@
+// Benchmark 1: bucle aritmético puro (200k iter)
+var total = 0;
+var i = 0;
+while (i < 200000) {
+    total = total + i;
+    i = i + 1;
+}
+println(total);

@@ -1,0 +1,14 @@
+class Calc {
+  base : int;
+  __constructor(_b : int) { this.base = _b; }
+  add(x : int) : int { return this.base + x; }
+}
+
+let c = new Calc(7);
+int total = 0;
+int r = 0;
+for(i = 0; 100000000; 1) {
+  r = c.add(3);
+  total = total + r;
+}
+println(total);

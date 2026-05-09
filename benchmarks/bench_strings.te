@@ -1,0 +1,8 @@
+// Benchmark 4: strings (concat 5k veces + .length())
+var s = "x";
+var i = 0;
+while (i < 5000) {
+    s = s + "a";
+    i = i + 1;
+}
+println(s.length());

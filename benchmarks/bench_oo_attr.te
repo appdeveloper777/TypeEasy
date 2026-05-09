@@ -1,0 +1,24 @@
+/* Bench OO: 100M lecturas de obj.x dentro de un loop FOR
+ * Mide el efecto del inline cache para acceso a atributos.
+ * Sin inline cache: cada iteración hace strcmp por cada atributo.
+ * Con inline cache: validación de class* + acceso directo al índice.
+ */
+class Counter {
+    x : int;
+    y : int;
+    z : int;
+    __constructor(_x : int, _y : int, _z : int) {
+        this.x = _x;
+        this.y = _y;
+        this.z = _z;
+    }
+}
+
+let c = new Counter(7, 0, 0);
+int total = 0;
+
+for(i = 0; 100000000; 1) {
+    total = total + c.x;
+}
+
+println(total);

@@ -1,0 +1,46 @@
+println("== map correctness ==");
+let m = {};
+m["one"] = 1;
+m["two"] = 2;
+m["three"] = 3;
+m["four"] = 4;
+m["five"] = 5;
+println(m.size());
+println(m["one"]);
+println(m["five"]);
+println(m.has("two"));
+println(m.has("zzz"));
+m.remove("two");
+println(m.size());
+println(m.has("two"));
+
+println("== list correctness ==");
+let xs = [10, 20, 30, 40, 50];
+println(xs.size());
+println(xs.get(0));
+println(xs.get(4));
+xs.push(60);
+println(xs.size());
+println(xs.get(5));
+xs.reverse();
+println(xs.get(0));
+xs.sort();
+println(xs.get(0));
+println(xs.get(5));
+
+println("== map lookup perf ==");
+int total = 0;
+int i = 0;
+for(i = 0; 1000000; 1) {
+  total = total + m["one"];
+}
+println(total);
+
+println("== list index perf ==");
+int s2 = 0;
+for(i = 0; 1000000; 1) {
+  s2 = s2 + xs.get(3);
+}
+println(s2);
+
+println("done");

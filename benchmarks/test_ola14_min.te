@@ -1,0 +1,7 @@
+let xs = [10, 20, 30, 40, 50];
+int s = 0;
+int i = 0;
+for(i = 0; 100000; 1) {
+  s = s + xs.get(3);
+}
+println(s);

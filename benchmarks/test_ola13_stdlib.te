@@ -1,0 +1,48 @@
+// Ola 13 stdlib smoke test
+println("== conversions ==");
+let x = to_int("42");
+println(x);
+let y = to_str(123);
+println(y);
+let z = to_float("3.14");
+println(z);
+
+println("== math ==");
+println(Math.log(2.71828));
+println(Math.sin(0));
+println(Math.cos(0));
+println(Math.exp(1));
+println(Math.PI(0));
+
+println("== string methods ==");
+let s = "hola mundo";
+println(s.replace("mundo", "TypeEasy"));
+println(s.substr(5, 5));
+println(s.find("mundo"));
+println(s.starts_with("hola"));
+println(s.ends_with("mundo"));
+println("ab".repeat(3));
+println("42".parse_int());
+println(s.char_at(0));
+println(s.char_code(0));
+
+println("== list methods ==");
+let xs = [3, 1, 4, 1, 5, 9, 2, 6];
+println(xs.size());
+println(xs.contains(4));
+println(xs.contains(99));
+xs.sort();
+println(xs.get(0));
+println(xs.get(7));
+println(xs.join(","));
+xs.reverse();
+println(xs.get(0));
+
+println("== range ==");
+let r = range(5);
+println(r.size());
+println(r.join("|"));
+
+println("== len ==");
+println(len("hello"));
+println(len(xs));

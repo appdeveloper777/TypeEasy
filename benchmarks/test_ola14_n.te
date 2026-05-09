@@ -1,0 +1,9 @@
+let xs = [10, 20, 30, 40, 50];
+int s = 0;
+s = s + xs[3];
+println(s);
+int i = 0;
+for(i = 0; 1000000; 1) {
+  s = s + xs[3];
+}
+println(s);

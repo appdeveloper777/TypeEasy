@@ -1,0 +1,3 @@
+// Programa mínimo: solo arrancar y salir.
+// Sirve para medir el overhead fijo del runtime + Docker.
+println(0);
