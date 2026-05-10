@@ -284,4 +284,9 @@ ASTNode *create_match_node(ASTNode* condition, ASTNode* case_list);
 ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
 char* get_node_string(ASTNode *node);
 
+/* Inicializar el pool global de threads CSV.
+ * Llamar desde main() antes de ejecutar el script TE.
+ * n = número total de workers deseados (incluyendo el main thread). */
+void te_csv_pool_init(int n);
+
 #endif

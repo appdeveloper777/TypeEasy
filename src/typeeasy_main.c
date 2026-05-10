@@ -127,7 +127,18 @@ int main(int argc, char *argv[]) {
         output_path = emit_wasm_mode ? "out.wasm" : "out.wat";
     }
 
-    // 1. Parsear el archivo
+    // 1. Pre-inicializar pool de threads CSV ANTES de parsear el script.
+    //    El parser ejecuta `from "file.csv"` directamente durante yyparse(),
+    //    así que el pool debe estar listo antes de abrir el archivo.
+    {
+        const char *te_threads = getenv("TE_CSV_THREADS");
+        int nw = te_threads ? atoi(te_threads) : 12;
+        if (nw < 2) nw = 2;
+        if (nw > 16) nw = 16;
+        te_csv_pool_init(nw);
+    }
+
+    // 2. Parsear el archivo
     FILE *file = fopen(script_path, "r");
     if (!file) {
         perror("Error al abrir el archivo");
@@ -214,6 +225,7 @@ int main(int argc, char *argv[]) {
 
     // 4. Inicializar Runtime
     runtime_save_initial_var_count();
+
 
     // 4b. Iniciar el debugger ANTES de ejecutar el script (bloquea hasta que
     // el adapter se conecte y envíe `start`).

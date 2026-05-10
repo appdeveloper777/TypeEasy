@@ -1,0 +1,12 @@
+class Producto {
+  nombre : string;
+  precio : int;
+
+  __constructor(nombre : string, precio : int) {
+    this.nombre = nombre;
+    this.precio = precio;
+  }
+}
+
+let productos = from "productos_1000000.csv", Producto;
+println(productos.length);

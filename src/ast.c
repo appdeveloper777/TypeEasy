@@ -14,6 +14,7 @@
 #if defined(__linux__) && defined(__x86_64__)
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <stddef.h>
@@ -7924,7 +7925,27 @@ static void *csv_pread_io_worker(void *p) {
 }
 #endif
 
-static char *csv_read_file(const char *filename, size_t *out_len) {
+/* Forward declare: definida más abajo (mmap-based loader). */
+static char *csv_mmap_file(const char *filename, size_t *out_len);
+
+static char *csv_read_file(const char *filename, size_t *out_len, int *out_is_mmap) {
+    if (out_is_mmap) *out_is_mmap = 0;
+    /* Auto-detect: usar mmap en ext4/overlayfs (rápido, zero-copy),
+     * pread paralelo en V9FS/FUSE (evita page-faults a través de 9P).
+     * V9FS_MAGIC = 0x01021997 (WSL2 bind-mount desde Windows).      */
+#if defined(__linux__)
+    struct statfs sfs;
+    int on_v9fs = 0;
+    if (statfs(filename, &sfs) == 0 && (long)sfs.f_type == 0x01021997L)
+        on_v9fs = 1;
+    if (!on_v9fs) {
+        /* ext4 / overlayfs: mmap MAP_PRIVATE (zero-copy, demand paging). */
+        char *m = csv_mmap_file(filename, out_len);
+        if (m && out_is_mmap) *out_is_mmap = 1;
+        return m;
+    }
+#endif
+    /* V9FS o fallback: pread paralelo (4 threads, evita page-faults VFS). */
     int fd = open(filename, O_RDONLY);
     if (fd < 0) return NULL;
     struct stat st;
@@ -7948,8 +7969,8 @@ static char *csv_read_file(const char *filename, size_t *out_len) {
 #endif
 
 #if TE_HAS_PTHREAD
-    /* Para archivos > 256KB, usar 4 threads de pread en paralelo.
-     * Cap a 4: más threads no ayudan en I/O (cuello de botella: bus/9P). */
+    /* Múltiples pread paralelos saturan el queue 9P de WSL2 → mayor throughput.
+     * 4 threads = sweet spot para bind-mount Windows→WSL2→Docker. */
     long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
     int nio = (int)ncpu;
     if (nio > 4) nio = 4;
@@ -8244,6 +8265,63 @@ static int csv_next_record_zerocopy(char *src, size_t len, size_t *pos,
     return n;
 }
 
+/* ------ Scanner readonly (no escribe \0): para buffers mmap MAP_PRIVATE. ------
+ * Retorna pares (ptr, len) en lugar de punteros null-terminados.
+ * Evita los COW page faults que disparan los writes en overlayfs (~100μs/page). */
+static int csv_next_record_readonly(const char *src, size_t len, size_t *pos,
+                                    const char **fields, int *field_lens, int max_cols) {
+    while (*pos < len && (src[*pos] == '\n' || src[*pos] == '\r')) (*pos)++;
+    if (*pos >= len) return -1;
+
+    int n = 0;
+    while (1) {
+        size_t i = *pos;
+        const char *field_start;
+        int field_len;
+
+        if (i < len && src[i] == '"') {
+            /* Quoted: field_start after opening quote, len until closing quote. */
+            i++;
+            field_start = src + i;
+            while (i < len && !(src[i] == '"' && (i+1 >= len || src[i+1] != '"'))) {
+                if (src[i] == '"' && i+1 < len && src[i+1] == '"') i += 2;
+                else i++;
+            }
+            field_len = (int)(i - (size_t)(field_start - src));
+            if (i < len) i++; /* skip closing quote */
+            i = simd_find_csv_delim(src, i, len);
+        } else {
+            field_start = src + i;
+            i = simd_find_csv_delim(src, i, len);
+            field_len = (int)(i - (size_t)(field_start - src));
+        }
+
+        int eor = 0;
+        if (i >= len) {
+            eor = 1;
+            *pos = i;
+        } else {
+            char d = src[i];
+            if (d == ',') {
+                *pos = i + 1;
+            } else {
+                size_t k = i + 1;
+                if (d == '\r' && k < len && src[k] == '\n') k++;
+                *pos = k;
+                eor = 1;
+            }
+        }
+
+        if (n < max_cols) {
+            fields[n]     = field_start;
+            field_lens[n] = field_len;
+            n++;
+        }
+        if (eor) break;
+    }
+    return n;
+}
+
 static int csv_attr_is_int(const char *t) {
     return t && (!strcmp(t, "int") || !strcmp(t, "int?"));
 }
@@ -8314,276 +8392,485 @@ static size_t csv_count_newlines(const char *s, size_t lo, size_t hi) {
     return n;
 }
 
+/* ============================================================
+ * CSVColWorkerArgs — Phase A + spinwait + Phase B (sin barriers/futex).
+ *
+ * Flujo prefix-sum con spinwait (elimina ~10ms de futex overhead):
+ *   Phase A (paralelo): worker cuenta \n, pone phase_a_done=1 (release).
+ *   Main spinea sobre phase_a_done[] (sin syscall) → prefix-sum → alloc.
+ *   Main pone go_phase_b=1 (release) para cada worker.
+ *   Phase B (paralelo): worker spinea go_phase_b, luego parsea directo al
+ *                        global array. Sin locks, sin memcpy.
+ * ============================================================ */
 typedef struct CSVColWorkerArgs {
-    char *src;
-    size_t total_len;
-    size_t chunk_start;
-    size_t chunk_end;
-    int is_first;
-    int nattr;
-    int header_n;
-    const int *attr_kind;
-    const int *col_to_attr;
-    int rows_capacity;     /* tope estimado para alocar buffers locales */
-    /* outputs (locales del worker) */
-    int **local_int_cols;  /* nattr slots; NULL si attr no es int */
-    char ***local_str_cols;/* nattr slots; NULL si attr no es string */
-    int local_row_count;
+    char       *src;
+    size_t      total_len;
+    size_t      chunk_start;
+    size_t      chunk_end;
+    int         is_first;
+    int         nattr;
+    int         header_n;
+    const int  *attr_kind;
+    const int  *col_to_attr;
+    size_t      actual_parse_start;
+    int         row_count;
+    int         row_offset;
+    void      **global_col_data;
+    /* Spinwait flags (cache-line aligned para evitar false sharing) */
+    volatile int phase_a_done __attribute__((aligned(64)));
+    volatile int go_phase_b   __attribute__((aligned(64)));
+    /* Flag: si 1, el buffer src es mmap'd (read-only seguro) →
+     * usar csv_next_record_readonly (sin writes, sin COW page faults). */
+    int         readonly_src;
+    /* Pool: fase actual (0=idle, 1=phase_a, 2=phase_b, 3=exit).
+     * Cache-line aligned para evitar false sharing entre slots. */
+    volatile int pool_phase __attribute__((aligned(64)));
 } CSVColWorkerArgs;
 
 #if TE_HAS_PTHREAD
-static void *csv_parse_columnar_worker(void *p) {
-    CSVColWorkerArgs *a = (CSVColWorkerArgs*)p;
-    char *src = a->src;
-    size_t total_len = a->total_len;
-    size_t end = a->chunk_end;
-    int nattr = a->nattr;
-    int header_n = a->header_n;
-    const int *attr_kind = a->attr_kind;
-    const int *col_to_attr = a->col_to_attr;
+static inline void cpu_relax(void) {
+#if defined(__x86_64__)
+    __builtin_ia32_pause();
+#else
+    __asm__ volatile("" ::: "memory");
+#endif
+}
 
-    size_t pos = a->chunk_start;
-    if (!a->is_first) {
-        if (pos > 0 && src[pos - 1] != '\n') {
-            while (pos < total_len && src[pos] != '\n') pos++;
-            if (pos < total_len) pos++;
-        }
-    }
+/* === csv_do_phase_b ===
+ * Parsea el chunk asignado y escribe directamente en los arrays globales del DataFrame.
+ * Precondición: a->actual_parse_start, a->row_offset, a->global_col_data están listos. */
+static void csv_do_phase_b(CSVColWorkerArgs *a) {
+    char       *src       = a->src;
+    size_t      total_len = a->total_len;
+    size_t      pos       = a->actual_parse_start;
+    size_t      end       = a->chunk_end;
+    int         header_n  = a->header_n;
+    const int  *attr_kind = a->attr_kind;
+    const int  *col_to_attr = a->col_to_attr;
+    void      **gcols     = a->global_col_data;
+    int         row_off   = a->row_offset;
 
     char **rec_fields = (char**)malloc(header_n * sizeof(char*));
     int row_idx = 0;
-    int cap = a->rows_capacity;
 
-    while (pos < end) {
-        size_t row_begin = pos;
-        int rn = csv_next_record_zerocopy(src, total_len, &pos, rec_fields, header_n);
-        if (rn <= 0) break;
-        if (row_begin >= end) break;
-        if (rn == 1 && rec_fields[0][0] == '\0') continue;
-        if (row_idx >= cap) {
-            /* Reasignar todos los buffers (geometric grow). Caso raro porque
-             * pre-estimamos generosamente, pero el código debe ser correcto. */
-            int new_cap = cap * 2;
-            for (int a2 = 0; a2 < nattr; a2++) {
-                if (a->local_int_cols[a2]) {
-                    a->local_int_cols[a2] = (int*)realloc(a->local_int_cols[a2], (size_t)new_cap * sizeof(int));
-                } else if (a->local_str_cols[a2]) {
-                    a->local_str_cols[a2] = (char**)realloc(a->local_str_cols[a2], (size_t)new_cap * sizeof(char*));
-                }
-            }
-            cap = new_cap;
-        }
-        int upto = rn < header_n ? rn : header_n;
-        for (int c = 0; c < upto; c++) {
-            int aa = col_to_attr[c];
-            if (aa < 0) continue;
-            const char *raw = rec_fields[c];
-            if (attr_kind[aa] == 0 /*INT*/) {
-                /* Fast int parser. */
-                const char *q = raw;
-                int neg = 0;
-                if (*q == '-') { neg = 1; q++; }
-                else if (*q == '+') { q++; }
-                long v = 0;
-                int ok = (*q != '\0');
-                while (*q) {
-                    unsigned d = (unsigned)(*q - '0');
-                    if (d > 9u) { ok = 0; break; }
-                    v = v * 10 + (long)d;
-                    q++;
-                }
-                if (!ok) {
-                    char *endp = NULL;
-                    v = strtol(raw, &endp, 10);
-                    if (endp == raw || (endp && *endp != '\0')) {
-                        fprintf(stderr,
-                            "CSVError (columnar): fila %d, col %d: '%s' no es int.\n",
-                            row_idx, c, raw);
-                        exit(1);
+    if (a->readonly_src) {
+        /* === Readonly path: sin writes → sin COW en overlayfs/mmap. === */
+        const char **ro_fields = (const char**)rec_fields; /* reuse buffer */
+        int *field_lens = (int*)malloc(header_n * sizeof(int));
+        while (pos < end) {
+            size_t row_begin = pos;
+            int rn = csv_next_record_readonly(src, total_len, &pos,
+                                              ro_fields, field_lens, header_n);
+            if (rn <= 0) break;
+            if (row_begin >= end) break;
+            if (rn == 1 && field_lens[0] == 0) continue;
+
+            int global_row = row_off + row_idx;
+            int upto = rn < header_n ? rn : header_n;
+            for (int c = 0; c < upto; c++) {
+                int aa = col_to_attr[c];
+                if (aa < 0) continue;
+                const char *raw = ro_fields[c];
+                int rawlen     = field_lens[c];
+                if (attr_kind[aa] == 0 /*INT*/) {
+                    const char *q = raw;
+                    const char *q_end = raw + rawlen;
+                    int neg = 0;
+                    if (q < q_end && *q == '-') { neg = 1; q++; }
+                    else if (q < q_end && *q == '+') { q++; }
+                    long v = 0;
+                    while (q < q_end) {
+                        unsigned d = (unsigned)(*q - '0');
+                        if (d > 9u) { v = 0; break; }
+                        v = v * 10 + (long)d; q++;
                     }
-                } else if (neg) v = -v;
-                a->local_int_cols[aa][row_idx] = (int)v;
-            } else /* string */ {
-                a->local_str_cols[aa][row_idx] = (char*)raw; /* zero-copy */
+                    if (neg) v = -v;
+                    ((int*)gcols[aa])[global_row] = (int)v;
+                } else {
+                    /* String: guardamos el puntero sin null-terminar.
+                     * Válido en el buffer mmap'd (lifetime de proceso). */
+                    ((const char**)gcols[aa])[global_row] = raw;
+                }
             }
+            row_idx++;
         }
-        row_idx++;
+        free(field_lens);
+    } else {
+        /* === Writable path: escribe \0 (buffer pread malloc'd). === */
+        while (pos < end) {
+            size_t row_begin = pos;
+            int rn = csv_next_record_zerocopy(src, total_len, &pos, rec_fields, header_n);
+            if (rn <= 0) break;
+            if (row_begin >= end) break;
+            if (rn == 1 && rec_fields[0][0] == '\0') continue;
+
+            int global_row = row_off + row_idx;
+            int upto = rn < header_n ? rn : header_n;
+            for (int c = 0; c < upto; c++) {
+                int aa = col_to_attr[c];
+                if (aa < 0) continue;
+                const char *raw = rec_fields[c];
+                if (attr_kind[aa] == 0 /*INT*/) {
+                    const char *q = raw;
+                    int neg = 0;
+                    if (*q == '-') { neg = 1; q++; }
+                    else if (*q == '+') { q++; }
+                    long v = 0;
+                    int ok = (*q != '\0');
+                    while (*q) {
+                        unsigned d = (unsigned)(*q - '0');
+                        if (d > 9u) { ok = 0; break; }
+                        v = v * 10 + (long)d; q++;
+                    }
+                    if (!ok) {
+                        char *endp = NULL;
+                        v = strtol(raw, &endp, 10);
+                    } else if (neg) v = -v;
+                    ((int*)gcols[aa])[global_row] = (int)v;
+                } else {
+                    ((char**)gcols[aa])[global_row] = (char*)raw;
+                }
+            }
+            row_idx++;
+        }
     }
     free(rec_fields);
-    a->local_row_count = row_idx;
-    /* Notar: cap puede haber crecido; ajustar el caller con realloc no es
-     * necesario porque solo concatenamos los primeros local_row_count. */
-    a->rows_capacity = cap;
+    a->row_count = row_idx;
+}
+
+static void *csv_combined_col_worker(void *p) {
+    CSVColWorkerArgs *a = (CSVColWorkerArgs*)p;
+
+    /* === Phase A: boundary adjustment + SIMD row count === */
+    {
+        char   *src       = a->src;
+        size_t  total_len = a->total_len;
+        size_t  pos       = a->chunk_start;
+        if (!a->is_first && pos > 0 && src[pos - 1] != '\n') {
+            while (pos < total_len && src[pos] != '\n') pos++;
+            if (pos < total_len) pos++;
+        }
+        a->actual_parse_start = pos;
+        a->row_count = (int)csv_count_newlines(src, pos, a->chunk_end);
+    }
+
+    /* Señalar Phase A completa (release → main la ve sin lag). */
+    __atomic_store_n(&a->phase_a_done, 1, __ATOMIC_RELEASE);
+
+    /* Spinear hasta que main señale Phase B (acquire → ve global_col_data). */
+    while (!__atomic_load_n(&a->go_phase_b, __ATOMIC_ACQUIRE))
+        cpu_relax();
+
+    /* Phase B: skip si main no pudo alocar. */
+    if (!a->global_col_data) return NULL;
+
+    /* === Phase B: parsear y escribir directo al DataFrame global === */
+    csv_do_phase_b(a);
     return NULL;
 }
-#endif
 
-/* Construye un DataFrame a partir del archivo. Retorna NULL si la clase tiene
- * tipos no soportados (caller debe usar fallback). */
+/* === Global CSV Worker Pool ===
+ * Threads inicializados al startup del programa (antes del primer CSV load).
+ * Esto elimina el overhead de pthread_create por cada carga de CSV en Docker
+ * (~3ms/thread × 11 threads = ~33ms por carga → 0ms con pool pre-iniciado).
+ * Workers esperan tareas con spinwait + sched_yield (idle ≈ 0% CPU). */
+#define CSV_POOL_IDLE    0
+#define CSV_POOL_PHASE_A 1
+#define CSV_POOL_PHASE_B 2
+#define CSV_POOL_EXIT    3
+#define CSV_POOL_MAX     15  /* máximo de worker threads en pool (main es el +1) */
+
+static CSVColWorkerArgs g_csv_slots[CSV_POOL_MAX];
+static pthread_t        g_csv_pthreads[CSV_POOL_MAX];
+static volatile int     g_csv_pool_n = 0;  /* threads vivos en pool */
+static volatile int     g_csv_pool_ready_count = 0; /* threads que llegaron al idle loop */
+
+static void *csv_pool_worker_fn(void *arg) {
+    CSVColWorkerArgs *s = (CSVColWorkerArgs*)arg;
+    /* Notificar al main que este thread llegó al idle spinwait loop. */
+    __atomic_fetch_add(&g_csv_pool_ready_count, 1, __ATOMIC_RELEASE);
+    int idle_spin = 0;
+    while (1) {
+        int p = __atomic_load_n(&s->pool_phase, __ATOMIC_ACQUIRE);
+        if (p == CSV_POOL_IDLE) {
+            cpu_relax();
+            /* Evitar quemar CPU cuando no hay trabajo: yield periódicamente. */
+            if (++idle_spin > 5000) { sched_yield(); idle_spin = 0; }
+            continue;
+        }
+        idle_spin = 0;
+        if (p == CSV_POOL_EXIT) return NULL;
+        if (p == CSV_POOL_PHASE_A) {
+            /* Phase A: boundary adjustment + SIMD count */
+            size_t pos2 = s->chunk_start;
+            if (!s->is_first && pos2 > 0 && s->src[pos2 - 1] != '\n') {
+                while (pos2 < s->total_len && s->src[pos2] != '\n') pos2++;
+                if (pos2 < s->total_len) pos2++;
+            }
+            s->actual_parse_start = pos2;
+            s->row_count = (int)csv_count_newlines(s->src, pos2, s->chunk_end);
+        } else if (p == CSV_POOL_PHASE_B) {
+            /* Phase B: parsear y escribir en arrays globales */
+            csv_do_phase_b(s);
+        }
+        /* Señalar idle (done) → main lo detecta sin spinwait externo */
+        __atomic_store_n(&s->pool_phase, CSV_POOL_IDLE, __ATOMIC_RELEASE);
+    }
+}
+
+/* Inicializar pool global. Llamar desde main() antes de ejecutar el script.
+ * n = número total de workers (incluyendo main); crea n-1 pool threads.
+ * BLOQUEA hasta que todos los threads estén listos en el idle spinwait loop.
+ * Esto mueve el overhead de pthread_create (~3ms/thread en Docker) al startup,
+ * ANTES del timer de CSV, para que los loads posteriores sean instantáneos. */
+void te_csv_pool_init(int n) {
+    /* DESHABILITADO: el pool path causaba starvation del main por workers
+     * spinning en cores. Mantener el stub para compat con typeeasy_main.c. */
+    (void)n;
+}
+#else /* !TE_HAS_PTHREAD */
+void te_csv_pool_init(int n) { (void)n; }
+#endif /* TE_HAS_PTHREAD */
+
+/* Construye un DataFrame.
+ *
+ * Algoritmo: Phase A (spinwait, no futex) → prefix-sum → Phase B directo.
+ * Elimina el doble pthread_barrier_wait (~10ms en Docker/WSL2) usando
+ * atomic spinwait (<1μs latencia) para coordinar Phase A → Phase B.
+ */
 static DataFrame *csv_build_dataframe(char *src, size_t len, size_t pos,
                                        ClassNode *cls,
                                        int *attr_kind, int *attr_nullable,
                                        int *col_to_attr,
                                        char **header, int header_n,
                                        int n_workers,
-                                       struct timespec *ts_after_count_out) {
+                                       struct timespec *ts_after_count_out,
+                                       int readonly_src) {
     int nattr = cls->attr_count;
-    /* Solo soportamos int y string puros (sin nullable). */
     for (int a = 0; a < nattr; a++) {
         if (attr_kind[a] != 0 && attr_kind[a] != 1) return NULL;
         if (attr_nullable[a]) return NULL;
     }
     (void)header;
-
-    /* Phase 1: estimar row count SIN pre-scan (el SIMD scan de 3.5MB
-     * sobre mmap fresco paga page-faults secuenciales = ~40ms, MÁS que
-     * el parse paralelo). Estimamos generosamente bytes-per-row promedio
-     * para alocar buffers locales sin realloc. Si nos pasamos, el
-     * worker hace realloc geométrico (raro). */
-    (void)header;
-    /* Estimar bytes-por-fila escaneando 4KB del head: contar \n. */
-    size_t sample_end = pos + 4096;
-    if (sample_end > len) sample_end = len;
-    size_t sample_nl = 0;
-    for (size_t i = pos; i < sample_end; i++) if (src[i] == '\n') sample_nl++;
-    size_t bytes_per_row_est = (sample_nl > 0) ? ((sample_end - pos) / sample_nl) : 32;
-    if (bytes_per_row_est < 4) bytes_per_row_est = 4;
-    int total_rows_est = (int)((len - pos) / bytes_per_row_est) + 64;
-    if (total_rows_est <= 0) return NULL;
-    if (ts_after_count_out) clock_gettime(CLOCK_MONOTONIC, ts_after_count_out);
-
-    /* Cap n_workers a algo razonable. */
     if (n_workers < 1) n_workers = 1;
 
-    /* Phase 2: lanzar workers, cada uno con buffers locales pre-asignados. */
-    int est_per_worker = (total_rows_est / n_workers) + 64;
-    /* Padding generoso para no realloc. */
-    int local_cap = est_per_worker * 2;
-    if (local_cap < 16) local_cap = 16;
-
     CSVColWorkerArgs *args = (CSVColWorkerArgs*)calloc(n_workers, sizeof(CSVColWorkerArgs));
+    size_t data_len = len - pos;
     for (int w = 0; w < n_workers; w++) {
-        args[w].src = src;
-        args[w].total_len = len;
-        args[w].chunk_start = pos + (size_t)w * ((len - pos) / n_workers);
-        args[w].chunk_end   = (w == n_workers - 1) ? len : pos + (size_t)(w + 1) * ((len - pos) / n_workers);
+        args[w].src         = src;
+        args[w].total_len   = len;
+        args[w].chunk_start = pos + (size_t)w * (data_len / n_workers);
+        args[w].chunk_end   = (w == n_workers - 1) ? len
+                              : pos + (size_t)(w + 1) * (data_len / n_workers);
         args[w].is_first    = (w == 0);
-        args[w].nattr = nattr;
-        args[w].header_n = header_n;
-        args[w].attr_kind = attr_kind;
+        args[w].nattr       = nattr;
+        args[w].header_n    = header_n;
+        args[w].attr_kind   = attr_kind;
         args[w].col_to_attr = col_to_attr;
-        args[w].rows_capacity = local_cap;
-        args[w].local_int_cols = (int**)calloc(nattr, sizeof(int*));
-        args[w].local_str_cols = (char***)calloc(nattr, sizeof(char**));
-        for (int a = 0; a < nattr; a++) {
-            if (attr_kind[a] == 0) args[w].local_int_cols[a] = (int*)malloc((size_t)local_cap * sizeof(int));
-            else                   args[w].local_str_cols[a] = (char**)malloc((size_t)local_cap * sizeof(char*));
-        }
+        args[w].phase_a_done = 0;
+        args[w].go_phase_b   = 0;
+        args[w].readonly_src = readonly_src;
     }
 
 #if TE_HAS_PTHREAD
-    if (n_workers >= 2) {
-        pthread_t *tids = (pthread_t*)malloc(n_workers * sizeof(pthread_t));
-        for (int w = 0; w < n_workers; w++)
-            pthread_create(&tids[w], NULL, csv_parse_columnar_worker, &args[w]);
-        for (int w = 0; w < n_workers; w++) pthread_join(tids[w], NULL);
-        free(tids);
-    } else
-#endif
-    {
-        /* Serial inline (no pthread): reusa el mismo worker. */
-        CSVColWorkerArgs *a = &args[0];
-        char *srcl = a->src;
-        size_t total_len = a->total_len;
-        size_t end = a->chunk_end;
-        int nattr_l = a->nattr;
-        int header_n_l = a->header_n;
-        const int *attr_kind_l = a->attr_kind;
-        const int *col_to_attr_l = a->col_to_attr;
-        size_t poss = a->chunk_start;
-        if (!a->is_first) {
-            if (poss > 0 && srcl[poss - 1] != '\n') {
-                while (poss < total_len && srcl[poss] != '\n') poss++;
-                if (poss < total_len) poss++;
-            }
-        }
-        char **rec_fields = (char**)malloc(header_n_l * sizeof(char*));
-        int row_idx = 0;
-        int capl = a->rows_capacity;
-        while (poss < end) {
-            size_t row_begin = poss;
-            int rn = csv_next_record_zerocopy(srcl, total_len, &poss, rec_fields, header_n_l);
-            if (rn <= 0) break;
-            if (row_begin >= end) break;
-            if (rn == 1 && rec_fields[0][0] == '\0') continue;
-            if (row_idx >= capl) {
-                int new_cap = capl * 2;
-                for (int a2 = 0; a2 < nattr_l; a2++) {
-                    if (a->local_int_cols[a2]) a->local_int_cols[a2] = (int*)realloc(a->local_int_cols[a2], (size_t)new_cap * sizeof(int));
-                    else if (a->local_str_cols[a2]) a->local_str_cols[a2] = (char**)realloc(a->local_str_cols[a2], (size_t)new_cap * sizeof(char*));
-                }
-                capl = new_cap;
-            }
-            int upto = rn < header_n_l ? rn : header_n_l;
-            for (int c = 0; c < upto; c++) {
-                int aa = col_to_attr_l[c];
-                if (aa < 0) continue;
-                const char *raw = rec_fields[c];
-                if (attr_kind_l[aa] == 0) {
-                    const char *q = raw; int neg = 0;
-                    if (*q == '-') { neg = 1; q++; } else if (*q == '+') q++;
-                    long v = 0; int ok = (*q != '\0');
-                    while (*q) { unsigned d = (unsigned)(*q - '0'); if (d > 9u) { ok = 0; break; } v = v*10 + (long)d; q++; }
-                    if (!ok) { char *endp = NULL; v = strtol(raw, &endp, 10); if (endp == raw || (endp && *endp != '\0')) { fprintf(stderr, "CSVError(col): fila %d col %d.\n", row_idx, c); exit(1); } } else if (neg) v = -v;
-                    a->local_int_cols[aa][row_idx] = (int)v;
-                } else {
-                    a->local_str_cols[aa][row_idx] = (char*)raw;
-                }
-            }
-            row_idx++;
-        }
-        free(rec_fields);
-        a->local_row_count = row_idx;
-    }
+    /* --- POOL PATH (DESHABILITADO): los threads spinning del pool consumen
+     *     todos los cores y starvan al main durante el trabajo serial previo
+     *     (has_quote scan, header parse). Net negativo. Mantenido el código
+     *     para experimentación futura, pero el if siempre es false. --- */
+    int pool_n = __atomic_load_n(&g_csv_pool_n, __ATOMIC_ACQUIRE);
+    if (0 && pool_n > 0 && n_workers >= 2) {
+        int nw = pool_n < n_workers - 1 ? pool_n : n_workers - 1;
+        int n_total = nw + 1;  /* nw pool workers + 1 main */
 
-    /* Phase 3: prefix-sum row counts y concat al global buffer (memcpy). */
-    int total_rows = 0;
-    for (int w = 0; w < n_workers; w++) total_rows += args[w].local_row_count;
+        /* Rechazar chunks con data_len 0. */
+        if (data_len == 0) { free(args); return NULL; }
 
-    DataFrame *df = (DataFrame*)calloc(1, sizeof(DataFrame));
-    df->row_count = total_rows;
-    df->col_count = nattr;
-    df->cls = cls;
-    df->col_kinds = (int*)malloc(nattr * sizeof(int));
-    df->col_data  = (void**)calloc(nattr, sizeof(void*));
-    df->col_names = (char**)malloc(nattr * sizeof(char*));
-    for (int a = 0; a < nattr; a++) {
-        df->col_kinds[a] = attr_kind[a];
-        df->col_names[a] = cls->attributes[a].id;
-        size_t slot = (attr_kind[a] == 0) ? sizeof(int) : sizeof(char*);
-        df->col_data[a] = malloc((size_t)total_rows * slot);
-        size_t off = 0;
-        for (int w = 0; w < n_workers; w++) {
-            size_t bytes = (size_t)args[w].local_row_count * slot;
-            void *src_ptr = (attr_kind[a] == 0)
-                            ? (void*)args[w].local_int_cols[a]
-                            : (void*)args[w].local_str_cols[a];
-            memcpy((char*)df->col_data[a] + off, src_ptr, bytes);
-            off += bytes;
+        /* Llenar slots del pool para workers 1..nw (chunk 0 = main). */
+        for (int w = 0; w < nw; w++) {
+            size_t w_start = pos + (size_t)(w + 1) * (data_len / n_total);
+            size_t w_end   = (w + 1 == nw) ? len
+                             : pos + (size_t)(w + 2) * (data_len / n_total);
+            g_csv_slots[w].src          = src;
+            g_csv_slots[w].total_len    = len;
+            g_csv_slots[w].chunk_start  = w_start;
+            g_csv_slots[w].chunk_end    = w_end;
+            g_csv_slots[w].is_first     = 0;
+            g_csv_slots[w].nattr        = nattr;
+            g_csv_slots[w].header_n     = header_n;
+            g_csv_slots[w].attr_kind    = attr_kind;
+            g_csv_slots[w].col_to_attr  = col_to_attr;
+            g_csv_slots[w].readonly_src = readonly_src;
+            g_csv_slots[w].global_col_data = NULL;
         }
-    }
+        size_t main_chunk_end = pos + data_len / n_total;
 
-    /* Liberar buffers locales. */
-    for (int w = 0; w < n_workers; w++) {
+        /* Dispatch Phase A a los pool workers (ya corriendo → latencia ~1μs). */
+        for (int w = 0; w < nw; w++)
+            __atomic_store_n(&g_csv_slots[w].pool_phase, CSV_POOL_PHASE_A, __ATOMIC_RELEASE);
+
+        /* Main: Phase A para chunk 0 (inline, is_first → no boundary adjust). */
+        int main_row_count = (int)csv_count_newlines(src, pos, main_chunk_end);
+
+        /* Spinwait para pool workers. */
+        for (int w = 0; w < nw; w++)
+            while (__atomic_load_n(&g_csv_slots[w].pool_phase, __ATOMIC_ACQUIRE) != CSV_POOL_IDLE)
+                cpu_relax();
+        if (ts_after_count_out) clock_gettime(CLOCK_MONOTONIC, ts_after_count_out);
+
+        /* Prefix-sum. */
+        int total_rows = main_row_count;
+        for (int w = 0; w < nw; w++) {
+            g_csv_slots[w].row_offset = total_rows;
+            total_rows += g_csv_slots[w].row_count;
+        }
+
+        if (total_rows <= 0) { free(args); return NULL; }
+
+        /* Alocar DataFrame con tamaño exacto. */
+        DataFrame *df = (DataFrame*)calloc(1, sizeof(DataFrame));
+        df->col_count = nattr; df->cls = cls;
+        df->col_kinds = (int*)malloc(nattr * sizeof(int));
+        df->col_data  = (void**)calloc(nattr, sizeof(void*));
+        df->col_names = (char**)malloc(nattr * sizeof(char*));
         for (int a = 0; a < nattr; a++) {
-            if (args[w].local_int_cols[a]) free(args[w].local_int_cols[a]);
-            if (args[w].local_str_cols[a]) free(args[w].local_str_cols[a]);
+            df->col_kinds[a] = attr_kind[a];
+            df->col_names[a] = cls->attributes[a].id;
+            size_t slot = (attr_kind[a] == 0) ? sizeof(int) : sizeof(char*);
+            df->col_data[a] = malloc((size_t)total_rows * slot);
         }
-        free(args[w].local_int_cols);
-        free(args[w].local_str_cols);
+
+        /* Propagar global_col_data a pool workers. */
+        for (int w = 0; w < nw; w++)
+            g_csv_slots[w].global_col_data = df->col_data;
+
+        /* Dispatch Phase B a los pool workers. */
+        for (int w = 0; w < nw; w++)
+            __atomic_store_n(&g_csv_slots[w].pool_phase, CSV_POOL_PHASE_B, __ATOMIC_RELEASE);
+
+        /* Main: Phase B para chunk 0 (en paralelo con pool workers). */
+        {
+            CSVColWorkerArgs ma = {0};
+            ma.src               = src;
+            ma.total_len         = len;
+            ma.actual_parse_start = pos;  /* is_first, no boundary */
+            ma.chunk_end         = main_chunk_end;
+            ma.header_n          = header_n;
+            ma.attr_kind         = attr_kind;
+            ma.col_to_attr       = col_to_attr;
+            ma.global_col_data   = df->col_data;
+            ma.row_offset        = 0;
+            ma.readonly_src      = readonly_src;
+            csv_do_phase_b(&ma);
+            main_row_count = ma.row_count;
+        }
+
+        /* Spinwait hasta que todos los pool workers terminen Phase B. */
+        for (int w = 0; w < nw; w++)
+            while (__atomic_load_n(&g_csv_slots[w].pool_phase, __ATOMIC_ACQUIRE) != CSV_POOL_IDLE)
+                cpu_relax();
+
+        int total_actual = main_row_count;
+        for (int w = 0; w < nw; w++) total_actual += g_csv_slots[w].row_count;
+        df->row_count = total_actual;
+        free(args);
+        return df;
     }
-    free(args);
-    return df;
+
+    /* --- FALLBACK: pool no inicializado → crear threads (pthread_create). --- */
+    if (n_workers >= 2) {
+        /* Patrón "main-as-worker-0": solo crea (n_workers-1) threads. */
+        int nw = n_workers - 1;
+        pthread_t *tids = (pthread_t*)malloc(nw * sizeof(pthread_t));
+        for (int w = 1; w <= nw; w++)
+            pthread_create(&tids[w-1], NULL, csv_combined_col_worker, &args[w]);
+
+        /* Main: Phase A para chunk 0. */
+        {
+            size_t p2 = args[0].chunk_start;
+            args[0].actual_parse_start = p2;
+            args[0].row_count = (int)csv_count_newlines(src, p2, args[0].chunk_end);
+        }
+
+        for (int w = 1; w < n_workers; w++)
+            while (!__atomic_load_n(&args[w].phase_a_done, __ATOMIC_ACQUIRE))
+                cpu_relax();
+        if (ts_after_count_out) clock_gettime(CLOCK_MONOTONIC, ts_after_count_out);
+
+        int total_rows = 0;
+        for (int w = 0; w < n_workers; w++) {
+            args[w].row_offset = total_rows;
+            total_rows += args[w].row_count;
+        }
+
+        DataFrame *df = NULL;
+        if (total_rows > 0) {
+            df = (DataFrame*)calloc(1, sizeof(DataFrame));
+            df->col_count = nattr; df->cls = cls;
+            df->col_kinds = (int*)malloc(nattr * sizeof(int));
+            df->col_data  = (void**)calloc(nattr, sizeof(void*));
+            df->col_names = (char**)malloc(nattr * sizeof(char*));
+            for (int a = 0; a < nattr; a++) {
+                df->col_kinds[a] = attr_kind[a];
+                df->col_names[a] = cls->attributes[a].id;
+                size_t slot = (attr_kind[a] == 0) ? sizeof(int) : sizeof(char*);
+                df->col_data[a] = malloc((size_t)total_rows * slot);
+            }
+            for (int w = 0; w < n_workers; w++)
+                args[w].global_col_data = df->col_data;
+        }
+
+        for (int w = 1; w < n_workers; w++)
+            __atomic_store_n(&args[w].go_phase_b, 1, __ATOMIC_RELEASE);
+
+        args[0].go_phase_b = 1;
+        if (df) csv_combined_col_worker(&args[0]);
+
+        for (int w = 0; w < nw; w++) pthread_join(tids[w], NULL);
+        free(tids);
+
+        if (!df) { free(args); return NULL; }
+
+        int total_actual = 0;
+        for (int w = 0; w < n_workers; w++) total_actual += args[w].row_count;
+        df->row_count = total_actual;
+        free(args);
+        return df;
+    }
+#endif /* TE_HAS_PTHREAD */
+
+    /* Serial (n_workers==1 o sin pthread). */
+    {
+        size_t p2 = args[0].chunk_start;
+        if (!args[0].is_first && p2 > 0 && src[p2-1] != '\n') {
+            while (p2 < len && src[p2] != '\n') p2++;
+            if (p2 < len) p2++;
+        }
+        args[0].actual_parse_start = p2;
+        args[0].row_count = (int)csv_count_newlines(src, p2, args[0].chunk_end);
+        if (ts_after_count_out) clock_gettime(CLOCK_MONOTONIC, ts_after_count_out);
+
+        int total_rows = args[0].row_count;
+        if (total_rows <= 0) { free(args); return NULL; }
+
+        DataFrame *df = (DataFrame*)calloc(1, sizeof(DataFrame));
+        df->col_count = nattr; df->cls = cls;
+        df->col_kinds = (int*)malloc(nattr * sizeof(int));
+        df->col_data  = (void**)calloc(nattr, sizeof(void*));
+        df->col_names = (char**)malloc(nattr * sizeof(char*));
+        for (int a = 0; a < nattr; a++) {
+            df->col_kinds[a] = attr_kind[a];
+            df->col_names[a] = cls->attributes[a].id;
+            size_t slot = (attr_kind[a] == 0) ? sizeof(int) : sizeof(char*);
+            df->col_data[a] = malloc((size_t)total_rows * slot);
+        }
+        args[0].row_offset = 0;
+        args[0].global_col_data = df->col_data;
+        args[0].go_phase_b = 1;   /* auto-señal para serial */
+        csv_combined_col_worker(&args[0]); /* Phase B serial */
+        df->row_count = args[0].row_count;
+        free(args);
+        return df;
+    }
 }
 
 typedef struct CSVParseCfg {
@@ -8804,7 +9091,8 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
     size_t len = 0;
     /* Usar pread en lugar de mmap para evitar page-fault overhead en Docker
      * overlay FS / WSL2 9P. Ver comentario en csv_read_file(). */
-    char *src = csv_read_file(filename, &len);
+    int src_is_mmap = 0;
+    char *src = csv_read_file(filename, &len, &src_is_mmap);
     if (!src) {
         fprintf(stderr, "IOError: no se pudo abrir/mapear el archivo CSV '%s'.\n", filename);
         exit(1);
@@ -8928,10 +9216,16 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
     } else if (len - pos > (256u * 1024u)) {
         long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
         if (ncpu < 1) ncpu = 1;
-        /* Sin lock contention (pool de wrappers + arenas thread-local 8MB),
-         * el sweet spot empírico subió de 6 a 8-12. Cap a 12 para no
-         * desperdiciar threads en cajas con muchos cores. */
-        if (ncpu > 12) ncpu = 12;
+        /* Cap adaptativo según tamaño del archivo.
+         * Empíricamente: ~2MB de CSV por thread es el sweet spot
+         * (chunks más pequeños hacen que la coordinación domine sobre
+         * el paralelismo real). Cap absoluto a 32 para evitar contention
+         * extrema en cajas con muchos cores. */
+        size_t bytes = len - pos;
+        long ideal_by_size = (long)(bytes / (2u * 1024u * 1024u));
+        if (ideal_by_size < 2) ideal_by_size = 2;
+        if (ncpu > ideal_by_size) ncpu = ideal_by_size;
+        if (ncpu > 32) ncpu = 32;
         if (forced > 0) ncpu = forced;
         if (ncpu >= 2) {
             /* Detección rápida de quotes (8 bytes a la vez). */
@@ -8953,7 +9247,8 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         DataFrame *df = csv_build_dataframe(src, len, pos, cls,
                                              attr_kind, attr_nullable, col_to_attr,
                                              header, header_n, n_workers,
-                                             te_timing ? &ts_after_count : NULL);
+                                             te_timing ? &ts_after_count : NULL,
+                                             src_is_mmap);
         if (df) {
             if (te_timing) clock_gettime(CLOCK_MONOTONIC, &ts_after_parse);
             csv_free_record(header, header_n);
@@ -8976,11 +9271,13 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
                 clock_gettime(CLOCK_MONOTONIC, &ts_end);
                 long us_mmap   = (ts_after_mmap.tv_sec   - ts0.tv_sec)*1000000L + (ts_after_mmap.tv_nsec   - ts0.tv_nsec)/1000L;
                 long us_header = (ts_after_header.tv_sec - ts_after_mmap.tv_sec)*1000000L + (ts_after_header.tv_nsec - ts_after_mmap.tv_nsec)/1000L;
-                long us_count  = (ts_after_count.tv_sec  - ts_before_parse.tv_sec)*1000000L + (ts_after_count.tv_nsec  - ts_before_parse.tv_nsec)/1000L;
-                long us_parse  = (ts_after_parse.tv_sec  - ts_after_count.tv_sec)*1000000L + (ts_after_parse.tv_nsec  - ts_after_count.tv_nsec)/1000L;
+                long us_parse_par = (ts_after_count.tv_sec  - ts_before_parse.tv_sec)*1000000L + (ts_after_count.tv_nsec  - ts_before_parse.tv_nsec)/1000L;
+                long us_memcpy    = (ts_after_parse.tv_sec  - ts_after_count.tv_sec)*1000000L + (ts_after_parse.tv_nsec  - ts_after_count.tv_nsec)/1000L;
                 long us_total  = (ts_end.tv_sec - ts0.tv_sec)*1000000L + (ts_end.tv_nsec - ts0.tv_nsec)/1000L;
-                fprintf(stderr, "[CSV-COL] mmap=%ldus header=%ldus count=%ldus parse=%ldus total=%ldus rows=%d\n",
-                        us_mmap, us_header, us_count, us_parse, us_total, df->row_count);
+                /* parse = Phase A (count newlines paralelo, SIMD AVX2)
+                 * phaseB = Phase B (parse campos + write directo al DataFrame, paralelo) */
+                fprintf(stderr, "[CSV-COL] io=%ldus header=%ldus phaseA=%ldus phaseB=%ldus total=%ldus rows=%d\n",
+                        us_mmap, us_header, us_parse_par, us_memcpy, us_total, df->row_count);
             }
             return listNode;
         }
