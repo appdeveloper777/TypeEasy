@@ -440,6 +440,131 @@ static void cmd_get_children(const char *line) {
     send_line(buf);
 }
 
+/* === cmd_eval ===
+ * Evalúa una expresión simple (hover/watch/REPL):
+ *   - "name"             → variable
+ *   - "name.attr"        → atributo de objeto, .length / .size sobre lista/map
+ *   - "name[idx]"        → item de lista por índice (idx literal numérico)
+ * Para algo más complejo, devolvemos un mensaje claro.
+ * Respuesta: {"resp":"eval","value":"...","type":"...","ref":N} */
+static void cmd_eval(const char *line) {
+    char expr[512] = "";
+    json_str_field(line, "expr", expr, sizeof(expr));
+    /* trim */
+    char *p = expr;
+    while (*p == ' ' || *p == '\t') p++;
+    size_t L = strlen(p);
+    while (L > 0 && (p[L-1] == ' ' || p[L-1] == '\t' || p[L-1] == '\n' || p[L-1] == '\r' || p[L-1] == ';')) {
+        p[--L] = '\0';
+    }
+
+    char val[256] = "";
+    char type[64] = "unknown";
+    int ref = 0;
+
+    if (L == 0) {
+        /* nada */
+    } else {
+        /* Buscar primer '.' o '[' */
+        char *dot = strchr(p, '.');
+        char *br  = strchr(p, '[');
+        char *sep = NULL;
+        if (dot && br) sep = (dot < br) ? dot : br;
+        else sep = dot ? dot : br;
+
+        char base[128];
+        if (sep) {
+            size_t bl = (size_t)(sep - p);
+            if (bl >= sizeof(base)) bl = sizeof(base) - 1;
+            memcpy(base, p, bl); base[bl] = '\0';
+        } else {
+            snprintf(base, sizeof(base), "%s", p);
+        }
+
+        Variable *v = find_variable(base);
+        if (!v) {
+            snprintf(val, sizeof(val), "<not in scope>");
+        } else if (!sep) {
+            /* Solo nombre de variable: render directo */
+            const char *t = "unknown";
+            ref = render_variable_value(v, val, sizeof(val), &t);
+            snprintf(type, sizeof(type), "%s", t);
+        } else if (*sep == '.') {
+            /* name.attr  o  name.length / .size */
+            const char *attr_name = sep + 1;
+            if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
+                if (strcmp(attr_name, "length") == 0 || strcmp(attr_name, "size") == 0) {
+                    ASTNode *listNode = (ASTNode*)(intptr_t)v->value.object_value;
+                    int n = list_count(listNode);
+                    snprintf(val, sizeof(val), "%d", n);
+                    snprintf(type, sizeof(type), "int");
+                } else {
+                    snprintf(val, sizeof(val), "<list has no attr '%s'>", attr_name);
+                }
+            } else if (v->vtype == VAL_OBJECT && v->value.object_value) {
+                ObjectNode *obj = v->value.object_value;
+                int found = 0;
+                if (obj && obj->class && obj->attributes) {
+                    for (int i = 0; i < obj->class->attr_count; i++) {
+                        const char *id = obj->class->attributes[i].id;
+                        if (id && strcmp(id, attr_name) == 0) {
+                            const char *t = "unknown";
+                            ref = render_variable_value(&obj->attributes[i], val, sizeof(val), &t);
+                            snprintf(type, sizeof(type), "%s", t);
+                            found = 1;
+                            break;
+                        }
+                    }
+                }
+                if (!found) snprintf(val, sizeof(val), "<no attr '%s'>", attr_name);
+            } else {
+                snprintf(val, sizeof(val), "<not an object>");
+            }
+        } else if (*sep == '[') {
+            /* name[idx]  — solo índices numéricos literales */
+            int idx = atoi(sep + 1);
+            if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
+                ASTNode *listNode = (ASTNode*)(intptr_t)v->value.object_value;
+                int n = list_count(listNode);
+                if (idx < 0 || idx >= n) {
+                    snprintf(val, sizeof(val), "<index %d out of range [0..%d)>", idx, n);
+                } else {
+                    ASTNode *cur = listNode->left;
+                    for (int i = 0; i < idx && cur; i++) cur = cur->next;
+                    if (cur && cur->type && strcmp(cur->type, "OBJECT") == 0) {
+                        ObjectNode *obj = cur->extra ? (ObjectNode*)cur->extra
+                                                     : (ObjectNode*)(intptr_t)cur->value;
+                        if (obj && obj->class && obj->class->name) {
+                            snprintf(val, sizeof(val), "<%s>", obj->class->name);
+                            snprintf(type, sizeof(type), "%s", obj->class->name);
+                            ref = register_ref(REF_OBJECT, obj);
+                        } else {
+                            snprintf(val, sizeof(val), "<object>");
+                        }
+                    } else if (cur && cur->type && strcmp(cur->type, "STRING") == 0) {
+                        snprintf(val, sizeof(val), "%.200s", cur->str_value ? cur->str_value : "");
+                        snprintf(type, sizeof(type), "string");
+                    } else if (cur) {
+                        snprintf(val, sizeof(val), "%d", cur->value);
+                        snprintf(type, sizeof(type), "int");
+                    }
+                }
+            } else {
+                snprintf(val, sizeof(val), "<not a list>");
+            }
+        }
+    }
+
+    char esc_val[1024], esc_type[64];
+    json_escape_into(esc_val, sizeof(esc_val), val);
+    json_escape_into(esc_type, sizeof(esc_type), type);
+    char buf[1280];
+    snprintf(buf, sizeof(buf),
+             "{\"resp\":\"eval\",\"value\":\"%s\",\"type\":\"%s\",\"ref\":%d}",
+             esc_val, esc_type, ref);
+    send_line(buf);
+}
+
 /* Block reading commands until one of them resumes execution.
  * Returns when client says continue/next/step_in/step_out/disconnect. */
 static void wait_for_resume(void) {
@@ -473,6 +598,8 @@ static void wait_for_resume(void) {
             cmd_vars();
         } else if (strcmp(cmd, "get_children") == 0) {
             cmd_get_children(line);
+        } else if (strcmp(cmd, "eval") == 0) {
+            cmd_eval(line);
         } else if (strcmp(cmd, "pause") == 0) {
             /* Already paused; just ack. */
             send_line("{\"resp\":\"ok\"}");

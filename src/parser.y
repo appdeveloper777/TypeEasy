@@ -351,7 +351,7 @@ func_call_expr SEMICOLON { $$ = $1; }
 
 
 |
-        FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_for_in_node($4, $6, $9); }
+        FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { ASTNode *n = create_for_in_node($4, $6, $9); if ($6 && $6->line > 0) n->line = $6->line; $$ = n; }
     | WHILE LPAREN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_ast_node("WHILE", $3, $6); }
     | BREAK SEMICOLON     { $$ = create_ast_leaf("BREAK", 0, NULL, NULL); }
     | CONTINUE SEMICOLON  { $$ = create_ast_leaf("CONTINUE", 0, NULL, NULL); }

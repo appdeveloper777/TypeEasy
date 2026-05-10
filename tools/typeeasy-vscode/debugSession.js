@@ -46,7 +46,7 @@ class TypeEasyDebugSession extends DebugSession {
   initializeRequest(response, args) {
     response.body = response.body || {};
     response.body.supportsConfigurationDoneRequest = true;
-    response.body.supportsEvaluateForHovers = false;
+    response.body.supportsEvaluateForHovers = true;
     response.body.supportsStepInTargetsRequest = false;
     this.sendResponse(response);
     // 'initialized' is sent AFTER we've connected to the interpreter
@@ -236,6 +236,33 @@ class TypeEasyDebugSession extends DebugSession {
   continueRequest(response, _args) {
     this._sockSend({ cmd: 'continue' });
     response.body = { allThreadsContinued: true };
+    this.sendResponse(response);
+  }
+
+  async evaluateRequest(response, args) {
+    /* Used for hover, watch, and the debug console REPL. */
+    const expr = (args && args.expression) ? String(args.expression).trim() : '';
+    const ctx  = (args && args.context) || 'hover';
+    if (!expr) {
+      response.body = { result: '', variablesReference: 0 };
+      this.sendResponse(response);
+      return;
+    }
+    this._sockSend({ cmd: 'eval', expr, context: ctx });
+    const line = await this._readLine();
+    let result = '', remoteRef = 0, type = '';
+    try {
+      const obj = JSON.parse(line);
+      result = String(obj.value != null ? obj.value : '');
+      type = obj.type || '';
+      remoteRef = obj.ref | 0;
+    } catch (e) {
+      result = '<eval error>';
+    }
+    const variablesReference = remoteRef > 0
+      ? this._variableHandles.create({ kind: 'children', remoteRef })
+      : 0;
+    response.body = { result, type, variablesReference };
     this.sendResponse(response);
   }
 

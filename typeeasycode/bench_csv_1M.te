@@ -9,4 +9,5 @@ class Producto {
 }
 
 let productos = from "productos_1000000.csv", Producto;
-println(productos.length);
+int cantidad = productos.length;
+println(cantidad);

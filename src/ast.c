@@ -1155,6 +1155,17 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
     else if (strcmp(value->type, "ACCESS_ATTR") == 0) {
         // Esto maneja: let item = intencion.item;
         ASTNode *o = value->left, *a = value->right;
+
+        /* Caso especial: .length / .size sobre LIST o MAP (atributo virtual,
+         * no presente en obj->attributes). Delegamos a evaluate_expression
+         * que ya implementa toda la lógica (incluyendo TEListIdx). */
+        if (a && a->id && (strcmp(a->id, "length") == 0 || strcmp(a->id, "size") == 0)) {
+            double r = evaluate_expression(value);
+            vars[my_index].vtype = VAL_INT;
+            vars[my_index].value.int_value = (int)r;
+            return;
+        }
+
         Variable *v = find_variable(o->id);
         
         if (!v || v->vtype != VAL_OBJECT) {
@@ -5487,6 +5498,7 @@ ASTNode* create_for_in_node(const char *var_name, ASTNode *list_expr, ASTNode *b
     node->left      = list_expr;
     node->right     = body;
     node->next      = NULL;
+    node->line      = yylineno;
     return node;
 }
 
@@ -9428,6 +9440,22 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
             }
         } else {
             effective_value_type_str = value_node->type;
+        }
+    }
+
+    /* Si el tipo "efectivo" es en realidad un AST node type que requiere
+     * evaluación (ej. ACCESS_ATTR, ACCESS_INDEX, NEG, MOD, IDENTIFIER),
+     * deferimos la verificación a runtime. La fase posterior ya valida
+     * el tipo concreto cuando se asigna efectivamente. */
+    if (declared_type != NULL && effective_value_type_str != NULL) {
+        int is_runtime_only =
+            strcmp(effective_value_type_str, "ACCESS_ATTR") == 0 ||
+            strcmp(effective_value_type_str, "ACCESS_INDEX") == 0 ||
+            strcmp(effective_value_type_str, "NEG") == 0 ||
+            strcmp(effective_value_type_str, "MOD") == 0 ||
+            strcmp(effective_value_type_str, "IDENTIFIER") == 0;
+        if (is_runtime_only) {
+            effective_value_type_str = NULL; /* skip static check */
         }
     }
 
