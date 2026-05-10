@@ -1,0 +1,21 @@
+class Producto {
+  nombre : string;
+  precio : int;
+
+  __constructor(nombre : string, precio : int) {
+    this.nombre = nombre;
+    this.precio = precio;
+  }
+}
+
+let productos = from "productos.csv", Producto;
+println(productos.length);
+let i = 0;
+for (let p in productos) {
+  if (i < 3) {
+    print(p.nombre);
+    print(",");
+    println(p.precio);
+  }
+  i = i + 1;
+}

@@ -32,9 +32,9 @@ SPARK_OBJ = $(SPARK_DIR)/dataframe.o
 
 CC = gcc
 CXX = g++
-CFLAGS = -Wall -g -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1
-CXXFLAGS = -Wall -g -std=c++17
-LIBS_SCRIPT = -lfl -lm -lmysqlclient
+CFLAGS = -Wall -g -O3 -mavx2 -mbmi -pthread -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1
+CXXFLAGS = -Wall -g -O3 -std=c++17
+LIBS_SCRIPT = -lfl -lm -lmysqlclient -lpthread
 LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto -lmysqlclient -lcurl
 
 # --- OBJETIVO PRINCIPAL ---

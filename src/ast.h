@@ -72,6 +72,11 @@ typedef struct ASTNode {
      * map lookups can short-circuit with pointer-eq when the lookup key is
      * also interned. */
     int   id_interned;
+    /* CSV reader (perf): nodo asignado en pool bump (no malloc individual).
+     * free_ast NO debe llamar free(node) sobre estos nodos; los bloques del
+     * pool viven hasta el exit del programa. type/id/str_value asociados
+     * deben ser sentinels o interned. */
+    int   from_pool;
     /* Debugger: source line where this node was parsed (1-based, 0 if unknown).
      * Set by create_ast_* constructors from yylineno. May be slightly off for
      * multi-line constructs (lookahead token); good enough for breakpoint match. */

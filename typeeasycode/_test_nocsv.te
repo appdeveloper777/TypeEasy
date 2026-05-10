@@ -1,0 +1,24 @@
+class Producto {
+  nombre : string;
+  precio : int;
+
+  __constructor(nombre : string, precio : int) {
+    this.nombre = nombre;
+    this.precio = precio;
+  }
+
+  Mostrar() : dynamic {
+    print(this.nombre);
+    println(this.precio);
+  }
+}
+
+let productos_del_papa_leon = [
+    new Producto("Chocolate", 1),
+    new Producto("Panetón", 2)
+];
+
+for (let item in productos_del_papa_leon) {
+    print("Producto:");
+    item.Mostrar();
+}
