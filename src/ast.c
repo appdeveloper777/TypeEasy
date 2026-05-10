@@ -19,6 +19,24 @@
 #include <unistd.h>
 #include <stddef.h>
 #include <pthread.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+
+/* Phase F: globals shared with test runner (typeeasy_main.c).
+ * Defined here as weak so binaries that don't link the test runner
+ * still satisfy references from te_builtin_dispatch. */
+int g_test_failed __attribute__((weak)) = 0;
+int g_test_assertions __attribute__((weak)) = 0;
+
+/* Phase F.3: error capture for --syntax-check. typeeasy_main.c provides
+ * strong defs; weak here so typeeasy_agent (which doesn't link main) builds. */
+int g_capture_errors __attribute__((weak)) = 0;
+void te_capture_error(int line, const char *msg, const char *near) __attribute__((weak));
+void te_capture_error(int line, const char *msg, const char *near) {
+    (void)line; (void)msg; (void)near;
+}
 #define TE_JIT_AVAILABLE 1
 #define TE_HAS_MMAP 1
 #define TE_HAS_PTHREAD 1
@@ -752,8 +770,51 @@ ClassNode *create_class(char *name) {
     class_node->attributes = NULL;
     class_node->attr_count = 0;
     class_node->methods = NULL;
+    class_node->parent = NULL;
     class_node->next = NULL;
     return class_node;
+}
+
+/* Phase E: copy parent attributes + methods into child class.
+ * Called from parser action BEFORE class_body, so child's own members
+ * (added later via add_method_to_class which prepends) override parent's. */
+void inherit_from(ClassNode *child, char *parent_name) {
+    if (!child || !parent_name) return;
+    ClassNode *parent = find_class(parent_name);
+    if (!parent) {
+        fprintf(stderr, "Error: cannot extend unknown class '%s'.\n", parent_name);
+        return;
+    }
+    child->parent = parent;
+    /* Copy attributes (child gets a deep-copied array). */
+    for (int i = 0; i < parent->attr_count; i++) {
+        child->attributes = realloc(child->attributes, (child->attr_count + 1) * sizeof(Variable));
+        child->attributes[child->attr_count].id = strdup(parent->attributes[i].id ? parent->attributes[i].id : "");
+        child->attributes[child->attr_count].type = strdup(parent->attributes[i].type ? parent->attributes[i].type : "");
+        child->attributes[child->attr_count].is_const = parent->attributes[i].is_const;
+        child->attributes[child->attr_count].vtype = parent->attributes[i].vtype;
+        memset(&child->attributes[child->attr_count].value, 0, sizeof(child->attributes[child->attr_count].value));
+        child->attr_count++;
+    }
+    /* Copy methods. Parent's method list is already in some order; we
+     * append at the END of the (currently empty) child list, so that
+     * subsequent add_method_to_class (which prepends) puts child's own
+     * methods FIRST → child overrides win in lookup. */
+    MethodNode **tail = &child->methods;
+    for (MethodNode *pm = parent->methods; pm; pm = pm->next) {
+        MethodNode *cm = (MethodNode*)malloc(sizeof(MethodNode));
+        cm->name = strdup(pm->name ? pm->name : "");
+        cm->params = pm->params;       /* share params list (read-only) */
+        cm->body = pm->body;           /* share body AST (read-only at runtime) */
+        cm->route_path = pm->route_path ? strdup(pm->route_path) : NULL;
+        cm->http_method = pm->http_method ? strdup(pm->http_method) : NULL;
+        cm->cache_ttl = pm->cache_ttl;
+        cm->return_type = pm->return_type ? strdup(pm->return_type) : NULL;
+        cm->bc_body = NULL;            /* don't share bytecode cache */
+        cm->next = NULL;
+        *tail = cm;
+        tail = &cm->next;
+    }
 }
 
 void add_class(ClassNode *class) {
@@ -1109,6 +1170,13 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         vars[my_index].vtype = VAL_OBJECT;
         vars[my_index].value.object_value = (void *)(intptr_t)value;
     }
+    else if (strcmp(value->type, "LAMBDA") == 0) {
+        /* Fase B: lambda como first-class value. Guardamos el ASTNode tal cual. */
+        free(vars[my_index].type);
+        vars[my_index].type = strdup("LAMBDA");
+        vars[my_index].vtype = VAL_OBJECT;
+        vars[my_index].value.object_value = (void *)(intptr_t)value;
+    }
     else if (strcmp(value->type, "NULL") == 0) {
         /* Fase 1d: null */
         free(vars[my_index].type);
@@ -1121,7 +1189,12 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         vars[my_index].value.float_value = atof(value->str_value);
     }
     else if (strcmp(value->type, "ADD") == 0 || strcmp(value->type, "SUB") == 0 || 
-             strcmp(value->type, "MUL") == 0 || strcmp(value->type, "DIV") == 0) {
+             strcmp(value->type, "MUL") == 0 || strcmp(value->type, "DIV") == 0 ||
+             strcmp(value->type, "MOD") == 0 || strcmp(value->type, "NEG") == 0 ||
+             strcmp(value->type, "BIT_AND") == 0 || strcmp(value->type, "BIT_OR") == 0 ||
+             strcmp(value->type, "BIT_XOR") == 0 || strcmp(value->type, "BIT_NOT") == 0 ||
+             strcmp(value->type, "SHL") == 0 || strcmp(value->type, "SHR") == 0 ||
+             strcmp(value->type, "IN") == 0) {
         /* Fase 6: string concatenation if ADD with strings */
         if (strcmp(value->type, "ADD") == 0 && is_string_type(value)) {
             char *s = get_node_string(value);
@@ -1238,6 +1311,10 @@ void add_or_update_variable(char *id, ASTNode *value) {
             __ret_var.vtype = VAL_OBJECT;
             __ret_var.type = strdup("LIST");
             __ret_var.value.object_value = (ObjectNode *)value;
+        } else if (strcmp(value->type, "MAP") == 0 || strcmp(value->type, "OBJECT_LITERAL") == 0) {
+            __ret_var.vtype = VAL_OBJECT;
+            __ret_var.type = strdup("MAP");
+            __ret_var.value.object_value = (ObjectNode *)value;
         } else if (strcmp(value->type, "FLOAT") == 0) {
             __ret_var.vtype = VAL_FLOAT;
             __ret_var.type = strdup("FLOAT");
@@ -1266,6 +1343,12 @@ void add_or_update_variable(char *id, ASTNode *value) {
         } else if (strcmp(value->type, "OBJECT") == 0) {
             var->vtype = VAL_OBJECT;
             var->value.object_value = (ObjectNode *)value->extra;
+        } else if (strcmp(value->type, "LAMBDA") == 0) {
+            var->vtype = VAL_OBJECT;
+            var->value.object_value = (ObjectNode *)(intptr_t)value;
+        } else if (strcmp(value->type, "LIST") == 0 || strcmp(value->type, "OBJECT_LITERAL") == 0) {
+            var->vtype = VAL_OBJECT;
+            var->value.object_value = (ObjectNode *)(intptr_t)value;
         } else if (strcmp(value->type, "FLOAT") == 0) {
             var->vtype = VAL_FLOAT;
             var->value.float_value = value->str_value ? atof(value->str_value) : 0.0;
@@ -1289,6 +1372,12 @@ void add_or_update_variable(char *id, ASTNode *value) {
         } else if (strcmp(value->type, "OBJECT") == 0) {
             vars[var_count].vtype = VAL_OBJECT;
             vars[var_count].value.object_value = (ObjectNode *)value->extra;
+        } else if (strcmp(value->type, "LAMBDA") == 0) {
+            vars[var_count].vtype = VAL_OBJECT;
+            vars[var_count].value.object_value = (ObjectNode *)(intptr_t)value;
+        } else if (strcmp(value->type, "LIST") == 0 || strcmp(value->type, "OBJECT_LITERAL") == 0) {
+            vars[var_count].vtype = VAL_OBJECT;
+            vars[var_count].value.object_value = (ObjectNode *)(intptr_t)value;
         } else {
             vars[var_count].vtype = VAL_INT;
             vars[var_count].value.int_value = value->value;
@@ -1327,6 +1416,10 @@ NodeKind nk_from_str(const char *t) {
         case 'B':
             if (!strcmp(t, "BREAK")) return NK_BREAK;
             if (!strcmp(t, "BRIDGE_DECL")) return NK_BRIDGE_DECL;
+            if (!strcmp(t, "BIT_AND")) return NK_BIT_AND;
+            if (!strcmp(t, "BIT_OR"))  return NK_BIT_OR;
+            if (!strcmp(t, "BIT_XOR")) return NK_BIT_XOR;
+            if (!strcmp(t, "BIT_NOT")) return NK_BIT_NOT;
             break;
         case 'C':
             if (!strcmp(t, "CALL_FUNC")) return NK_CALL_FUNC;
@@ -1360,6 +1453,7 @@ NodeKind nk_from_str(const char *t) {
             if (!strcmp(t, "INT")) return NK_INT;
             if (!strcmp(t, "IF")) return NK_IF;
             if (!strcmp(t, "INDEX_ASSIGN")) return NK_INDEX_ASSIGN;
+            if (!strcmp(t, "IN")) return NK_IN;
             break;
         case 'K':
             if (!strcmp(t, "KV_PAIR")) return NK_KV_PAIR;
@@ -1376,12 +1470,14 @@ NodeKind nk_from_str(const char *t) {
             if (!strcmp(t, "MATCH")) return NK_MATCH;
             if (!strcmp(t, "MODEL")) return NK_MODEL;
             if (!strcmp(t, "METHOD_CALL_ALONE")) return NK_METHOD_CALL_ALONE;
+            if (!strcmp(t, "MOD")) return NK_MOD;
             break;
         case 'N':
             if (!strcmp(t, "NUMBER")) return NK_NUMBER;
             if (!strcmp(t, "NULL")) return NK_NULL;
             if (!strcmp(t, "NULL_COALESCE")) return NK_NULL_COALESCE;
             if (!strcmp(t, "NOT")) return NK_NOT;
+            if (!strcmp(t, "NEG")) return NK_NEG;
             break;
         case 'O':
             if (!strcmp(t, "OR")) return NK_OR;
@@ -1406,6 +1502,8 @@ NodeKind nk_from_str(const char *t) {
             if (!strcmp(t, "STRING_INTERP")) return NK_STRING_INTERP;
             if (!strcmp(t, "STATE_DECL")) return NK_STATE_DECL;
             if (!strcmp(t, "STATEMENT_LIST")) return NK_STATEMENT_LIST;
+            if (!strcmp(t, "SHL")) return NK_SHL;
+            if (!strcmp(t, "SHR")) return NK_SHR;
             break;
         case 'T':
             if (!strcmp(t, "THROW")) return NK_THROW;
@@ -2274,6 +2372,10 @@ typedef enum {
     BC_LT, BC_GT, BC_LE, BC_GE, BC_EQ, BC_NEQ,
     BC_AND, BC_OR, BC_NOT,
     BC_NEG,             /* unary minus (compiled from SUB(0, x)) — currently unused */
+    /* Phase G: integer-only ops. Operate on long long via cast. */
+    BC_MOD,
+    BC_BAND, BC_BOR, BC_BXOR, BC_BNOT,
+    BC_SHL, BC_SHR,
     /* Fase 4: full-statement bytecode (assign / while / if / blocks). */
     BC_STORE_VAR,       /* pop top, write to numeric Variable* (auto INT/FLOAT) */
     BC_JUMP,            /* ip += offset (relative, signed) */
@@ -2462,6 +2564,78 @@ static int bc_compile(ASTNode *node, Instr *out, int *pos, int max) {
         }
         if (*pos >= max) return 0;
         out[*pos].op = BC_NOT;
+        (*pos)++;
+        return 1;
+    }
+    /* Phase G: integer-only ops. Operands compiled via bc_compile (must be
+     * numeric); folded if both are LOAD_CONST. Runtime cast a/b to long long. */
+    case NK_MOD: case NK_BIT_AND: case NK_BIT_OR: case NK_BIT_XOR:
+    case NK_SHL: case NK_SHR: {
+        int saved = *pos;
+        if (!bc_compile(node->left,  out, pos, max)) return 0;
+        if (!bc_compile(node->right, out, pos, max)) return 0;
+        if (*pos >= saved + 2 &&
+            out[*pos - 2].op == BC_LOAD_CONST &&
+            out[*pos - 1].op == BC_LOAD_CONST) {
+            long long a = (long long)out[*pos - 2].u.constant;
+            long long b = (long long)out[*pos - 1].u.constant;
+            long long r = 0;
+            int folded = 1;
+            switch (k) {
+                case NK_MOD:     if (b == 0) folded = 0; else r = a % b; break;
+                case NK_BIT_AND: r = a & b; break;
+                case NK_BIT_OR:  r = a | b; break;
+                case NK_BIT_XOR: r = a ^ b; break;
+                case NK_SHL:     r = a << b; break;
+                case NK_SHR:     r = a >> b; break;
+                default:         folded = 0; break;
+            }
+            if (folded) {
+                *pos -= 2;
+                out[*pos].op = BC_LOAD_CONST;
+                out[*pos].u.constant = (double)r;
+                (*pos)++;
+                return 1;
+            }
+        }
+        BCOp op;
+        switch (k) {
+            case NK_MOD:     op = BC_MOD;  break;
+            case NK_BIT_AND: op = BC_BAND; break;
+            case NK_BIT_OR:  op = BC_BOR;  break;
+            case NK_BIT_XOR: op = BC_BXOR; break;
+            case NK_SHL:     op = BC_SHL;  break;
+            case NK_SHR:     op = BC_SHR;  break;
+            default:         return 0;
+        }
+        if (*pos >= max) return 0;
+        out[*pos].op = op;
+        (*pos)++;
+        return 1;
+    }
+    case NK_BIT_NOT: {
+        if (!node->left) return 0;
+        int saved = *pos;
+        if (!bc_compile(node->left, out, pos, max)) return 0;
+        if (*pos == saved + 1 && out[saved].op == BC_LOAD_CONST) {
+            out[saved].u.constant = (double)~(long long)out[saved].u.constant;
+            return 1;
+        }
+        if (*pos >= max) return 0;
+        out[*pos].op = BC_BNOT;
+        (*pos)++;
+        return 1;
+    }
+    case NK_NEG: {
+        if (!node->left) return 0;
+        int saved = *pos;
+        if (!bc_compile(node->left, out, pos, max)) return 0;
+        if (*pos == saved + 1 && out[saved].op == BC_LOAD_CONST) {
+            out[saved].u.constant = -out[saved].u.constant;
+            return 1;
+        }
+        if (*pos >= max) return 0;
+        out[*pos].op = BC_NEG;
         (*pos)++;
         return 1;
     }
@@ -4212,6 +4386,14 @@ static double bc_exec(Instr *code) {
         [BC_SET_THIS]       = &&do_set_this,
         [BC_RESTORE_THIS]   = &&do_restore_this,
         [BC_LIST_ITEM_ATTR] = &&do_list_item_attr,
+        /* Phase G */
+        [BC_MOD]            = &&do_mod,
+        [BC_BAND]           = &&do_band,
+        [BC_BOR]            = &&do_bor,
+        [BC_BXOR]           = &&do_bxor,
+        [BC_BNOT]           = &&do_bnot,
+        [BC_SHL]            = &&do_shl,
+        [BC_SHR]            = &&do_shr,
     };
     double stack[64];
     int sp = 0;
@@ -4335,6 +4517,31 @@ do_not:
     stack[sp-1] = (stack[sp-1] == 0.0) ? 1 : 0;
     TRACE_ABORT();
     ip++; DISPATCH();
+/* Phase G: integer ops. Trace recording is aborted; these ops aren't in IR. */
+do_mod: {
+    long long b = (long long)stack[sp-1];
+    if (b == 0) { printf("Error: modulo by zero.\n"); stack[sp-2] = 0; }
+    else        { stack[sp-2] = (double)((long long)stack[sp-2] % b); }
+    sp--; TRACE_ABORT(); ip++; DISPATCH();
+}
+do_band:
+    stack[sp-2] = (double)((long long)stack[sp-2] & (long long)stack[sp-1]);
+    sp--; TRACE_ABORT(); ip++; DISPATCH();
+do_bor:
+    stack[sp-2] = (double)((long long)stack[sp-2] | (long long)stack[sp-1]);
+    sp--; TRACE_ABORT(); ip++; DISPATCH();
+do_bxor:
+    stack[sp-2] = (double)((long long)stack[sp-2] ^ (long long)stack[sp-1]);
+    sp--; TRACE_ABORT(); ip++; DISPATCH();
+do_bnot:
+    stack[sp-1] = (double)(~(long long)stack[sp-1]);
+    TRACE_ABORT(); ip++; DISPATCH();
+do_shl:
+    stack[sp-2] = (double)((long long)stack[sp-2] << (long long)stack[sp-1]);
+    sp--; TRACE_ABORT(); ip++; DISPATCH();
+do_shr:
+    stack[sp-2] = (double)((long long)stack[sp-2] >> (long long)stack[sp-1]);
+    sp--; TRACE_ABORT(); ip++; DISPATCH();
 do_store: {
     /* Pop top, write to var. Auto-detect INT vs FLOAT to keep parity with
      * the Fase 2 fast-path: integral doubles stay as VAL_INT. */
@@ -5191,6 +5398,74 @@ double evaluate_expression(ASTNode *node) {
         }
         return evaluate_expression(node->left) / right;
     }
+    case NK_MOD: {
+        long long lv = (long long)evaluate_expression(node->left);
+        long long rv = (long long)evaluate_expression(node->right);
+        if (rv == 0) { printf("Error: modulo by zero.\n"); return 0; }
+        return (double)(lv % rv);
+    }
+    case NK_NEG:
+        return -evaluate_expression(node->left);
+    case NK_BIT_AND: {
+        long long a = (long long)evaluate_expression(node->left);
+        long long b = (long long)evaluate_expression(node->right);
+        return (double)(a & b);
+    }
+    case NK_BIT_OR: {
+        long long a = (long long)evaluate_expression(node->left);
+        long long b = (long long)evaluate_expression(node->right);
+        return (double)(a | b);
+    }
+    case NK_BIT_XOR: {
+        long long a = (long long)evaluate_expression(node->left);
+        long long b = (long long)evaluate_expression(node->right);
+        return (double)(a ^ b);
+    }
+    case NK_BIT_NOT: {
+        long long a = (long long)evaluate_expression(node->left);
+        return (double)(~a);
+    }
+    case NK_SHL: {
+        long long a = (long long)evaluate_expression(node->left);
+        long long b = (long long)evaluate_expression(node->right);
+        return (double)(a << b);
+    }
+    case NK_SHR: {
+        long long a = (long long)evaluate_expression(node->left);
+        long long b = (long long)evaluate_expression(node->right);
+        return (double)(a >> b);
+    }
+    case NK_IN: {
+        /* `key in container` — container puede ser map (busca clave) o list (busca elemento) */
+        ASTNode *container = node->right;
+        ASTNode *map = resolve_to_map(container);
+        if (map) {
+            char *key = get_node_string(node->left);
+            int found = (key && map_find_pair(map, key)) ? 1 : 0;
+            free(key);
+            return (double)found;
+        }
+        ASTNode *list = resolve_to_list(container);
+        if (list) {
+            double needle = evaluate_expression(node->left);
+            char *needle_s = is_string_type(node->left) ? get_node_string(node->left) : NULL;
+            ASTNode *cur = list->left;
+            int found = 0;
+            while (cur) {
+                if (needle_s) {
+                    char *cs = get_node_string(cur);
+                    if (cs && strcmp(cs, needle_s) == 0) { free(cs); found = 1; break; }
+                    if (cs) free(cs);
+                } else {
+                    if (evaluate_expression(cur) == needle) { found = 1; break; }
+                }
+                cur = cur->next;
+            }
+            if (needle_s) free(needle_s);
+            return (double)found;
+        }
+        return 0;
+    }
 
     case NK_ACCESS_ATTR: {
         ASTNode *objRef = node->left;
@@ -5419,6 +5694,7 @@ static void interpret_println(ASTNode *node);
 static void interpret_fprint(ASTNode *node);
 static void interpret_fprintln(ASTNode *node);
 static void interpret_statement_list(ASTNode *node);
+static int te_builtin_dispatch(ASTNode *node);
 double evaluate_number(ASTNode *node);
 static void interpret_match(ASTNode *node);
 // void interpret_if(ASTNode *node); // Ya en ast.h
@@ -5800,6 +6076,9 @@ void interpret_ast(ASTNode *node) {
     case NK_CALL_METHOD:  interpret_call_method(node); break;
 
     case NK_METHOD_CALL_ALONE: {
+        /* Phase F: top-level bare calls like `assert(0);` are parsed as
+         * METHOD_CALL_ALONE; try built-ins before user-defined methods. */
+        if (te_builtin_dispatch(node)) break;
         MethodNode *m = global_methods;
         while (m) {
             if (strcmp(m->name, node->id) == 0) {
@@ -6109,10 +6388,351 @@ static void interpret_predict_node(ASTNode *node) {
  *   Hooked al inicio de interpret_call_func.  No modifican Variable.value
  *   ni el AST de listas/maps existentes; son puramente aditivos.
  * ========================================================================*/
+/* =================== Phase D: stdlib helpers =================== */
+
+/* Resolve an arg AST node to a root container node (for LIST/MAP identifiers).
+ * Returns root node and writes resolved type to *out_type ("LIST","MAP","STRING","INT","FLOAT","NUMBER",NULL). */
+static ASTNode* te_resolve_arg(ASTNode *arg, const char **out_type) {
+    if (out_type) *out_type = NULL;
+    if (!arg) return NULL;
+    if (arg->type && (strcmp(arg->type,"IDENTIFIER")==0 || strcmp(arg->type,"ID")==0) && arg->id) {
+        Variable *v = find_variable(arg->id);
+        if (!v) return NULL;
+        if (v->type && (strcmp(v->type,"LIST")==0 || strcmp(v->type,"MAP")==0)) {
+            if (out_type) *out_type = v->type;
+            return (ASTNode*)(intptr_t)v->value.object_value;
+        }
+        if (v->vtype == VAL_STRING) {
+            ASTNode *tmp = create_ast_leaf("STRING", 0, v->value.string_value ? v->value.string_value : "", NULL);
+            if (out_type) *out_type = "STRING";
+            return tmp;
+        }
+        if (v->vtype == VAL_FLOAT) {
+            char buf[64]; snprintf(buf, sizeof(buf), "%g", v->value.float_value);
+            ASTNode *tmp = create_ast_leaf("FLOAT", 0, buf, NULL);
+            if (out_type) *out_type = "FLOAT";
+            return tmp;
+        }
+        if (v->vtype == VAL_INT) {
+            ASTNode *tmp = create_ast_leaf_number("INT", v->value.int_value, NULL, NULL);
+            if (out_type) *out_type = "INT";
+            return tmp;
+        }
+        return NULL;
+    }
+    if (arg->type) {
+        if (strcmp(arg->type,"MAP")==0)  { if (out_type) *out_type = "MAP";  return arg; }
+        if (strcmp(arg->type,"LIST")==0) { if (out_type) *out_type = "LIST"; return arg; }
+        if (strcmp(arg->type,"STRING")==0){ if (out_type) *out_type = "STRING"; return arg; }
+        if (strcmp(arg->type,"INT")==0 || strcmp(arg->type,"NUMBER")==0) { if (out_type) *out_type = "INT"; return arg; }
+        if (strcmp(arg->type,"FLOAT")==0){ if (out_type) *out_type = "FLOAT"; return arg; }
+    }
+    return arg;
+}
+
+/* Dynamic string buffer */
+typedef struct { char *p; size_t len; size_t cap; } TeBuf;
+static void tebuf_init(TeBuf *b) { b->cap = 256; b->p = (char*)malloc(b->cap); b->len = 0; b->p[0] = 0; }
+static void tebuf_putc(TeBuf *b, char c) {
+    if (b->len + 2 > b->cap) { b->cap *= 2; b->p = (char*)realloc(b->p, b->cap); }
+    b->p[b->len++] = c; b->p[b->len] = 0;
+}
+static void tebuf_puts(TeBuf *b, const char *s) {
+    if (!s) return;
+    size_t L = strlen(s);
+    if (b->len + L + 1 > b->cap) { while (b->len + L + 1 > b->cap) b->cap *= 2; b->p = (char*)realloc(b->p, b->cap); }
+    memcpy(b->p + b->len, s, L); b->len += L; b->p[b->len] = 0;
+}
+
+/* Emit JSON-escaped string content (without surrounding quotes). */
+static void te_json_emit_str(TeBuf *b, const char *s) {
+    tebuf_putc(b, '"');
+    for (const unsigned char *p = (const unsigned char*)(s ? s : ""); *p; p++) {
+        switch (*p) {
+            case '"':  tebuf_puts(b, "\\\""); break;
+            case '\\': tebuf_puts(b, "\\\\"); break;
+            case '\n': tebuf_puts(b, "\\n");  break;
+            case '\r': tebuf_puts(b, "\\r");  break;
+            case '\t': tebuf_puts(b, "\\t");  break;
+            case '\b': tebuf_puts(b, "\\b");  break;
+            case '\f': tebuf_puts(b, "\\f");  break;
+            default:
+                if (*p < 0x20) { char tmp[8]; snprintf(tmp, sizeof(tmp), "\\u%04x", *p); tebuf_puts(b, tmp); }
+                else tebuf_putc(b, (char)*p);
+        }
+    }
+    tebuf_putc(b, '"');
+}
+
+/* Recursive JSON emitter for an AST node. Handles STRING/INT/NUMBER/FLOAT/LIST/MAP. */
+static void te_json_emit_node(TeBuf *b, ASTNode *n) {
+    if (!n) { tebuf_puts(b, "null"); return; }
+    if (!n->type) { tebuf_puts(b, "null"); return; }
+    if (strcmp(n->type, "STRING") == 0) {
+        te_json_emit_str(b, n->str_value ? n->str_value : "");
+        return;
+    }
+    if (strcmp(n->type, "INT") == 0 || strcmp(n->type, "NUMBER") == 0) {
+        char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", n->value); tebuf_puts(b, tmp);
+        return;
+    }
+    if (strcmp(n->type, "FLOAT") == 0) {
+        const char *s = n->str_value ? n->str_value : "0";
+        tebuf_puts(b, s);
+        return;
+    }
+    if (strcmp(n->type, "LIST") == 0) {
+        tebuf_putc(b, '[');
+        ASTNode *cur = n->left;
+        int first = 1;
+        while (cur) {
+            if (!first) tebuf_putc(b, ',');
+            te_json_emit_node(b, cur);
+            first = 0;
+            cur = cur->next;
+        }
+        tebuf_putc(b, ']');
+        return;
+    }
+    if (strcmp(n->type, "MAP") == 0 || strcmp(n->type, "OBJECT_LITERAL") == 0) {
+        tebuf_putc(b, '{');
+        ASTNode *cur = n->left;
+        int first = 1;
+        while (cur) {
+            if (!first) tebuf_putc(b, ',');
+            te_json_emit_str(b, cur->id ? cur->id : "");
+            tebuf_putc(b, ':');
+            te_json_emit_node(b, cur->left);
+            first = 0;
+            cur = cur->right;
+        }
+        tebuf_putc(b, '}');
+        return;
+    }
+    if (strcmp(n->type, "IDENTIFIER") == 0 && n->id) {
+        Variable *v = find_variable(n->id);
+        if (v) {
+            if (v->vtype == VAL_STRING) { te_json_emit_str(b, v->value.string_value ? v->value.string_value : ""); return; }
+            if (v->vtype == VAL_INT)    { char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", v->value.int_value); tebuf_puts(b, tmp); return; }
+            if (v->vtype == VAL_FLOAT)  { char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", v->value.float_value); tebuf_puts(b, tmp); return; }
+            if (v->type && (strcmp(v->type,"LIST")==0 || strcmp(v->type,"MAP")==0)) {
+                te_json_emit_node(b, (ASTNode*)(intptr_t)v->value.object_value);
+                return;
+            }
+        }
+    }
+    tebuf_puts(b, "null");
+}
+
+/* JSON parser: recursive descent. *p is advanced past consumed input. Returns NULL on error. */
+static void te_json_skip_ws(const char **p) {
+    while (**p == ' ' || **p == '\t' || **p == '\r' || **p == '\n') (*p)++;
+}
+static ASTNode* te_json_parse_value(const char **p);
+static char* te_json_parse_string(const char **p) {
+    if (**p != '"') return NULL;
+    (*p)++;
+    TeBuf b; tebuf_init(&b);
+    while (**p && **p != '"') {
+        if (**p == '\\') {
+            (*p)++;
+            switch (**p) {
+                case '"':  tebuf_putc(&b, '"');  (*p)++; break;
+                case '\\': tebuf_putc(&b, '\\'); (*p)++; break;
+                case '/':  tebuf_putc(&b, '/');  (*p)++; break;
+                case 'n':  tebuf_putc(&b, '\n'); (*p)++; break;
+                case 'r':  tebuf_putc(&b, '\r'); (*p)++; break;
+                case 't':  tebuf_putc(&b, '\t'); (*p)++; break;
+                case 'b':  tebuf_putc(&b, '\b'); (*p)++; break;
+                case 'f':  tebuf_putc(&b, '\f'); (*p)++; break;
+                case 'u': {
+                    (*p)++;
+                    unsigned int cp = 0;
+                    for (int i = 0; i < 4 && **p; i++, (*p)++) {
+                        char c = **p; cp <<= 4;
+                        if (c>='0'&&c<='9') cp |= (c-'0');
+                        else if (c>='a'&&c<='f') cp |= (c-'a'+10);
+                        else if (c>='A'&&c<='F') cp |= (c-'A'+10);
+                    }
+                    if (cp < 0x80) tebuf_putc(&b, (char)cp);
+                    else if (cp < 0x800) { tebuf_putc(&b, (char)(0xC0|(cp>>6))); tebuf_putc(&b, (char)(0x80|(cp&0x3F))); }
+                    else { tebuf_putc(&b, (char)(0xE0|(cp>>12))); tebuf_putc(&b, (char)(0x80|((cp>>6)&0x3F))); tebuf_putc(&b, (char)(0x80|(cp&0x3F))); }
+                    break;
+                }
+                default: tebuf_putc(&b, **p); if (**p) (*p)++; break;
+            }
+        } else {
+            tebuf_putc(&b, **p); (*p)++;
+        }
+    }
+    if (**p == '"') (*p)++;
+    return b.p;
+}
+static ASTNode* te_json_parse_value(const char **p) {
+    te_json_skip_ws(p);
+    char c = **p;
+    if (c == '"') {
+        char *s = te_json_parse_string(p);
+        ASTNode *r = create_ast_leaf("STRING", 0, s ? s : "", NULL);
+        if (s) free(s);
+        return r;
+    }
+    if (c == '{') {
+        (*p)++;
+        ASTNode *map = (ASTNode*)calloc(1, sizeof(ASTNode));
+        map->type = strdup("OBJECT_LITERAL");
+        ASTNode *tail = NULL;
+        te_json_skip_ws(p);
+        if (**p == '}') { (*p)++; return map; }
+        while (**p) {
+            te_json_skip_ws(p);
+            char *k = te_json_parse_string(p);
+            te_json_skip_ws(p);
+            if (**p == ':') (*p)++;
+            ASTNode *val = te_json_parse_value(p);
+            ASTNode *pair = create_kv_pair_node(k ? k : "", val);
+            if (k) free(k);
+            if (!map->left) map->left = pair; else tail->right = pair;
+            tail = pair;
+            te_json_skip_ws(p);
+            if (**p == ',') { (*p)++; continue; }
+            if (**p == '}') { (*p)++; break; }
+            break;
+        }
+        return map;
+    }
+    if (c == '[') {
+        (*p)++;
+        ASTNode *list = create_list_node(NULL);
+        ASTNode *tail = NULL;
+        te_json_skip_ws(p);
+        if (**p == ']') { (*p)++; return list; }
+        while (**p) {
+            ASTNode *val = te_json_parse_value(p);
+            if (!list->left) list->left = val; else tail->next = val;
+            tail = val;
+            te_json_skip_ws(p);
+            if (**p == ',') { (*p)++; continue; }
+            if (**p == ']') { (*p)++; break; }
+            break;
+        }
+        return list;
+    }
+    if (c == 't' && strncmp(*p, "true", 4) == 0) { *p += 4; return create_ast_leaf_number("INT", 1, NULL, NULL); }
+    if (c == 'f' && strncmp(*p, "false", 5) == 0) { *p += 5; return create_ast_leaf_number("INT", 0, NULL, NULL); }
+    if (c == 'n' && strncmp(*p, "null", 4) == 0) { *p += 4; return create_ast_leaf_number("INT", 0, NULL, NULL); }
+    /* number */
+    const char *start = *p;
+    if (**p == '-' || **p == '+') (*p)++;
+    int is_float = 0;
+    while (**p && (isdigit((unsigned char)**p) || **p == '.' || **p == 'e' || **p == 'E' || **p == '-' || **p == '+')) {
+        if (**p == '.' || **p == 'e' || **p == 'E') is_float = 1;
+        (*p)++;
+    }
+    char tmp[64];
+    size_t L = (size_t)(*p - start);
+    if (L >= sizeof(tmp)) L = sizeof(tmp) - 1;
+    memcpy(tmp, start, L); tmp[L] = 0;
+    if (is_float) return create_ast_leaf("FLOAT", 0, tmp, NULL);
+    return create_ast_leaf_number("INT", atoi(tmp), NULL, NULL);
+}
+
+/* Minimal HTTP/1.0 client over plain TCP. Returns body as malloc'd string (caller frees), or NULL. */
+static char* te_http_request(const char *method, const char *url, const char *body) {
+    if (!url) return NULL;
+    /* Parse http://host[:port]/path */
+    const char *u = url;
+    if (strncmp(u, "http://", 7) == 0) u += 7;
+    else if (strncmp(u, "https://", 8) == 0) return NULL; /* TLS no soportado en stdlib mínima */
+    char host[512] = {0};
+    char port[16]  = "80";
+    char path[1024] = "/";
+    const char *slash = strchr(u, '/');
+    const char *colon = strchr(u, ':');
+    size_t hostlen;
+    if (colon && (!slash || colon < slash)) {
+        hostlen = (size_t)(colon - u);
+        if (hostlen >= sizeof(host)) hostlen = sizeof(host) - 1;
+        memcpy(host, u, hostlen); host[hostlen] = 0;
+        size_t pl = slash ? (size_t)(slash - colon - 1) : strlen(colon + 1);
+        if (pl >= sizeof(port)) pl = sizeof(port) - 1;
+        memcpy(port, colon + 1, pl); port[pl] = 0;
+    } else {
+        hostlen = slash ? (size_t)(slash - u) : strlen(u);
+        if (hostlen >= sizeof(host)) hostlen = sizeof(host) - 1;
+        memcpy(host, u, hostlen); host[hostlen] = 0;
+    }
+    if (slash) {
+        size_t pl = strlen(slash);
+        if (pl >= sizeof(path)) pl = sizeof(path) - 1;
+        memcpy(path, slash, pl); path[pl] = 0;
+    }
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, port, &hints, &res) != 0 || !res) return NULL;
+    int sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (sock < 0) { freeaddrinfo(res); return NULL; }
+    if (connect(sock, res->ai_addr, res->ai_addrlen) < 0) { close(sock); freeaddrinfo(res); return NULL; }
+    freeaddrinfo(res);
+    /* Build request */
+    TeBuf req; tebuf_init(&req);
+    tebuf_puts(&req, method); tebuf_putc(&req, ' ');
+    tebuf_puts(&req, path); tebuf_puts(&req, " HTTP/1.0\r\n");
+    tebuf_puts(&req, "Host: "); tebuf_puts(&req, host);
+    if (strcmp(port, "80") != 0) { tebuf_putc(&req, ':'); tebuf_puts(&req, port); }
+    tebuf_puts(&req, "\r\n");
+    tebuf_puts(&req, "User-Agent: TypeEasy/1.0\r\nAccept: */*\r\nConnection: close\r\n");
+    if (body && *body) {
+        char clbuf[64]; snprintf(clbuf, sizeof(clbuf), "Content-Length: %zu\r\n", strlen(body));
+        tebuf_puts(&req, clbuf);
+        tebuf_puts(&req, "Content-Type: application/json\r\n");
+    }
+    tebuf_puts(&req, "\r\n");
+    if (body && *body) tebuf_puts(&req, body);
+    /* Send */
+    size_t sent = 0; size_t total = req.len;
+    while (sent < total) {
+        ssize_t w = send(sock, req.p + sent, total - sent, 0);
+        if (w <= 0) break;
+        sent += (size_t)w;
+    }
+    free(req.p);
+    /* Receive */
+    TeBuf resp; tebuf_init(&resp);
+    char chunk[4096];
+    ssize_t r;
+    while ((r = recv(sock, chunk, sizeof(chunk), 0)) > 0) {
+        if (resp.len + (size_t)r + 1 > resp.cap) {
+            while (resp.len + (size_t)r + 1 > resp.cap) resp.cap *= 2;
+            resp.p = (char*)realloc(resp.p, resp.cap);
+        }
+        memcpy(resp.p + resp.len, chunk, (size_t)r);
+        resp.len += (size_t)r;
+        resp.p[resp.len] = 0;
+    }
+    close(sock);
+    /* Strip headers: find \r\n\r\n */
+    char *sep = strstr(resp.p, "\r\n\r\n");
+    if (!sep) sep = strstr(resp.p, "\n\n");
+    char *out;
+    if (sep) {
+        sep += (sep[0] == '\r') ? 4 : 2;
+        out = strdup(sep);
+    } else {
+        out = strdup(resp.p);
+    }
+    free(resp.p);
+    return out;
+}
+
 static int te_builtin_dispatch(ASTNode *node) {
     if (!node || !node->id) return 0;
     const char *fn = node->id;
-    ASTNode *a0 = node->left;
+    /* CALL_FUNC stores args on node->left; METHOD_CALL_ALONE on node->right.
+     * Pick the non-null side. */
+    ASTNode *a0 = node->left ? node->left : node->right;
     ASTNode *a1 = a0 ? a0->right : NULL;
 
     /* ---- len(x): string | list | map ---- */
@@ -6287,11 +6907,105 @@ static int te_builtin_dispatch(ASTNode *node) {
         return 1;
     }
 
+    /* ---- Phase F: assert / assert_eq for test runner ---- */
+    if (strcmp(fn, "assert") == 0) {
+        extern int g_test_assertions; extern int g_test_failed;
+        double cond = a0 ? evaluate_expression(a0) : 0;
+        g_test_assertions++;
+        if (cond == 0) {
+            g_test_failed = 1;
+            char *msg = a1 ? get_node_string(a1) : NULL;
+            fprintf(stderr, "    ASSERT FAILED: %s (line %d)\n", msg ? msg : "condition is false", node->line);
+            if (msg) free(msg);
+        }
+        add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)(cond != 0), NULL, NULL));
+        return 1;
+    }
+    if (strcmp(fn, "assert_eq") == 0) {
+        extern int g_test_assertions; extern int g_test_failed;
+        g_test_assertions++;
+        int eq = 0;
+        if (a0 && a1 && a0->type && a1->type) {
+            int sa = (strcmp(a0->type,"STRING")==0) || (a0->type && (strcmp(a0->type,"IDENTIFIER")==0||strcmp(a0->type,"ID")==0) && find_variable(a0->id) && find_variable(a0->id)->vtype==VAL_STRING);
+            int sb = (strcmp(a1->type,"STRING")==0) || (a1->type && (strcmp(a1->type,"IDENTIFIER")==0||strcmp(a1->type,"ID")==0) && find_variable(a1->id) && find_variable(a1->id)->vtype==VAL_STRING);
+            if (sa || sb) {
+                char *s1 = get_node_string(a0); char *s2 = get_node_string(a1);
+                eq = (s1 && s2 && strcmp(s1, s2) == 0) ? 1 : 0;
+                if (!eq) fprintf(stderr, "    ASSERT_EQ FAILED: \"%s\" != \"%s\" (line %d)\n", s1?s1:"", s2?s2:"", node->line);
+                if (s1) free(s1); if (s2) free(s2);
+            } else {
+                double va = evaluate_expression(a0);
+                double vb = evaluate_expression(a1);
+                eq = (va == vb) ? 1 : 0;
+                if (!eq) fprintf(stderr, "    ASSERT_EQ FAILED: %g != %g (line %d)\n", va, vb, node->line);
+            }
+        }
+        if (!eq) g_test_failed = 1;
+        add_or_update_variable("__ret__", create_ast_leaf_number("INT", eq, NULL, NULL));
+        return 1;
+    }
+
+    /* ---- Phase D: stdlib JSON / HTTP ---- */
+    if (strcmp(fn, "json_stringify") == 0) {
+        const char *rt = NULL;
+        ASTNode *root = te_resolve_arg(a0, &rt);
+        TeBuf b; tebuf_init(&b);
+        te_json_emit_node(&b, root);
+        ASTNode *r = create_ast_leaf("STRING", 0, b.p, NULL);
+        free(b.p);
+        add_or_update_variable("__ret__", r);
+        return 1;
+    }
+    if (strcmp(fn, "json_parse") == 0) {
+        char *s = a0 ? get_node_string(a0) : NULL;
+        if (!s) {
+            add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, "", NULL));
+            return 1;
+        }
+        const char *p = s;
+        ASTNode *r = te_json_parse_value(&p);
+        free(s);
+        if (!r) r = create_ast_leaf("STRING", 0, "", NULL);
+        add_or_update_variable("__ret__", r);
+        return 1;
+    }
+    if (strcmp(fn, "http_get") == 0) {
+        char *url = a0 ? get_node_string(a0) : NULL;
+        char *body = url ? te_http_request("GET", url, NULL) : NULL;
+        if (url) free(url);
+        ASTNode *r = create_ast_leaf("STRING", 0, body ? body : "", NULL);
+        if (body) free(body);
+        add_or_update_variable("__ret__", r);
+        return 1;
+    }
+    if (strcmp(fn, "http_post") == 0) {
+        char *url  = a0 ? get_node_string(a0) : NULL;
+        char *post = a1 ? get_node_string(a1) : NULL;
+        char *body = url ? te_http_request("POST", url, post ? post : "") : NULL;
+        if (url) free(url);
+        if (post) free(post);
+        ASTNode *r = create_ast_leaf("STRING", 0, body ? body : "", NULL);
+        if (body) free(body);
+        add_or_update_variable("__ret__", r);
+        return 1;
+    }
+
     return 0;
 }
 
 static void interpret_call_func(ASTNode *node) {
     if (te_builtin_dispatch(node)) return;
+
+    /* Fase B: si node->id es una variable de tipo LAMBDA, invocar el lambda. */
+    if (node->id) {
+        Variable *fv = find_variable(node->id);
+        if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0) {
+            ASTNode *lambda = (ASTNode*)(intptr_t)fv->value.object_value;
+            ASTNode *r = call_lambda(lambda, node->left);
+            if (r) add_or_update_variable("__ret__", r);
+            return;
+        }
+    }
 
     if (strcmp(node->id, "json") == 0) {
         native_json(node->left);
@@ -6606,6 +7320,152 @@ static void interpret_call_method(ASTNode *node) {
     /* Fase 1b: métodos built-in en LIST: push, pop */
     if (v && v->type && strcmp(v->type, "LIST") == 0) {
         ASTNode *list = (ASTNode*)(intptr_t)v->value.object_value;
+
+        /* ---- Fase B: higher-order methods sobre LIST ----
+         * .map(fn), .filter(fn), .reduce(fn, init), .forEach(fn),
+         * .find(fn), .any(fn)/.every(fn). El argumento puede ser un lambda
+         * inline (NK_LAMBDA / type=="LAMBDA") o una variable de tipo LAMBDA. */
+        if (list && node->id && (
+                strcmp(node->id, "map") == 0 ||
+                strcmp(node->id, "filter") == 0 ||
+                strcmp(node->id, "reduce") == 0 ||
+                strcmp(node->id, "forEach") == 0 ||
+                strcmp(node->id, "find") == 0 ||
+                strcmp(node->id, "any") == 0 ||
+                strcmp(node->id, "every") == 0)) {
+            ASTNode *arg = node->right;
+            ASTNode *fn = NULL;
+            if (arg && arg->type && strcmp(arg->type, "LAMBDA") == 0) {
+                fn = arg;
+            } else if (arg && arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+                Variable *fv = find_variable(arg->id);
+                if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0) {
+                    fn = (ASTNode*)(intptr_t)fv->value.object_value;
+                }
+            }
+            if (!fn) {
+                printf("Error: %s() requires a lambda or function value.\n", node->id);
+                add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                return;
+            }
+            const char *fname = node->id;
+            if (strcmp(fname, "map") == 0) {
+                ASTNode *result = create_list_node(NULL);
+                ASTNode *item = list->left;
+                while (item) {
+                    ASTNode *r = call_lambda(fn, item);
+                    if (r) te_list_append(result, r);
+                    item = item->next;
+                }
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+            if (strcmp(fname, "filter") == 0) {
+                ASTNode *result = create_list_node(NULL);
+                ASTNode *item = list->left;
+                while (item) {
+                    ASTNode *r = call_lambda(fn, item);
+                    int truthy = 0;
+                    if (r) {
+                        if (r->type && strcmp(r->type, "STRING") == 0) {
+                            truthy = (r->str_value && r->str_value[0]) ? 1 : 0;
+                        } else if (r->type && strcmp(r->type, "NULL") == 0) {
+                            truthy = 0;
+                        } else {
+                            truthy = (evaluate_expression(r) != 0) ? 1 : 0;
+                        }
+                    }
+                    if (truthy) {
+                        ASTNode *copy = build_item_from_value(item);
+                        te_list_append(result, copy);
+                    }
+                    item = item->next;
+                }
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+            if (strcmp(fname, "reduce") == 0) {
+                /* arg list: (fn, init). arg->right es init. */
+                ASTNode *initArg = arg->right;
+                ASTNode *acc = NULL;
+                if (initArg) {
+                    if (is_string_type(initArg)) {
+                        char *s = get_node_string(initArg);
+                        acc = create_ast_leaf("STRING", 0, s, NULL); free(s);
+                    } else {
+                        double r = evaluate_expression(initArg);
+                        if (r == (double)(long long)r) acc = create_ast_leaf_number("NUMBER", (int)r, NULL, NULL);
+                        else { char b[64]; snprintf(b,sizeof(b),"%g",r); acc = create_ast_leaf("FLOAT", 0, b, NULL); }
+                    }
+                } else {
+                    acc = create_ast_leaf_number("NUMBER", 0, NULL, NULL);
+                }
+                ASTNode *item = list->left;
+                while (item) {
+                    /* Construir args: acc, item — los enlazamos por ->right. */
+                    ASTNode *acc_copy = acc;
+                    acc_copy->right = item;
+                    ASTNode saved_item_right;
+                    saved_item_right = *item; /* unused but keeps pattern */
+                    (void)saved_item_right;
+                    ASTNode *prev_item_right = item->right;
+                    /* call_lambda lee acc->right como segundo arg */
+                    ASTNode *r = call_lambda(fn, acc);
+                    /* restaurar */
+                    item->right = prev_item_right;
+                    acc->right = NULL;
+                    if (r) acc = r;
+                    item = item->next;
+                }
+                add_or_update_variable("__ret__", acc);
+                return;
+            }
+            if (strcmp(fname, "forEach") == 0) {
+                ASTNode *item = list->left;
+                while (item) {
+                    call_lambda(fn, item);
+                    item = item->next;
+                }
+                add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                return;
+            }
+            if (strcmp(fname, "find") == 0) {
+                ASTNode *item = list->left;
+                while (item) {
+                    ASTNode *r = call_lambda(fn, item);
+                    if (r && evaluate_expression(r) != 0) {
+                        add_or_update_variable("__ret__", build_item_from_value(item));
+                        return;
+                    }
+                    item = item->next;
+                }
+                add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                return;
+            }
+            if (strcmp(fname, "any") == 0) {
+                ASTNode *item = list->left;
+                int found = 0;
+                while (item) {
+                    ASTNode *r = call_lambda(fn, item);
+                    if (r && evaluate_expression(r) != 0) { found = 1; break; }
+                    item = item->next;
+                }
+                add_or_update_variable("__ret__", create_ast_leaf_number("INT", found, NULL, NULL));
+                return;
+            }
+            if (strcmp(fname, "every") == 0) {
+                ASTNode *item = list->left;
+                int all = 1;
+                while (item) {
+                    ASTNode *r = call_lambda(fn, item);
+                    if (!r || evaluate_expression(r) == 0) { all = 0; break; }
+                    item = item->next;
+                }
+                add_or_update_variable("__ret__", create_ast_leaf_number("INT", all, NULL, NULL));
+                return;
+            }
+        }
+
         if (list && node->id && strcmp(node->id, "push") == 0) {
             ASTNode *arg = node->right;
             if (!arg) return;
@@ -9427,7 +10287,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
             effective_value_type_str = "STRING";
         } else if (strcmp(value_node->type, "STRING_INTERP") == 0) {
             effective_value_type_str = "STRING";
-        } else if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0) {
+        } else if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0 || strcmp(value_node->type, "MOD") == 0 || strcmp(value_node->type, "NEG") == 0 || strcmp(value_node->type, "BIT_AND") == 0 || strcmp(value_node->type, "BIT_OR") == 0 || strcmp(value_node->type, "BIT_XOR") == 0 || strcmp(value_node->type, "BIT_NOT") == 0 || strcmp(value_node->type, "SHL") == 0 || strcmp(value_node->type, "SHR") == 0 || strcmp(value_node->type, "IN") == 0) {
             if (strcmp(value_node->type, "ADD") == 0 && is_string_type(value_node)) {
                 effective_value_type_str = "STRING";
             } else {
@@ -9511,6 +10371,25 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                     if (__ret_var.type) free(__ret_var.type);
                     memset(&__ret_var, 0, sizeof(Variable));
                     // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
+                }
+                return_flag = 0;
+                return_node = NULL;
+                return;
+            } else if (strcmp(evaluated_value_var->type, "MAP") == 0) {
+                /* Phase D: fast-path for MAP returned from a builtin (e.g. json_parse). */
+                Variable *var = malloc(sizeof(Variable));
+                var->id = strdup(node->id);
+                var->is_const = is_const_flag;
+                var->vtype = VAL_OBJECT;
+                var->type = strdup("MAP");
+                var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value;
+                vars[var_count++] = *var;
+                free(var);
+                if (__ret_var_active) {
+                    if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
+                    if (__ret_var.id) free(__ret_var.id);
+                    if (__ret_var.type) free(__ret_var.type);
+                    memset(&__ret_var, 0, sizeof(Variable));
                 }
                 return_flag = 0;
                 return_node = NULL;
@@ -9755,6 +10634,154 @@ ASTNode* create_lambda_node(const char* argName, ASTNode* body) {
     return node;
 }
 
+/* Fase B: lambda multi-param. paramsCsv = nombres separados por '\1'.
+ * Usamos el mismo NodeKind LAMBDA. body puede ser expr o STATEMENT_LIST. */
+ASTNode* create_lambda_multi_node(const char *paramsCsv, ASTNode *body) {
+    ASTNode *node = calloc(1, sizeof(ASTNode));
+    node->type = strdup("LAMBDA");
+    node->id = strdup(paramsCsv ? paramsCsv : "");
+    node->left = body;
+    node->right = NULL;
+    node->next = NULL;
+    node->line = yylineno;
+    return node;
+}
+
+/* Fase B: invoca un lambda con argsList (lista enlazada por ->right o ->next).
+ * Setea cada parámetro en el scope global, evalúa el body y devuelve el ASTNode*
+ * con el resultado. Si body es expresión, retorna su valor evaluado.
+ * Si body es STATEMENT_LIST, ejecuta y lee return_node / __ret__. */
+ASTNode* call_lambda(ASTNode *lambda, ASTNode *argsList) {
+    if (!lambda || !lambda->id) {
+        return create_ast_leaf("NULL", 0, NULL, NULL);
+    }
+    /* Parsear paramsCsv ('\1'-separated). Casos: "" (0 params), "x", "x\1y", etc. */
+    const char *params = lambda->id;
+    /* Bind args a params, en orden. argsList puede ser NULL o lista por ->right. */
+    ASTNode *cur_arg = argsList;
+    if (params[0]) {
+        const char *p = params;
+        while (*p) {
+            const char *e = p;
+            while (*e && *e != '\1') e++;
+            size_t n = (size_t)(e - p);
+            char name[128];
+            if (n >= sizeof(name)) n = sizeof(name) - 1;
+            memcpy(name, p, n); name[n] = '\0';
+            /* Construir un ASTNode "valor concreto" para este param */
+            ASTNode *valNode = NULL;
+            if (cur_arg) {
+                /* Resolver el arg a su valor actual */
+                if (cur_arg->type && (strcmp(cur_arg->type, "OBJECT") == 0 ||
+                                      strcmp(cur_arg->type, "STRING") == 0 ||
+                                      strcmp(cur_arg->type, "NUMBER") == 0 ||
+                                      strcmp(cur_arg->type, "INT") == 0 ||
+                                      strcmp(cur_arg->type, "FLOAT") == 0 ||
+                                      strcmp(cur_arg->type, "NULL") == 0 ||
+                                      strcmp(cur_arg->type, "LIST") == 0 ||
+                                      strcmp(cur_arg->type, "OBJECT_LITERAL") == 0)) {
+                    valNode = cur_arg;
+                } else if (is_string_type(cur_arg)) {
+                    char *s = get_node_string(cur_arg);
+                    valNode = create_ast_leaf("STRING", 0, s, NULL);
+                    free(s);
+                } else {
+                    double r = evaluate_expression(cur_arg);
+                    if (r == (double)(long long)r) {
+                        valNode = create_ast_leaf_number("NUMBER", (int)r, NULL, NULL);
+                    } else {
+                        char buf[64]; snprintf(buf, sizeof(buf), "%g", r);
+                        valNode = create_ast_leaf("FLOAT", 0, buf, NULL);
+                    }
+                }
+                cur_arg = cur_arg->right ? cur_arg->right : cur_arg->next;
+            } else {
+                valNode = create_ast_leaf("NULL", 0, NULL, NULL);
+            }
+            add_or_update_variable(name, valNode);
+            if (*e == '\1') p = e + 1; else p = e;
+        }
+    }
+    /* Ejecutar el body */
+    ASTNode *body = lambda->left;
+    if (!body) return create_ast_leaf("NULL", 0, NULL, NULL);
+    if (body->type && strcmp(body->type, "STATEMENT_LIST") == 0) {
+        int saved_return_flag = return_flag;
+        ASTNode *saved_return_node = return_node;
+        return_flag = 0;
+        return_node = NULL;
+        interpret_ast(body);
+        ASTNode *ret = return_node;
+        return_flag = saved_return_flag;
+        return_node = saved_return_node;
+        if (!ret) return create_ast_leaf("NULL", 0, NULL, NULL);
+        if (ret->type && strcmp(ret->type, "RETURN") == 0 && ret->left) ret = ret->left;
+        /* Normalizar a valor concreto (evaluar la expresión) */
+        if (ret->type && (
+                strcmp(ret->type, "STRING") == 0 ||
+                strcmp(ret->type, "NUMBER") == 0 ||
+                strcmp(ret->type, "INT") == 0 ||
+                strcmp(ret->type, "FLOAT") == 0 ||
+                strcmp(ret->type, "NULL") == 0 ||
+                strcmp(ret->type, "LIST") == 0 ||
+                strcmp(ret->type, "OBJECT") == 0 ||
+                strcmp(ret->type, "OBJECT_LITERAL") == 0 ||
+                strcmp(ret->type, "MAP") == 0)) {
+            return ret;
+        }
+        if (is_string_type(ret)) {
+            char *s = get_node_string(ret);
+            ASTNode *r = create_ast_leaf("STRING", 0, s, NULL);
+            free(s);
+            return r;
+        }
+        if (ret->type && (strcmp(ret->type, "ID") == 0 || strcmp(ret->type, "IDENTIFIER") == 0)) {
+            Variable *v = find_variable(ret->id);
+            if (v && v->vtype == VAL_OBJECT && v->type) {
+                if (strcmp(v->type, "LIST") == 0 || strcmp(v->type, "MAP") == 0) {
+                    return (ASTNode*)(intptr_t)v->value.object_value;
+                }
+            }
+        }
+        double dr = evaluate_expression(ret);
+        if (dr == (double)(long long)dr) return create_ast_leaf_number("NUMBER", (int)dr, NULL, NULL);
+        char buf[64]; snprintf(buf, sizeof(buf), "%g", dr);
+        return create_ast_leaf("FLOAT", 0, buf, NULL);
+    }
+    /* body es expresión. Si produce string, devolver STRING; si numérica, NUMBER/FLOAT. */
+    if (is_string_type(body)) {
+        char *s = get_node_string(body);
+        ASTNode *r = create_ast_leaf("STRING", 0, s, NULL);
+        free(s);
+        return r;
+    }
+    /* Si la expresión produce un OBJECT/LIST/MAP, evaluate_expression no lo refleja.
+     * Detectar referencias a IDENTIFIER que apunten a OBJECT/LIST/MAP. */
+    if (body->type && (strcmp(body->type, "ID") == 0 || strcmp(body->type, "IDENTIFIER") == 0)) {
+        Variable *v = find_variable(body->id);
+        if (v && v->vtype == VAL_OBJECT && v->type) {
+            if (strcmp(v->type, "LIST") == 0 || strcmp(v->type, "MAP") == 0) {
+                return (ASTNode*)(intptr_t)v->value.object_value;
+            }
+            if (strcmp(v->type, "OBJECT") == 0) {
+                ASTNode *r = (ASTNode*)calloc(1, sizeof(ASTNode));
+                r->type = strdup("OBJECT");
+                r->extra = (struct ASTNode*)v->value.object_value;
+                return r;
+            }
+            if (strcmp(v->type, "NULL") == 0) {
+                return create_ast_leaf("NULL", 0, NULL, NULL);
+            }
+        }
+    }
+    double r = evaluate_expression(body);
+    if (r == (double)(long long)r) {
+        return create_ast_leaf_number("NUMBER", (int)r, NULL, NULL);
+    }
+    char buf[64]; snprintf(buf, sizeof(buf), "%g", r);
+    return create_ast_leaf("FLOAT", 0, buf, NULL);
+}
+
 
 static void interpret_assign_attr(ASTNode *node) {
     /* trace removed */
@@ -9982,7 +11009,7 @@ static void interpret_assign(ASTNode *node) {
         return;
     }
     // ¿Es una expresión matemática?
-    else if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0) {
+    else if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0 || strcmp(value_node->type, "MOD") == 0 || strcmp(value_node->type, "NEG") == 0 || strcmp(value_node->type, "BIT_AND") == 0 || strcmp(value_node->type, "BIT_OR") == 0 || strcmp(value_node->type, "BIT_XOR") == 0 || strcmp(value_node->type, "BIT_NOT") == 0 || strcmp(value_node->type, "SHL") == 0 || strcmp(value_node->type, "SHR") == 0 || strcmp(value_node->type, "IN") == 0) {
         if (strcmp(value_node->type, "ADD") == 0 && is_string_type(value_node)) {
             char *s = get_node_string(value_node);
             ASTNode* temp_node = create_ast_leaf("STRING", 0, s, NULL);

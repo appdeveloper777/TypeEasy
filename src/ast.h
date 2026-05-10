@@ -17,6 +17,9 @@ typedef struct ParameterNode ParameterNode;
 typedef enum {
     NK_UNKNOWN = 0,
     NK_ADD, NK_SUB, NK_MUL, NK_DIV,
+    NK_MOD, NK_NEG,
+    NK_BIT_AND, NK_BIT_OR, NK_BIT_XOR, NK_BIT_NOT, NK_SHL, NK_SHR,
+    NK_IN,
     NK_GT, NK_LT, NK_EQ, NK_DIFF, NK_GT_EQ, NK_LT_EQ,
     NK_AND, NK_OR, NK_NOT, NK_NULL_COALESCE,
     NK_NUMBER, NK_INT, NK_FLOAT, NK_STRING, NK_STRING_LITERAL, NK_STRING_INTERP,
@@ -141,6 +144,7 @@ typedef struct ClassNode {
     Variable *attributes;
     int attr_count;
     MethodNode *methods;
+    struct ClassNode *parent;   /* Phase E: superclass (NULL if none) */
     struct ClassNode *next;
 } ClassNode;
 
@@ -200,6 +204,10 @@ ASTNode *append_to_list(ASTNode *list, ASTNode *item);
 ASTNode *create_list_function_call_node(ASTNode *list, const char *funcName, ASTNode *lambda);
 ASTNode *create_object_node(ObjectNode *obj);
 ASTNode *create_lambda_node(const char *argName, ASTNode *body);
+/* Fase B: lambda multi-param. paramsCsv = nombres separados por '\1'. */
+ASTNode *create_lambda_multi_node(const char *paramsCsv, ASTNode *body);
+/* Invoca un lambda con argumentos (lista enlazada por ->right). */
+ASTNode *call_lambda(ASTNode *lambda, ASTNode *argsList);
 ASTNode* create_for_in_node(const char *var_name, ASTNode *list_expr, ASTNode *body);
 
 
@@ -218,6 +226,7 @@ ASTNode *create_method_call_node(ASTNode *objectNode,
                                      ASTNode *args);
 
 ClassNode *create_class(char *name);
+void inherit_from(ClassNode *child, char *parent_name);  /* Phase E */
 void add_class(ClassNode *class);
 void add_attribute_to_class(ClassNode *class, char *attr_name, char *attr_type);
 void add_method_to_class(ClassNode *class,

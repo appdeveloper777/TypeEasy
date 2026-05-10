@@ -1,0 +1,69 @@
+// Fase B: lambdas + higher-order
+
+// 1. Lambda como variable
+var doble = fn(x) => x * 2;
+println(doble(5));               // 10
+println(doble(21));              // 42
+
+// 2. Lambda multi-arg
+var suma = fn(a, b) => a + b;
+println(suma(3, 4));             // 7
+
+// 3. Lambda con block body
+var fact = fn(n) => {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * 2;
+};
+println(fact(5));                // 10
+println(fact(0));                // 1
+
+// 4. map sobre array
+var nums = [1, 2, 3, 4, 5];
+var dobles = nums.map(fn(x) => x * 2);
+println(dobles[0]);              // 2
+println(dobles[1]);              // 4
+println(dobles[4]);              // 10
+println(dobles.length);          // 5
+
+// 5. filter
+var pares = nums.filter(fn(x) => x % 2 == 0);
+println(pares.length);           // 2
+println(pares[0]);               // 2
+println(pares[1]);               // 4
+
+// 6. reduce
+var total = nums.reduce(fn(acc, x) => acc + x, 0);
+println(total);                  // 15
+
+var prod = nums.reduce(fn(acc, x) => acc * x, 1);
+println(prod);                   // 120
+
+// 7. forEach
+var contador = 0;
+nums.forEach(fn(x) => {
+    contador = contador + x;
+});
+println(contador);               // 15
+
+// 8. find
+var primero_grande = nums.find(fn(x) => x > 3);
+println(primero_grande);         // 4
+
+// 9. any / every
+var hay_par = nums.any(fn(x) => x % 2 == 0);
+println(hay_par);                // 1
+var todos_pos = nums.every(fn(x) => x > 0);
+println(todos_pos);              // 1
+var todos_pares = nums.every(fn(x) => x % 2 == 0);
+println(todos_pares);            // 0
+
+// 10. Cadena map+filter
+var por10 = nums.map(fn(x) => x * 10);
+var resultado = por10.filter(fn(x) => x > 20);
+println(resultado.length);       // 3
+println(resultado[0]);           // 30
+println(resultado[2]);           // 50
+
+println("FASE B OK");

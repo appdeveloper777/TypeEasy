@@ -1,0 +1,26 @@
+var doble = fn(x) => x * 2;
+println("--- expression-body lambda ---");
+var a = doble(5);
+println(a);                  // 10
+println(doble(7));           // 14
+println("--- block-body lambda ---");
+var f = fn(n) => {
+    return n * 3;
+};
+println(f(4));               // 12
+println("--- if/else block ---");
+var g = fn(n) => {
+    if (n <= 1) { return 999; }
+    return n * 10;
+};
+println(g(0));               // 999
+println(g(5));               // 50
+println("--- map small ---");
+var nums = [1, 2, 3];
+println(nums.length);        // 3
+println(nums[0]);            // 1
+var dd = nums.map(fn(x) => x * 100);
+println(dd.length);          // 3
+println(dd[0]);              // 100
+println(dd[2]);              // 300
+println("OK");

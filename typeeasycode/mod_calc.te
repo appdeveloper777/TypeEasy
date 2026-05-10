@@ -1,0 +1,19 @@
+// Módulo: clases y constantes simples
+class Calc {
+  base : int;
+
+  __constructor(b : int) {
+    this.base = b;
+  }
+
+  doblar(n : int) : int {
+    return n * 2;
+  }
+
+  sumar_base(n : int) : int {
+    return this.base + n;
+  }
+}
+
+var MOD_CONST = 42;
+println("[mod_calc] cargado");

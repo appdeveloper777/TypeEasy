@@ -29,12 +29,15 @@
 %token       VAR ASSIGN PRINT PRINTLN FOR LPAREN RPAREN SEMICOLON CONCAT FPRINT FPRINTLN 
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
 %token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN MYSQL_CONNECT MYSQL_CLOSE MYSQL_QUERY ORM_QUERY
+%token       EXTENDS
 %token       VOID DYNAMIC
 %token       NULLTOK QMARK
 %token       TRY CATCH FINALLY THROW
 %token       PLUS_ASSIGN MINUS_ASSIGN STAR_ASSIGN SLASH_ASSIGN INCREMENT DECREMENT
 %token       WHILE BREAK CONTINUE
 %token       AND OR NOT QDOT QQ
+%token       PERCENT SHL SHR BIT_AND BIT_OR BIT_XOR BIT_NOT
+%token       FN
 %token <sval> IDENTIFIER STRING_LITERAL CONST
 %token <sval> STRING_INTERP
 %token <ival> NUMBER
@@ -43,7 +46,8 @@
 %token NODE ENDPOINT
 %type <sval> method_name
 %type <sval> method_return_type
-%type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args lambda_expression httpget_method_decl
+%type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args lambda_expression httpget_method_decl lambda_value
+%type <sval> lambda_param_list
 %type <pnode> parameter_decl parameter_list
 %type <node> list_literal
 %type <node> object_expression object_list
@@ -74,6 +78,14 @@
 %left AND
 %right NOT
 %nonassoc GT LT EQ GT_EQ LT_EQ, DIFF
+%nonassoc IN
+%left BIT_OR
+%left BIT_XOR
+%left BIT_AND
+%left SHL SHR
+%left PLUS MINUS
+%left MULTIPLY DIVIDE PERCENT
+%right UMINUS BIT_NOT
 
 %%
 
@@ -153,6 +165,12 @@ httpget_method_decl:
 
 class_decl:
         CLASS IDENTIFIER { last_class = create_class($2); add_class(last_class); } 
+        LBRACKET class_body RBRACKET { $$ = NULL; }
+    |   CLASS IDENTIFIER EXTENDS IDENTIFIER {
+            last_class = create_class($2);
+            add_class(last_class);
+            inherit_from(last_class, $4);
+        }
         LBRACKET class_body RBRACKET { $$ = NULL; }
 ;
 
@@ -277,6 +295,7 @@ method_decl:
 expression:
   func_call_expr
  | list_literal   
+ | lambda_value
 |expression GT expression    { $$ = create_ast_node("GT", $1, $3); }
   | expression LT expression      { $$ = create_ast_node("LT", $1, $3); }
   | expression EQ expression      { $$ = create_ast_node("EQ", $1, $3); }
@@ -313,6 +332,15 @@ expression:
   | expression MINUS expression       { $$ = create_ast_node("SUB", $1, $3); }
   | expression MULTIPLY expression       { $$ = create_ast_node("MUL", $1, $3); }
   | expression DIVIDE expression       { $$ = create_ast_node("DIV", $1, $3); }
+  | expression PERCENT expression      { $$ = create_ast_node("MOD", $1, $3); }
+  | expression BIT_AND expression      { $$ = create_ast_node("BIT_AND", $1, $3); }
+  | expression BIT_OR  expression      { $$ = create_ast_node("BIT_OR",  $1, $3); }
+  | expression BIT_XOR expression      { $$ = create_ast_node("BIT_XOR", $1, $3); }
+  | expression SHL     expression      { $$ = create_ast_node("SHL", $1, $3); }
+  | expression SHR     expression      { $$ = create_ast_node("SHR", $1, $3); }
+  | expression IN      expression      { $$ = create_ast_node("IN",  $1, $3); }
+  | MINUS expression %prec UMINUS      { $$ = create_ast_node("NEG", $2, NULL); }
+  | BIT_NOT expression                 { $$ = create_ast_node("BIT_NOT", $2, NULL); }
   | LPAREN expression RPAREN       { $$ = $2; }
   | NEW IDENTIFIER LPAREN RPAREN 
       { ClassNode *cls = find_class($2);
@@ -332,6 +360,12 @@ var_decl:
         ASTNode *filterCall = create_list_function_call_node(listExpr, $4, lambda); 
         filterCall->type = strdup("FILTER_CALL"); 
         ASTNode* d = create_var_decl_node($2, filterCall); d->value = 1; /* let = immutable */ $$ = d; }
+
+  | VAR IDENTIFIER ASSIGN IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN SEMICOLON
+      { ASTNode *listExpr = $6; ASTNode *lambda = $8;
+        ASTNode *filterCall = create_list_function_call_node(listExpr, $4, lambda);
+        filterCall->type = strdup("FILTER_CALL");
+        $$ = create_var_decl_node($2, filterCall); }
 
 
 
@@ -428,6 +462,10 @@ func_call_expr SEMICOLON { $$ = $1; }
     { ClassNode* cls = find_class($7);
       if (!cls) { printf("Clase '%s' no encontrada.\n", $7); $$ = NULL; } 
       else { ASTNode* list = from_csv_to_list($5, cls); ASTNode* d = create_var_decl_node($2, list); d->value = 1; /* let = immutable */ $$ = d; } }
+  | VAR IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER SEMICOLON
+    { ClassNode* cls = find_class($7);
+      if (!cls) { printf("Clase '%s' no encontrada.\n", $7); $$ = NULL; }
+      else { ASTNode* list = from_csv_to_list($5, cls); $$ = create_var_decl_node($2, list); } }
 ; 
 
 func_call_expr:
@@ -455,6 +493,9 @@ if_statement:
     | IF LPAREN expression RPAREN LBRACKET statement_list RBRACKET 
       ELSE LBRACKET statement_list RBRACKET
     { $$ = create_if_node($3, $6, $10); }
+    | IF LPAREN expression RPAREN LBRACKET statement_list RBRACKET 
+      ELSE if_statement
+    { $$ = create_if_node($3, $6, $9); }
 ;
 
 match_statement:
@@ -523,6 +564,27 @@ lambda:
   | LPAREN IDENTIFIER RPAREN ARROW expression  { $$ = create_lambda_node($2, $5); free($2); }
   ;
 
+/* Fase B: lambda first-class con N parámetros y body expr o block. */
+lambda_param_list:
+    IDENTIFIER                                    { $$ = $1; }
+  | lambda_param_list COMMA IDENTIFIER            {
+        size_t la = strlen($1), lb = strlen($3);
+        char *r = (char*)malloc(la + 1 + lb + 1);
+        memcpy(r, $1, la); r[la] = '\1'; memcpy(r + la + 1, $3, lb); r[la + 1 + lb] = '\0';
+        free($1); free($3); $$ = r; }
+  ;
+
+lambda_value:
+    FN LPAREN RPAREN ARROW expression
+        { $$ = create_lambda_multi_node("", $5); }
+  | FN LPAREN RPAREN ARROW LBRACKET statement_list RBRACKET
+        { $$ = create_lambda_multi_node("", $6); }
+  | FN LPAREN lambda_param_list RPAREN ARROW expression
+        { $$ = create_lambda_multi_node($3, $6); free($3); }
+  | FN LPAREN lambda_param_list RPAREN ARROW LBRACKET statement_list RBRACKET
+        { $$ = create_lambda_multi_node($3, $7); free($3); }
+  ;
+
 arg_list:
     expression
   | arg_list COMMA expression  {  $$ = append_argument_raw($1, $3); }
@@ -574,6 +636,12 @@ void generate_code(const char* code) {
 
 void yyerror(const char *s) {
     extern char *yytext;
+    extern int g_capture_errors;
+    extern void te_capture_error(int line, const char *msg, const char *near);
+    if (g_capture_errors) {
+        te_capture_error(yylineno, s, yytext);
+        return;
+    }
     printf("Error de sintaxis en linea %d: %s\n", yylineno, s);
     if (yytext) {
         printf("Cerca de: '%s'\n", yytext);

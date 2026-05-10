@@ -9,7 +9,7 @@ class Producto {
 
   Mostrar() : dynamic {
     print(this.nombre);
-    println(this.precio);
+    println(" " + this.precio);
   }
 }
 
@@ -21,11 +21,11 @@ let productos_del_papa_leon = [
     new Producto("Ceviche", 2)
 ];
 
-let productos = from "productos.csv", Producto;
-let filtrados = filter(productos, p => p.precio != 2); // LINQ
-for (let item in productos_del_papa_leon) {
+var productos = from "productos.csv", Producto;
+var filtrados = filter(productos_del_papa_leon, p => p.precio == 2); // LINQ
+for (let item in filtrados) {
     print("Producto de papa leon:");
-    item.Mostrar();
+    item.Mostrar();    
 }
 
 /*for (let _item in filtrados) {

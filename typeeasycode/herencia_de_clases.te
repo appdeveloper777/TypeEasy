@@ -1,0 +1,64 @@
+println("=== FASE E: herencia de clases ===");
+
+class Animal {
+    nombre : string;
+    edad : int;
+    energia : int;
+
+    __constructor(n : string, e : int) {
+        this.nombre = n;
+        this.edad = e;
+        this.energia = 100;
+    }
+
+    saludar() : void {
+        print("Hola, soy ");
+        println(this.nombre);
+    }
+
+    describir() : string {
+        return "Animal generico";
+    }
+
+    sumar_edad(extra : int) : int {
+        return this.edad + extra;
+    }
+}
+
+class Perro extends Animal {
+    raza : string;
+
+    __constructor(n : string, e : int, r : string) {
+        this.nombre = n;
+        this.edad = e;
+        this.energia = 100;
+        this.raza = r;
+    }
+
+    // Override
+    describir() : string {
+        return "Perro";
+    }
+
+    ladrar() : string {
+        return "Guau!";
+    }
+}
+
+let a = new Animal("Bicho", 5);
+a.saludar();                  // Hola, soy Bicho
+println(a.describir());       // Animal generico
+println(a.sumar_edad(10));    // 15
+
+println("---");
+
+let p = new Perro("Rex", 3, "Labrador");
+p.saludar();                  // Hola, soy Rex   (heredado)
+println(p.describir());       // Perro           (override)
+println(p.ladrar());          // Guau!           (propio)
+println(p.sumar_edad(7));     // 10              (heredado)
+println(p.edad);              // 3               (atributo heredado)
+println(p.energia);           // 100             (atributo heredado, default ctor body)
+println(p.raza);              // Labrador        (atributo propio)
+
+println("FASE E OK");

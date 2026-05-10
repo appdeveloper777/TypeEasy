@@ -1,0 +1,58 @@
+println("=== FASE G: bytecode ext (MOD/NEG/BIT_*/SHL/SHR) ===");
+
+class Calc {
+    a : int;
+    b : int;
+
+    __constructor(x : int, y : int) {
+        this.a = x;
+        this.b = y;
+    }
+
+    mod()  : int { return this.a % this.b; }
+    neg()  : int { return -this.a; }
+    band() : int { return this.a & this.b; }
+    bor()  : int { return this.a | this.b; }
+    bxor() : int { return this.a ^ this.b; }
+    shl()  : int { return this.a << this.b; }
+    shr()  : int { return this.a >> this.b; }
+    expr() : int { return (this.a * 3) % (this.b + 1); }
+}
+
+let c1 = new Calc(17, 5);
+println(c1.mod());          // 2
+println(c1.expr());         // 51 % 6 = 3
+
+let c2 = new Calc(12, 10);
+println(c2.band());         // 8
+println(c2.bor());          // 14
+println(c2.bxor());         // 6
+
+let c3 = new Calc(3, 4);
+println(c3.shl());          // 48
+
+let c4 = new Calc(256, 3);
+println(c4.shr());          // 32
+
+let c5 = new Calc(42, 0);
+println(c5.neg());          // -42
+
+class Hot {
+    n : int;
+    __constructor(x : int) { this.n = x; }
+    sum_odd_mod() : int {
+        var i = 0;
+        var s = 0;
+        while (i < this.n) {
+            if ((i % 2) == 1) {
+                s = s + i;
+            }
+            i = i + 1;
+        }
+        return s;
+    }
+}
+let h = new Hot(100);
+println(h.sum_odd_mod());   // 2500
+
+println("FASE G OK");

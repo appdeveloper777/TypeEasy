@@ -1,0 +1,9 @@
+/* Phase F demo test — happy path. Limitación: assert_eq con args
+ * que sean BINOP (a+b) corrompe el chain; usar variables intermedias. */
+let a = 10;
+let b = 20;
+let sum = a + b;
+assert(a < b);
+assert_eq(sum, 30);
+assert_eq("hola", "hola");
+println("smoke ok");

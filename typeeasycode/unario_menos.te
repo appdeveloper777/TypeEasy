@@ -1,0 +1,77 @@
+// Fase A: quick wins de sintaxis
+
+// 1. Unario menos
+var a = -7;
+println(a);                  // -7
+var b = -a;
+println(b);                  // 7
+var c = -(3 + 4);
+println(c);                  // -7
+var d = 10 + -3;
+println(d);                  // 7
+
+// 2. Modulo
+var m1 = 10 % 3;
+println(m1);                 // 1
+var m2 = 17 % 5;
+println(m2);                 // 2
+
+// 3. else if
+var x = 5;
+if (x == 1) {
+    println("uno");
+} else if (x == 5) {
+    println("cinco");
+} else if (x == 10) {
+    println("diez");
+} else {
+    println("otro");
+}                            // cinco
+
+// 4. Bitwise
+var ba = 12 & 10;
+println(ba);                 // 8
+var bo = 12 | 10;
+println(bo);                 // 14
+var bx = 12 ^ 10;
+println(bx);                 // 6
+var bn = ~0;
+println(bn);                 // -1
+var sl = 1 << 4;
+println(sl);                 // 16
+var sr = 256 >> 2;
+println(sr);                 // 64
+
+// 5. Literales hex / bin / underscore
+var h = 0xFF;
+println(h);                  // 255
+var h2 = 0xDEAD_BEEF;
+println(h2);                 // -559038737  (interpretado como int32)
+var bin = 0b1010;
+println(bin);                // 10
+var million = 1_000_000;
+println(million);            // 1000000
+
+// 6. Operador 'in' con map
+var m = {"a": 1, "b": 2};
+if ("a" in m) {
+    println("tiene a");
+}                            // tiene a
+if ("z" in m) {
+    println("tiene z");
+} else {
+    println("no tiene z");
+}                            // no tiene z
+
+// 7. Operador 'in' con array
+var arr = [10, 20, 30];
+if (20 in arr) {
+    println("encontrado 20");
+}                            // encontrado 20
+if (99 in arr) {
+    println("encontrado 99");
+} else {
+    println("99 no esta");
+}                            // 99 no esta
+
+println("FASE A OK");

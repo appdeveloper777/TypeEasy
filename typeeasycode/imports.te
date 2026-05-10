@@ -1,0 +1,15 @@
+// Fase C: imports
+
+import "mod_calc.te";
+
+println("[main] MOD_CONST =");
+println(MOD_CONST);
+
+let c = new Calc(100);
+println(c.doblar(7));         // 14
+println(c.sumar_base(50));    // 150
+
+// Re-importar el mismo módulo: skip silencioso
+import "mod_calc.te";
+
+println("FASE C OK");

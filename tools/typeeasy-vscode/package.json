@@ -4,8 +4,13 @@
   "description": "Debug adapter for the TypeEasy language",
   "version": "0.0.1",
   "publisher": "typeeasy",
-  "engines": { "vscode": "^1.75.0" },
-  "categories": ["Debuggers", "Programming Languages"],
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Debuggers",
+    "Programming Languages"
+  ],
   "main": "./extension.js",
   "activationEvents": [
     "onDebugResolve:typeeasy",
@@ -15,8 +20,13 @@
     "languages": [
       {
         "id": "typeeasy",
-        "aliases": ["TypeEasy", "typeeasy"],
-        "extensions": [".te"],
+        "aliases": [
+          "TypeEasy",
+          "typeeasy"
+        ],
+        "extensions": [
+          ".te"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -26,7 +36,9 @@
       }
     },
     "breakpoints": [
-      { "language": "typeeasy" }
+      {
+        "language": "typeeasy"
+      }
     ],
     "grammars": [
       {
@@ -39,10 +51,14 @@
       {
         "type": "typeeasy",
         "label": "TypeEasy",
-        "languages": ["typeeasy"],
+        "languages": [
+          "typeeasy"
+        ],
         "configurationAttributes": {
           "launch": {
-            "required": ["program"],
+            "required": [
+              "program"
+            ],
             "properties": {
               "program": {
                 "type": "string",
@@ -90,6 +106,7 @@
     ]
   },
   "dependencies": {
-    "@vscode/debugadapter": "^1.66.0"
+    "@vscode/debugadapter": "^1.66.0",
+    "vscode-languageclient": "^9.0.1"
   }
 }

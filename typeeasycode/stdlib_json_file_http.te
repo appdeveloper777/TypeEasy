@@ -1,0 +1,29 @@
+println("=== FASE D: stdlib (JSON / File / HTTP) ===");
+
+// --- JSON stringify ---
+let m = { "nombre": "Ana", "edad": 30, "activo": 1 };
+println(json_stringify(m));      // {"nombre":"Ana","edad":30,"activo":1}
+
+let lst = [1, 2, 3, "x"];
+println(json_stringify(lst));    // [1,2,3,"x"]
+
+// --- JSON parse ---
+let p = json_parse("{\"a\": 7, \"b\": 20, \"c\": \"hola\"}");
+println(p["a"]);                 // 7
+println(p["b"]);                 // 20
+println(p["c"]);                 // hola
+
+// --- Roundtrip simple ---
+let original = { "nombre": "Bob", "edad": 25 };
+let dump = json_stringify(original);
+println(dump);                   // {"nombre":"Bob","edad":25}
+let back = json_parse(dump);
+println(back["nombre"]);         // Bob
+println(back["edad"]);           // 25
+
+// --- File ---
+println(write_file("te_phase_d.txt", "hola desde TypeEasy"));  // 1
+println(file_exists("te_phase_d.txt"));   // 1
+println(read_file("te_phase_d.txt"));     // hola desde TypeEasy
+
+println("FASE D OK");

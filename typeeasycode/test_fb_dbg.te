@@ -1,0 +1,7 @@
+var f = fn(x) => x * 2;
+var a = f(5);
+println("a=");
+println(a);
+println("inline:");
+println(f(5));
+println(f(7));

@@ -63,8 +63,25 @@
     
     // Resolve path
     char path[1024];
-    if (fname[0] == '/') snprintf(path, sizeof(path), "%s", fname);
-    else snprintf(path, sizeof(path), "/app/%s", fname);
+    if (fname[0] == '/') {
+        snprintf(path, sizeof(path), "%s", fname);
+    } else {
+        // 1) Relative to CWD
+        FILE *probe = fopen(fname, "r");
+        if (probe) {
+            fclose(probe);
+            snprintf(path, sizeof(path), "%s", fname);
+        } else {
+            // 2) /code/ (docker mount of typeeasycode/)
+            snprintf(path, sizeof(path), "/code/%s", fname);
+            probe = fopen(path, "r");
+            if (probe) { fclose(probe); }
+            else {
+                // 3) /app/
+                snprintf(path, sizeof(path), "/app/%s", fname);
+            }
+        }
+    }
     free(fname);
 
     if (!is_already_imported(path)) {
@@ -109,6 +126,7 @@
 "var"                   { return VAR; }
 "return"                { return RETURN; }
 "class"                 { return CLASS; }
+"extends"               { return EXTENDS; }
 "__constructor"         { return CONSTRUCTOR; }
 "this"                  { return THIS; }
 "new"                   { return NEW; }
@@ -118,6 +136,7 @@
 "fprint"                { return FPRINT; }
 "fprintln"              { return FPRINTLN; }
 "const"                 { return CONST; }
+"fn"                    { return FN; }
 
 "HttpGet"               { return HTTPGET; }
 "HTTPGET"               { return HTTPGET; }
@@ -187,6 +206,13 @@
 "*"                     { return MULTIPLY; }
 "/"                     { return DIVIDE; }
 "="                     { return ASSIGN; }
+"%"                     { return PERCENT; }
+"<<"                    { return SHL; }
+">>"                    { return SHR; }
+"&"                     { return BIT_AND; }
+"|"                     { return BIT_OR; }
+"^"                     { return BIT_XOR; }
+"~"                     { return BIT_NOT; }
 "if"                    { return IF; }    
 "else"                  { return ELSE; }  
 
@@ -245,14 +271,38 @@
     return STRING_LITERAL;
 }
 
-[0-9]+                  {
-    yylval.ival = atoi(yytext);
+0[xX][0-9a-fA-F][0-9a-fA-F_]*  {
+    /* Hex literal: 0xFF, 0xDEAD_BEEF */
+    char buf[64]; int j = 0;
+    for (char *p = yytext + 2; *p && j < 63; p++) if (*p != '_') buf[j++] = *p;
+    buf[j] = '\0';
+    yylval.ival = (int)strtol(buf, NULL, 16);
     return NUMBER;
 }
-[0-9]+\.[0-9]+          {
-                            yylval.sval = strdup(yytext);
-                            return FLOAT_LITERAL;
-                        }
+0[bB][01][01_]*           {
+    /* Binary literal: 0b1010, 0b1010_1100 */
+    char buf[64]; int j = 0;
+    for (char *p = yytext + 2; *p && j < 63; p++) if (*p != '_') buf[j++] = *p;
+    buf[j] = '\0';
+    yylval.ival = (int)strtol(buf, NULL, 2);
+    return NUMBER;
+}
+[0-9][0-9_]*              {
+    /* Decimal literal con separadores opcionales: 1_000_000 */
+    char buf[64]; int j = 0;
+    for (char *p = yytext; *p && j < 63; p++) if (*p != '_') buf[j++] = *p;
+    buf[j] = '\0';
+    yylval.ival = atoi(buf);
+    return NUMBER;
+}
+[0-9][0-9_]*\.[0-9][0-9_]*  {
+    /* Float con underscores opcional */
+    char buf[64]; int j = 0;
+    for (char *p = yytext; *p && j < 63; p++) if (*p != '_') buf[j++] = *p;
+    buf[j] = '\0';
+    yylval.sval = strdup(buf);
+    return FLOAT_LITERAL;
+}
 
 
 [A-Za-z_][A-Za-z0-9_]*  {
