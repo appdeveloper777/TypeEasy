@@ -1,0 +1,33 @@
+// Test endpoint con @Cache(30) — patrón TypeEasy:
+// Imprimir el body por println y retornar json() o xml()
+
+@Cache(30)
+endpoint {
+    [HttpGet("/api/rapido")]
+    saludo() {
+        println("{");
+        println("  \"mensaje\": \"Hola desde TypeEasy\"");
+        println("}");
+        return json();
+    }
+
+    [HttpGet("/api/lento")]
+    pesado() {
+        var s = 0;
+        var i = 0;
+        while (i < 100) {
+            s = s + i;
+            i = i + 1;
+        }
+        println("{");
+        let body = concat("  \"suma\": ", s);
+        println(body);
+        println("}");
+        return json();
+    }
+     [HttpGet("/api/users/{id}")]
+    getUser() {
+        let id = request_param("id");
+        return json(concat("{\"test9\": \"", id, "\"}"));
+    }
+}

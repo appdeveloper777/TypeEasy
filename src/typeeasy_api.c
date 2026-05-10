@@ -270,15 +270,17 @@ char* typeeasy_embedded_discover(TypeEasyEmbeddedContext* ctx, const char* scrip
             
             // Detect response type
             const char *response_type = detect_response_type_embedded(m->body);
+            const char *http_method = m->http_method ? m->http_method : "GET";
             
-            // Build JSON entry
+            // Build JSON entry (now includes cache_ttl)
             char entry[1024];
             snprintf(entry, sizeof(entry), 
-                     "{\"route\": \"%s\", \"method\": \"%s\", \"function\": \"%s\", \"response_type\": \"%s\"}", 
+                     "{\"route\": \"%s\", \"method\": \"%s\", \"function\": \"%s\", \"response_type\": \"%s\", \"cache_ttl\": %d}", 
                      m->route_path, 
-                     m->http_method ? m->http_method : "GET", 
+                     http_method, 
                      m->name, 
-                     response_type);
+                     response_type,
+                     m->cache_ttl);
             strcat(result, entry);
             first = 0;
         }

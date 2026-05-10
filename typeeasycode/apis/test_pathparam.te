@@ -1,0 +1,8 @@
+endpoint {
+    [HttpGet("/api/echo/{x}")]
+    echoX() { return json(request_param("x")); }
+    [HttpGet("/api/concat-test")]
+    ct() { return json(concat("a","b","c")); }
+    [HttpGet("/api/literal")]
+    lit() { return json("{\"ok\":1}"); }
+}

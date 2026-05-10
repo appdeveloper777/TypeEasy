@@ -1,0 +1,25 @@
+#!/bin/sh
+# Dev entrypoint: rebuild typeeasy_api from mounted /app/src + /app/api_server, then exec it.
+# Used by the api_dev mode (docker-compose.override.yml). For prod use the multi-stage Dockerfile.
+set -e
+
+echo "[dev] regenerating parser..."
+cd /app/src
+bison -d -o parser.tab.c parser.y --warnings=none
+flex -o lex.yy.c parser.l
+
+echo "[dev] compiling interpreter objects..."
+gcc -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -O0 -g -c \
+    ast.c bytecode.c mysql_bridge.c orm_bridge.c typeeasy_api.c debugger.c \
+    parser.tab.c lex.yy.c strvars.c
+
+echo "[dev] linking typeeasy_api..."
+cd /app
+gcc -I/app/api_server -I/app/src -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -O0 -g \
+    /app/api_server/servidor_api.c /app/api_server/typeeasy.c /app/api_server/civetweb.c \
+    /app/src/ast.o /app/src/bytecode.o /app/src/mysql_bridge.o /app/src/orm_bridge.o \
+    /app/src/typeeasy_api.o /app/src/debugger.o /app/src/parser.tab.o /app/src/lex.yy.o /app/src/strvars.o \
+    -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto -lmysqlclient -lfl -lm
+
+echo "[dev] starting typeeasy_api on :8080"
+exec /app/typeeasy_api

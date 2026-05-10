@@ -4,6 +4,9 @@
 #include <signal.h>
 #include <ctype.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <pthread.h>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -14,6 +17,7 @@
 
 // Incluir el encabezado de TypeEasy
 #include "typeeasy.h"
+#include "../src/typeeasy_http.h"
 
 // Estructura para la tabla de rutas dinámica
 typedef struct RouteEntry {
@@ -21,22 +25,160 @@ typedef struct RouteEntry {
     char *script_path;
     char *function_name;
     char *response_type;  // "json" or "xml"
+    char *http_method;    // "GET" / "POST" / "PUT" / "DELETE" / "PATCH"
+    int   cache_ttl;      // seconds; 0 = no cache
     struct RouteEntry *next;
 } RouteEntry;
 
 static RouteEntry *global_routes = NULL;
 static TypeEasyContext *g_typeeasy_ctx = NULL;
 
+/* Simple in-memory response cache keyed by method+full URI. Phase H. */
+typedef struct CacheEntry {
+    char  *key;           // "METHOD URI"
+    char  *body;
+    int    status;
+    char  *content_type;
+    time_t expires_at;
+    struct CacheEntry *next;
+} CacheEntry;
+static CacheEntry *g_cache = NULL;
+
+/* --- Hot-reload of .te scripts (dev mode, gated by TYPEEASY_HOTRELOAD=1) ---
+ * On each request we stat every tracked .te file; if any mtime changed (or a
+ * new file appeared), we drop all routes/cache, reinit the interpreter, and
+ * re-run discover. Lets users edit .te files without `docker compose restart`. */
+typedef struct ScriptFile {
+    char  *path;
+    time_t mtime;
+    struct ScriptFile *next;
+} ScriptFile;
+static ScriptFile *g_scripts = NULL;
+static int         g_hotreload = 0;
+static char      **g_main_argv = NULL;  /* saved for execv self-restart */
+
+static void track_script(const char *path, time_t m) {
+    ScriptFile *s = (ScriptFile*)malloc(sizeof(ScriptFile));
+    s->path = strdup(path); s->mtime = m; s->next = g_scripts; g_scripts = s;
+}
+static void free_scripts(void) {
+    ScriptFile *s = g_scripts;
+    while (s) { ScriptFile *n = s->next; free(s->path); free(s); s = n; }
+    g_scripts = NULL;
+}
+static void free_routes_list(void) {
+    RouteEntry *r = global_routes;
+    while (r) {
+        RouteEntry *n = r->next;
+        free(r->route_path); free(r->script_path); free(r->function_name);
+        free(r->response_type); free(r->http_method); free(r);
+        r = n;
+    }
+    global_routes = NULL;
+}
+static void free_cache_list(void) {
+    CacheEntry *c = g_cache;
+    while (c) { CacheEntry *n = c->next; free(c->key); free(c->body); free(c->content_type); free(c); c = n; }
+    g_cache = NULL;
+}
+
+void discover_routes(void); /* fwd */
+void typeeasy_cleanup(TypeEasyContext* ctx); /* from typeeasy.c */
+
+/* mg context handle (set in main) so the hot-reload thread can drain. */
+static struct mg_context *g_mg_ctx = NULL;
+
+/* Returns 1 if any tracked .te changed (mtime or new file), 0 otherwise.
+ * Pure check — doesn't act. */
+static int hotreload_changed(void) {
+    if (!g_hotreload) return 0;
+    struct stat st;
+    for (ScriptFile *s = g_scripts; s; s = s->next) {
+        if (stat(s->path, &st) != 0) return 1;
+        if (st.st_mtime != s->mtime)  return 1;
+    }
+    FILE *fp = popen("ls -1 /app/apis/*.te 2>/dev/null", "r");
+    if (fp) {
+        char line[1035];
+        int newfile = 0;
+        while (fgets(line, sizeof(line), fp)) {
+            line[strcspn(line, "\r\n")] = 0;
+            int found = 0;
+            for (ScriptFile *s = g_scripts; s; s = s->next) {
+                if (strcmp(s->path, line) == 0) { found = 1; break; }
+            }
+            if (!found) { newfile = 1; break; }
+        }
+        pclose(fp);
+        if (newfile) return 1;
+    }
+    return 0;
+}
+
+/* Replace this process with a fresh one (used by the forked child during
+ * zero-downtime reload). */
+static void child_execv_self(void) __attribute__((noreturn));
+static void child_execv_self(void) {
+    if (g_main_argv && g_main_argv[0]) {
+        execv(g_main_argv[0], g_main_argv);
+        execl("/proc/self/exe", "typeeasy_api", (char*)NULL);
+    }
+    fprintf(stderr, "[HOTRELOAD] execv falló — child saliendo\n");
+    fflush(stderr);
+    _exit(1);
+}
+
+/* Background thread (legacy, unused now): supervisor model handles reload. */
+static void *hotreload_thread(void *arg) {
+    (void)arg;
+    return NULL;
+}
+
+static CacheEntry *cache_lookup(const char *key) {
+    time_t now = time(NULL);
+    CacheEntry *prev = NULL, *cur = g_cache;
+    while (cur) {
+        if (cur->expires_at <= now) {
+            /* expired: drop */
+            CacheEntry *dead = cur;
+            if (prev) prev->next = cur->next; else g_cache = cur->next;
+            cur = cur->next;
+            free(dead->key); free(dead->body); free(dead->content_type); free(dead);
+            continue;
+        }
+        if (strcmp(cur->key, key) == 0) return cur;
+        prev = cur; cur = cur->next;
+    }
+    return NULL;
+}
+static void cache_store(const char *key, const char *body, int status, const char *ct, int ttl) {
+    if (ttl <= 0) return;
+    CacheEntry *e = (CacheEntry*)malloc(sizeof(CacheEntry));
+    e->key = strdup(key); e->body = strdup(body ? body : "");
+    e->status = status; e->content_type = strdup(ct ? ct : "application/json");
+    e->expires_at = time(NULL) + ttl;
+    e->next = g_cache; g_cache = e;
+}
+
 // Función para añadir una ruta a la tabla
+void add_route_full(const char *route, const char *script, const char *func,
+                    const char *resp_type, const char *http_method, int cache_ttl);
 void add_route(const char *route, const char *script, const char *func, const char *resp_type) {
+    add_route_full(route, script, func, resp_type, "GET", 0);
+}
+void add_route_full(const char *route, const char *script, const char *func,
+                    const char *resp_type, const char *http_method, int cache_ttl) {
     RouteEntry *entry = (RouteEntry*)malloc(sizeof(RouteEntry));
     entry->route_path = strdup(route);
     entry->script_path = strdup(script);
     entry->function_name = strdup(func);
     entry->response_type = strdup(resp_type ? resp_type : "json");
+    entry->http_method = strdup(http_method ? http_method : "GET");
+    entry->cache_ttl = cache_ttl;
     entry->next = global_routes;
     global_routes = entry;
-    printf("[LOG] Ruta registrada: %s -> %s() [%s]\n", route, func, entry->response_type);
+    printf("[LOG] Ruta registrada: %s %s -> %s() [%s, cache=%d]\n",
+           entry->http_method, route, func, entry->response_type, cache_ttl);
 }
 
 // Función para cargar un script TypeEasy
@@ -112,6 +254,12 @@ void discover_routes() {
         if (!load_typeeasy_script(path)) {
             continue;
         }
+
+        /* Track mtime for hot-reload */
+        if (g_hotreload) {
+            struct stat st;
+            if (stat(path, &st) == 0) track_script(path, st.st_mtime);
+        }
         
         // Ejecutar discover usando TypeEasy embebido
         char *discover_result = typeeasy_discover(g_typeeasy_ctx, path);
@@ -167,11 +315,37 @@ void discover_routes() {
                             resp_type = resp_temp;
                         }
                     }
-                    
+
+                    /* Parse method */
+                    char *http_method = "GET";
+                    char *method_pos = strstr(p, "\"method\":");
+                    if (method_pos) {
+                        method_pos += 9;
+                        while (*method_pos == ' ' || *method_pos == '"') method_pos++;
+                        char *ms = method_pos;
+                        while (*method_pos != '"' && *method_pos != '\0') method_pos++;
+                        if (*method_pos == '"') {
+                            int mlen = method_pos - ms;
+                            char *tmp = (char*)malloc(mlen + 1);
+                            strncpy(tmp, ms, mlen); tmp[mlen] = '\0';
+                            http_method = tmp;
+                        }
+                    }
+
+                    /* Parse cache_ttl */
+                    int cache_ttl = 0;
+                    char *cache_pos = strstr(p, "\"cache_ttl\":");
+                    if (cache_pos) {
+                        cache_pos += 12;
+                        while (*cache_pos == ' ') cache_pos++;
+                        cache_ttl = atoi(cache_pos);
+                    }
+
                     // Registrar ruta
-                    add_route(route, path, func, resp_type);
+                    add_route_full(route, path, func, resp_type, http_method, cache_ttl);
                     
-                    if (resp_pos && resp_type != "json") free((char*)resp_type);
+                    if (resp_pos && resp_type != (char*)"json") free((char*)resp_type);
+                    if (method_pos && http_method != (char*)"GET") free((char*)http_method);
                     free(func);
                 }
             }
@@ -183,97 +357,202 @@ void discover_routes() {
     pclose(fp);
 }
 
+/* Match a registered route pattern (possibly containing {name} segments)
+ * against an actual URI. Returns 1 on match and populates path params via
+ * typeeasy_http_add_param(). Returns 0 on mismatch. */
+static int match_route_pattern(const char *pattern, const char *uri) {
+    const char *pp = pattern, *up = uri;
+    while (*pp && *up) {
+        if (*pp == '{') {
+            /* extract param name */
+            const char *name_start = pp + 1;
+            const char *name_end = strchr(name_start, '}');
+            if (!name_end) return 0;
+            /* consume up to next '/' or end in uri */
+            const char *val_start = up;
+            while (*up && *up != '/') up++;
+            int nlen = name_end - name_start;
+            int vlen = up - val_start;
+            char name[64], val[256];
+            if (nlen <= 0 || nlen >= (int)sizeof(name) || vlen >= (int)sizeof(val)) return 0;
+            memcpy(name, name_start, nlen); name[nlen] = '\0';
+            memcpy(val,  val_start,  vlen); val[vlen]   = '\0';
+            typeeasy_http_add_param(name, val);
+            pp = name_end + 1;
+        } else if (*pp == *up) {
+            pp++; up++;
+        } else {
+            return 0;
+        }
+    }
+    return (*pp == '\0' && *up == '\0');
+}
+
+/* Strip XML declaration / leading log noise from interpreter output. */
+static char *strip_leading_garbage(char *result, const char **content_type_out) {
+    char *actual_content = result;
+    char *xml_start = strstr(result, "<?xml");
+    if (xml_start) {
+        actual_content = xml_start;
+        *content_type_out = "application/xml";
+        return actual_content;
+    }
+    char *p = result;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (*p == '<') { *content_type_out = "application/xml"; return p; }
+    char *ja = strstr(result, "[{");
+    char *jo = strstr(result, "{\"");
+    if (ja && (!jo || ja < jo)) { *content_type_out = "application/json"; return ja; }
+    if (jo)                     { *content_type_out = "application/json"; return jo; }
+    *content_type_out = "application/json";
+    return result;
+}
+
 static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
-    (void)cbdata; 
+    (void)cbdata;
 
     const struct mg_request_info *req_info = mg_get_request_info(conn);
-    const char *uri = req_info->local_uri;
+    const char *uri    = req_info->local_uri;
+    const char *method = req_info->request_method ? req_info->request_method : "GET";
+    const char *qs     = req_info->query_string;
 
-    fprintf(stderr, "[LOG] manejadorApiDinamico: URI recibida: %s\n", uri); fflush(stderr);
+    fprintf(stderr, "[LOG] %s %s\n", method, uri); fflush(stderr);
 
-    // Buscar en la tabla de rutas dinámica
-    RouteEntry *entry = global_routes;
-    while (entry) {
-        if (strcmp(uri, entry->route_path) == 0) {
-            // Encontrado! Invocar función directamente usando TypeEasy embebido
-            fprintf(stderr, "[LOG] Invocando función: %s desde %s\n", entry->function_name, entry->script_path); fflush(stderr);
-            
-            // Medir tiempo de ejecución
-            clock_t start_time = clock();
-            fprintf(stderr, "[DEBUG] Starting execution timer\n"); fflush(stderr);
-            
-            // CAMBIO PRINCIPAL: Usar typeeasy_invoke_with_script en lugar de typeeasy_invoke
-            char *result = typeeasy_invoke_with_script(g_typeeasy_ctx, entry->script_path, entry->function_name, NULL);
-            fprintf(stderr, "[DEBUG] Execution finished, result: %p\n", result); fflush(stderr);
-            
-            clock_t end_time = clock();
-            double time_taken = ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
-            
-            if (!result) {
-                mg_send_http_error(conn, 500, "Error interno al ejecutar función TypeEasy");
-                return 1;
-            }
+    /* Reset HTTP state. We always reset before matching: params get added
+     * during the match attempt and we need a clean slate per try. */
+    typeeasy_http_reset();
+    typeeasy_http_set_method(method);
+    typeeasy_http_set_path(uri);
 
-            // Extraer solo contenido XML/JSON, filtrando logs de debug
-            char *actual_content = result;
-            
-            // Buscar declaración XML
-            char *xml_start = strstr(result, "<?xml");
-            if (xml_start) {
-                actual_content = xml_start;
-            } else {
-                // Buscar etiquetas XML (ej: <Usuarios>, <Usuario>, etc.)
-                // Ignorar espacios en blanco iniciales
-                char *p = result;
-                while (*p && isspace((unsigned char)*p)) p++;
-                
-                if (*p == '<') {
-                     // Es XML si empieza con < y no es un comentario obvio (aunque <?xml ya lo cubrimos)
-                     actual_content = p;
-                } else {
-                    // Buscar inicio de array JSON
-                    char *json_array_start = strstr(result, "[{");
-                    if (json_array_start) {
-                        actual_content = json_array_start;
-                    } else {
-                        // Buscar inicio de objeto JSON
-                        char *json_obj_start = strstr(result, "{\"");
-                        if (json_obj_start) {
-                            actual_content = json_obj_start;
-                        }
-                    }
+    /* Find a matching route (exact first, then pattern). Also enforce method. */
+    RouteEntry *match = NULL;
+    for (RouteEntry *entry = global_routes; entry && !match; entry = entry->next) {
+        if (entry->http_method && strcmp(entry->http_method, method) != 0) continue;
+        if (strchr(entry->route_path, '{') == NULL) {
+            if (strcmp(uri, entry->route_path) == 0) match = entry;
+        } else {
+            /* Pattern match. Params get added inside; if it fails we clear them. */
+            typeeasy_http_reset();
+            typeeasy_http_set_method(method);
+            typeeasy_http_set_path(uri);
+            if (match_route_pattern(entry->route_path, uri)) match = entry;
+        }
+    }
+    if (!match) {
+        typeeasy_http_reset();
+        mg_send_http_error(conn, 404, "Endpoint no encontrado");
+        return 1;
+    }
+
+    /* Populate query params */
+    if (qs && *qs) {
+        const char *p = qs;
+        while (*p) {
+            const char *eq = strchr(p, '=');
+            const char *amp = strchr(p, '&');
+            if (!amp) amp = p + strlen(p);
+            char key[128]; char val[1024];
+            if (eq && eq < amp) {
+                int kl = eq - p; int vl = amp - (eq + 1);
+                if (kl > 0 && kl < (int)sizeof(key) && vl < (int)sizeof(val)) {
+                    memcpy(key, p, kl); key[kl] = '\0';
+                    memcpy(val, eq + 1, vl); val[vl] = '\0';
+                    typeeasy_http_add_query(key, val);
                 }
             }
+            if (*amp == '\0') break;
+            p = amp + 1;
+        }
+    }
 
-            // Determinar Content-Type (heurística simple)
-            const char *content_type = "application/json";
-            // Check if it looks like XML (starts with <)
-            // We need to be careful about whitespace
-            char *check_p = actual_content;
-            while (*check_p && isspace((unsigned char)*check_p)) check_p++;
-            
-            if (*check_p == '<') {
-                content_type = "application/xml";
-            }
+    /* Populate headers */
+    for (int i = 0; i < req_info->num_headers; i++) {
+        typeeasy_http_add_header(req_info->http_headers[i].name,
+                                 req_info->http_headers[i].value);
+    }
 
+    /* Populate body (POST/PUT/PATCH). Cap at 1 MiB. */
+    long long clen = req_info->content_length;
+    if (clen > 0 && clen < (1 << 20)) {
+        char *body = (char*)malloc((size_t)clen + 1);
+        if (body) {
+            int n = mg_read(conn, body, (size_t)clen);
+            if (n < 0) n = 0;
+            body[n] = '\0';
+            typeeasy_http_set_body(body);
+            free(body);
+        }
+    }
+
+    /* Cache lookup */
+    char cache_key[1024];
+    snprintf(cache_key, sizeof(cache_key), "%s %s%s%s", method, uri,
+             qs ? "?" : "", qs ? qs : "");
+    if (match->cache_ttl > 0) {
+        CacheEntry *hit = cache_lookup(cache_key);
+        if (hit) {
+            fprintf(stderr, "[CACHE] HIT %s\n", cache_key);
             mg_printf(conn,
-                      "HTTP/1.1 200 OK\r\n"
+                      "HTTP/1.1 %d OK\r\n"
                       "Content-Type: %s\r\n"
                       "Content-Length: %d\r\n"
                       "Access-Control-Allow-Origin: *\r\n"
-                      "X-Execution-Time: %.4f s\r\n"
-                      "\r\n"
-                      "%s",
-                      content_type, (int)strlen(actual_content), time_taken, actual_content);
-            
-            free(result);
+                      "X-Cache: HIT\r\n\r\n%s",
+                      hit->status, hit->content_type,
+                      (int)strlen(hit->body), hit->body);
             return 1;
         }
-        entry = entry->next;
     }
-    
-    // No encontrado
-    mg_send_http_error(conn, 404, "Endpoint no encontrado");
+
+    /* Invoke */
+    clock_t start_time = clock();
+    char *result = typeeasy_invoke_with_script(g_typeeasy_ctx, match->script_path,
+                                               match->function_name, NULL);
+    clock_t end_time = clock();
+    double time_taken = ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
+
+    if (!result) {
+        typeeasy_http_reset();
+        mg_send_http_error(conn, 500, "Error interno al ejecutar funcion TypeEasy");
+        return 1;
+    }
+
+    const char *content_type = "application/json";
+    char *actual_content = strip_leading_garbage(result, &content_type);
+    int status = typeeasy_http_get_status();
+    if (status <= 0) status = 200;
+
+    /* Build extra headers from response_header() */
+    char extra_headers[1024] = {0};
+    int hi = 0; const char *hk, *hv;
+    while (typeeasy_http_iter_response_header(hi, &hk, &hv)) {
+        if (hk && hv) {
+            size_t cur = strlen(extra_headers);
+            snprintf(extra_headers + cur, sizeof(extra_headers) - cur, "%s: %s\r\n", hk, hv);
+        }
+        hi++;
+    }
+
+    mg_printf(conn,
+              "HTTP/1.1 %d OK\r\n"
+              "Content-Type: %s\r\n"
+              "Content-Length: %d\r\n"
+              "Access-Control-Allow-Origin: *\r\n"
+              "X-Execution-Time: %.4f s\r\n"
+              "X-Cache: MISS\r\n"
+              "%s"
+              "\r\n%s",
+              status, content_type, (int)strlen(actual_content), time_taken,
+              extra_headers, actual_content);
+
+    /* Cache store */
+    if (match->cache_ttl > 0 && status >= 200 && status < 300) {
+        cache_store(cache_key, actual_content, status, content_type, match->cache_ttl);
+        fprintf(stderr, "[CACHE] STORE %s ttl=%d\n", cache_key, match->cache_ttl);
+    }
+
+    typeeasy_http_reset();
+    free(result);
     return 1;
 }
 
@@ -282,7 +561,7 @@ volatile int exit_flag = 0;
 
 // Manejador de señales para detener el servidor de forma segura con Ctrl+C.
 void signal_handler(int sig_num) {
-    (void)sig_num;
+    signal(sig_num, signal_handler);
     exit_flag = 1;
 }
 
@@ -474,49 +753,122 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
     return 1;
 }
 
-int main(void) {
+/* === Worker: serves HTTP. Same as old main(). On SIGTERM/SIGINT it drains
+ * via mg_stop and exits. Supervisor spawns one of these. === */
+static int run_worker(void) {
     struct mg_context *ctx;
-    // Opciones del servidor. Escuchará en el puerto 8080.
     const char *options[] = {"listening_ports", "8080", NULL};
 
-    // Registrar el manejador de señales para Ctrl+C
-    signal(SIGINT, signal_handler);
-    
-    // Registrar cleanup al salir
+    signal(SIGINT,  signal_handler);
+    signal(SIGTERM, signal_handler);
     atexit(cleanup);
 
-    // Inicia la biblioteca CivetWeb
     mg_init_library(0);
-
-    // Iniciar descubrimiento de rutas dinámicas
     discover_routes();
 
-    // Inicia el servidor
     ctx = mg_start(NULL, NULL, options);
     if (ctx == NULL) {
-        printf("Error al iniciar el servidor.\n");
+        fprintf(stderr, "[WORKER %d] Error al iniciar civetweb (puerto en uso?)\n", (int)getpid());
         return 1;
     }
+    g_mg_ctx = ctx;
+    printf("[WORKER %d] listo en :8080\n", (int)getpid()); fflush(stdout);
 
-    printf("Servidor iniciado en http://localhost:8080 (Modo Embebido TypeEasy)\n");
-
-    // Registrar manejadores
-    mg_set_request_handler(ctx, "/", manejadorRaiz, NULL);
+    mg_set_request_handler(ctx, "/",      manejadorRaiz,        NULL);
     mg_set_request_handler(ctx, "/api/**", manejadorApiDinamico, NULL);
 
-    // Bucle principal del servidor
-    while (exit_flag == 0) {
-#if defined(_WIN32)
-        Sleep(1000);
-#else
-        sleep(1);
-#endif
-    }
+    while (exit_flag == 0) sleep(1);
 
-    // Detiene el servidor de forma segura
-    printf("\nDeteniendo el servidor...\n");
+    printf("[WORKER %d] SIGTERM recibido — drenando + saliendo\n", (int)getpid()); fflush(stdout);
     mg_stop(ctx);
     mg_exit_library();
-
     return 0;
+}
+
+/* Supervisor's own .te tracker: just stat, no parsing. */
+static void supervisor_track_scripts(void) {
+    free_scripts();
+    FILE *fp = popen("ls -1 /app/apis/*.te 2>/dev/null", "r");
+    if (!fp) return;
+    char line[1035];
+    struct stat st;
+    while (fgets(line, sizeof(line), fp)) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (stat(line, &st) == 0) track_script(line, st.st_mtime);
+    }
+    pclose(fp);
+}
+
+int main(void) {
+    /* Save argv for child re-exec. */
+    static char *argv0_buf = NULL;
+    static char *fake_argv[2];
+    {
+        char buf[1024];
+        ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        if (n > 0) { buf[n] = '\0'; argv0_buf = strdup(buf); }
+        else argv0_buf = strdup("/app/typeeasy_api");
+        fake_argv[0] = argv0_buf;
+        fake_argv[1] = NULL;
+        g_main_argv = fake_argv;
+    }
+
+    /* Detect dev hot-reload mode. If OFF, just run worker directly (no
+     * supervisor needed) so production stays a single-process binary. */
+    const char *hr = getenv("TYPEEASY_HOTRELOAD");
+    g_hotreload = (hr && (*hr == '1' || *hr == 't' || *hr == 'T' || *hr == 'y' || *hr == 'Y')) ? 1 : 0;
+    if (!g_hotreload) {
+        return run_worker();
+    }
+
+    /* === SUPERVISOR === always PID 1 of container, never dies. Forks workers,
+     * polls .te mtime, on change spawns new worker (binds same port via
+     * SO_REUSEPORT) then SIGTERMs old worker for graceful drain. */
+    printf("[SUPERVISOR %d] iniciado — hot-reload activo (zero-downtime)\n", (int)getpid());
+    fflush(stdout);
+
+    /* Ignore SIGCHLD-default but reap explicitly with waitpid. */
+    signal(SIGINT,  SIG_DFL);
+    signal(SIGTERM, SIG_DFL);
+
+    supervisor_track_scripts();
+
+    pid_t worker_pid = fork();
+    if (worker_pid < 0) { perror("fork"); return 1; }
+    if (worker_pid == 0) { _exit(run_worker()); }
+
+    while (1) {
+        sleep(1);
+
+        /* Reap any dead worker (unexpected exit) */
+        int status;
+        pid_t reaped = waitpid(-1, &status, WNOHANG);
+        if (reaped > 0 && reaped == worker_pid) {
+            fprintf(stderr, "[SUPERVISOR] worker %d murio (status=%d) — respawn\n",
+                    (int)reaped, status);
+            fflush(stderr);
+            worker_pid = fork();
+            if (worker_pid == 0) { _exit(run_worker()); }
+        }
+
+        if (!hotreload_changed()) continue;
+
+        printf("[SUPERVISOR] cambio en .te — spawn new worker (SO_REUSEPORT)\n");
+        fflush(stdout);
+        pid_t new_worker = fork();
+        if (new_worker < 0) { perror("fork"); continue; }
+        if (new_worker == 0) { _exit(run_worker()); }
+
+        /* Give the new worker time to bind + start accepting. */
+        sleep(2);
+
+        printf("[SUPERVISOR] SIGTERM old worker %d (graceful drain)\n", (int)worker_pid);
+        fflush(stdout);
+        kill(worker_pid, SIGTERM);
+        waitpid(worker_pid, NULL, 0);
+        worker_pid = new_worker;
+
+        /* Reset baseline so we don't loop on the same change. */
+        supervisor_track_scripts();
+    }
 }

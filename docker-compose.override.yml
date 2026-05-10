@@ -9,3 +9,25 @@ services:
   whatsapp_adapter:
     environment:
       - AGENT_WEBHOOK=http://agent_gemini:8081/whatsapp_hook
+
+  # --- DEV MODE para api ---
+  # Usa la imagen api_builder (con gcc + flex + bison + libs) y monta src/ y api_server/
+  # como volumen. El entrypoint recompila y arranca. Para iterar tras editar C:
+  #   docker compose restart api    (~10-15s, sin docker build)
+  # Para editar .te: simplemente guarda el archivo — el server detecta mtime y
+  # recarga rutas/AST en la siguiente request (TYPEEASY_HOTRELOAD=1).
+  api:
+    build:
+      target: api_builder
+    image: typeeasy-api-dev
+    environment:
+      - TYPEEASY_HOTRELOAD=1
+    volumes:
+      - ./src:/app/src
+      - ./api_server:/app/api_server
+      - ./scripts:/app/scripts:ro
+      - ./typeeasycode/apis:/app/apis
+      - ./typeeasycode/models:/app/models
+      - ./typeeasycode/settings:/app/settings
+    working_dir: /app
+    entrypoint: ["/bin/sh", "/app/scripts/dev_api_entrypoint.sh"]

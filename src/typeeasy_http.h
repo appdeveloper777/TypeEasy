@@ -1,0 +1,25 @@
+#ifndef TYPEEASY_HTTP_H
+#define TYPEEASY_HTTP_H
+
+/* Phase H: API for the HTTP server to communicate request/response state to
+ * the interpreted endpoint body. Implementation lives in ast.c. */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void typeeasy_http_reset(void);
+void typeeasy_http_set_method(const char *m);
+void typeeasy_http_set_path  (const char *p);
+void typeeasy_http_set_body  (const char *b);
+void typeeasy_http_add_query (const char *k, const char *v);
+void typeeasy_http_add_header(const char *k, const char *v);
+void typeeasy_http_add_param (const char *k, const char *v);
+int  typeeasy_http_get_status(void);
+int  typeeasy_http_iter_response_header(int idx, const char **k, const char **v);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

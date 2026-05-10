@@ -141,6 +141,9 @@
 "HttpGet"               { return HTTPGET; }
 "HTTPGET"               { return HTTPGET; }
 "HttpPost"              { return HTTPPOST; }
+"HttpPut"               { return HTTPPUT; }
+"HttpDelete"            { return HTTPDELETE; }
+"HttpPatch"             { return HTTPPATCH; }
 "xml"                   { return XML; }
 "json"                  { return JSON; }
 

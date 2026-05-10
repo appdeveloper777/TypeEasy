@@ -25,7 +25,7 @@
 }
 
 %token <sval> INT STRING FLOAT FLOAT_LITERAL LAYER LSBRACKET RSBRACKET CACHE
-%token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA CONCAT JSON XML HTTPGET HTTPPOST
+%token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA CONCAT JSON XML HTTPGET HTTPPOST HTTPPUT HTTPDELETE HTTPPATCH
 %token       VAR ASSIGN PRINT PRINTLN FOR FOREACH LPAREN RPAREN SEMICOLON CONCAT FPRINT FPRINTLN 
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
 %token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN MYSQL_CONNECT MYSQL_CLOSE MYSQL_QUERY ORM_QUERY
@@ -135,6 +135,34 @@ endpoint_method:
         global_methods = m;
         $$ = NULL;
     }
+    | LSBRACKET HTTPPOST LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
+    {
+        MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
+        m->name = strdup($7); m->body = $12; m->params = $9;
+        m->route_path = strdup($4); m->http_method = strdup("POST");
+        m->cache_ttl = 0; m->next = global_methods; global_methods = m; $$ = NULL;
+    }
+    | LSBRACKET HTTPPUT LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
+    {
+        MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
+        m->name = strdup($7); m->body = $12; m->params = $9;
+        m->route_path = strdup($4); m->http_method = strdup("PUT");
+        m->cache_ttl = 0; m->next = global_methods; global_methods = m; $$ = NULL;
+    }
+    | LSBRACKET HTTPDELETE LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
+    {
+        MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
+        m->name = strdup($7); m->body = $12; m->params = $9;
+        m->route_path = strdup($4); m->http_method = strdup("DELETE");
+        m->cache_ttl = 0; m->next = global_methods; global_methods = m; $$ = NULL;
+    }
+    | LSBRACKET HTTPPATCH LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
+    {
+        MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
+        m->name = strdup($7); m->body = $12; m->params = $9;
+        m->route_path = strdup($4); m->http_method = strdup("PATCH");
+        m->cache_ttl = 0; m->next = global_methods; global_methods = m; $$ = NULL;
+    }
     | cache_decorator LSBRACKET HTTPGET LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
     {
         MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
@@ -147,6 +175,34 @@ endpoint_method:
         m->next = global_methods;
         global_methods = m;
         $$ = NULL;
+    }
+    | cache_decorator LSBRACKET HTTPPOST LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
+    {
+        MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
+        m->name = strdup($8); m->body = $13; m->params = $10;
+        m->route_path = strdup($5); m->http_method = strdup("POST");
+        m->cache_ttl = $1; m->next = global_methods; global_methods = m; $$ = NULL;
+    }
+    | cache_decorator LSBRACKET HTTPPUT LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
+    {
+        MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
+        m->name = strdup($8); m->body = $13; m->params = $10;
+        m->route_path = strdup($5); m->http_method = strdup("PUT");
+        m->cache_ttl = $1; m->next = global_methods; global_methods = m; $$ = NULL;
+    }
+    | cache_decorator LSBRACKET HTTPDELETE LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
+    {
+        MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
+        m->name = strdup($8); m->body = $13; m->params = $10;
+        m->route_path = strdup($5); m->http_method = strdup("DELETE");
+        m->cache_ttl = $1; m->next = global_methods; global_methods = m; $$ = NULL;
+    }
+    | cache_decorator LSBRACKET HTTPPATCH LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
+    {
+        MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
+        m->name = strdup($8); m->body = $13; m->params = $10;
+        m->route_path = strdup($5); m->http_method = strdup("PATCH");
+        m->cache_ttl = $1; m->next = global_methods; global_methods = m; $$ = NULL;
     }
     ;
 

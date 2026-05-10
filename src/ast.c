@@ -62,6 +62,10 @@ extern int g_debug_mode;
  * creation time so the runtime debugger can match breakpoints. */
 extern int yylineno;
 
+/* Phase H: forward declaration so get_node_string / native_json can recursively
+ * evaluate nested CALL_FUNC arguments (e.g. json(concat(...)), concat(a, request_param("id"), b)). */
+static void interpret_call_func(ASTNode *node);
+
 // Helper: Recursively evaluate arguments for native calls
 void evaluate_native_args(ASTNode *arg) {
     ASTNode *curr = arg;
@@ -87,6 +91,11 @@ void evaluate_native_args(ASTNode *arg) {
 // Global buffer for capturing println output
 char *g_stdout_buffer = NULL;
 size_t g_stdout_size = 0;
+
+/* When non-zero, dbg_printf does NOT write to real stdout — only to the
+ * capture buffer (g_stdout_buffer) and the debugger sink. Set during
+ * --invoke so the body output isn't duplicated alongside __ret__. */
+int g_suppress_stdout = 0;
 
 void append_to_stdout(const char *str) {
     if (!str) return;
@@ -114,7 +123,30 @@ void append_to_stdout(const char *str) {
 
 void native_json(ASTNode *arg) {
     if (g_debug_mode) { fprintf(stderr, "[DEBUG] native_json called\n"); fflush(stderr); }
-    
+
+    /* Phase H: json(call(...)) — invoke nested function, leave __ret__ as the
+     * resulting string. interpret_call_func already sets __ret__ via the
+     * native dispatcher (concat, request_param, etc.). */
+    if (arg && arg->type && strcmp(arg->type, "CALL_FUNC") == 0) {
+        interpret_call_func(arg);
+        Variable *r = find_variable("__ret__");
+        if (r && r->vtype == VAL_STRING) {
+            /* already a string — nothing else to do */
+            return;
+        }
+        if (r && r->vtype == VAL_INT) {
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", r->value.int_value);
+            ASTNode *result_node = create_ast_leaf("STRING", 0, tmp, NULL);
+            add_or_update_variable("__ret__", result_node);
+            free_ast(result_node);
+            return;
+        }
+        ASTNode *result_node = create_ast_leaf("STRING", 0, "", NULL);
+        add_or_update_variable("__ret__", result_node);
+        free_ast(result_node);
+        return;
+    }
+
     // Handle empty argument (return json())
     if (!arg) {
         if (g_stdout_buffer) {
@@ -126,6 +158,32 @@ void native_json(ASTNode *arg) {
             add_or_update_variable("__ret__", result_node);
             free_ast(result_node);
         }
+        return;
+    }
+
+    /* Phase H: accept a STRING / STRING_INTERP / ADD literal directly so that
+     * `return json("{\"x\":1}")` or `return json(concat(...))` works without
+     * the println+buffer dance. */
+    if (arg->type && (strcmp(arg->type, "STRING") == 0 || strcmp(arg->type, "STRING_LITERAL") == 0)) {
+        ASTNode *result_node = create_ast_leaf("STRING", 0, arg->str_value ? arg->str_value : "", NULL);
+        add_or_update_variable("__ret__", result_node);
+        free_ast(result_node);
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "STRING_INTERP") == 0) {
+        char *s = expand_interp_string(arg->str_value ? arg->str_value : "");
+        ASTNode *result_node = create_ast_leaf("STRING", 0, s, NULL);
+        add_or_update_variable("__ret__", result_node);
+        free_ast(result_node);
+        free(s);
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "ADD") == 0 && is_string_type(arg)) {
+        char *s = get_node_string(arg);
+        ASTNode *result_node = create_ast_leaf("STRING", 0, s ? s : "", NULL);
+        add_or_update_variable("__ret__", result_node);
+        free_ast(result_node);
+        if (s) free(s);
         return;
     }
 
@@ -299,7 +357,20 @@ char* get_node_string(ASTNode* node) {
     if (!node) return strdup("");
     
     char temp[64];
-    
+
+    /* Phase H: nested function call — invoke it and read __ret__. Lets
+     * concat(a, request_param("id"), b) work, plus any future nesting. */
+    if (node->type && strcmp(node->type, "CALL_FUNC") == 0) {
+        interpret_call_func(node);
+        Variable *r = find_variable("__ret__");
+        if (r) {
+            if (r->vtype == VAL_STRING) return strdup(r->value.string_value ? r->value.string_value : "");
+            if (r->vtype == VAL_INT)    { snprintf(temp, sizeof(temp), "%d", r->value.int_value); return strdup(temp); }
+            if (r->vtype == VAL_FLOAT)  { snprintf(temp, sizeof(temp), "%f", r->value.float_value); return strdup(temp); }
+        }
+        return strdup("");
+    }
+
     if (node->type && (strcmp(node->type, "STRING") == 0 || strcmp(node->type, "STRING_LITERAL") == 0)) {
         return node->str_value ? strdup(node->str_value) : strdup("");
     }
@@ -407,6 +478,116 @@ void native_concat(ASTNode *arg) {
     free(result);
 }
 
+/* ============================================================================
+ * Phase H: HTTP request/response state (used by API server to pass request data
+ * into the interpreted endpoint body, and read back response status/headers).
+ *
+ * The server populates these globals BEFORE calling typeeasy_embedded_invoke()
+ * via the typeeasy_http_* setters declared below; resets them between requests
+ * via typeeasy_http_reset(). Inside the interpreted body, builtins like
+ * request_query("q") / response_status(404) read/write these.
+ * ============================================================================ */
+typedef struct TeKV { char *k; char *v; struct TeKV *next; } TeKV;
+
+static char *g_req_method = NULL;
+static char *g_req_path   = NULL;
+static char *g_req_body   = NULL;
+static TeKV *g_req_query   = NULL;
+static TeKV *g_req_headers = NULL;
+static TeKV *g_req_params  = NULL;
+static int   g_resp_status = 200;
+static TeKV *g_resp_headers = NULL;
+
+static void te_kv_free_list(TeKV **head) {
+    TeKV *c = *head; while (c) { TeKV *n = c->next; free(c->k); free(c->v); free(c); c = n; }
+    *head = NULL;
+}
+static void te_kv_add(TeKV **head, const char *k, const char *v) {
+    if (!k) return;
+    TeKV *e = (TeKV*)malloc(sizeof(TeKV));
+    e->k = strdup(k); e->v = strdup(v ? v : ""); e->next = *head; *head = e;
+}
+static const char *te_kv_find(TeKV *head, const char *k) {
+    if (!k) return NULL;
+    while (head) { if (head->k && strcmp(head->k, k) == 0) return head->v; head = head->next; }
+    return NULL;
+}
+
+void typeeasy_http_reset(void) {
+    free(g_req_method); g_req_method = NULL;
+    free(g_req_path);   g_req_path   = NULL;
+    free(g_req_body);   g_req_body   = NULL;
+    te_kv_free_list(&g_req_query);
+    te_kv_free_list(&g_req_headers);
+    te_kv_free_list(&g_req_params);
+    te_kv_free_list(&g_resp_headers);
+    g_resp_status = 200;
+}
+void typeeasy_http_set_method(const char *m) { free(g_req_method); g_req_method = m ? strdup(m) : NULL; }
+void typeeasy_http_set_path  (const char *p) { free(g_req_path);   g_req_path   = p ? strdup(p) : NULL; }
+void typeeasy_http_set_body  (const char *b) { free(g_req_body);   g_req_body   = b ? strdup(b) : NULL; }
+void typeeasy_http_add_query (const char *k, const char *v) { te_kv_add(&g_req_query,  k, v); }
+void typeeasy_http_add_header(const char *k, const char *v) { te_kv_add(&g_req_headers, k, v); }
+void typeeasy_http_add_param (const char *k, const char *v) { te_kv_add(&g_req_params,  k, v); }
+int  typeeasy_http_get_status(void) { return g_resp_status; }
+int  typeeasy_http_iter_response_header(int idx, const char **k, const char **v) {
+    TeKV *c = g_resp_headers; int i = 0;
+    while (c) { if (i == idx) { if (k) *k = c->k; if (v) *v = c->v; return 1; } c = c->next; i++; }
+    return 0;
+}
+
+/* Helpers: extract the first STRING argument from a function-call arg AST.
+ * The argument may be a single STRING node, or a chain via ->right, or wrapped
+ * in evaluate_native_args (which already resolves identifiers to STRING). */
+static const char *te_arg_string(ASTNode *arg) {
+    if (!arg) return NULL;
+    if (arg->type) {
+        if (strcmp(arg->type, "STRING") == 0 || strcmp(arg->type, "STRING_LITERAL") == 0)
+            return arg->str_value;
+        if (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0) {
+            Variable *v = find_variable(arg->id);
+            if (v && v->vtype == VAL_STRING) return v->value.string_value;
+        }
+    }
+    return NULL;
+}
+static int te_arg_int(ASTNode *arg, int dflt) {
+    if (!arg) return dflt;
+    if (arg->type) {
+        if (strcmp(arg->type, "NUMBER") == 0 || strcmp(arg->type, "INT") == 0) return arg->value;
+        if (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0) {
+            Variable *v = find_variable(arg->id);
+            if (v && v->vtype == VAL_INT) return v->value.int_value;
+        }
+    }
+    return dflt;
+}
+
+static void te_set_ret_string(const char *s) {
+    ASTNode *r = create_ast_leaf("STRING", 0, s ? s : "", NULL);
+    add_or_update_variable("__ret__", r);
+    free_ast(r);
+}
+static void te_set_ret_int(int n) {
+    ASTNode *r = create_ast_leaf("NUMBER", n, NULL, NULL);
+    add_or_update_variable("__ret__", r);
+    free_ast(r);
+}
+
+static void native_request_method(ASTNode *arg) { (void)arg; te_set_ret_string(g_req_method ? g_req_method : ""); }
+static void native_request_path  (ASTNode *arg) { (void)arg; te_set_ret_string(g_req_path   ? g_req_path   : ""); }
+static void native_request_body  (ASTNode *arg) { (void)arg; te_set_ret_string(g_req_body   ? g_req_body   : ""); }
+static void native_request_query (ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_query,   k); te_set_ret_string(v ? v : ""); }
+static void native_request_header(ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_headers, k); te_set_ret_string(v ? v : ""); }
+static void native_request_param (ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_params,  k); te_set_ret_string(v ? v : ""); }
+static void native_response_status(ASTNode *arg) { g_resp_status = te_arg_int(arg, 200); te_set_ret_int(g_resp_status); }
+static void native_response_header(ASTNode *arg) {
+    const char *k = te_arg_string(arg);
+    const char *v = arg && arg->right ? te_arg_string(arg->right) : NULL;
+    if (k) te_kv_add(&g_resp_headers, k, v ? v : "");
+    te_set_ret_int(0);
+}
+
 int call_native_function(const char *name, ASTNode *arg) {
     if (strcmp(name, "orm_query") == 0) {
         native_orm_query(arg);
@@ -422,6 +603,15 @@ int call_native_function(const char *name, ASTNode *arg) {
         native_xml(arg);
         return 1;
     }
+    /* Phase H: HTTP request/response builtins */
+    if (strcmp(name, "request_method") == 0) { native_request_method(arg); return 1; }
+    if (strcmp(name, "request_path")   == 0) { native_request_path(arg);   return 1; }
+    if (strcmp(name, "request_body")   == 0) { native_request_body(arg);   return 1; }
+    if (strcmp(name, "request_query")  == 0) { native_request_query(arg);  return 1; }
+    if (strcmp(name, "request_header") == 0) { native_request_header(arg); return 1; }
+    if (strcmp(name, "request_param")  == 0) { native_request_param(arg);  return 1; }
+    if (strcmp(name, "response_status")== 0) { native_response_status(arg);return 1; }
+    if (strcmp(name, "response_header")== 0) { native_response_header(arg);return 1; }
     if (strcmp(name, "concat") == 0) {
         native_concat(arg);
         return 1;
@@ -459,8 +649,11 @@ static int dbg_printf(const char *fmt, ...) {
     va_end(ap);
     if (n < 0) { va_end(ap2); return n; }
     if ((size_t)n < sizeof(stackbuf)) {
-        fputs(stackbuf, stdout);
-        append_to_stdout(stackbuf);
+        if (!g_suppress_stdout) fputs(stackbuf, stdout);
+        /* NOTE: capture-buffer (g_stdout_buffer) is filled by callers via
+         * explicit append_to_stdout(...) calls in interpret_print/println.
+         * dbg_printf must NOT append here or every line is duplicated in
+         * __ret__ when json() reads the buffer. */
         if (g_debug_enabled) debugger_emit_output("stdout", stackbuf);
         va_end(ap2);
         return n;
@@ -470,8 +663,7 @@ static int dbg_printf(const char *fmt, ...) {
     if (!buf) { va_end(ap2); return -1; }
     vsnprintf(buf, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
-    fputs(buf, stdout);
-    append_to_stdout(buf);
+    if (!g_suppress_stdout) fputs(buf, stdout);
     if (g_debug_enabled) debugger_emit_output("stdout", buf);
     free(buf);
     return n;

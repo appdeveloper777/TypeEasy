@@ -587,9 +587,15 @@ int main(int argc, char *argv[]) {
         int found = 0;
         while (m) {
             if (strcmp(m->name, invoke_func) == 0) {
-                // Ejecutar el cuerpo de la función
+                /* Suprimir stdout en vivo y limpiar el buffer de captura
+                 * para que el cuerpo no se duplique con __ret__. */
+                extern int g_suppress_stdout;
+                extern char *g_stdout_buffer;
+                if (g_stdout_buffer) { free(g_stdout_buffer); g_stdout_buffer = NULL; }
+                g_suppress_stdout = 1;
                 interpret_ast(m->body);
-                
+                g_suppress_stdout = 0;
+
                 // Verificar si hubo un retorno (return json(...))
                 Variable *ret_var = find_variable("__ret__");
                 if (ret_var && ret_var->vtype == VAL_STRING) {

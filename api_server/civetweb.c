@@ -16468,6 +16468,24 @@ set_ports_option(struct mg_context *phys_ctx)
 			    "cannot set socket option SO_REUSEADDR (entry %i)",
 			    portsTotal);
 		}
+#if defined(SO_REUSEPORT)
+		/* TypeEasy hot-reload: enable SO_REUSEPORT so a successor process can
+		 * bind the same port concurrently for zero-downtime restarts. Failure
+		 * is non-fatal (kernel may not support it). */
+		{
+			int reuseport_on = 1;
+			if (setsockopt(so.sock,
+			               SOL_SOCKET,
+			               SO_REUSEPORT,
+			               (SOCK_OPT_TYPE)&reuseport_on,
+			               sizeof(reuseport_on)) != 0) {
+				mg_cry_ctx_internal(
+				    phys_ctx,
+				    "cannot set socket option SO_REUSEPORT (entry %i)",
+				    portsTotal);
+			}
+		}
+#endif
 #endif
 
 #if defined(USE_X_DOM_SOCKET)
