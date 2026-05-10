@@ -26,7 +26,7 @@
 
 %token <sval> INT STRING FLOAT FLOAT_LITERAL LAYER LSBRACKET RSBRACKET CACHE
 %token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA CONCAT JSON XML HTTPGET HTTPPOST
-%token       VAR ASSIGN PRINT PRINTLN FOR LPAREN RPAREN SEMICOLON CONCAT FPRINT FPRINTLN 
+%token       VAR ASSIGN PRINT PRINTLN FOR FOREACH LPAREN RPAREN SEMICOLON CONCAT FPRINT FPRINTLN 
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
 %token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN MYSQL_CONNECT MYSQL_CLOSE MYSQL_QUERY ORM_QUERY
 %token       EXTENDS
@@ -386,6 +386,8 @@ func_call_expr SEMICOLON { $$ = $1; }
 
 |
         FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { ASTNode *n = create_for_in_node($4, $6, $9); if ($6 && $6->line > 0) n->line = $6->line; $$ = n; }
+    | FOREACH LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { ASTNode *n = create_for_in_node($4, $6, $9); if ($6 && $6->line > 0) n->line = $6->line; $$ = n; }
+    | FOREACH LPAREN VAR IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { ASTNode *n = create_for_in_node($4, $6, $9); if ($6 && $6->line > 0) n->line = $6->line; $$ = n; }
     | WHILE LPAREN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_ast_node("WHILE", $3, $6); }
     | BREAK SEMICOLON     { $$ = create_ast_leaf("BREAK", 0, NULL, NULL); }
     | CONTINUE SEMICOLON  { $$ = create_ast_leaf("CONTINUE", 0, NULL, NULL); }

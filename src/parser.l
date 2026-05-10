@@ -155,6 +155,7 @@
 "@Cache"                { return CACHE; }
 
 "for"                   { return FOR; }
+"foreach"               { return FOREACH; }
 "concat"                { return CONCAT; }
 "in"                    { return IN; }
 

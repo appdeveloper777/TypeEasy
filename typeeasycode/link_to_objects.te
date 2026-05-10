@@ -23,7 +23,7 @@ let productos_del_papa_leon = [
 
 var productos = from "productos.csv", Producto;
 var filtrados = filter(productos_del_papa_leon, p => p.precio == 2); // LINQ
-for (let item in filtrados) {
+foreach (let item in filtrados) {
     print("Producto de papa leon:");
     item.Mostrar();    
 }
