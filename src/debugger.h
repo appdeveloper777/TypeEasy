@@ -15,6 +15,12 @@ extern const char *g_debug_source_file;   /* user-visible source path (e.g. argv
  * Sets g_debug_enabled = 1 on success. */
 void debugger_init(int port, const char *source_file);
 
+/* Async variant for embedded servers (API server). Spawns a background
+ * thread that does listen+accept+handshake. Returns immediately. The main
+ * program keeps running; debugging activates the moment a client connects.
+ * Reconnect-friendly: when the client disconnects, the thread re-arms. */
+void debugger_listen_async(int port, const char *source_file);
+
 /* Frame management: called by interpret_call_method on entry/exit. */
 void debugger_push_frame(const char *name, ASTNode *call_site);
 void debugger_pop_frame(void);

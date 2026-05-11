@@ -25,9 +25,9 @@ endpoint {
         println("}");
         return json();
     }
-     [HttpPost("/api/users/{id}")]
+     [HttpGet("/api/users/{id}")]
     getUser() {
         let id = request_param("id");
-        return json(concat("{\"test10\": \"", id, "\"}"));
+        return json(concat("{\"test11\": \"", id, "\"}"));
     }
 }

@@ -1,4 +1,5 @@
 #include "typeeasy_api.h"
+#include "debugger.h"
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -329,7 +330,9 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
     __ret_var.value.int_value = 0;
     return_flag = 0;
 
+    debugger_push_frame(m->name ? m->name : "<endpoint>", m->body);
     interpret_ast(m->body);
+    debugger_pop_frame();
 
     char* result = NULL;
     Variable* ret_var = find_variable("__ret__");

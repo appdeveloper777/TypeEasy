@@ -25,6 +25,10 @@ services:
       # - TYPEEASY_WORKERS=4       # opcional: forzar N workers (default = nproc)
       # - TYPEEASY_MYSQL_POOL=1    # opcional: reusar conexiones MySQL
       # - TYPEEASY_VERBOSE=1       # opcional: logs por request (default OFF)
+      - TYPEEASY_DEBUG_PORT=4711   # debugger DAP listener (worker slot 0)
+    ports:
+      - "8080:8080"                # API HTTP (también declarado en base)
+      - "4711:4711"                # debugger socket para VS Code
     volumes:
       - ./src:/app/src
       - ./api_server:/app/api_server

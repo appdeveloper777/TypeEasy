@@ -7,7 +7,7 @@
       "request": "launch",
       "program": "${file}",
       "stopOnEntry": false,
-      "port": 4711
+      "port": 4712
     },
     {
       "name": "TypeEasy: attach to running interpreter (port 4711)",

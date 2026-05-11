@@ -536,6 +536,20 @@ int  typeeasy_http_iter_response_header(int idx, const char **k, const char **v)
     return 0;
 }
 
+/* Debugger introspection */
+const char *typeeasy_http_get_method(void) { return g_req_method; }
+const char *typeeasy_http_get_path  (void) { return g_req_path;   }
+const char *typeeasy_http_get_body  (void) { return g_req_body;   }
+static int te_kv_iter(TeKV *head, int idx, const char **k, const char **v) {
+    int i = 0; for (TeKV *c = head; c; c = c->next, ++i) {
+        if (i == idx) { if (k) *k = c->k; if (v) *v = c->v; return 1; }
+    }
+    return 0;
+}
+int typeeasy_http_iter_param (int idx, const char **k, const char **v) { return te_kv_iter(g_req_params,  idx, k, v); }
+int typeeasy_http_iter_query (int idx, const char **k, const char **v) { return te_kv_iter(g_req_query,   idx, k, v); }
+int typeeasy_http_iter_header(int idx, const char **k, const char **v) { return te_kv_iter(g_req_headers, idx, k, v); }
+
 /* Helpers: extract the first STRING argument from a function-call arg AST.
  * The argument may be a single STRING node, or a chain via ->right, or wrapped
  * in evaluate_native_args (which already resolves identifiers to STRING). */

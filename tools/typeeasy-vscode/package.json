@@ -73,7 +73,7 @@
               "port": {
                 "type": "number",
                 "description": "TCP port for the debugger socket.",
-                "default": 4711
+                "default": 4712
               }
             }
           }
@@ -85,7 +85,7 @@
             "name": "TypeEasy: debug current .te (Docker)",
             "program": "${file}",
             "stopOnEntry": false,
-            "port": 4711
+            "port": 4712
           }
         ],
         "configurationSnippets": [
@@ -98,7 +98,7 @@
               "name": "TypeEasy: debug current .te",
               "program": "^\"\\${file}\"",
               "stopOnEntry": false,
-              "port": 4711
+              "port": 4712
             }
           }
         ]

@@ -31,6 +31,14 @@
       "request": "launch",
       "program": "${file}",
       "stopOnEntry": false,
+      "port": 4712
+    },
+    {
+      "name": "TypeEasy: ATTACH to running API",
+      "type": "typeeasy",
+      "request": "launch",
+      "program": "${file}",
+      "attachOnly": true,
       "port": 4711
     },
     {

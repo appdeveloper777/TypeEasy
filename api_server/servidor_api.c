@@ -20,6 +20,7 @@
 #include "../src/typeeasy_http.h"
 #include "../src/typeeasy_api.h"
 #include "../src/ast.h"
+#include "../src/debugger.h"
 
 // Estructura para la tabla de rutas dinámica
 typedef struct RouteEntry {
@@ -488,7 +489,26 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
         }
     }
 
-    /* Populate headers */
+    /* Populate headers. In our handler, req_info->http_headers may be empty
+     * (civetweb only fills it for built-in flows). Probe the most common
+     * headers explicitly via mg_get_header(); also iterate the array as a
+     * fallback. */
+    {
+        static const char *probe[] = {
+            "Host", "User-Agent", "Accept", "Accept-Language", "Accept-Encoding",
+            "Referer", "Origin", "Cookie", "Authorization", "Connection",
+            "Cache-Control", "Content-Type", "Content-Length", "DNT",
+            "Upgrade-Insecure-Requests", "Sec-Fetch-Site", "Sec-Fetch-Mode",
+            "Sec-Fetch-User", "Sec-Fetch-Dest",
+            "Sec-CH-UA", "Sec-CH-UA-Mobile", "Sec-CH-UA-Platform",
+            "X-Forwarded-For", "X-Real-IP", "X-Requested-With",
+            NULL
+        };
+        for (int i = 0; probe[i]; ++i) {
+            const char *vh = mg_get_header(conn, probe[i]);
+            if (vh) typeeasy_http_add_header(probe[i], vh);
+        }
+    }
     for (int i = 0; i < req_info->num_headers; i++) {
         typeeasy_http_add_header(req_info->http_headers[i].name,
                                  req_info->http_headers[i].value);
@@ -511,7 +531,7 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
     char cache_key[1024];
     snprintf(cache_key, sizeof(cache_key), "%s %s%s%s", method, uri,
              qs ? "?" : "", qs ? qs : "");
-    if (match->cache_ttl > 0) {
+    if (match->cache_ttl > 0 && !g_debug_enabled) {
         CacheEntry *hit = cache_lookup(cache_key);
         if (hit) {
             fprintf(stderr, "[CACHE] HIT %s\n", cache_key);
@@ -782,8 +802,9 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
 }
 
 /* === Worker: serves HTTP. Same as old main(). On SIGTERM/SIGINT it drains
- * via mg_stop and exits. Supervisor spawns one of these. === */
-static int run_worker(void) {
+ * via mg_stop and exits. Supervisor spawns one of these. ===
+ * If enable_debug != 0, opens the debugger listener (only slot 0). */
+static int run_worker_ext(int enable_debug) {
     struct mg_context *ctx;
     const char *options[] = {"listening_ports", "8080", NULL};
 
@@ -794,13 +815,22 @@ static int run_worker(void) {
     mg_init_library(0);
     discover_routes();
 
+    if (enable_debug) {
+        const char *p = getenv("TYPEEASY_DEBUG_PORT");
+        int port = (p && *p) ? atoi(p) : 4711;
+        if (port > 0 && port < 65536) {
+            debugger_listen_async(port, NULL);
+        }
+    }
+
     ctx = mg_start(NULL, NULL, options);
     if (ctx == NULL) {
         fprintf(stderr, "[WORKER %d] Error al iniciar civetweb (puerto en uso?)\n", (int)getpid());
         return 1;
     }
     g_mg_ctx = ctx;
-    printf("[WORKER %d] listo en :8080\n", (int)getpid()); fflush(stdout);
+    printf("[WORKER %d] listo en :8080%s\n", (int)getpid(),
+           enable_debug ? " [DEBUG ON]" : ""); fflush(stdout);
 
     mg_set_request_handler(ctx, "/",      manejadorRaiz,        NULL);
     mg_set_request_handler(ctx, "/api/**", manejadorApiDinamico, NULL);
@@ -812,6 +842,8 @@ static int run_worker(void) {
     mg_exit_library();
     return 0;
 }
+
+static int run_worker(void) { return run_worker_ext(0); }
 
 /* Supervisor's own .te tracker: just stat, no parsing. */
 static void supervisor_track_scripts(void) {
@@ -835,6 +867,12 @@ static pid_t g_worker_pids[MAX_WORKERS];
 static int   g_num_workers = 0;
 
 static int detect_num_workers(void) {
+    /* Debug mode: force 1 worker so EVERY request goes to the debugged process.
+     * Otherwise the kernel (SO_REUSEPORT) load-balances away from the debug worker. */
+    if (getenv("TYPEEASY_DEBUG_PORT") != NULL) {
+        fprintf(stderr, "[SUPERVISOR] TYPEEASY_DEBUG_PORT set -> forzando 1 worker\n");
+        return 1;
+    }
     const char *env = getenv("TYPEEASY_WORKERS");
     if (env && *env) {
         int n = atoi(env);
@@ -847,9 +885,11 @@ static int detect_num_workers(void) {
 }
 
 static pid_t spawn_worker(int slot) {
+    /* Slot 0 hosts the debugger listener (single bind). */
+    int enable_debug = (slot == 0 && getenv("TYPEEASY_DEBUG_PORT") != NULL) ? 1 : 0;
     pid_t pid = fork();
     if (pid < 0) { perror("fork"); return -1; }
-    if (pid == 0) { _exit(run_worker()); }
+    if (pid == 0) { _exit(run_worker_ext(enable_debug)); }
     g_worker_pids[slot] = pid;
     return pid;
 }
@@ -934,9 +974,10 @@ int main(void) {
         pid_t new_pids[MAX_WORKERS];
         int spawn_failed = 0;
         for (int i = 0; i < g_num_workers; i++) {
+            int enable_debug = (i == 0 && getenv("TYPEEASY_DEBUG_PORT") != NULL) ? 1 : 0;
             pid_t p = fork();
             if (p < 0) { perror("fork"); spawn_failed = 1; new_pids[i] = 0; continue; }
-            if (p == 0) { _exit(run_worker()); }
+            if (p == 0) { _exit(run_worker_ext(enable_debug)); }
             new_pids[i] = p;
         }
         if (spawn_failed) {

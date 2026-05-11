@@ -11329,9 +11329,13 @@ parse_http_request(char *buf, int len, struct mg_request_info *ri)
 
 	/* Parse all HTTP headers */
 	//char *p = buf;
-	if (parse_http_headers(&buf, ri->http_headers) < 0) {
-		/* Error while parsing headers */
-		return -1;
+	{
+		int _nh = parse_http_headers(&buf, ri->http_headers);
+		if (_nh < 0) {
+			/* Error while parsing headers */
+			return -1;
+		}
+		ri->num_headers = _nh;
 	}
 
 	return request_length + init_skip;

@@ -56,19 +56,50 @@ class TypeEasyDebugSession extends DebugSession {
   async launchRequest(response, args) {
     this._programPath = args.program;
     this._programBasename = path.basename(this._programPath);
-    const port = args.port || 4711;
+    const port = args.port || 4712;
     const stopOnEntry = !!args.stopOnEntry;
     this._stopOnEntry = stopOnEntry;
     const attachOnly = args.attachOnly === true;
 
     this.sendEvent(new OutputEvent(`[typeeasy-dap] launching: ${this._programBasename}\n`, 'console'));
 
-    // Resolve the host workspace folder containing typeeasycode/.
-    // Convention: program is inside <workspace>/typeeasycode/<file>.te
-    const programDir = path.dirname(this._programPath);
-    const workspaceRoot = path.resolve(programDir, '..'); // parent of typeeasycode
+    // Resolve workspace root: walk up from program dir until we find a
+    // 'typeeasycode' folder OR a 'docker-compose.yml'. That's the host repo
+    // root we mount into the container.
+    let workspaceRoot = path.dirname(this._programPath);
+    let relInsideTypeeasycode = this._programBasename;
+    {
+      let cur = path.dirname(this._programPath);
+      const parts = [];
+      let found = null;
+      while (true) {
+        const tryRoot = cur;
+        try {
+          const fs = require('fs');
+          if (fs.existsSync(path.join(tryRoot, 'typeeasycode')) &&
+              fs.existsSync(path.join(tryRoot, 'docker-compose.yml'))) {
+            found = tryRoot;
+            break;
+          }
+        } catch (_) {}
+        const parent = path.dirname(cur);
+        if (parent === cur) break;
+        parts.unshift(path.basename(cur));
+        cur = parent;
+      }
+      if (found) {
+        workspaceRoot = found;
+        // path inside typeeasycode/ : strip everything up to and including 'typeeasycode'
+        const idx = parts.indexOf('typeeasycode');
+        if (idx >= 0) {
+          const sub = parts.slice(idx + 1).join('/');
+          relInsideTypeeasycode = sub ? `${sub}/${this._programBasename}` : this._programBasename;
+        }
+      }
+    }
     this._workspaceRoot = workspaceRoot;
     this.sendEvent(new OutputEvent(`[typeeasy-dap] workspaceRoot=${workspaceRoot}\n`, 'console'));
+    this.sendEvent(new OutputEvent(`[typeeasy-dap] program rel=${relInsideTypeeasycode}\n`, 'console'));
 
     if (!attachOnly) {
       // Spawn docker compose run with the interpreter in --debug-port mode.
@@ -79,7 +110,7 @@ class TypeEasyDebugSession extends DebugSession {
         '--entrypoint', '/typeeasy/typeeasy',
         'typeeasy',
         '--debug-port', String(port),
-        `/code/${this._programBasename}`
+        `/code/${relInsideTypeeasycode}`
       ];
       this.sendEvent(new OutputEvent(`[typeeasy-dap] spawn: docker ${dockerArgs.join(' ')}\n`, 'console'));
 

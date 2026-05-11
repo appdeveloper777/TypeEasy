@@ -18,6 +18,14 @@ void typeeasy_http_add_param (const char *k, const char *v);
 int  typeeasy_http_get_status(void);
 int  typeeasy_http_iter_response_header(int idx, const char **k, const char **v);
 
+/* --- Debugger introspection: read live request data ---- */
+const char *typeeasy_http_get_method(void);
+const char *typeeasy_http_get_path(void);
+const char *typeeasy_http_get_body(void);
+int  typeeasy_http_iter_param (int idx, const char **k, const char **v);
+int  typeeasy_http_iter_query (int idx, const char **k, const char **v);
+int  typeeasy_http_iter_header(int idx, const char **k, const char **v);
+
 #ifdef __cplusplus
 }
 #endif

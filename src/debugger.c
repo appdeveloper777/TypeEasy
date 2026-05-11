@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdint.h>
 #include <unistd.h>
 #include <errno.h>
@@ -48,6 +49,7 @@
   void debugger_on_statement(ASTNode *n) { (void)n; }
   void debugger_terminate(int e) { (void)e; }
   void debugger_emit_output(const char *c, const char *t) { (void)c; (void)t; }
+  void debugger_listen_async(int port, const char *src) { (void)port; (void)src; }
 #else
 
 #include <sys/types.h>
@@ -55,6 +57,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <pthread.h>
+
+#include "typeeasy_http.h"
 
 /* ===== globals ===== */
 int g_debug_enabled = 0;
@@ -67,10 +72,12 @@ static int g_client_fd = -1;
 static char g_rx[RX_CAP];
 static size_t g_rx_len = 0;
 
-/* Breakpoints. v1: single source file, simple sorted-ish list. */
+/* Breakpoints. Stored as (file_basename, line) pairs so multiple files can
+ * coexist (attach mode hosts many .te). For standalone mode, file is "". */
 #define MAX_BPS 256
-static int g_bp_lines[MAX_BPS];
-static int g_bp_count = 0;
+static int  g_bp_lines[MAX_BPS];
+static char g_bp_files[MAX_BPS][96];
+static int  g_bp_count = 0;
 
 /* Frame stack (call frames). v1: just names + call-site line for stack trace. */
 #define MAX_FRAMES 256
@@ -204,24 +211,58 @@ static int json_int_field(const char *line, const char *key, int *out) {
     return 0;
 }
 
-/* Parse "lines":[1,2,3] into g_bp_lines/g_bp_count. */
-static void parse_lines_array(const char *line) {
-    g_bp_count = 0;
+/* Parse "lines":[1,2,3] for a given source file. We store BPs per-file so
+ * multiple .te can have BPs simultaneously (needed for attach-to-API mode).
+ * Each set_breakpoints REPLACES all BPs for that file (DAP semantics). */
+static int parse_lines_array(const char *line) {
+    char file_in[96] = "";
+    json_str_field(line, "file", file_in, sizeof(file_in));
+
+    /* In standalone mode, optionally enforce that BPs match our single source
+     * (drop unrelated files to keep the array small). */
+    const char *cur = g_debug_source_file ? g_debug_source_file : "";
+    const char *cur_base = strrchr(cur, '/');
+    cur_base = cur_base ? cur_base + 1 : cur;
+    if (cur_base[0] && file_in[0] && strcmp(file_in, cur_base) != 0) {
+        return 0;
+    }
+
+    /* Step 1: drop any existing BPs for this file (compact in place). */
+    int w = 0;
+    for (int r = 0; r < g_bp_count; r++) {
+        if (strcmp(g_bp_files[r], file_in) != 0) {
+            if (w != r) {
+                g_bp_lines[w] = g_bp_lines[r];
+                strncpy(g_bp_files[w], g_bp_files[r], sizeof(g_bp_files[w]) - 1);
+                g_bp_files[w][sizeof(g_bp_files[w]) - 1] = '\0';
+            }
+            w++;
+        }
+    }
+    g_bp_count = w;
+
+    /* Step 2: parse the new line-list and append. */
     const char *p = strstr(line, "\"lines\"");
-    if (!p) return;
+    if (!p) return 1;
     p = strchr(p, '[');
-    if (!p) return;
+    if (!p) return 1;
     p++;
     while (*p && *p != ']') {
         while (*p == ' ' || *p == ',') p++;
         if (*p >= '0' && *p <= '9') {
             int v = atoi(p);
-            if (g_bp_count < MAX_BPS) g_bp_lines[g_bp_count++] = v;
+            if (g_bp_count < MAX_BPS) {
+                g_bp_lines[g_bp_count] = v;
+                strncpy(g_bp_files[g_bp_count], file_in, sizeof(g_bp_files[g_bp_count]) - 1);
+                g_bp_files[g_bp_count][sizeof(g_bp_files[g_bp_count]) - 1] = '\0';
+                g_bp_count++;
+            }
             while (*p >= '0' && *p <= '9') p++;
         } else if (*p) {
             p++;
         }
     }
+    return 1;
 }
 
 static int line_has_breakpoint(int line) {
@@ -276,7 +317,21 @@ static const char *vtype_name(ValueType t) {
 }
 
 /* ===== variable references for object/list expansion ===== */
-typedef enum { REF_LIST, REF_OBJECT } RefKind;
+typedef enum {
+    REF_LIST,
+    REF_OBJECT,
+    REF_REQ_ROOT,
+    REF_REQ_HEADERS,
+    REF_REQ_QUERY,
+    REF_REQ_PARAMS,
+    REF_REQ_CLIENT
+} RefKind;
+/* Sentinel pointers used as identity for the synthetic $req refs. */
+static char g_req_root_sentinel;
+static char g_req_headers_sentinel;
+static char g_req_query_sentinel;
+static char g_req_params_sentinel;
+static char g_req_client_sentinel;
 typedef struct { RefKind kind; void *ptr; } DbgRef;
 #define MAX_REFS 1024
 static DbgRef g_refs[MAX_REFS];
@@ -372,8 +427,70 @@ static void cmd_vars(void) {
         o = emit_var_entry(buf, sizeof(buf), o, first, v->id, type, val, ref);
         first = 0;
     }
+
+    /* === HTTP request snapshot ===
+     * Expose live request state as a single expandable $req entry. */
+    {
+        const char *m = typeeasy_http_get_method();
+        const char *p = typeeasy_http_get_path();
+        if (m || p) {
+            char summary[256];
+            snprintf(summary, sizeof(summary), "%s %s",
+                     m ? m : "?", p ? p : "?");
+            int ref = register_ref(REF_REQ_ROOT, &g_req_root_sentinel);
+            o = emit_var_entry(buf, sizeof(buf), o, first, "$req", "request", summary, ref);
+            first = 0;
+        }
+    }
     snprintf(buf + o, sizeof(buf) - o, "]}");
     send_line(buf);
+}
+
+/* Parse User-Agent + client hints into browser/os/mobile summary. */
+static void parse_user_agent(const char *ua, const char *sec_pf, const char *sec_mob,
+                              char *browser, size_t bcap,
+                              char *osname,  size_t ocap,
+                              int *is_mobile_out) {
+    snprintf(browser, bcap, "Unknown");
+    snprintf(osname,  ocap, "Unknown");
+    *is_mobile_out = 0;
+    if (!ua || !*ua) return;
+    const char *q;
+    if      ((q = strstr(ua, "Edg/")))       snprintf(browser, bcap, "Edge %.32s",    q + 4);
+    else if ((q = strstr(ua, "OPR/")))       snprintf(browser, bcap, "Opera %.32s",   q + 4);
+    else if ((q = strstr(ua, "Brave/")))     snprintf(browser, bcap, "Brave %.32s",   q + 6);
+    else if ((q = strstr(ua, "Firefox/")))   snprintf(browser, bcap, "Firefox %.32s", q + 8);
+    else if ((q = strstr(ua, "Chrome/")))    snprintf(browser, bcap, "Chrome %.32s",  q + 7);
+    else if ((q = strstr(ua, "Version/")) && strstr(ua, "Safari/"))
+                                              snprintf(browser, bcap, "Safari %.32s", q + 8);
+    else if (strstr(ua, "curl/"))            snprintf(browser, bcap, "curl");
+    else if (strstr(ua, "PostmanRuntime/"))  snprintf(browser, bcap, "Postman");
+    else if (strstr(ua, "python-requests/")) snprintf(browser, bcap, "Python requests");
+    {
+        char *sp = strchr(browser, ' ');
+        if (sp) {
+            char *sp2 = strpbrk(sp + 1, " );,");
+            if (sp2) *sp2 = '\0';
+        }
+    }
+    if      (strstr(ua, "Windows NT 10.0")) snprintf(osname, ocap, "Windows 10/11");
+    else if (strstr(ua, "Windows NT 6.3"))  snprintf(osname, ocap, "Windows 8.1");
+    else if (strstr(ua, "Windows NT 6.1"))  snprintf(osname, ocap, "Windows 7");
+    else if (strstr(ua, "Windows"))         snprintf(osname, ocap, "Windows");
+    else if (strstr(ua, "Android"))         snprintf(osname, ocap, "Android");
+    else if (strstr(ua, "iPhone"))          snprintf(osname, ocap, "iOS (iPhone)");
+    else if (strstr(ua, "iPad"))            snprintf(osname, ocap, "iPadOS");
+    else if (strstr(ua, "Mac OS X"))        snprintf(osname, ocap, "macOS");
+    else if (strstr(ua, "CrOS"))            snprintf(osname, ocap, "ChromeOS");
+    else if (strstr(ua, "Linux"))           snprintf(osname, ocap, "Linux");
+    if (sec_pf && *sec_pf) {
+        char clean[64]; size_t ci = 0;
+        for (const char *s = sec_pf; *s && ci + 1 < sizeof(clean); ++s)
+            if (*s != '"') clean[ci++] = *s;
+        clean[ci] = '\0';
+        if (clean[0]) snprintf(osname, ocap, "%s", clean);
+    }
+    *is_mobile_out = (sec_mob && strstr(sec_mob, "?1")) || strstr(ua, "Mobile") != NULL;
 }
 
 /* Emit children for a previously registered ref. */
@@ -433,6 +550,95 @@ static void cmd_get_children(const char *line) {
                     o = emit_var_entry(buf, sizeof(buf), o, first, name, type, val, child_ref);
                     first = 0;
                 }
+            }
+        } else if (r->kind == REF_REQ_ROOT) {
+            const char *m = typeeasy_http_get_method();
+            const char *p = typeeasy_http_get_path();
+            const char *b = typeeasy_http_get_body();
+            if (m) { o = emit_var_entry(buf, sizeof(buf), o, first, "method", "string", m, 0); first = 0; }
+            if (p) { o = emit_var_entry(buf, sizeof(buf), o, first, "path",   "string", p, 0); first = 0; }
+            if (b && *b) {
+                char trunc[256]; snprintf(trunc, sizeof(trunc), "%.250s", b);
+                o = emit_var_entry(buf, sizeof(buf), o, first, "body", "string", trunc, 0); first = 0;
+            }
+            /* client summary (always present if there is a UA) */
+            const char *kk, *vvv;
+            const char *ua = NULL, *sec_pf = NULL, *sec_mob = NULL;
+            for (int i = 0; typeeasy_http_iter_header(i, &kk, &vvv); ++i) {
+                if (!kk) continue;
+                if (strcasecmp(kk, "User-Agent") == 0) ua = vvv;
+                else if (strcasecmp(kk, "Sec-CH-UA-Platform") == 0) sec_pf = vvv;
+                else if (strcasecmp(kk, "Sec-CH-UA-Mobile") == 0) sec_mob = vvv;
+            }
+            if (ua && *ua) {
+                char browser[96], osname[96]; int mob = 0;
+                parse_user_agent(ua, sec_pf, sec_mob, browser, sizeof(browser),
+                                 osname, sizeof(osname), &mob);
+                char summary[200];
+                snprintf(summary, sizeof(summary), "%s on %s%s", browser, osname,
+                         mob ? " (mobile)" : "");
+                int cref = register_ref(REF_REQ_CLIENT, &g_req_client_sentinel);
+                o = emit_var_entry(buf, sizeof(buf), o, first, "client", "client", summary, cref);
+                first = 0;
+            }
+            /* groups */
+            int qcount = 0; for (int i = 0; typeeasy_http_iter_query(i, &kk, &vvv); ++i) qcount++;
+            int pcount = 0; for (int i = 0; typeeasy_http_iter_param(i, &kk, &vvv); ++i) pcount++;
+            int hcount = 0; for (int i = 0; typeeasy_http_iter_header(i, &kk, &vvv); ++i) hcount++;
+            char gv[64];
+            int qref = register_ref(REF_REQ_QUERY, &g_req_query_sentinel);
+            snprintf(gv, sizeof(gv), "{%d}", qcount);
+            o = emit_var_entry(buf, sizeof(buf), o, first, "query", "group", gv, qref); first = 0;
+            int pref = register_ref(REF_REQ_PARAMS, &g_req_params_sentinel);
+            snprintf(gv, sizeof(gv), "{%d}", pcount);
+            o = emit_var_entry(buf, sizeof(buf), o, first, "params", "group", gv, pref); first = 0;
+            int href = register_ref(REF_REQ_HEADERS, &g_req_headers_sentinel);
+            snprintf(gv, sizeof(gv), "{%d}", hcount);
+            o = emit_var_entry(buf, sizeof(buf), o, first, "headers", "group", gv, href); first = 0;
+        } else if (r->kind == REF_REQ_HEADERS) {
+            const char *kk, *vvv;
+            for (int i = 0; typeeasy_http_iter_header(i, &kk, &vvv) && o + 512 < sizeof(buf); ++i) {
+                o = emit_var_entry(buf, sizeof(buf), o, first,
+                                   kk ? kk : "?", "string", vvv ? vvv : "", 0);
+                first = 0;
+            }
+        } else if (r->kind == REF_REQ_QUERY) {
+            const char *kk, *vvv;
+            for (int i = 0; typeeasy_http_iter_query(i, &kk, &vvv) && o + 512 < sizeof(buf); ++i) {
+                o = emit_var_entry(buf, sizeof(buf), o, first,
+                                   kk ? kk : "?", "string", vvv ? vvv : "", 0);
+                first = 0;
+            }
+        } else if (r->kind == REF_REQ_PARAMS) {
+            const char *kk, *vvv;
+            for (int i = 0; typeeasy_http_iter_param(i, &kk, &vvv) && o + 512 < sizeof(buf); ++i) {
+                o = emit_var_entry(buf, sizeof(buf), o, first,
+                                   kk ? kk : "?", "string", vvv ? vvv : "", 0);
+                first = 0;
+            }
+        } else if (r->kind == REF_REQ_CLIENT) {
+            const char *kk, *vvv;
+            const char *ua = NULL, *sec_ua = NULL, *sec_pf = NULL, *sec_mob = NULL;
+            for (int i = 0; typeeasy_http_iter_header(i, &kk, &vvv); ++i) {
+                if (!kk) continue;
+                if (strcasecmp(kk, "User-Agent") == 0) ua = vvv;
+                else if (strcasecmp(kk, "Sec-CH-UA") == 0) sec_ua = vvv;
+                else if (strcasecmp(kk, "Sec-CH-UA-Platform") == 0) sec_pf = vvv;
+                else if (strcasecmp(kk, "Sec-CH-UA-Mobile") == 0) sec_mob = vvv;
+            }
+            char browser[96] = "Unknown", osname[96] = "Unknown"; int mob = 0;
+            parse_user_agent(ua, sec_pf, sec_mob, browser, sizeof(browser),
+                             osname, sizeof(osname), &mob);
+            o = emit_var_entry(buf, sizeof(buf), o, first, "browser", "string", browser, 0); first = 0;
+            o = emit_var_entry(buf, sizeof(buf), o, first, "os",      "string", osname,  0); first = 0;
+            o = emit_var_entry(buf, sizeof(buf), o, first, "mobile",  "bool",   mob?"true":"false", 0); first = 0;
+            if (sec_ua && *sec_ua) {
+                char trunc[200]; snprintf(trunc, sizeof(trunc), "%.196s", sec_ua);
+                o = emit_var_entry(buf, sizeof(buf), o, first, "brands", "string", trunc, 0); first = 0;
+            }
+            if (ua && *ua) {
+                char trunc[256]; snprintf(trunc, sizeof(trunc), "%.250s", ua);
+                o = emit_var_entry(buf, sizeof(buf), o, first, "userAgent", "string", trunc, 0); first = 0;
             }
         }
     }
@@ -641,7 +847,7 @@ void debugger_init(int port, const char *source_file) {
         perror("[debugger] listen"); close(listen_fd); return;
     }
 
-    fprintf(stderr, "[typeeasy-debugger] Listening on port %d, waiting for adapter...\n", port);
+    if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] Listening on port %d, waiting for adapter...\n", port);
     fflush(stderr);
 
     struct sockaddr_in cli;
@@ -656,7 +862,7 @@ void debugger_init(int port, const char *source_file) {
     /* Push a synthetic top-level frame "<main>". */
     debugger_push_frame("<main>", NULL);
 
-    fprintf(stderr, "[typeeasy-debugger] Adapter connected. Awaiting configuration...\n");
+    if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] Adapter connected. Awaiting configuration...\n");
     fflush(stderr);
 
     /* Send 'initialized' so adapter sends breakpoints + start. */
@@ -668,7 +874,12 @@ void debugger_init(int port, const char *source_file) {
         char cmd[64];
         if (json_str_field(line, "cmd", cmd, sizeof(cmd)) < 0) continue;
         if (strcmp(cmd, "set_breakpoints") == 0) {
-            parse_lines_array(line);
+            int applied = parse_lines_array(line);
+            if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
+                fprintf(stderr, "[typeeasy-debugger] set_breakpoints (applied=%d): %d lines [", applied, g_bp_count);
+                for (int i = 0; i < g_bp_count; i++) fprintf(stderr, "%s%d", i?",":"", g_bp_lines[i]);
+                fprintf(stderr, "]\n"); fflush(stderr);
+            }
             send_line("{\"resp\":\"ok\"}");
         } else if (strcmp(cmd, "start") == 0) {
             send_line("{\"resp\":\"ok\"}");
@@ -708,6 +919,16 @@ void debugger_on_statement(ASTNode *node) {
     int line = node->line;
     if (line <= 0) return;
 
+    static int dbg_log_once = 0;
+    if (!dbg_log_once) {
+        dbg_log_once = 1;
+        if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
+            fprintf(stderr, "[typeeasy-debugger] FIRST hit: line=%d, g_bp_count=%d, kind=%d\n",
+                    line, g_bp_count, (int)node->kind);
+            fflush(stderr);
+        }
+    }
+
     /* Update current line of innermost frame. */
     if (g_frame_top > 0) {
         g_frames[g_frame_top - 1].current_line = line;
@@ -745,6 +966,13 @@ void debugger_on_statement(ASTNode *node) {
 
     g_last_line = line;
 
+    if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
+        fprintf(stderr, "[typeeasy-debugger] hook line=%d kind=%d step=%d armed=%d has_bp=%d should_stop=%d g_client_fd=%d\n",
+                line, (int)node->kind, (int)g_step, g_armed,
+                line_has_breakpoint(line), should_stop, g_client_fd);
+        fflush(stderr);
+    }
+
     if (!should_stop) return;
 
     last_stop_line = line;
@@ -752,7 +980,15 @@ void debugger_on_statement(ASTNode *node) {
     g_step = RUN;
     g_armed = 0;        /* require a different line before re-firing same BP */
     send_stopped(reason, line);
+    if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
+        fprintf(stderr, "[typeeasy-debugger] sent stopped, entering wait_for_resume\n");
+        fflush(stderr);
+    }
     wait_for_resume();
+    if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
+        fprintf(stderr, "[typeeasy-debugger] wait_for_resume returned\n");
+        fflush(stderr);
+    }
 }
 
 void debugger_terminate(int exit_code) {
@@ -781,6 +1017,125 @@ void debugger_emit_output(const char *category, const char *text) {
     send_line(buf);
     free(esc);
     free(buf);
+}
+
+/* ===== Async listener for embedded servers (API server) =====
+ * Spawns a thread that listens on `port`, accepts a single client at a time,
+ * runs the handshake (set_breakpoints + start), then returns control. The
+ * interpreter executes BPs in the calling thread (HTTP request thread) via
+ * debugger_on_statement -> wait_for_resume which reads from the same socket.
+ *
+ * When the client disconnects, the thread loops back to accept again so the
+ * adapter can reconnect without restarting the server. */
+static int g_dbg_listen_fd = -1;
+static int g_dbg_port = 0;
+
+static void *dbg_acceptor_thread(void *arg) {
+    (void)arg;
+    while (1) {
+        struct sockaddr_in cli;
+        socklen_t cli_len = sizeof(cli);
+        int fd = accept(g_dbg_listen_fd, (struct sockaddr*)&cli, &cli_len);
+        if (fd < 0) {
+            if (errno == EINTR) continue;
+            perror("[debugger] accept (async)");
+            sleep(1);
+            continue;
+        }
+        g_client_fd = fd;
+        g_debug_enabled = 1;
+
+        /* Reset frame stack (a fresh adapter session). */
+        g_frame_top = 0;
+        g_bp_count  = 0;
+        g_step      = RUN;
+        g_armed     = 1;
+        g_last_line = -1;
+
+        if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] (async) Adapter connected on port %d\n", g_dbg_port);
+        fflush(stderr);
+
+        send_line("{\"event\":\"initialized\"}");
+
+        /* Handshake: set_breakpoints + start. After 'start', return so the
+         * thread idles in this accept loop while requests in other threads
+         * hit BPs. */
+        char line[2048];
+        while (recv_line(line, sizeof(line)) == 0) {
+            char cmd[64];
+            if (json_str_field(line, "cmd", cmd, sizeof(cmd)) < 0) continue;
+            if (strcmp(cmd, "set_breakpoints") == 0) {
+            parse_lines_array(line);
+            if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
+                fprintf(stderr, "[typeeasy-debugger] (async) set_breakpoints: %d lines\n", g_bp_count);
+                for (int i = 0; i < g_bp_count; i++) fprintf(stderr, "  bp[%d]=%d\n", i, g_bp_lines[i]);
+                fflush(stderr);
+            }
+            send_line("{\"resp\":\"ok\"}");
+        } else if (strcmp(cmd, "start") == 0) {
+            send_line("{\"resp\":\"ok\"}");
+            g_step = RUN;
+            if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] (async) start, armed with %d BPs\n", g_bp_count);
+            fflush(stderr);
+            break; /* fall through: armed, waiting for requests to hit BPs */
+            } else if (strcmp(cmd, "disconnect") == 0) {
+                close(g_client_fd);
+                g_client_fd = -1;
+                g_debug_enabled = 0;
+                break;
+            }
+        }
+
+        /* While the adapter is connected and armed, BPs are processed in
+         * other threads via debugger_on_statement -> wait_for_resume. We
+         * monitor the socket for disconnect by sleeping; the read in
+         * wait_for_resume detects EOF and clears g_debug_enabled. */
+        while (g_debug_enabled && g_client_fd >= 0) {
+            sleep(1);
+        }
+        if (g_client_fd >= 0) { close(g_client_fd); g_client_fd = -1; }
+        g_debug_enabled = 0;
+        if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] (async) Adapter disconnected, listening again\n");
+        fflush(stderr);
+    }
+    return NULL;
+}
+
+void debugger_listen_async(int port, const char *source_file) {
+    g_debug_source_file = source_file ? source_file : "";
+    g_dbg_port = port;
+
+    signal(SIGPIPE, SIG_IGN);
+
+    g_dbg_listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (g_dbg_listen_fd < 0) { perror("[debugger] socket"); return; }
+
+    int yes = 1;
+    setsockopt(g_dbg_listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons((uint16_t)port);
+
+    if (bind(g_dbg_listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("[debugger] bind (async)");
+        close(g_dbg_listen_fd); g_dbg_listen_fd = -1;
+        return;
+    }
+    if (listen(g_dbg_listen_fd, 1) < 0) {
+        perror("[debugger] listen (async)");
+        close(g_dbg_listen_fd); g_dbg_listen_fd = -1;
+        return;
+    }
+
+    pthread_t th;
+    pthread_create(&th, NULL, dbg_acceptor_thread, NULL);
+    pthread_detach(th);
+
+    if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] async listener up on port %d\n", port);
+    fflush(stderr);
 }
 
 #endif /* !_WIN32 */
