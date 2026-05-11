@@ -5,8 +5,59 @@
 #include <string.h>
 
 // Pool de conexiones MySQL (máximo 10 conexiones concurrentes)
-static MYSQL* connections[10] = {NULL};
+#define MYSQL_POOL_SIZE 10
+static MYSQL* connections[MYSQL_POOL_SIZE] = {NULL};
 static int next_conn_id = 0;
+
+/* Pool keying — reuse conexiones por (host|user|db|port). Opt-in via
+ * TYPEEASY_MYSQL_POOL=1. Cuando está activo, mysql_close() devuelve la
+ * conexión al pool en vez de cerrarla, y mysql_connect() reusa una
+ * existente con mysql_ping() para validarla. */
+static char *pool_keys[MYSQL_POOL_SIZE] = {NULL};
+static int   pool_in_use[MYSQL_POOL_SIZE] = {0};
+static int pool_enabled_cached = -1;
+
+static int pool_enabled(void) {
+    if (pool_enabled_cached < 0) {
+        const char *v = getenv("TYPEEASY_MYSQL_POOL");
+        pool_enabled_cached = (v && (*v == '1' || *v == 't' || *v == 'T')) ? 1 : 0;
+    }
+    return pool_enabled_cached;
+}
+
+static int pool_acquire(const char *key) {
+    if (!pool_enabled() || !key) return -1;
+    for (int i = 0; i < MYSQL_POOL_SIZE; i++) {
+        if (connections[i] && !pool_in_use[i] && pool_keys[i] && strcmp(pool_keys[i], key) == 0) {
+            if (mysql_ping(connections[i]) != 0) {
+                /* dead conn — dropearla y dejar el slot libre para reabrir */
+                mysql_close(connections[i]);
+                connections[i] = NULL;
+                free(pool_keys[i]); pool_keys[i] = NULL;
+                continue;
+            }
+            pool_in_use[i] = 1;
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void pool_register(int conn_id, const char *key) {
+    if (!pool_enabled() || conn_id < 0 || conn_id >= MYSQL_POOL_SIZE) return;
+    if (pool_keys[conn_id]) free(pool_keys[conn_id]);
+    pool_keys[conn_id] = key ? strdup(key) : NULL;
+    pool_in_use[conn_id] = 1;
+}
+
+static int pool_release(int conn_id) {
+    if (!pool_enabled() || conn_id < 0 || conn_id >= MYSQL_POOL_SIZE) return 0;
+    if (pool_keys[conn_id]) {
+        pool_in_use[conn_id] = 0; /* mantén viva la conexión */
+        return 1; /* indica al caller "NO cierres" */
+    }
+    return 0;
+}
 
 // Helper: Escape XML special characters
 static void xml_escape(const char* input, char* output, size_t output_size) {
@@ -261,6 +312,18 @@ void native_mysql_connect(ASTNode* args) {
     const char* db   = get_arg_string(args, 3);
     int port = get_arg_int(args, 4);  // Optional 5th parameter
 
+    /* Pool: intentar reusar una conexión libre con el mismo key. */
+    char pool_key[512];
+    snprintf(pool_key, sizeof(pool_key), "%s|%s|%s|%d",
+             host ? host : "", user ? user : "", db ? db : "", port);
+    int reused = pool_acquire(pool_key);
+    if (reused >= 0) {
+        ASTNode* ret_node = create_ast_leaf("NUMBER", reused, NULL, NULL);
+        add_or_update_variable("__ret__", ret_node);
+        free_ast(ret_node);
+        return;
+    }
+
     // Debug: imprimir los valores recibidos
    /* printf("[MySQL DEBUG] Valores recibidos en native_mysql_connect:\n");
     printf("  host: '%s'\n", host ? host : "NULL");
@@ -330,9 +393,10 @@ void native_mysql_connect(ASTNode* args) {
     }
     
     connections[conn_id] = conn;
+    pool_register(conn_id, pool_key);
     // next_conn_id is no longer used for allocation logic
     
-    printf("[MySQL] Conexión exitosa (ID: %d)\n", conn_id); fflush(stdout);
+    printf("[MySQL] Conexión exitosa (ID: %d)%s\n", conn_id, pool_enabled() ? " [pool]" : ""); fflush(stdout);
     ASTNode* ret_node = create_ast_leaf("NUMBER", conn_id, NULL, NULL);
     add_or_update_variable("__ret__", ret_node);
     free_ast(ret_node);
@@ -499,10 +563,13 @@ void native_mysql_query(ASTNode* args) {
 void native_mysql_close(ASTNode* args) {
     int conn_id = get_arg_int(args, 0);
     
-    if (conn_id < 0 || conn_id >= 10 || !connections[conn_id]) {
+    if (conn_id < 0 || conn_id >= MYSQL_POOL_SIZE || !connections[conn_id]) {
         printf("[MySQL] Error: Conexión inválida (ID: %d)\n", conn_id);
         return;
     }
+    
+    /* Si el pool está activo, devolver al pool en vez de cerrar. */
+    if (pool_release(conn_id)) return;
     
     mysql_close(connections[conn_id]);
     connections[conn_id] = NULL;

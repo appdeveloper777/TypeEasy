@@ -28,6 +28,6 @@ endpoint {
      [HttpGet("/api/users/{id}")]
     getUser() {
         let id = request_param("id");
-        return json(concat("{\"test9\": \"", id, "\"}"));
+        return json(concat("{\"test11\": \"", id, "\"}"));
     }
 }

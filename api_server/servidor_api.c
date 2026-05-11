@@ -18,6 +18,8 @@
 // Incluir el encabezado de TypeEasy
 #include "typeeasy.h"
 #include "../src/typeeasy_http.h"
+#include "../src/typeeasy_api.h"
+#include "../src/ast.h"
 
 // Estructura para la tabla de rutas dinámica
 typedef struct RouteEntry {
@@ -27,6 +29,7 @@ typedef struct RouteEntry {
     char *response_type;  // "json" or "xml"
     char *http_method;    // "GET" / "POST" / "PUT" / "DELETE" / "PATCH"
     int   cache_ttl;      // seconds; 0 = no cache
+    void *method_node;    // MethodNode* cached at discover (hot-path O(1))
     struct RouteEntry *next;
 } RouteEntry;
 
@@ -153,6 +156,25 @@ static CacheEntry *cache_lookup(const char *key) {
 }
 static void cache_store(const char *key, const char *body, int status, const char *ct, int ttl) {
     if (ttl <= 0) return;
+
+    /* Si ya existe la key, actualizar in-place. */
+    for (CacheEntry *e = g_cache; e; e = e->next) {
+        if (strcmp(e->key, key) == 0) {
+            free(e->body); free(e->content_type);
+            e->body = strdup(body ? body : "");
+            e->content_type = strdup(ct ? ct : "application/json");
+            e->status = status;
+            e->expires_at = time(NULL) + ttl;
+            return;
+        }
+    }
+
+    /* L\u00edmite simple: si hay >1024 entries, dropear la cola (LRU aprox). */
+    int n = 0; CacheEntry *prev = NULL, *cur = g_cache;
+    while (cur) { n++; if (n > 1024 && cur->next == NULL && prev) {
+        prev->next = NULL; free(cur->key); free(cur->body); free(cur->content_type); free(cur); break;
+    } prev = cur; cur = cur->next; }
+
     CacheEntry *e = (CacheEntry*)malloc(sizeof(CacheEntry));
     e->key = strdup(key); e->body = strdup(body ? body : "");
     e->status = status; e->content_type = strdup(ct ? ct : "application/json");
@@ -175,6 +197,7 @@ void add_route_full(const char *route, const char *script, const char *func,
     entry->response_type = strdup(resp_type ? resp_type : "json");
     entry->http_method = strdup(http_method ? http_method : "GET");
     entry->cache_ttl = cache_ttl;
+    entry->method_node = (void*)typeeasy_find_method(func); /* O(1) hot path */
     entry->next = global_routes;
     global_routes = entry;
     printf("[LOG] Ruta registrada: %s %s -> %s() [%s, cache=%d]\n",
@@ -504,10 +527,15 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
         }
     }
 
-    /* Invoke */
+    /* Invoke (fast path: cached MethodNode*) */
     clock_t start_time = clock();
-    char *result = typeeasy_invoke_with_script(g_typeeasy_ctx, match->script_path,
-                                               match->function_name, NULL);
+    char *result = NULL;
+    if (match->method_node) {
+        result = typeeasy_embedded_invoke_method((MethodNode*)match->method_node);
+    } else {
+        result = typeeasy_invoke_with_script(g_typeeasy_ctx, match->script_path,
+                                             match->function_name, NULL);
+    }
     clock_t end_time = clock();
     double time_taken = ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
 
@@ -799,8 +827,41 @@ static void supervisor_track_scripts(void) {
     pclose(fp);
 }
 
+/* === Multi-worker supervisor (nginx-style) ===
+ * N workers servidos por SO_REUSEPORT. El kernel balancea conexiones nuevas.
+ * Defaults: TYPEEASY_WORKERS env var, else nproc, capped at MAX_WORKERS. */
+#define MAX_WORKERS 64
+static pid_t g_worker_pids[MAX_WORKERS];
+static int   g_num_workers = 0;
+
+static int detect_num_workers(void) {
+    const char *env = getenv("TYPEEASY_WORKERS");
+    if (env && *env) {
+        int n = atoi(env);
+        if (n >= 1 && n <= MAX_WORKERS) return n;
+    }
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 1) n = 1;
+    if (n > MAX_WORKERS) n = MAX_WORKERS;
+    return (int)n;
+}
+
+static pid_t spawn_worker(int slot) {
+    pid_t pid = fork();
+    if (pid < 0) { perror("fork"); return -1; }
+    if (pid == 0) { _exit(run_worker()); }
+    g_worker_pids[slot] = pid;
+    return pid;
+}
+
+static int find_worker_slot(pid_t pid) {
+    for (int i = 0; i < g_num_workers; i++)
+        if (g_worker_pids[i] == pid) return i;
+    return -1;
+}
+
 int main(void) {
-    /* Save argv for child re-exec. */
+    /* Save argv for child re-exec (legacy; no longer used by reload path). */
     static char *argv0_buf = NULL;
     static char *fake_argv[2];
     {
@@ -813,62 +874,93 @@ int main(void) {
         g_main_argv = fake_argv;
     }
 
-    /* Detect dev hot-reload mode. If OFF, just run worker directly (no
-     * supervisor needed) so production stays a single-process binary. */
     const char *hr = getenv("TYPEEASY_HOTRELOAD");
     g_hotreload = (hr && (*hr == '1' || *hr == 't' || *hr == 'T' || *hr == 'y' || *hr == 'Y')) ? 1 : 0;
-    if (!g_hotreload) {
+    g_num_workers = detect_num_workers();
+
+    /* Single-worker + no hot-reload => no supervisor (lean prod single proc). */
+    if (g_num_workers == 1 && !g_hotreload) {
         return run_worker();
     }
 
-    /* === SUPERVISOR === always PID 1 of container, never dies. Forks workers,
-     * polls .te mtime, on change spawns new worker (binds same port via
-     * SO_REUSEPORT) then SIGTERMs old worker for graceful drain. */
-    printf("[SUPERVISOR %d] iniciado — hot-reload activo (zero-downtime)\n", (int)getpid());
+    /* === SUPERVISOR === PID 1 del contenedor, nunca muere. */
+    printf("[SUPERVISOR %d] iniciado — workers=%d  hot-reload=%s\n",
+           (int)getpid(), g_num_workers, g_hotreload ? "ON" : "OFF");
     fflush(stdout);
 
-    /* Ignore SIGCHLD-default but reap explicitly with waitpid. */
     signal(SIGINT,  SIG_DFL);
     signal(SIGTERM, SIG_DFL);
 
-    supervisor_track_scripts();
+    if (g_hotreload) supervisor_track_scripts();
 
-    pid_t worker_pid = fork();
-    if (worker_pid < 0) { perror("fork"); return 1; }
-    if (worker_pid == 0) { _exit(run_worker()); }
+    /* Spawn pool inicial */
+    for (int i = 0; i < g_num_workers; i++) {
+        if (spawn_worker(i) < 0) return 1;
+    }
 
     while (1) {
         sleep(1);
 
-        /* Reap any dead worker (unexpected exit) */
-        int status;
-        pid_t reaped = waitpid(-1, &status, WNOHANG);
-        if (reaped > 0 && reaped == worker_pid) {
-            fprintf(stderr, "[SUPERVISOR] worker %d murio (status=%d) — respawn\n",
-                    (int)reaped, status);
-            fflush(stderr);
-            worker_pid = fork();
-            if (worker_pid == 0) { _exit(run_worker()); }
+        /* Reap todos los hijos muertos y respawn en su slot. */
+        for (;;) {
+            int status;
+            pid_t reaped = waitpid(-1, &status, WNOHANG);
+            if (reaped <= 0) break;
+            int slot = find_worker_slot(reaped);
+            if (slot >= 0) {
+                fprintf(stderr, "[SUPERVISOR] worker %d (slot %d) murio (status=%d) — respawn\n",
+                        (int)reaped, slot, status);
+                fflush(stderr);
+                spawn_worker(slot);
+            }
+            /* slot<0 => worker viejo terminado por reload, ignorar. */
         }
 
-        if (!hotreload_changed()) continue;
+        if (!g_hotreload || !hotreload_changed()) continue;
 
-        printf("[SUPERVISOR] cambio en .te — spawn new worker (SO_REUSEPORT)\n");
+        /* === RELOAD ROLLING (nginx -s reload) ===
+         * 1) Snapshot de pids viejos.
+         * 2) Spawn N workers nuevos en slots nuevos (temporales).
+         * 3) Esperar 2s para que liguen al puerto via SO_REUSEPORT.
+         * 4) SIGTERM a los viejos, waitpid hasta drenar.
+         * 5) Compactar slots: los nuevos pasan a las posiciones definitivas. */
+        printf("[SUPERVISOR] cambio en .te — rolling restart de %d workers\n", g_num_workers);
         fflush(stdout);
-        pid_t new_worker = fork();
-        if (new_worker < 0) { perror("fork"); continue; }
-        if (new_worker == 0) { _exit(run_worker()); }
 
-        /* Give the new worker time to bind + start accepting. */
+        pid_t old_pids[MAX_WORKERS];
+        int old_n = g_num_workers;
+        for (int i = 0; i < old_n; i++) old_pids[i] = g_worker_pids[i];
+
+        pid_t new_pids[MAX_WORKERS];
+        int spawn_failed = 0;
+        for (int i = 0; i < g_num_workers; i++) {
+            pid_t p = fork();
+            if (p < 0) { perror("fork"); spawn_failed = 1; new_pids[i] = 0; continue; }
+            if (p == 0) { _exit(run_worker()); }
+            new_pids[i] = p;
+        }
+        if (spawn_failed) {
+            fprintf(stderr, "[SUPERVISOR] reload parcial — algunos forks fallaron\n");
+            fflush(stderr);
+        }
+
+        /* Dejar que los nuevos bindeen y empiecen a aceptar. */
         sleep(2);
 
-        printf("[SUPERVISOR] SIGTERM old worker %d (graceful drain)\n", (int)worker_pid);
+        printf("[SUPERVISOR] SIGTERM a %d workers viejos (graceful drain)\n", old_n);
         fflush(stdout);
-        kill(worker_pid, SIGTERM);
-        waitpid(worker_pid, NULL, 0);
-        worker_pid = new_worker;
+        for (int i = 0; i < old_n; i++) {
+            if (old_pids[i] > 0) kill(old_pids[i], SIGTERM);
+        }
+        for (int i = 0; i < old_n; i++) {
+            if (old_pids[i] > 0) waitpid(old_pids[i], NULL, 0);
+        }
 
-        /* Reset baseline so we don't loop on the same change. */
-        supervisor_track_scripts();
+        /* Promover los nuevos al pool oficial. */
+        for (int i = 0; i < g_num_workers; i++) g_worker_pids[i] = new_pids[i];
+
+        supervisor_track_scripts(); /* baseline para el siguiente cambio */
+        printf("[SUPERVISOR] reload completo\n");
+        fflush(stdout);
     }
 }

@@ -68,6 +68,18 @@ char* typeeasy_embedded_discover(TypeEasyEmbeddedContext* ctx, const char* scrip
 char* typeeasy_embedded_invoke(TypeEasyEmbeddedContext* ctx, const char* script_path, const char* function_name);
 
 /**
+ * Busca un MethodNode* por nombre en global_methods (lookup O(n)).
+ * Cachealo en tu router y reusa para evitar el strcmp por request.
+ */
+struct MethodNode; /* fwd from ast.h */
+struct MethodNode* typeeasy_find_method(const char* function_name);
+
+/**
+ * Ejecuta directamente un MethodNode* ya resuelto. Path rápido sin lookup.
+ */
+char* typeeasy_embedded_invoke_method(struct MethodNode* m);
+
+/**
  * Busca un script cargado por su ruta
  * @param ctx Contexto del intérprete
  * @param script_path Ruta del script a buscar

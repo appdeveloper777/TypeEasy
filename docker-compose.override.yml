@@ -22,6 +22,9 @@ services:
     image: typeeasy-api-dev
     environment:
       - TYPEEASY_HOTRELOAD=1
+      # - TYPEEASY_WORKERS=4       # opcional: forzar N workers (default = nproc)
+      # - TYPEEASY_MYSQL_POOL=1    # opcional: reusar conexiones MySQL
+      # - TYPEEASY_VERBOSE=1       # opcional: logs por request (default OFF)
     volumes:
       - ./src:/app/src
       - ./api_server:/app/api_server
@@ -31,3 +34,15 @@ services:
       - ./typeeasycode/settings:/app/settings
     working_dir: /app
     entrypoint: ["/bin/sh", "/app/scripts/dev_api_entrypoint.sh"]
+    # === Tuning para alto throughput ===
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+      nproc: 65535
+    sysctls:
+      net.core.somaxconn: 65535
+      net.ipv4.tcp_tw_reuse: 1
+      net.ipv4.ip_local_port_range: "1024 65535"
+    # Opcional: shm_size si usas mmap intensivo
+    # shm_size: 256m

@@ -292,93 +292,67 @@ char* typeeasy_embedded_discover(TypeEasyEmbeddedContext* ctx, const char* scrip
     return result;
 }
 
-char* typeeasy_embedded_invoke(TypeEasyEmbeddedContext* ctx, const char* script_path, const char* function_name) {
-    if (!ctx || !script_path || !function_name) {
-        return NULL;
+/* Verbose flag — set TYPEEASY_VERBOSE=1 to enable per-request logs. */
+static int te_verbose_cached = -1;
+static int te_verbose(void) {
+    if (te_verbose_cached < 0) {
+        const char *v = getenv("TYPEEASY_VERBOSE");
+        te_verbose_cached = (v && (*v == '1' || *v == 't' || *v == 'T')) ? 1 : 0;
     }
-    
-    // Verificar que el script esté cargado
+    return te_verbose_cached;
+}
+
+/* Lookup MethodNode* por nombre. Cachealo en el router para evitar repetir. */
+MethodNode* typeeasy_find_method(const char* function_name) {
+    if (!function_name) return NULL;
+    for (MethodNode* m = global_methods; m; m = m->next) {
+        if (m->name && strcmp(m->name, function_name) == 0) return m;
+    }
+    return NULL;
+}
+
+/* Ejecuta un MethodNode* ya resuelto. Hot path. */
+char* typeeasy_embedded_invoke_method(MethodNode* m) {
+    if (!m || !m->body) return NULL;
+
+    if (!__ret_var_active) {
+        memset(&__ret_var, 0, sizeof(Variable));
+        __ret_var_active = 1;
+    }
+    if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
+        free(__ret_var.value.string_value);
+        __ret_var.value.string_value = NULL;
+    }
+    if (__ret_var.id)   { free(__ret_var.id);   __ret_var.id = NULL; }
+    if (__ret_var.type) { free(__ret_var.type); __ret_var.type = NULL; }
+    __ret_var.vtype = VAL_INT;
+    __ret_var.value.int_value = 0;
+    return_flag = 0;
+
+    interpret_ast(m->body);
+
+    char* result = NULL;
+    Variable* ret_var = find_variable("__ret__");
+    if (ret_var && ret_var->vtype == VAL_STRING && ret_var->value.string_value) {
+        result = strdup(ret_var->value.string_value);
+    }
+    runtime_reset_vars_to_initial_state();
+    if (!result) result = strdup("");
+    return result;
+}
+
+char* typeeasy_embedded_invoke(TypeEasyEmbeddedContext* ctx, const char* script_path, const char* function_name) {
+    if (!ctx || !script_path || !function_name) return NULL;
     LoadedScript* script = find_loaded_script(ctx, script_path);
     if (!script) {
-        fprintf(stderr, "[TYPEEASY_API] Script no cargado: %s\n", script_path);
+        if (te_verbose()) fprintf(stderr, "[TYPEEASY_API] Script no cargado: %s\n", script_path);
         return NULL;
     }
-    
-    printf("[TYPEEASY_API] Invocando función: %s\n", function_name);
-    
-    // Buscar la función en global_methods
-    MethodNode* m = global_methods;
-    int found = 0;
-    
-    printf("[TYPEEASY_API] Buscando en global_methods...\n");
-    
-    while (m) {
-        printf("[TYPEEASY_API] Encontrado método: %s\n", m->name);
-        if (strcmp(m->name, function_name) == 0) {
-            found = 1;
-            printf("[TYPEEASY_API] ¡Función encontrada! Ejecutando...\n");
-            
-            // CRITICAL: Activar __ret_var si no está activo
-            if (!__ret_var_active) {
-                memset(&__ret_var, 0, sizeof(Variable));
-                __ret_var_active = 1;
-            }
-            
-            // CRITICAL: Limpiar __ret__ antes de ejecutar la función
-            if (__ret_var_active) {
-                // Liberar el valor anterior pero mantener la variable activa
-                if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
-                    free(__ret_var.value.string_value);
-                    __ret_var.value.string_value = NULL;
-                }
-                if (__ret_var.id) {
-                    free(__ret_var.id);
-                    __ret_var.id = NULL;
-                }
-                if (__ret_var.type) {
-                    free(__ret_var.type);
-                    __ret_var.type = NULL;
-                }
-                __ret_var.vtype = VAL_INT;  // Reset to default type
-                __ret_var.value.int_value = 0;
-                // NO desactivar: __ret_var_active sigue siendo 1
-            }
-            
-            // Resetear return_flag
-            return_flag = 0;
-            
-            // Ejecutar el cuerpo de la función
-            interpret_ast(m->body);
-            
-            // Guardar el resultado ANTES de limpiar variables
-            char* result = NULL;
-            Variable* ret_var = find_variable("__ret__");
-            if (ret_var) {
-                fprintf(stderr, "[TYPEEASY_API] __ret__ encontrado. vtype=%d (esperado VAL_STRING=%d)\n", ret_var->vtype, VAL_STRING); fflush(stderr);
-                if (ret_var->vtype == VAL_STRING) {
-                    fprintf(stderr, "[TYPEEASY_API] Retorno encontrado en __ret__: %s\n", ret_var->value.string_value); fflush(stderr);
-                    result = strdup(ret_var->value.string_value);
-                }
-            } else {
-                fprintf(stderr, "[TYPEEASY_API] __ret__ NO encontrado via find_variable\n"); fflush(stderr);
-            }
-            
-            // CRITICAL: Limpiar variables DESPUÉS de ejecutar (para cerrar conexiones MySQL)
-            runtime_reset_vars_to_initial_state();
-            
-            if (result) {
-                return result;
-            }
-            
-            fprintf(stderr, "[TYPEEASY_API] Ejecución completada sin retorno en __ret__\n"); fflush(stderr);
-            return strdup("");
-        }
-        m = m->next;
+    MethodNode* m = typeeasy_find_method(function_name);
+    if (!m) {
+        if (te_verbose()) fprintf(stderr, "[TYPEEASY_API] Función no encontrada: %s\n", function_name);
+        return NULL;
     }
-    
-    if (!found) {
-        fprintf(stderr, "[TYPEEASY_API] Función no encontrada en global_methods: %s\n", function_name);
-    }
-    
-    return NULL;
+    if (te_verbose()) printf("[TYPEEASY_API] Invocando: %s\n", function_name);
+    return typeeasy_embedded_invoke_method(m);
 }
