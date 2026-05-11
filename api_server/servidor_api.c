@@ -489,26 +489,7 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
         }
     }
 
-    /* Populate headers. In our handler, req_info->http_headers may be empty
-     * (civetweb only fills it for built-in flows). Probe the most common
-     * headers explicitly via mg_get_header(); also iterate the array as a
-     * fallback. */
-    {
-        static const char *probe[] = {
-            "Host", "User-Agent", "Accept", "Accept-Language", "Accept-Encoding",
-            "Referer", "Origin", "Cookie", "Authorization", "Connection",
-            "Cache-Control", "Content-Type", "Content-Length", "DNT",
-            "Upgrade-Insecure-Requests", "Sec-Fetch-Site", "Sec-Fetch-Mode",
-            "Sec-Fetch-User", "Sec-Fetch-Dest",
-            "Sec-CH-UA", "Sec-CH-UA-Mobile", "Sec-CH-UA-Platform",
-            "X-Forwarded-For", "X-Real-IP", "X-Requested-With",
-            NULL
-        };
-        for (int i = 0; probe[i]; ++i) {
-            const char *vh = mg_get_header(conn, probe[i]);
-            if (vh) typeeasy_http_add_header(probe[i], vh);
-        }
-    }
+    /* Populate headers from the parsed civetweb header array. */
     for (int i = 0; i < req_info->num_headers; i++) {
         typeeasy_http_add_header(req_info->http_headers[i].name,
                                  req_info->http_headers[i].value);

@@ -594,6 +594,53 @@ static void native_request_body  (ASTNode *arg) { (void)arg; te_set_ret_string(g
 static void native_request_query (ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_query,   k); te_set_ret_string(v ? v : ""); }
 static void native_request_header(ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_headers, k); te_set_ret_string(v ? v : ""); }
 static void native_request_param (ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_params,  k); te_set_ret_string(v ? v : ""); }
+
+/* JSON-encode a TeKV list as { "k": "v", ... } into out (truncates safely). */
+static void te_kv_to_json(TeKV *head, char *out, size_t cap) {
+    size_t o = 0;
+    if (cap < 3) { if (cap) out[0] = 0; return; }
+    out[o++] = '{';
+    int first = 1;
+    for (TeKV *c = head; c && o + 8 < cap; c = c->next) {
+        const char *k = c->k ? c->k : "";
+        const char *v = c->v ? c->v : "";
+        if (!first) { if (o + 1 < cap) out[o++] = ','; }
+        first = 0;
+        if (o + 1 < cap) out[o++] = '"';
+        for (const char *p = k; *p && o + 2 < cap; ++p) {
+            if (*p == '"' || *p == '\\') { if (o + 2 < cap) out[o++] = '\\'; }
+            out[o++] = *p;
+        }
+        if (o + 3 < cap) { out[o++] = '"'; out[o++] = ':'; out[o++] = '"'; }
+        for (const char *p = v; *p && o + 2 < cap; ++p) {
+            if (*p == '"' || *p == '\\') { if (o + 2 < cap) out[o++] = '\\'; }
+            else if (*p == '\n') { if (o + 2 < cap) { out[o++] = '\\'; out[o++] = 'n'; } continue; }
+            else if (*p == '\r') { if (o + 2 < cap) { out[o++] = '\\'; out[o++] = 'r'; } continue; }
+            else if (*p == '\t') { if (o + 2 < cap) { out[o++] = '\\'; out[o++] = 't'; } continue; }
+            out[o++] = *p;
+        }
+        if (o + 1 < cap) out[o++] = '"';
+    }
+    if (o + 1 < cap) out[o++] = '}';
+    out[o < cap ? o : cap - 1] = 0;
+}
+
+static void native_request_headers(ASTNode *arg) {
+    (void)arg;
+    char buf[8192]; te_kv_to_json(g_req_headers, buf, sizeof(buf));
+    te_set_ret_string(buf);
+}
+static void native_request_queries(ASTNode *arg) {
+    (void)arg;
+    char buf[4096]; te_kv_to_json(g_req_query, buf, sizeof(buf));
+    te_set_ret_string(buf);
+}
+static void native_request_params_all(ASTNode *arg) {
+    (void)arg;
+    char buf[2048]; te_kv_to_json(g_req_params, buf, sizeof(buf));
+    te_set_ret_string(buf);
+}
+
 static void native_response_status(ASTNode *arg) { g_resp_status = te_arg_int(arg, 200); te_set_ret_int(g_resp_status); }
 static void native_response_header(ASTNode *arg) {
     const char *k = te_arg_string(arg);
@@ -624,6 +671,9 @@ int call_native_function(const char *name, ASTNode *arg) {
     if (strcmp(name, "request_query")  == 0) { native_request_query(arg);  return 1; }
     if (strcmp(name, "request_header") == 0) { native_request_header(arg); return 1; }
     if (strcmp(name, "request_param")  == 0) { native_request_param(arg);  return 1; }
+    if (strcmp(name, "request_headers")== 0) { native_request_headers(arg);return 1; }
+    if (strcmp(name, "request_queries")== 0) { native_request_queries(arg);return 1; }
+    if (strcmp(name, "request_params") == 0) { native_request_params_all(arg); return 1; }
     if (strcmp(name, "response_status")== 0) { native_response_status(arg);return 1; }
     if (strcmp(name, "response_header")== 0) { native_response_header(arg);return 1; }
     if (strcmp(name, "concat") == 0) {

@@ -1,0 +1,65 @@
+// Endpoint de prueba para los builtins HTTP request_*.
+// Devuelve un JSON con method, path, query, body, headers seleccionados
+// y los nuevos request_headers() / request_queries() / request_params() que
+// devuelven todo el mapa serializado como JSON.
+//
+// Pruebas sugeridas:
+//   GET  http://localhost:8080/api/reqinfo
+//   GET  http://localhost:8080/api/reqinfo?id=42&name=fer
+//   POST http://localhost:8080/api/reqinfo/99   (con body)
+//   GET  http://localhost:8080/api/reqinfo/headers   -> sólo los headers
+
+endpoint {
+
+    [HttpGet("/api/reqinfo")]
+    info() {
+        let m  = request_method();
+        let p  = request_path();
+        let ua = request_header("User-Agent");
+        let ck = request_header("Cookie");
+        let lg = request_header("Accept-Language");
+        let id = request_query("id");
+        let nm = request_query("name");
+
+        let h  = request_headers();   // {"User-Agent":"...","Cookie":"...",...}
+        let q  = request_queries();   // {"id":"42","name":"fer"}
+
+        println("{");
+        println(concat("  \"method\": \"", m, "\","));
+        println(concat("  \"path\": \"", p, "\","));
+        println(concat("  \"id\": \"", id, "\","));
+        println(concat("  \"name\": \"", nm, "\","));
+        println(concat("  \"userAgent\": \"", ua, "\","));
+        println(concat("  \"cookie\": \"", ck, "\","));
+        println(concat("  \"acceptLanguage\": \"", lg, "\","));
+        println(concat("  \"query\": ", q, ","));
+        println(concat("  \"headers\": ", h));
+        println("}");
+        return json();
+    }
+
+    [HttpGet("/api/reqinfo/headers")]
+    headers() {
+        let h = request_headers();
+        println("{");
+        println(concat("  \"headers\": ", h));
+        println("}");
+        return json();
+    }
+
+    [HttpPost("/api/reqinfo/{id}")]
+    create() {
+        let id   = request_param("id");
+        let body = request_body();
+        let ct   = request_header("Content-Type");
+        let pall = request_params();
+
+        println("{");
+        println(concat("  \"id\": \"", id, "\","));
+        println(concat("  \"contentType\": \"", ct, "\","));
+        println(concat("  \"params\": ", pall, ","));
+        println(concat("  \"body\": \"", body, "\""));
+        println("}");
+        return json();
+    }
+}
