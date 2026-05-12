@@ -57,7 +57,7 @@ git clone https://github.com/appdeveloper777/TypeEasy.git; cd TypeEasy; code -r 
 
 1. Crea un archivo `.te` en `typeeasycode/`:
 
-```te
+```ts
 // typeeasycode/hola.te
 print("¡Hola, mundo!");
 ```
