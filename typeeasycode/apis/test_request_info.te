@@ -62,4 +62,15 @@ endpoint {
         println("}");
         return json();
     }
+
+    [HttpGet("/api/reqinfo/show/{id}")]
+    showId() {
+        let id   = request_param("id");
+        let pall = request_params();
+        println("{");
+        println(concat("  \"id\": \"", id, "\","));
+        println(concat("  \"params\": ", pall));
+        println("}");
+        return json();
+    }
 }

@@ -417,10 +417,21 @@ static void cmd_vars(void) {
     size_t o = 0;
     o += (size_t)snprintf(buf + o, sizeof(buf) - o, "{\"resp\":\"vars\",\"vars\":[");
     int first = 1;
-    for (int i = 0; i < var_count && o + 512 < sizeof(buf); ++i) {
+    /* Dedupe by name keeping the LATEST entry. vars[] is append-only across
+     * scopes (each `var x = ...` adds a new slot, the older `x` stays alive
+     * but is unreachable via find_variable since the symtab hash points to
+     * the newest index). Without dedupe we would emit stale shadowed copies
+     * and VS Code's Locals view picks the first (oldest) one. Iterate
+     * backward and skip any name we've already emitted. */
+    for (int i = var_count - 1; i >= 0 && o + 512 < sizeof(buf); --i) {
         Variable *v = &vars[i];
         if (!v->id) continue;
         if (v->id[0] == '_' && v->id[1] == '_') continue; /* skip __ret__ etc */
+        int dup = 0;
+        for (int j = i + 1; j < var_count; ++j) {
+            if (vars[j].id && strcmp(vars[j].id, v->id) == 0) { dup = 1; break; }
+        }
+        if (dup) continue;
         char val[256] = "";
         const char *type = "unknown";
         int ref = render_variable_value(v, val, sizeof(val), &type);

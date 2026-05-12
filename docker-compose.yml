@@ -24,6 +24,14 @@ services:
       - "8080:8080"
     environment:
       - TYPEEASY_DEBUG=0
+      # --- CSV reader tuning (opcional) ---
+      # TE_CSV_MAX_THREADS: tope de hilos para from_csv_to_list (default 16, rango 1-256).
+      # Subir en hosts con 32+ cores y CSVs >16MB. Bajar si se comparte el host.
+      # - TE_CSV_MAX_THREADS=16
+      # TE_CSV_THREADS: fuerza N hilos exactos (sobrescribe heurística y MAX).
+      # - TE_CSV_THREADS=8
+      # TE_CSV_DATAFRAME=1: activa el modo columnar (más rápido pero rompe iteración OO).
+      # - TE_CSV_DATAFRAME=0
       # Configuración de MySQL - Cambia estos valores según tu servidor
       - MYSQL_HOST=mysql # Nombre del servicio MySQL en Docker
       - MYSQL_PORT=3306 # Puerto interno de MySQL
@@ -45,6 +53,11 @@ services:
       - ./typeeasycode:/code
     environment:
       - TYPEEASY_DEBUG=0
+      # --- CSV reader tuning (opcional) ---
+      # - TE_CSV_MAX_THREADS=16   # tope de hilos (default 16, rango 1-256)
+      # - TE_CSV_THREADS=8        # forzar N hilos exactos
+      # - TE_CSV_DATAFRAME=0      # 1 = modo columnar (rompe iteración OO)
+      # - TE_CSV_TIMING=0         # 1 = imprimir tiempos de carga
     working_dir: /code
     entrypoint: [ "/typeeasy/typeeasy" ]
 

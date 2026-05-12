@@ -443,6 +443,30 @@ char* get_node_string(ASTNode* node) {
         return strdup(""); // Attribute not found
     }
 
+    /* Fallback: arithmetic / bitwise sub-expressions (MUL, SUB, DIV, MOD,
+     * NEG, BIT_*, SHL, SHR, paren-wrapped, etc.). Let evaluate_expression
+     * compute the numeric value and format it. Keeps `"x" + (s*2)` working. */
+    if (node->type && (
+        strcmp(node->type, "MUL") == 0 ||
+        strcmp(node->type, "SUB") == 0 ||
+        strcmp(node->type, "DIV") == 0 ||
+        strcmp(node->type, "MOD") == 0 ||
+        strcmp(node->type, "NEG") == 0 ||
+        strcmp(node->type, "BIT_AND") == 0 ||
+        strcmp(node->type, "BIT_OR") == 0 ||
+        strcmp(node->type, "BIT_XOR") == 0 ||
+        strcmp(node->type, "BIT_NOT") == 0 ||
+        strcmp(node->type, "SHL") == 0 ||
+        strcmp(node->type, "SHR") == 0)) {
+        double d = evaluate_expression(node);
+        if (d == (double)(long long)d) {
+            snprintf(temp, sizeof(temp), "%lld", (long long)d);
+        } else {
+            snprintf(temp, sizeof(temp), "%g", d);
+        }
+        return strdup(temp);
+    }
+
     return strdup(""); // Fallback
 }
 
@@ -886,6 +910,14 @@ void runtime_save_initial_var_count() {
 }
 
 void runtime_reset_vars_to_initial_state() {
+    /* Invalidate all cached bytecode whose Instrs hold raw Variable*
+     * pointers into vars[]. After this reset, slots are recycled and
+     * those cached pointers become stale. Force recompilation on next
+     * access by clearing node->bc / m->bc_body. (Defined later in file
+     * after BCInfo is declared.) */
+    extern void bc_invalidate_all(void);
+    bc_invalidate_all();
+
     // Libera la memoria de todas las variables CREADAS DURANTE LA ÚLTIMA EJECUCIÓN
     // (es decir, todas las variables DESPUÉS de los bridges)
     for (int i = g_initial_var_count; i < var_count; i++) {
@@ -894,7 +926,11 @@ void runtime_reset_vars_to_initial_state() {
         if (vars[i].vtype == VAL_STRING && vars[i].value.string_value) {
             free(vars[i].value.string_value);
         }
-        
+        /* Wipe the slot so any AST node that cached `&vars[i]` from a
+         * previous request will read garbage-free zeros, and code paths
+         * that validate against `id != NULL` can detect staleness. */
+        memset(&vars[i], 0, sizeof(Variable));
+
         // ¡Importante! Si la variable es un Objeto (como 'intencion')
         // debemos liberar el objeto en sí (que está en 'extra')
         // PERO 'declare_variable'  y 'add_or_update_variable' 
@@ -2696,6 +2732,51 @@ typedef struct BCInfo {
 
 #define BC_NOT_COMPILABLE ((void*)0x1)
 
+/* Track all AST nodes / methods that have a cached BCInfo so that
+ * runtime_reset_vars_to_initial_state() can invalidate them. The cached
+ * Instrs hold raw `Variable*` pointers into vars[], which become stale
+ * when slots are recycled across API requests. */
+#define BC_REG_MAX_NODES 65536
+#define BC_REG_MAX_METHODS 4096
+static struct ASTNode *g_bc_reg_nodes[BC_REG_MAX_NODES];
+static int g_bc_reg_node_count = 0;
+static struct MethodNode *g_bc_reg_methods[BC_REG_MAX_METHODS];
+static int g_bc_reg_method_count = 0;
+
+static inline void bc_register_node(struct ASTNode *n) {
+    if (g_bc_reg_node_count < BC_REG_MAX_NODES) g_bc_reg_nodes[g_bc_reg_node_count++] = n;
+}
+static inline void bc_register_method(struct MethodNode *m) {
+    if (g_bc_reg_method_count < BC_REG_MAX_METHODS) g_bc_reg_methods[g_bc_reg_method_count++] = m;
+}
+
+/* Called from runtime_reset_vars_to_initial_state (forward-declared
+ * extern) to drop all cached bytecode whose Instrs hold stale Variable*
+ * pointers into recycled slots.
+ *
+ * NOTE: we do NOT free the BCInfo / Instrs blocks. Some code paths
+ * (method bodies, inherited methods sharing AST, recursive compile)
+ * may have multiple registrations of the same pointer; double-free
+ * causes hang/crash. The leak is bounded by the program's compiled
+ * code size and only happens once per script reload boundary, not
+ * per request — totally acceptable. */
+void bc_invalidate_all(void) {
+    for (int bi = 0; bi < g_bc_reg_node_count; bi++) {
+        ASTNode *n = g_bc_reg_nodes[bi];
+        if (n && n->bc != BC_NOT_COMPILABLE) {
+            n->bc = NULL;
+        }
+    }
+    g_bc_reg_node_count = 0;
+    for (int bi = 0; bi < g_bc_reg_method_count; bi++) {
+        MethodNode *mm = g_bc_reg_methods[bi];
+        if (mm && mm->bc_body != BC_NOT_COMPILABLE) {
+            mm->bc_body = NULL;
+        }
+    }
+    g_bc_reg_method_count = 0;
+}
+
 /* Ola 4: per-call current `this` for BC_LOAD_THIS_ATTR. Set by
  * interpret_call_method before invoking bc_exec on a compiled method body. */
 static ObjectNode *g_bc_this = NULL;
@@ -2731,6 +2812,10 @@ static int bc_compile(ASTNode *node, Instr *out, int *pos, int max) {
         return 1;
     case NK_IDENTIFIER: {
         Variable *v = (Variable *)node->cached_var;
+        if (v && node->id && (!v->id || strcmp(v->id, node->id) != 0)) {
+            v = NULL;
+            node->cached_var = NULL;
+        }
         if (!v) {
             v = find_variable(node->id);
             if (v) node->cached_var = v;
@@ -5105,6 +5190,7 @@ static BCInfo *bc_get_or_compile(ASTNode *node) {
     memcpy(info->code, buf, sizeof(Instr) * pos);
     info->len = pos;
     node->bc = info;
+    bc_register_node(node);
     return info;
 }
 
@@ -5204,6 +5290,7 @@ static BCInfo *bc_get_or_compile_method(MethodNode *m, ClassNode *cls) {
     memcpy(info->code, buf, sizeof(Instr) * pos);
     info->len = pos;
     m->bc_body = info;
+    bc_register_method(m);
     return info;
 }
 
@@ -5445,6 +5532,7 @@ static BCInfo *bc_get_or_compile_stmt(ASTNode *node) {
     memcpy(info->code, buf, sizeof(Instr) * pos);
     info->len = pos;
     node->bc = info;
+    bc_register_node(node);
     return info;
 }
 
@@ -5462,7 +5550,7 @@ double evaluate_expression(ASTNode *node) {
             if (e && e[0] && e[0] != '0') bc_enabled = 0;
             bc_init = 1;
         }
-        if (bc_enabled) {
+        if (bc_enabled && !g_debug_enabled) {
             BCInfo *info = bc_get_or_compile(node);
             if (info) return bc_exec(info->code);
         }
@@ -5477,8 +5565,18 @@ double evaluate_expression(ASTNode *node) {
 
     case NK_IDENTIFIER: {
         /* Fase 2 (perf): cache Variable* on first lookup.
-         * vars[] is append-only with stable pointers, so this is safe. */
+         * vars[] is append-only with stable pointers, so this is safe.
+         * EXCEPT: runtime_reset_vars_to_initial_state() between API
+         * requests truncates var_count and wipes slots, so a cached
+         * pointer from a previous request may now point to a recycled
+         * (or zeroed) slot. Re-validate by comparing the slot's id. */
         Variable *var = (Variable *)node->cached_var;
+        if (var && node->id) {
+            if (!var->id || strcmp(var->id, node->id) != 0) {
+                var = NULL;
+                node->cached_var = NULL;
+            }
+        }
         if (!var) {
             var = find_variable(node->id);
             node->cached_var = var;
@@ -6463,7 +6561,10 @@ void interpret_ast(ASTNode *node) {
     case NK_WHILE:
         /* Fase 4: try compiled-bytecode loop. Only succeeds if the entire
          * body is numeric (assigns/ifs/whiles). Falls back to AST walker
-         * for any non-trivial body. */
+         * for any non-trivial body.
+         * Debugger: skip bytecode entirely when attached, otherwise the
+         * loop runs in one shot and breakpoints / step inside the body
+         * never fire. */
         {
             static int bc4_init = 0;
             static int bc4_enabled = 1;
@@ -6472,7 +6573,7 @@ void interpret_ast(ASTNode *node) {
                 if (e && e[0] && e[0] != '0') bc4_enabled = 0;
                 bc4_init = 1;
             }
-            if (bc4_enabled) {
+            if (bc4_enabled && !g_debug_enabled) {
                 BCInfo *info = bc_get_or_compile_stmt(node);
                 if (info) { bc_exec(info->code); break; }
             }
@@ -6593,7 +6694,7 @@ static void interpret_for(ASTNode *node) {
             if (e && e[0] && e[0] != '0') bc_for_enabled = 0;
             bc_for_init = 1;
         }
-        if (bc_for_enabled) {
+        if (bc_for_enabled && !g_debug_enabled) {
             BCInfo *info = bc_get_or_compile_stmt(node);
             if (info) { bc_exec(info->code); return; }
         }
@@ -10345,15 +10446,22 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
         if (ncpu < 1) ncpu = 1;
         /* Cap adaptativo según tamaño del archivo.
-         * Empíricamente: ~2MB de CSV por thread es el sweet spot
-         * (chunks más pequeños hacen que la coordinación domine sobre
-         * el paralelismo real). Cap absoluto a 32 para evitar contention
-         * extrema en cajas con muchos cores. */
+         * Re-medido mayo 2026 (best-of-30): el sweet spot real es
+         * ~1MB de CSV por thread (no 2MB como estimación previa).
+         * Mediciones: 200k/3.5MB → óptimo 4 threads; 1M/11.2MB → 8.
+         * Cap absoluto a 16 por default; override via env TE_CSV_MAX_THREADS=N
+         * para máquinas con muchos cores y archivos grandes (>16MB). */
+        long max_threads_cap = 16;
+        const char *te_max_env = getenv("TE_CSV_MAX_THREADS");
+        if (te_max_env) {
+            long v = atol(te_max_env);
+            if (v >= 1 && v <= 256) max_threads_cap = v;
+        }
         size_t bytes = len - pos;
-        long ideal_by_size = (long)(bytes / (2u * 1024u * 1024u));
+        long ideal_by_size = (long)(bytes / (1u * 1024u * 1024u));
         if (ideal_by_size < 2) ideal_by_size = 2;
         if (ncpu > ideal_by_size) ncpu = ideal_by_size;
-        if (ncpu > 32) ncpu = 32;
+        if (ncpu > max_threads_cap) ncpu = max_threads_cap;
         if (forced > 0) ncpu = forced;
         if (ncpu >= 2) {
             /* Detección rápida de quotes (8 bytes a la vez). */

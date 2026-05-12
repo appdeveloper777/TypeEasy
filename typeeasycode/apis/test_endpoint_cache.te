@@ -19,14 +19,17 @@ endpoint {
             s = s + i;
             i = i + 1;
         }
-        println("{");
-        let body = concat("  \"suma\": ", s);
+        var body = "{\n" +
+                "  \"mensaje\": \"Hola desde TypeEasy\",\n" +
+                "  \"suma\": " + s + ",\n" +
+                "  \"suma2\": " + ((s * 2) * 2) + ",\n"+
+                "  \"suma3\": " + (s * 3) + "\n" +
+                "}";
         println(body);
-        println("}");
         return json();
     }
      [HttpPost("/api/users/{id}")]
-    getUser() {
+    getUser() { 
         let id = request_param("id");
         return json(concat("{\"test10\": \"", id, "\"}"));
     }
