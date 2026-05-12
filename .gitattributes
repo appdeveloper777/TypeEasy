@@ -1,0 +1,9 @@
+# Make GitHub highlight TypeEasy (.te) sources using its TypeScript grammar
+# until TypeEasy is registered in github-linguist/linguist.
+# TS matches better than JS: let/var/const, class, =>, ${...} interpolation,
+# plus type annotations like `: int` / `: string` / `: dynamic`.
+*.te linguist-language=TypeScript
+
+# Do not count benchmark/generated .te files in the language stats donut.
+benchmarks/**     linguist-vendored
+typeeasycode/_*.te linguist-generated
