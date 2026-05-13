@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# te-install — instalador de paquetes nativos para TypeEasy.
+#
+# Un "paquete" es una librería compartida `libte_<name>.so` que exporta
+#   void te_module_register(const TEHostAPI *host);
+# y registra builtins en runtime cuando el script .te llama
+#   load_native("name");
+#
+# El gestor coloca cada paquete en  ~/.te/packages/<name>/libte_<name>.so
+# (uno de los paths que `load_native` busca por defecto).
+#
+# USO
+#   te-install                          # instala todo lo de te-packages.json
+#   te-install <name>                   # instala un paquete individual del índice
+#   te-install <name> --from <url>      # instala desde una URL .so directa
+#   te-install <name> --from <ruta.so>  # instala desde un .so local
+#   te-install --list                   # lista paquetes instalados
+#   te-install --remove <name>          # desinstala un paquete
+#
+# MANIFIESTO  te-packages.json (en la raíz del proyecto)
+# {
+#   "dependencies": {
+#     "mongo": { "version": "^1.0.0", "url": "https://example.com/libte_mongo.so", "sha256": "abc..." },
+#     "redis": { "version": "^0.3.1", "url": "https://example.com/libte_redis.so" }
+#   }
+# }
+#
+# Variables de entorno:
+#   TE_PACKAGES_DIR   — sobreescribe ~/.te/packages
+#   TE_INDEX_URL      — índice JSON remoto (futuro registro central)
+
+set -euo pipefail
+
+PKG_DIR="${TE_PACKAGES_DIR:-$HOME/.te/packages}"
+INDEX_URL="${TE_INDEX_URL:-}"
+MANIFEST="${TE_MANIFEST:-te-packages.json}"
+
+color() { printf '\033[%sm%s\033[0m' "$1" "$2"; }
+info()  { echo "$(color '1;34' '[te-install]') $*"; }
+ok()    { echo "$(color '1;32' '[te-install]') $*"; }
+err()   { echo "$(color '1;31' '[te-install]') $*" >&2; }
+
+ensure_dir() { mkdir -p "$PKG_DIR"; }
+
+fetch() {
+    # fetch <url> <dst>
+    local url="$1" dst="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$dst"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$url" -O "$dst"
+    else
+        err "necesito curl o wget para descargar"; return 1
+    fi
+}
+
+verify_sha256() {
+    # verify_sha256 <file> <expected>
+    local file="$1" expected="$2"
+    [[ -z "$expected" ]] && return 0
+    local got
+    if command -v sha256sum >/dev/null 2>&1; then
+        got=$(sha256sum "$file" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        got=$(shasum -a 256 "$file" | awk '{print $1}')
+    else
+        err "necesito sha256sum o shasum para verificar"; return 1
+    fi
+    if [[ "$got" != "$expected" ]]; then
+        err "checksum mismatch: esperado $expected, obtuve $got"
+        return 1
+    fi
+}
+
+install_one() {
+    # install_one <name> <source> [sha256]
+    # source = URL http(s) | ruta a .so local
+    local name="$1" src="$2" sha="${3:-}"
+    ensure_dir
+    local target_dir="$PKG_DIR/$name"
+    mkdir -p "$target_dir"
+    local target="$target_dir/libte_${name}.so"
+    local tmp; tmp=$(mktemp)
+    info "instalando '$name' desde $src"
+    if [[ "$src" =~ ^https?:// ]]; then
+        fetch "$src" "$tmp"
+    elif [[ -f "$src" ]]; then
+        cp "$src" "$tmp"
+    else
+        err "fuente no válida: $src"; rm -f "$tmp"; return 1
+    fi
+    if ! verify_sha256 "$tmp" "$sha"; then
+        rm -f "$tmp"; return 1
+    fi
+    mv "$tmp" "$target"
+    chmod 0644 "$target"
+    ok "instalado: $target"
+}
+
+install_from_manifest() {
+    [[ -f "$MANIFEST" ]] || { err "no encuentro $MANIFEST"; return 1; }
+    if ! command -v python3 >/dev/null 2>&1; then
+        err "necesito python3 para parsear $MANIFEST"; return 1
+    fi
+    info "leyendo $MANIFEST"
+    # Cada dependencia se imprime en una línea: name<TAB>url<TAB>sha256
+    python3 - "$MANIFEST" <<'PY' | while IFS=$'\t' read -r name url sha; do
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+for n, spec in (data.get("dependencies") or {}).items():
+    if isinstance(spec, str):
+        url, sha = spec, ""
+    else:
+        url = spec.get("url", "")
+        sha = spec.get("sha256", "")
+    print(f"{n}\t{url}\t{sha}")
+PY
+        if [[ -z "$url" ]]; then
+            err "paquete '$name' sin URL en $MANIFEST"; continue
+        fi
+        install_one "$name" "$url" "$sha"
+    done
+}
+
+list_installed() {
+    ensure_dir
+    if [[ -z "$(ls -A "$PKG_DIR" 2>/dev/null)" ]]; then
+        echo "(no hay paquetes instalados en $PKG_DIR)"; return 0
+    fi
+    echo "Paquetes instalados en $PKG_DIR:"
+    for d in "$PKG_DIR"/*/; do
+        local n; n=$(basename "$d")
+        local so="$d/libte_${n}.so"
+        if [[ -f "$so" ]]; then
+            local size; size=$(stat -c %s "$so" 2>/dev/null || stat -f %z "$so")
+            printf '  %-20s %s bytes\n' "$n" "$size"
+        fi
+    done
+}
+
+remove_pkg() {
+    local name="$1"
+    local d="$PKG_DIR/$name"
+    if [[ ! -d "$d" ]]; then
+        err "no instalado: $name"; return 1
+    fi
+    rm -rf "$d"
+    ok "desinstalado: $name"
+}
+
+# ─── CLI ─────────────────────────────────────────────────────────────────
+case "${1:-}" in
+    "")            install_from_manifest ;;
+    --list|-l)     list_installed ;;
+    --remove|-r)   shift; [[ $# -ge 1 ]] || { err "uso: te-install --remove <name>"; exit 2; }
+                   remove_pkg "$1" ;;
+    -h|--help)     sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *)
+        name="$1"; shift
+        src=""; sha=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --from)   src="$2"; shift 2 ;;
+                --sha256) sha="$2"; shift 2 ;;
+                *) err "opción desconocida: $1"; exit 2 ;;
+            esac
+        done
+        if [[ -z "$src" ]]; then
+            err "índice central aún no implementado. Usa: te-install $name --from <url|file>"
+            exit 2
+        fi
+        install_one "$name" "$src" "$sha"
+        ;;
+esac

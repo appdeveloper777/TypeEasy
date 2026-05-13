@@ -132,8 +132,11 @@ int te_load_native_module(const char *name_or_path) {
         dlclose(h);
         return -3;
     }
-    TEHostAPI host;
-    te_fill_host_api(&host);
+    /* Static storage so the pointer remains valid even if the plugin
+     * (incorrectly) keeps a reference instead of copying the struct. */
+    static TEHostAPI host;
+    static int host_filled = 0;
+    if (!host_filled) { te_fill_host_api(&host); host_filled = 1; }
     reg(&host);
     return 0;
 }

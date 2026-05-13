@@ -1,0 +1,19 @@
+// Smoke test for libte_mongo plugin.
+// Verifica que load_native funciona y que mongo_connect/mongo_close están registrados.
+// No requiere un servidor MongoDB real — solo prueba la carga dinámica.
+
+let rc = load_native("mongo");
+println("load_native rc =");
+println(rc);
+
+// Intento de conexión a un host inexistente: el plugin debe estar registrado
+// y devolver -1 (no crash). Esto prueba que los builtins se registraron.
+let conn = mongo_connect("mongodb://127.0.0.1:1/dbtest");
+println("mongo_connect slot =");
+println(conn);
+
+let r = mongo_close(conn);
+println("mongo_close rc =");
+println(r);
+
+println("smoke ok");

@@ -1,0 +1,10 @@
+{
+  "$comment": "Manifiesto de paquetes nativos de TypeEasy. Renombra a te-packages.json en la raíz del proyecto y ejecuta: tools/te-install/te-install",
+  "dependencies": {
+    "mongo": {
+      "version": "^1.0.0",
+      "url": "https://example.com/te-packages/libte_mongo.so",
+      "sha256": ""
+    }
+  }
+}

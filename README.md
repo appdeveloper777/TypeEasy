@@ -317,6 +317,48 @@ curl http://localhost:5002/history
 
 ---
 
+## 📦 Paquetes nativos (plugins `.so`)
+
+TypeEasy soporta **plugins instalables** sin recompilar el motor. Un paquete
+es una librería `libte_<nombre>.so` que registra builtins en runtime cuando
+el script lo carga con `load_native("nombre")`.
+
+### Instalar un paquete (ej. mongo, en el futuro redis, kafka, etc.)
+
+```bash
+# Desde URL (modelo actual)
+tools/te-install/te-install mongo \
+    --from https://example.com/libte_mongo.so \
+    --sha256 abc123...
+
+# O desde manifiesto te-packages.json en la raíz
+tools/te-install/te-install
+```
+
+El `.so` se instala en `~/.te/packages/<nombre>/libte_<nombre>.so`, una de
+las rutas que `load_native` busca por defecto (junto con `./`,
+`/usr/local/lib`, `/typeeasy`).
+
+### Usarlo desde un `.te`
+
+```ts
+load_native("mongo");
+
+let conn = mongo_connect("mongodb://localhost:27017/meri");
+let r    = mongo_query(conn, "usuarios", { "activo": 1 }, "json");
+println(r);
+mongo_close(conn);
+```
+
+Ver [`tools/te-install/README.md`](tools/te-install/README.md) para escribir
+tus propios paquetes (cualquier `.c` que exporte `te_module_register` y
+llame a `host->register_builtin`).
+
+> Nota: el índice central (`te-install <name>` sin `--from`) está reservado
+> para una futura "registry" oficial de librerías TypeEasy.
+
+---
+
 ## 🧹 Comandos Útiles
 
 ```bash
