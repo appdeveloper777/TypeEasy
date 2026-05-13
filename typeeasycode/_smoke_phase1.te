@@ -1,0 +1,2 @@
+let n = load_native("nonexistent_plugin_xxx");
+println(n);

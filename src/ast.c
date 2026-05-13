@@ -11,6 +11,7 @@
 #include "postgres_bridge.h"
 #include "sqlserver_bridge.h"
 #include "debugger.h"
+#include "te_builtins.h"
 
 /* Ola 10: JIT availability — must be defined BEFORE any use further down. */
 #if defined(__linux__) && defined(__x86_64__)
@@ -676,6 +677,14 @@ static void native_response_header(ASTNode *arg) {
 }
 
 int call_native_function(const char *name, ASTNode *arg) {
+    /* Fase 1: registry first. New builtins live in the hash table only;
+     * the legacy if-chain below remains as fallback for transparency. */
+    {
+        ASTNode tmp = (ASTNode){0};
+        tmp.id = (char*)name;
+        TEBuiltinFn fn = te_builtin_lookup(name);
+        if (fn) return fn(&tmp, arg);
+    }
     if (strcmp(name, "orm_query") == 0) {
         native_orm_query(arg);
         return 1;
@@ -1129,7 +1138,9 @@ ClassNode *find_class(char *name) {
             return classes[i];
         }
     }
-    printf("Error: class '%s' not found.\n", name);
+    /* Fase 2: silent — `new IDENTIFIER(...)` may be a builtin call, not a
+     * class instantiation. The grammar action falls back to create_call_node
+     * which surfaces "function not defined" downstream if neither matches. */
     return NULL;
 }
 
@@ -7100,6 +7111,11 @@ static int te_builtin_dispatch(ASTNode *node) {
     ASTNode *a0 = node->left ? node->left : node->right;
     ASTNode *a1 = a0 ? a0->right : NULL;
 
+    /* Fase 1: registry first. New builtins (and plugins loaded via
+     * load_native) live in the hash table; the legacy if-chain below
+     * remains as transparent fallback for builtins not yet migrated. */
+    if (te_builtin_dispatch_registry(node, a0)) return 1;
+
     /* ---- len(x): string | list | map ---- */
     if (strcmp(fn, "len") == 0) {
         int n = 0;
@@ -7356,6 +7372,104 @@ static int te_builtin_dispatch(ASTNode *node) {
     }
 
     return 0;
+}
+
+/* ─── Fase 1/3: bootstrap + plugin host API ───────────────────────────── */
+
+/* Adapter helpers: convert legacy native_*(arg) into the registry signature.
+ * EVAL variants pre-evaluate native args (identifier resolution, etc.); the
+ * raw variant skips that for builtins that handle args themselves. */
+#define TE_WRAP_EVAL(NAME, FN) \
+    static int adapt_##NAME(ASTNode *node, ASTNode *args) { \
+        (void)node; if (args) evaluate_native_args(args); FN(args); return 1; \
+    }
+#define TE_WRAP_RAW(NAME, FN) \
+    static int adapt_##NAME(ASTNode *node, ASTNode *args) { \
+        (void)node; FN(args); return 1; \
+    }
+
+/* DB bridges — pre-evaluate args (need resolved literals). */
+TE_WRAP_EVAL(mysql_connect,     native_mysql_connect)
+TE_WRAP_EVAL(mysql_query,       native_mysql_query)
+TE_WRAP_EVAL(mysql_close,       native_mysql_close)
+TE_WRAP_EVAL(postgres_connect,  native_postgres_connect)
+TE_WRAP_EVAL(postgres_query,    native_postgres_query)
+TE_WRAP_EVAL(postgres_close,    native_postgres_close)
+TE_WRAP_EVAL(sqlserver_connect, native_sqlserver_connect)
+TE_WRAP_EVAL(sqlserver_query,   native_sqlserver_query)
+TE_WRAP_EVAL(sqlserver_close,   native_sqlserver_close)
+
+/* Fase 3: load_native("name") — dynamically load a `.so` plugin which
+ * registers its own builtins via te_module_register(host_api). */
+static int adapt_load_native(ASTNode *node, ASTNode *args) {
+    (void)node;
+    const char *name = NULL;
+    char *owned = NULL;
+    if (args) {
+        if (args->type && strcmp(args->type, "STRING") == 0) {
+            name = args->str_value;
+        } else if (args->type && (strcmp(args->type, "IDENTIFIER")==0 || strcmp(args->type,"ID")==0)) {
+            owned = get_node_string(args);
+            name = owned;
+        }
+    }
+    int rc = name ? te_load_native_module(name) : -1;
+    if (owned) free(owned);
+    add_or_update_variable("__ret__", create_ast_leaf_number("INT", rc == 0 ? 1 : 0, NULL, NULL));
+    return 1;
+}
+
+/* Called once by te_builtins_ensure_loaded(). Idempotent — overwrites are OK.
+ * Add new core builtins here as one-liners. */
+void te_register_ast_builtins(void) {
+    te_builtin_register("mysql_connect",     adapt_mysql_connect);
+    te_builtin_register("mysql_query",       adapt_mysql_query);
+    te_builtin_register("mysql_close",       adapt_mysql_close);
+    te_builtin_register("postgres_connect",  adapt_postgres_connect);
+    te_builtin_register("postgres_query",    adapt_postgres_query);
+    te_builtin_register("postgres_close",    adapt_postgres_close);
+    te_builtin_register("sqlserver_connect", adapt_sqlserver_connect);
+    te_builtin_register("sqlserver_query",   adapt_sqlserver_query);
+    te_builtin_register("sqlserver_close",   adapt_sqlserver_close);
+    te_builtin_register("load_native",       adapt_load_native);
+    /* Other builtins (json, xml, request_*, response_*, len, range,
+     * read_file, http_get, etc.) still served by the legacy if-chains
+     * in call_native_function / te_builtin_dispatch. They can be migrated
+     * here incrementally — this is now backwards-compatible by design. */
+}
+
+/* Plugin ABI: fill the host API struct that `.so` modules receive. The
+ * pointers below are to file-static helpers earlier in this translation
+ * unit, so plugins get a stable surface without linking the host binary. */
+static char  *host_arg_string_dup(ASTNode *arg) {
+    const char *s = te_arg_string(arg);
+    return s ? strdup(s) : NULL;
+}
+static int    host_arg_int(ASTNode *arg, int defv) { return te_arg_int(arg, defv); }
+static double host_arg_float(ASTNode *arg, double defv) {
+    if (!arg) return defv;
+    return evaluate_expression(arg);
+}
+static void   host_set_ret_int(int v)            { te_set_ret_int(v); }
+static void   host_set_ret_str(const char *s)    { te_set_ret_string(s); }
+static void   host_set_ret_float(double v) {
+    char buf[64]; snprintf(buf, sizeof(buf), "%g", v);
+    ASTNode *r = create_ast_leaf("FLOAT", 0, buf, NULL);
+    add_or_update_variable("__ret__", r);
+    free_ast(r);
+}
+
+void te_fill_host_api(TEHostAPI *out) {
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    out->abi_version      = TE_HOST_API_VERSION;
+    out->register_builtin = te_builtin_register;
+    out->set_ret_int      = host_set_ret_int;
+    out->set_ret_str      = host_set_ret_str;
+    out->set_ret_float    = host_set_ret_float;
+    out->arg_string       = host_arg_string_dup;
+    out->arg_int          = host_arg_int;
+    out->arg_float        = host_arg_float;
 }
 
 static void interpret_call_func(ASTNode *node) {

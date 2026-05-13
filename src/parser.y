@@ -28,7 +28,10 @@
 %token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA CONCAT JSON XML HTTPGET HTTPPOST HTTPPUT HTTPDELETE HTTPPATCH
 %token       VAR ASSIGN PRINT PRINTLN FOR FOREACH LPAREN RPAREN SEMICOLON CONCAT FPRINT FPRINTLN 
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
-%token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN MYSQL_CONNECT MYSQL_CLOSE MYSQL_QUERY POSTGRES_CONNECT POSTGRES_CLOSE POSTGRES_QUERY SQLSERVER_CONNECT SQLSERVER_CLOSE SQLSERVER_QUERY ORM_QUERY
+%token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN
+/* Fase 2: tokens MYSQL/POSTGRES/SQLSERVER and ORM_QUERY removed -
+ * those names lex as IDENTIFIER and dispatch through the runtime
+ * registry (te_builtins.c). */
 %token       EXTENDS
 %token       VOID DYNAMIC
 %token       NULLTOK QMARK
@@ -401,13 +404,17 @@ expression:
   | BIT_NOT expression                 { $$ = create_ast_node("BIT_NOT", $2, NULL); }
   | LPAREN expression RPAREN       { $$ = $2; }
   | NEW IDENTIFIER LPAREN RPAREN 
-      { ClassNode *cls = find_class($2);
-        if (!cls) { printf("Error: Clase '%s' no definida.\n", $2); $$ = NULL; } 
-        else { $$ = (ASTNode *)create_object_with_args(cls, NULL); } }
+      { /* Fase 2: NEW Foo() — class instantiation, or builtin call if no class. */
+        ClassNode *cls = find_class($2);
+        if (cls) { $$ = (ASTNode *)create_object_with_args(cls, NULL); }
+        else     { $$ = create_call_node($2, NULL); } }
   | NEW IDENTIFIER LPAREN expr_list RPAREN 
-      { ClassNode *cls = find_class($2);
-        if (!cls) { fprintf(stderr, "Error: clase '%s' no encontrada\n", $2); exit(1); } 
-        $$ = create_object_with_args(cls, $4); free($2); }
+      { /* Fase 2: NEW Foo(args) — class instantiation, or builtin call if no class.
+         * This is what makes `new sqlserver_query(conn, sql, params, fmt)` work
+         * without dedicated tokens — the dispatcher routes by name at runtime. */
+        ClassNode *cls = find_class($2);
+        if (cls) { $$ = create_object_with_args(cls, $4); free($2); }
+        else     { $$ = create_call_node($2, $4); } }
  | JSON LPAREN IDENTIFIER RPAREN  {       $$ = create_call_node_return_json($3, create_ast_leaf("json", 0, NULL, $3));}
 | XML LPAREN IDENTIFIER RPAREN  {      $$ = create_call_node_return_xml($3, create_ast_leaf("xml", 0, NULL, $3));}
 ;
@@ -439,9 +446,6 @@ var_decl:
 
 statement:
 func_call_expr SEMICOLON { $$ = $1; }
-|   MYSQL_CLOSE LPAREN expression RPAREN SEMICOLON { $$ = create_call_node("mysql_close", $3); }
-|   POSTGRES_CLOSE LPAREN expression RPAREN SEMICOLON { $$ = create_call_node("postgres_close", $3); }
-|   SQLSERVER_CLOSE LPAREN expression RPAREN SEMICOLON { $$ = create_call_node("sqlserver_close", $3); }
 
 
 |
@@ -509,9 +513,9 @@ func_call_expr SEMICOLON { $$ = $1; }
   | FPRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("FPRINT", access, NULL); }
   
   | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET    { $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf("NUMBER",$5,NULL,NULL), $7, $9, $12); }
-  | NEW IDENTIFIER LPAREN RPAREN SEMICOLON    { ClassNode *cls = find_class($2); if (!cls) { printf("Error: Clase '%s' no definida.\n", $2); $$ = NULL; } else { $$ = (ASTNode *)create_object_with_args(cls, NULL); } }
-  | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN RPAREN SEMICOLON    { ClassNode *cls = find_class($5); if (!cls) { printf("Error: Clase '%s' no definida.\n", $5); $$ = NULL; } else { ASTNode* d = create_var_decl_node($2, create_object_with_args(cls, NULL)); d->value = 1; /* let = immutable */ $$ = d; } }
-  | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN expression_list RPAREN SEMICOLON    { ClassNode *cls = find_class($5); if (!cls) { printf("Error: Clase '%s' no definida.\n", $5); $$ = NULL; } else { ASTNode* d = create_var_decl_node($2, create_object_with_args(cls, $7)); d->value = 1; /* let = immutable */ $$ = d; } }
+  | NEW IDENTIFIER LPAREN RPAREN SEMICOLON    { /* Fase 2: class or builtin */ ClassNode *cls = find_class($2); if (cls) $$ = (ASTNode *)create_object_with_args(cls, NULL); else $$ = create_call_node($2, NULL); }
+  | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN RPAREN SEMICOLON    { /* Fase 2: class or builtin */ ClassNode *cls = find_class($5); ASTNode *rhs = cls ? create_object_with_args(cls, NULL) : create_call_node($5, NULL); ASTNode* d = create_var_decl_node($2, rhs); d->value = 1; $$ = d; }
+  | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN expression_list RPAREN SEMICOLON    { /* Fase 2: class or builtin (let r = new sqlserver_query(...)). */ ClassNode *cls = find_class($5); ASTNode *rhs = cls ? create_object_with_args(cls, $7) : create_call_node($5, $7); ASTNode* d = create_var_decl_node($2, rhs); d->value = 1; $$ = d; }
   | DATASET IDENTIFIER FROM STRING_LITERAL SEMICOLON    { $$ = create_dataset_node($2, $4); }
   | PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON    { $$ = create_predict_node($3, $5); }
   | VAR IDENTIFIER ASSIGN PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i"); $$ = create_method_call_node(obj, "predict", NULL); $$ = create_predict_node($6, $8); }
@@ -534,25 +538,9 @@ func_call_expr:
     IDENTIFIER LPAREN RPAREN { $$ = create_call_node($1, NULL); }
     | IDENTIFIER LPAREN expression RPAREN { $$ = create_call_node($1, $3); }
     | IDENTIFIER LPAREN expression_list RPAREN { $$ = create_call_node($1, $3); }
-    | NEW MYSQL_CONNECT LPAREN expression_list RPAREN { 
-        //printf("PARSER: Reducing MYSQL_CONNECT\n"); fflush(stdout); 
-        $$ = create_call_node("mysql_connect", $4); }
-    | NEW MYSQL_QUERY LPAREN expression_list RPAREN { 
-        //printf("PARSER: Reducing MYSQL_QUERY\n"); 
-        fflush(stdout); $$ = create_call_node("mysql_query", $4); }
-    | MYSQL_CLOSE LPAREN expression RPAREN { 
-        //printf("PARSER: Reducing MYSQL_CLOSE\n"); 
-        fflush(stdout); $$ = create_call_node("mysql_close", $3); }
-    | NEW POSTGRES_CONNECT LPAREN expression_list RPAREN { $$ = create_call_node("postgres_connect", $4); }
-    | NEW POSTGRES_QUERY LPAREN expression_list RPAREN   { $$ = create_call_node("postgres_query", $4); }
-    | POSTGRES_CLOSE LPAREN expression RPAREN            { $$ = create_call_node("postgres_close", $3); }
-    | NEW SQLSERVER_CONNECT LPAREN expression_list RPAREN { $$ = create_call_node("sqlserver_connect", $4); }
-    | NEW SQLSERVER_QUERY LPAREN expression_list RPAREN   { $$ = create_call_node("sqlserver_query", $4); }
-    | SQLSERVER_CLOSE LPAREN expression RPAREN            { $$ = create_call_node("sqlserver_close", $3); }
-    | ORM_QUERY LPAREN expression_list RPAREN { 
-        //printf("PARSER: Reducing ORM_QUERY\n"); 
-        fflush(stdout); $$ = create_call_node("orm_query", $3); }
-    
+    /* Fase 2: NEW IDENTIFIER (...) for non-class names is handled by the
+     * `NEW IDENTIFIER LPAREN expression_list RPAREN` rule in `expression`
+     * which falls back to create_call_node when find_class returns NULL. */
 ;
 
 if_statement:

@@ -1,0 +1,70 @@
+/* te_builtins.h — Runtime registry for TypeEasy built-in functions.
+ *
+ * Replaces the historical if/strcmp chains in `call_native_function` and
+ * `te_builtin_dispatch` with an O(1) hash lookup so that adding a new
+ * builtin is a one-liner instead of a parser change + dispatch chain edit.
+ *
+ * Fase 3 (plugins) uses the same registry: a `.so` loaded via
+ * `load_native("name")` receives a `TEHostAPI*` and registers its functions
+ * by calling `host->register_builtin(...)`.
+ */
+#ifndef TE_BUILTINS_H
+#define TE_BUILTINS_H
+
+#include "ast.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* A builtin receives the full call node (for line numbers, debug info, etc.)
+ * and a pre-extracted args head (`node->left` for CALL_FUNC,
+ * `node->right` for METHOD_CALL_ALONE — the dispatcher picks the right one).
+ * Return 1 when the call was handled, 0 to fall through. */
+typedef int (*TEBuiltinFn)(ASTNode *node, ASTNode *args);
+
+/* Register / lookup. Names are interned via strdup on first registration.
+ * Re-registering the same name overwrites (useful for plugin reloads). */
+void          te_builtin_register(const char *name, TEBuiltinFn fn);
+TEBuiltinFn   te_builtin_lookup(const char *name);
+int           te_builtin_dispatch_registry(ASTNode *node, ASTNode *args);
+
+/* Lazy bootstrap: registers all core builtins (mysql_*, postgres_*,
+ * sqlserver_*, json/xml, request/response, len/range/read_file/...).
+ * Idempotent. Called automatically on first lookup. */
+void          te_builtins_ensure_loaded(void);
+
+/* Fase 3 — plugins.
+ *
+ * A `.so` plugin must export:
+ *     void te_module_register(const TEHostAPI *host);
+ *
+ * The plugin then calls host->register_builtin("mybuiltin", &my_fn) for
+ * each function it wishes to expose. Helpers below let the plugin do
+ * everything that core builtins do without linking against the host
+ * binary directly (clean ABI). */
+typedef struct TEHostAPI {
+    int  abi_version;  /* TE_HOST_API_VERSION at compile time */
+    void (*register_builtin)(const char *name, TEBuiltinFn fn);
+
+    /* Common helpers a plugin will need. Mirror existing internals. */
+    void  (*set_ret_int)(int v);
+    void  (*set_ret_str)(const char *s);
+    void  (*set_ret_float)(double v);
+    char *(*arg_string)(ASTNode *arg);   /* malloc'd, caller frees */
+    int   (*arg_int)(ASTNode *arg, int defv);
+    double(*arg_float)(ASTNode *arg, double defv);
+} TEHostAPI;
+
+#define TE_HOST_API_VERSION 1
+
+/* Returns 0 on success, non-zero on error (file not found, missing
+ * `te_module_register`, ABI mismatch). On error, sets __ret__ to 0;
+ * on success, sets __ret__ to 1. */
+int  te_load_native_module(const char *name_or_path);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* TE_BUILTINS_H */

@@ -118,16 +118,10 @@
 "layer"      { yylval.sval = strdup(yytext); return LAYER; }
 "plot"                   { return PLOT; }       
 
-"mysql_connect"          { return MYSQL_CONNECT; }
-"mysql_close"            { return MYSQL_CLOSE; }
-"mysql_query"            { return MYSQL_QUERY; }
-"postgres_connect"       { return POSTGRES_CONNECT; }
-"postgres_close"         { return POSTGRES_CLOSE; }
-"postgres_query"         { return POSTGRES_QUERY; }
-"sqlserver_connect"      { return SQLSERVER_CONNECT; }
-"sqlserver_close"        { return SQLSERVER_CLOSE; }
-"sqlserver_query"        { return SQLSERVER_QUERY; }
-"orm_query"              { return ORM_QUERY; }
+    /* Fase 2: tokens MYSQL/POSTGRES/SQLSERVER and ORM_QUERY removed; */
+    /* those names lex as plain IDENTIFIERs and dispatch through the    */
+    /* runtime registry (te_builtins.c). Add new builtins by calling    */
+    /* te_builtin_register() in te_register_ast_builtins() in ast.c.    */
 
 "var"                   { return VAR; }
 "return"                { return RETURN; }

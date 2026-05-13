@@ -47,7 +47,7 @@ endpoint {
     let r6 = new mysql_query(
     conn_id,
     "INSERT INTO usuarios (usuario, email) VALUES (@usuario, @email)",
-      { "@usuario": "O'Reilly Book", "@email": "test7" }
+      { "@usuario": "O'Reilly Book", "@email": "test9" }
 );
     println("[r6_insert] ");
     println(r6);
