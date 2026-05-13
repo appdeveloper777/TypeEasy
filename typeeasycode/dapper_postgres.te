@@ -1,0 +1,89 @@
+// =====================================================
+// Ejemplo Dapper-style — PostgreSQL
+// Ejecutar: docker compose run --rm typeeasy dapper_postgres.te
+// =====================================================
+
+let conn = new postgres_connect("host.docker.internal", "postgres", "postgres", "meri", 5432);
+
+// 1) SELECT con parámetros nombrados (@min, @pat)
+let r1 = new postgres_query(
+    conn,
+    "SELECT nombre, precio FROM productos WHERE precio > @min AND nombre LIKE @pat",
+    { "@min": 1, "@pat": "%a%" },
+    "json"
+);
+print("[Postgres] productos filtrados:");
+println(r1);
+
+// 2) SELECT por id
+let r2 = new postgres_query(
+    conn,
+    "SELECT * FROM productos WHERE id = @id",
+    { "@id": 1 },
+    "json"
+);
+print("[Postgres] producto por id:");
+println(r2);
+
+// 3) INSERT parametrizado
+let r3 = new postgres_query(
+    conn,
+    "INSERT INTO productos (nombre, precio) VALUES (@nombre, @precio)",
+    { "@nombre": "O'Reilly Book", "@precio": 19.9 }
+);
+print("[Postgres] insert:");
+println(r3);
+
+// 4) UPDATE parametrizado
+let r4 = new postgres_query(
+    conn,
+    "UPDATE productos SET precio = @nuevo WHERE nombre = @nombre",
+    { "@nuevo": 25, "@nombre": "O'Reilly Book" }
+);
+print("[Postgres] update:");
+println(r4);
+
+// 5) Usando una clase como contenedor de parámetros
+//    (sus atributos se exponen como @id, @nombre, @precio, etc.)
+class FiltroProducto {
+    id: int;
+    nombre: string;
+    precio: float;
+    __constructor(_id: int, _nombre: string, _precio: float) {
+        this.id = _id;
+        this.nombre = _nombre;
+        this.precio = _precio;
+    }
+}
+
+let filtro = new FiltroProducto(1, "O'Reilly Book", 19.9);
+
+// SELECT con el objeto: @id, @nombre, @precio salen de los atributos
+let r5 = new postgres_query(
+    conn,
+    "SELECT * FROM productos WHERE id = @id OR nombre = @nombre",
+    filtro,
+    "json"
+);
+print("[Postgres] filtro por objeto:");
+println(r5);
+
+// 6) INSERT usando el mismo objeto
+let r6 = new postgres_query(
+    conn,
+    "INSERT INTO productos (nombre, precio) VALUES (@nombre, @precio)",
+    filtro
+);
+print("[Postgres] insert por objeto:");
+println(r6);
+
+// 7) UPDATE usando el objeto (id como WHERE, los demás como SET)
+let r7 = new postgres_query(
+    conn,
+    "UPDATE productos SET nombre = @nombre, precio = @precio WHERE id = @id",
+    filtro
+);
+print("[Postgres] update por objeto:");
+println(r7);
+
+postgres_close(conn);

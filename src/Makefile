@@ -12,7 +12,7 @@ MAIN_AGENT_OBJ = $(MAIN_AGENT_C:.c=.o)
 BISON_FILE = parser.y
 FLEX_FILE = parser.l
 # Archivos del motor incluyendo la nueva API embebida
-MOTOR_C_FILES = ast.c bytecode.c mysql_bridge.c orm_bridge.c typeeasy_api.c wasm_backend.c debugger.c
+MOTOR_C_FILES = ast.c bytecode.c mysql_bridge.c postgres_bridge.c sqlserver_bridge.c db_params.c orm_bridge.c typeeasy_api.c wasm_backend.c debugger.c
 MOTOR_OBJS = $(MOTOR_C_FILES:.c=.o)
 
 BISON_C = parser.tab.c
@@ -32,10 +32,10 @@ SPARK_OBJ = $(SPARK_DIR)/dataframe.o
 
 CC = gcc
 CXX = g++
-CFLAGS = -Wall -g -O3 -mavx2 -mbmi -pthread -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1
+CFLAGS = -Wall -g -O3 -mavx2 -mbmi -pthread -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1
 CXXFLAGS = -Wall -g -O3 -std=c++17
-LIBS_SCRIPT = -lfl -lm -lmysqlclient -lpthread
-LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto -lmysqlclient -lcurl
+LIBS_SCRIPT = -lfl -lm -lmysqlclient -lpq -lsybdb -lpthread
+LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto -lmysqlclient -lpq -lsybdb -lcurl
 
 # --- OBJETIVO PRINCIPAL ---
 all: $(EXEC_SCRIPT) $(EXEC_AGENT)

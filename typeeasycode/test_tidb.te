@@ -1,0 +1,33 @@
+// Test conexión MySQL contra TiDB Cloud
+let conn = new mysql_connect(
+    "gateway01.us-east-1.prod.aws.tidbcloud.com",
+    "2XCY4FHDYiMMcdi.root",
+    "dMal8ex6FlLgprno",
+    "test",
+    4000
+);
+
+print("[TiDB] conexion id:");
+println(conn);
+
+// SELECT trivial: version + db actual
+let r1 = new mysql_query(conn, "SELECT VERSION() AS version, DATABASE() AS db", "json");
+print("[TiDB] version:");
+println(r1);
+
+// Listar tablas
+let r2 = new mysql_query(conn, "SHOW TABLES", "json");
+print("[TiDB] tables:");
+println(r2);
+
+// Dapper-style con map
+let r3 = new mysql_query(
+    conn,
+    "SELECT @n AS num, @s AS texto",
+    { "@n": 42, "@s": "hola tidb" },
+    "json"
+);
+print("[TiDB] dapper map:");
+println(r3);
+
+mysql_close(conn);

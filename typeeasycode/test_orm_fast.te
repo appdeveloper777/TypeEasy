@@ -1,0 +1,94 @@
+// Regression: ORM fast-path (Paso A + B).
+// Verifica:
+//   1. mysql_query(conn, sql, Class) devuelve LIST de objetos.
+//   2. .length funciona sobre la lista.
+//   3. Mapping de columnas → atributos por nombre (case-insensitive).
+//   4. Tipos: int e string respetados.
+//   5. for-in itera y los métodos del objeto se invocan.
+//   6. Modo Dapper @params + class combinados.
+//
+// Imprime EXACTAMENTE estas líneas (en orden) cuando todo va bien:
+//   FAST_OK_LIST
+//   FAST_OK_LEN
+//   FAST_OK_TYPES
+//   FAST_OK_ITER
+//   FAST_OK_PARAMS
+// El runner las grep-ea para validar.
+
+class UFast {
+    Id : int;
+    usuario : string;
+    email : string;
+
+    __constructor(_id:int, _u:string, _e:string) {
+        this.Id = _id;
+        this.usuario = _u;
+        this.email = _e;
+    }
+
+    Etiqueta() : string {
+        return this.usuario;
+    }
+}
+
+let conn = new mysql_connect(
+    "gateway01.us-east-1.prod.aws.tidbcloud.com",
+    "2XCY4FHDYiMMcdi.root",
+    "dMal8ex6FlLgprno",
+    "test",
+    4000
+);
+
+// 1. SELECT directo con clase
+let lista = new mysql_query(conn, "SELECT Id, usuario, email FROM usuarios ORDER BY Id DESC LIMIT 10", UFast);
+
+if (lista.length > 0) {
+    println("FAST_OK_LIST");
+}
+
+// 2. .length
+int n = lista.length;
+if (n == 10) {
+    println("FAST_OK_LEN");
+}
+
+// 3 + 4. tipos correctos en el primer item
+int ok_types = 0;
+for (let it in lista) {
+    int x = it.Id + 0;          // exige int
+    string s = it.usuario + ""; // exige string
+    if (x > 0) {
+        if (s != "") {
+            ok_types = 1;
+        }
+    }
+    break;
+}
+if (ok_types == 1) {
+    println("FAST_OK_TYPES");
+}
+
+// 5. iteración y método
+int contador = 0;
+for (let it in lista) {
+    string lbl = it.Etiqueta();
+    if (lbl != "") {
+        contador = contador + 1;
+    }
+}
+if (contador == 10) {
+    println("FAST_OK_ITER");
+}
+
+// 6. Dapper params + clase
+let lista2 = new mysql_query(
+    conn,
+    "SELECT Id, usuario, email FROM usuarios WHERE Id > @min ORDER BY Id DESC LIMIT @lim",
+    { "@min": 0, "@lim": 3 },
+    UFast
+);
+if (lista2.length == 3) {
+    println("FAST_OK_PARAMS");
+}
+
+mysql_close(conn);

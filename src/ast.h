@@ -291,11 +291,26 @@ ASTNode *create_case_node(ASTNode* condition, ASTNode* body);
 ASTNode *append_case_clause(ASTNode* list, ASTNode* case_clause);
 ASTNode *create_match_node(ASTNode* condition, ASTNode* case_list);
 ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
+ASTNode *create_kv_pair_node(char *key, ASTNode *value);
 char* get_node_string(ASTNode *node);
 
 /* Inicializar el pool global de threads CSV.
  * Llamar desde main() antes de ejecutar el script TE.
  * n = número total de workers deseados (incluyendo el main thread). */
 void te_csv_pool_init(int n);
+
+/* ---------- Fast-row primitives (compartidos CSV/MySQL ORM) ----------
+ * Arena + AST pool thread-local. Todo lo asignado vive hasta exit (script-mode).
+ * Reusable por cualquier productor que necesite construir LIST de ObjectNode
+ * a alta velocidad (ORM streaming, CSV, etc).
+ */
+void  *te_orm_arena_alloc(size_t n);
+char  *te_orm_arena_strdup(const char *s);
+char  *te_orm_arena_dup(const char *s, size_t n);
+ASTNode *te_orm_pool_alloc(void);
+const char *te_orm_wrapper_obj_type(void);
+/* 0=int, 1=string, 2=other (incluye float, dynamic, etc). */
+int  te_orm_attr_kind(const char *type);
+int  te_orm_attr_is_nullable(const char *type);
 
 #endif

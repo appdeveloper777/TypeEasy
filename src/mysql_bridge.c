@@ -1,13 +1,34 @@
 #include "mysql_bridge.h"
+#include "db_params.h"
 #include <mysql/mysql.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>   /* strcasecmp */
+#include <stdint.h>    /* intptr_t */
+#include <time.h>      /* clock_gettime */
+
+/* Escape callback para db_substitute_params (estilo Dapper). */
+char* mysql_escape_cb(const char* in, void* ctx) {
+    MYSQL* c = (MYSQL*)ctx;
+    size_t inl = in ? strlen(in) : 0;
+    char* out = (char*)malloc(inl * 2 + 1);
+    if (!out) return NULL;
+    mysql_real_escape_string(c, out, in ? in : "", inl);
+    return out;
+}
 
 // Pool de conexiones MySQL (máximo 10 conexiones concurrentes)
 #define MYSQL_POOL_SIZE 10
 static MYSQL* connections[MYSQL_POOL_SIZE] = {NULL};
 static int next_conn_id = 0;
+
+/* Accessor público para obtener la conexión por id (usado por orm_bridge
+ * para escape Dapper). Devuelve NULL si el id es inválido. */
+void* mysql_get_conn(int conn_id) {
+    if (conn_id < 0 || conn_id >= MYSQL_POOL_SIZE) return NULL;
+    return (void*)connections[conn_id];
+}
 
 /* Pool keying — reuse conexiones por (host|user|db|port). Opt-in via
  * TYPEEASY_MYSQL_POOL=1. Cuando está activo, mysql_close() devuelve la
@@ -102,9 +123,171 @@ static void xml_escape(const char* input, char* output, size_t output_size) {
     output[out_pos] = '\0';
 }
 
+/* ---------- ORM fast path (Paso A + B) -----------------------------------
+ * Streaming MySQL → ObjectNode list usando arena/pool del fast-row CSV.
+ * Diseñado para escalar a 1M+ filas:
+ *   - mysql_use_result(): no buffer entero del lado cliente.
+ *   - Pre-classify atributos + row template + memcpy por fila.
+ *   - Arena allocator (sin millones de malloc/free).
+ *   - AST node pool bump (wrapper por fila).
+ *   - LIST node con value=1 → declare_variable salta clone + ctor por objeto.
+ * Activa logs de timing con TE_ORM_TIMING=1.
+ */
+ASTNode* mysql_query_to_objects_fast(int conn_id, const char* query, ClassNode* cls) {
+    const char *te_timing = getenv("TE_ORM_TIMING");
+    struct timespec t0 = {0,0}, t1 = {0,0};
+    if (te_timing) clock_gettime(CLOCK_MONOTONIC, &t0);
+
+    if (conn_id < 0 || conn_id >= MYSQL_POOL_SIZE || !connections[conn_id]) {
+        fprintf(stderr, "[ORM-fast] Conexión inválida (ID: %d)\n", conn_id);
+        return NULL;
+    }
+    if (!cls || !query) return NULL;
+
+    MYSQL* conn = connections[conn_id];
+
+    if (mysql_query(conn, query)) {
+        fprintf(stderr, "[ORM-fast] Error: %s\n", mysql_error(conn));
+        return NULL;
+    }
+
+    /* Streaming: no copia el resultset entero al cliente. */
+    MYSQL_RES* res = mysql_use_result(conn);
+    if (!res) {
+        fprintf(stderr, "[ORM-fast] mysql_use_result NULL: %s\n", mysql_error(conn));
+        return NULL;
+    }
+
+    int n_fields = (int)mysql_num_fields(res);
+    MYSQL_FIELD* fields = mysql_fetch_fields(res);
+    int nattr = cls->attr_count;
+
+    int *attr_kind = (int*)malloc((size_t)nattr * sizeof(int));
+    int *attr_nullable = (int*)malloc((size_t)nattr * sizeof(int));
+    char **shared_id   = (char**)te_orm_arena_alloc((size_t)nattr * sizeof(char*));
+    char **shared_type = (char**)te_orm_arena_alloc((size_t)nattr * sizeof(char*));
+    for (int a = 0; a < nattr; a++) {
+        attr_kind[a]     = te_orm_attr_kind(cls->attributes[a].type);
+        attr_nullable[a] = te_orm_attr_is_nullable(cls->attributes[a].type);
+        shared_id[a]     = te_orm_arena_strdup(cls->attributes[a].id ? cls->attributes[a].id : "");
+        shared_type[a]   = te_orm_arena_strdup(cls->attributes[a].type ? cls->attributes[a].type : "dynamic");
+    }
+
+    /* Mapeo columna→atributo (case-insensitive). */
+    int *col_to_attr = (int*)malloc((size_t)n_fields * sizeof(int));
+    for (int c = 0; c < n_fields; c++) {
+        col_to_attr[c] = -1;
+        for (int a = 0; a < nattr; a++) {
+            if (cls->attributes[a].id && strcasecmp(cls->attributes[a].id, fields[c].name) == 0) {
+                col_to_attr[c] = a;
+                break;
+            }
+        }
+    }
+
+    /* Row template prebuilt: id/type/vtype/is_const seteados; value en cero. */
+    Variable *row_template = (Variable*)te_orm_arena_alloc((size_t)nattr * sizeof(Variable));
+    memset(row_template, 0, (size_t)nattr * sizeof(Variable));
+    for (int a = 0; a < nattr; a++) {
+        row_template[a].id       = shared_id[a];
+        row_template[a].type     = shared_type[a];
+        row_template[a].is_const = 0;
+        row_template[a].vtype    = (attr_kind[a] == 0) ? VAL_INT : VAL_STRING;
+    }
+    size_t row_template_bytes = (size_t)nattr * sizeof(Variable);
+
+    char *shared_class_name = te_orm_arena_strdup(cls->name ? cls->name : "");
+    const char *shared_obj_type = te_orm_wrapper_obj_type();
+
+    ASTNode *first = NULL, *last = NULL;
+    long row_count = 0;
+
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(res))) {
+        unsigned long *lengths = mysql_fetch_lengths(res);
+
+        ObjectNode *obj = (ObjectNode*)te_orm_arena_alloc(sizeof(ObjectNode));
+        obj->class = cls;
+        obj->attributes = (Variable*)te_orm_arena_alloc(row_template_bytes);
+        memcpy(obj->attributes, row_template, row_template_bytes);
+
+        for (int c = 0; c < n_fields; c++) {
+            int a = col_to_attr[c];
+            if (a < 0) continue;
+            const char *raw = row[c];
+            unsigned long rl = lengths ? lengths[c] : 0;
+            if (!raw) {
+                /* NULL del servidor: deja value en zero (memset del template). */
+                continue;
+            }
+            if (attr_kind[a] == 0) {
+                /* int rápido (clon de la lógica CSV). */
+                const char *p = raw;
+                int neg = 0;
+                if (*p == '-') { neg = 1; p++; }
+                else if (*p == '+') { p++; }
+                long v = 0;
+                int ok = (*p != '\0');
+                while (*p) {
+                    unsigned d = (unsigned)(*p - '0');
+                    if (d > 9u) { ok = 0; break; }
+                    v = v * 10 + (long)d;
+                    p++;
+                }
+                if (!ok) {
+                    char *endp = NULL;
+                    v = strtol(raw, &endp, 10);
+                }
+                if (neg) v = -v;
+                obj->attributes[a].value.int_value = (int)v;
+            } else {
+                /* STRING/OTHER: dup en arena con length conocido (sin strlen). */
+                obj->attributes[a].value.string_value = te_orm_arena_dup(raw, (size_t)rl);
+            }
+        }
+
+        ASTNode *item = te_orm_pool_alloc();
+        item->type         = (char*)shared_obj_type;
+        item->id           = shared_class_name;
+        item->id_interned  = 1;
+        item->from_pool    = 1;
+        item->extra        = (struct ASTNode*)obj;
+        item->value        = (int)(intptr_t)obj;
+        item->left         = NULL;
+        item->right        = NULL;
+        item->next         = NULL;
+
+        if (!first) { first = last = item; }
+        else        { last->next = item; last = item; }
+        row_count++;
+    }
+
+    mysql_free_result(res);
+    free(col_to_attr);
+    free(attr_kind);
+    free(attr_nullable);
+
+    if (te_timing) {
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        long us = (t1.tv_sec - t0.tv_sec) * 1000000L + (t1.tv_nsec - t0.tv_nsec) / 1000L;
+        fprintf(stderr, "[ORM-fast] rows=%ld time=%ldus (%.3f us/row)\n",
+                row_count, us, row_count > 0 ? (double)us / (double)row_count : 0.0);
+    }
+
+    ASTNode *list_node = (ASTNode*)calloc(1, sizeof(ASTNode));
+    list_node->type      = strdup("LIST");
+    list_node->left      = first;
+    list_node->right     = NULL;
+    list_node->next      = NULL;
+    list_node->id        = NULL;
+    list_node->str_value = NULL;
+    list_node->value     = 1; /* PREINIT FLAG: declare_variable salta clone + ctor */
+    return list_node;
+}
+
 // Devuelve lista de resultados para ORM
 ASTNode* mysql_query_result(int conn_id, const char* query) {
-    //printf("[ORM] mysql_query_result: conn_id=%d, query=%s\n", conn_id, query ? query : "NULL");
+
    // fflush(stdout);
     
     // Validar conexión
@@ -405,19 +588,50 @@ void native_mysql_connect(ASTNode* args) {
 // native_mysql_query(connection_id, query_string, [format])
 // format can be "json" (default) or "xml"
 // Retorna JSON or XML string en __ret__
+extern void orm_run_mapped_query(int conn_id, const char* query, ClassNode* cls);
+
+/* Devuelve el ASTNode en posicion idx (0-based) sin resolverlo. */
+static ASTNode* mysql_arg_at(ASTNode* args, int idx) {
+    ASTNode* cur = args;
+    for (int i = 0; i < idx && cur; i++) cur = cur->right;
+    return cur;
+}
+
+/* Si args[idx] es un IDENTIFIER que matchea una ClassNode, devuelve la clase. */
+static ClassNode* mysql_arg_as_class(ASTNode* args, int idx) {
+    ASTNode* a = mysql_arg_at(args, idx);
+    if (!a || !a->type) return NULL;
+    if ((strcmp(a->type, "IDENTIFIER") == 0 || strcmp(a->type, "ID") == 0) && a->id) {
+        /* Solo es clase si NO existe una variable con ese nombre. */
+        Variable* v = find_variable(a->id);
+        if (v) return NULL;
+        return find_class(a->id);
+    }
+    return NULL;
+}
+
 void native_mysql_query(ASTNode* args) {
-
-    //printf("[MySQL] native_mysql_query called\n");
-    //printf("[MySQL] args=%p\n", (void*)args);
-   // return;
-
     int conn_id = get_arg_int(args, 0);
     const char* query = get_arg_string(args, 1);
-    const char* format = get_arg_string(args, 2);  // Optional format parameter
-    
-    // Default to JSON if format not specified
-    if (!format || strlen(format) == 0) {
-        format = "json";
+
+    /* Estilo Dapper: arg #2 puede ser un MAP de params; en ese caso arg #3 es el formato/clase. */
+    int params_owned = 0;
+    ASTNode* params_head = db_arg_as_map_head(args, 2, &params_owned);
+
+    /* Detectar si el slot del 4° (con params) o 3° (sin params) arg es una clase → modo ORM. */
+    ClassNode* orm_class = mysql_arg_as_class(args, params_head ? 3 : 2);
+
+    const char* format = NULL;
+    if (!orm_class) {
+        if (params_head) {
+            format = get_arg_string(args, 3);
+        } else {
+            format = get_arg_string(args, 2);
+        }
+        // Default to JSON if format not specified
+        if (!format || strlen(format) == 0) {
+            format = "json";
+        }
     }
     
    // printf("[MySQL] Query format: %s\n", format);
@@ -427,6 +641,7 @@ void native_mysql_query(ASTNode* args) {
         ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"invalid_connection\"}"), NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
+        if (params_owned && params_head) free_ast(params_head);
         return;
     }
     
@@ -435,11 +650,28 @@ void native_mysql_query(ASTNode* args) {
         ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"invalid_query\"}"), NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
+        if (params_owned && params_head) free_ast(params_head);
         return;
     }
     
     MYSQL* conn = connections[conn_id];
-    
+
+    /* Sustituir @placeholders si hay params */
+    char* final_query = NULL;
+    if (params_head) {
+        final_query = db_substitute_params(query, params_head, mysql_escape_cb, conn);
+        query = final_query;
+        if (params_owned) { free_ast(params_head); params_head = NULL; }
+    }
+
+    /* Modo ORM: si el caller pasó una clase como formato, mapeamos cada fila
+     * a una instancia y devolvemos una LIST en __ret__. */
+    if (orm_class) {
+        orm_run_mapped_query(conn_id, query, orm_class);
+        if (final_query) free(final_query);
+        return;
+    }
+
     if (mysql_query(conn, query)) {
       //  printf("[MySQL] Error en query: %s\n", mysql_error(conn));
         char error_buffer[512];
@@ -447,6 +679,7 @@ void native_mysql_query(ASTNode* args) {
         ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup(error_buffer), NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
+        if (final_query) free(final_query);
         return;
     }
     
@@ -454,15 +687,22 @@ void native_mysql_query(ASTNode* args) {
     if (!result) {
         // Query sin resultados (INSERT, UPDATE, DELETE) o error al obtener resultados
         if (mysql_field_count(conn) == 0) { // No result set for this query
-            ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"affected_rows\":0}"), NULL);
+            char ar_buf[64];
+            snprintf(ar_buf, sizeof(ar_buf),
+                     "{\"affected_rows\":%llu,\"insert_id\":%llu}",
+                     (unsigned long long)mysql_affected_rows(conn),
+                     (unsigned long long)mysql_insert_id(conn));
+            ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup(ar_buf), NULL);
             add_or_update_variable("__ret__", ret_node);
             free_ast(ret_node);
+            if (final_query) free(final_query);
             return;
         } else { // Error fetching result set for a query that should have one
            // printf("[MySQL] Error al obtener resultado: %s\n", mysql_error(conn));
             ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"no_result\"}"), NULL);
             add_or_update_variable("__ret__", ret_node);
             free_ast(ret_node);
+            if (final_query) free(final_query);
             return;
         }
     }
@@ -477,6 +717,7 @@ void native_mysql_query(ASTNode* args) {
         ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"memory_allocation_failed\"}"), NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
+        if (final_query) free(final_query);
         return;
     }
     
@@ -557,6 +798,7 @@ void native_mysql_query(ASTNode* args) {
     add_or_update_variable("__ret__", ret_node);
     free_ast(ret_node);
     free(result_buffer);
+    if (final_query) free(final_query);
 }
 
 // native_mysql_close(connection_id)
@@ -569,9 +811,12 @@ void native_mysql_close(ASTNode* args) {
     }
     
     /* Si el pool está activo, devolver al pool en vez de cerrar. */
-    if (pool_release(conn_id)) return;
-    
+    if (pool_release(conn_id)) {
+        fprintf(stderr, "[MySQL] Conexión devuelta al pool (ID: %d)\n", conn_id);
+        return;
+    }
+
     mysql_close(connections[conn_id]);
     connections[conn_id] = NULL;
-   // printf("[MySQL] Conexión cerrada (ID: %d)\n", conn_id);
+    fprintf(stderr, "[MySQL] Conexión cerrada (ID: %d)\n", conn_id);
 }

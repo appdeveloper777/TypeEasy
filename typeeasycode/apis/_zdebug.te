@@ -1,0 +1,37 @@
+// Debug test endpoint
+class UsuarioDbg {
+  Id : int;
+  usuario : string;
+  email : string;
+  __constructor(_id : int, _usuario : string, _email : string) {
+    this.Id = _id;
+    this.usuario = _usuario;
+    this.email = _email;
+  }
+}
+
+endpoint {
+  [HttpGet("/api/zdebug/e")]
+  ZDebugE() {
+    let filtro = new UsuarioDbg(1, "test", "test");
+    return "E_OK";
+  }
+
+  [HttpGet("/api/zdebug/f")]
+  ZDebugF() {
+    let conn_id = new mysql_connect("gateway01.us-east-1.prod.aws.tidbcloud.com", "2XCY4FHDYiMMcdi.root", "dMal8ex6FlLgprno", "test", 4000);
+    let filtro = new UsuarioDbg(1, "test", "test");
+    let r = new mysql_query(conn_id, "SELECT 1 AS x", "json");
+    mysql_close(conn_id);
+    return r;
+  }
+
+  [HttpGet("/api/zdebug/g")]
+  ZDebugG() {
+    let conn_id = new mysql_connect("gateway01.us-east-1.prod.aws.tidbcloud.com", "2XCY4FHDYiMMcdi.root", "dMal8ex6FlLgprno", "test", 4000);
+    let filtro = new UsuarioDbg(1, "test", "test");
+    let r = new mysql_query(conn_id, "SELECT @usuario AS u, @email AS e", filtro);
+    mysql_close(conn_id);
+    return r;
+  }
+}

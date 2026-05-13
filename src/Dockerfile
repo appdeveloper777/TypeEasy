@@ -7,7 +7,7 @@ FROM gcc:13.2.0 AS base
 
 # Instala las herramientas que ambos componentes necesitan
 RUN apt-get update && \
-    apt-get install -y flex bison libssl-dev default-libmysqlclient-dev libcurl4-openssl-dev && \
+    apt-get install -y flex bison libssl-dev default-libmysqlclient-dev libcurl4-openssl-dev libpq-dev freetds-dev && \
     apt-get clean
 
 WORKDIR /app
@@ -48,15 +48,15 @@ RUN openssl version
 RUN cd /app/src && \
     bison -d -o parser.tab.c parser.y --warnings=none && \
     flex -o lex.yy.c parser.l && \
-    gcc -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -c \
-    ast.c bytecode.c mysql_bridge.c orm_bridge.c typeeasy_api.c debugger.c \
+    gcc -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -c \
+    ast.c bytecode.c mysql_bridge.c postgres_bridge.c sqlserver_bridge.c db_params.c orm_bridge.c typeeasy_api.c debugger.c \
     parser.tab.c lex.yy.c strvars.c && \
     cd /app && \
     gcc -I/app/api_server -I/app/src -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 \
     /app/api_server/servidor_api.c /app/api_server/typeeasy.c /app/api_server/civetweb.c \
-    /app/src/ast.o /app/src/bytecode.o /app/src/mysql_bridge.o /app/src/orm_bridge.o \
+    /app/src/ast.o /app/src/bytecode.o /app/src/mysql_bridge.o /app/src/postgres_bridge.o /app/src/sqlserver_bridge.o /app/src/db_params.o /app/src/orm_bridge.o \
     /app/src/typeeasy_api.o /app/src/debugger.o /app/src/parser.tab.o /app/src/lex.yy.o /app/src/strvars.o \
-    -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto -lmysqlclient -lfl -lm
+    -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto -lmysqlclient -lpq -lsybdb -lfl -lm
 
 # =================================================================
 # ETAPA 4: IMAGEN FINAL PARA LA API (Lista para producción)
@@ -67,7 +67,7 @@ WORKDIR /app
 
 # Instala las librerías SSL de runtime Y la librería de Flex (libfl2)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libssl3 libfl2 default-libmysqlclient-dev && \
+    apt-get install -y --no-install-recommends libssl3 libfl2 default-libmysqlclient-dev libpq5 libsybdb5 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -96,7 +96,7 @@ WORKDIR /typeeasy
 
 # Instala la librería 'libfl' que falta (+ gdbserver para depuración remota)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libfl2 default-libmysqlclient-dev wabt gdbserver && \
+    apt-get install -y --no-install-recommends libfl2 default-libmysqlclient-dev libpq5 libsybdb5 wabt gdbserver && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -115,7 +115,7 @@ FROM debian:12-slim AS agent
 WORKDIR /app
 # Instala las dependencias de runtime: libssl (para civetweb) y libfl2 (para flex)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libssl3 libfl2 default-libmysqlclient-dev libcurl4 && \
+    apt-get install -y --no-install-recommends libssl3 libfl2 default-libmysqlclient-dev libcurl4 libpq5 libsybdb5 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

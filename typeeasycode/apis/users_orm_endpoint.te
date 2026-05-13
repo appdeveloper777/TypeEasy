@@ -1,7 +1,7 @@
 // Ejemplo de conexión y consulta ORM a MySQL usando TypeEasy
 // Archivo: orm_mysql.te
 
-class Usuario {
+class UsuarioOrm {
   Id : int;
   usuario : string;
   email : string;
@@ -18,6 +18,17 @@ class Usuario {
   }
 }
 
+class FiltroProducto {
+      id: int;
+      usuario: string;
+      email: string;
+    __constructor(_id: int, _usuario: string, _email: string) {
+        this.id = _id;
+        this.usuario = _usuario;
+        this.email = _email;
+    }
+}
+
 endpoint {
 
   [HttpGet("/api/mysql-orm/public-server/usuarios")]
@@ -28,12 +39,27 @@ endpoint {
     string pass = "dMal8ex6FlLgprno";
     string db   = "test";
     int port = 4000;
-    
-    string query = "SELECT * FROM usuarios LIMIT 3";
-    let conn_id = new mysql_connect(host, user, pass, db, port);      
+
+     let conn_id = new mysql_connect(host, user, pass, db, port);      
  
+
+    var filtro = new FiltroProducto(1, "O'Reilly Book6", "test3");
+    let r6 = new mysql_query(
+    conn_id,
+    "INSERT INTO usuarios (usuario, email) VALUES (@usuario, @email)",
+      { "@usuario": "O'Reilly Book", "@email": "test7" }
+);
+    println("[r6_insert] ");
+    println(r6);
     
-    let usuarios = orm_query(conn_id, query, Usuario);  
+    string query = "SELECT * FROM usuarios WHERE Id > @min_id ORDER BY Id DESC LIMIT @lim";
+   
+    
+    let usuarios = new mysql_query(conn_id, query,
+        { "@min_id": 0, "@lim": 5 },
+        UsuarioOrm);
+
+    int count = usuarios.length;
  
     /*for (let item in usuarios) {
         println("Nombre:");       

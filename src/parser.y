@@ -28,7 +28,7 @@
 %token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA CONCAT JSON XML HTTPGET HTTPPOST HTTPPUT HTTPDELETE HTTPPATCH
 %token       VAR ASSIGN PRINT PRINTLN FOR FOREACH LPAREN RPAREN SEMICOLON CONCAT FPRINT FPRINTLN 
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
-%token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN MYSQL_CONNECT MYSQL_CLOSE MYSQL_QUERY ORM_QUERY
+%token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN MYSQL_CONNECT MYSQL_CLOSE MYSQL_QUERY POSTGRES_CONNECT POSTGRES_CLOSE POSTGRES_QUERY SQLSERVER_CONNECT SQLSERVER_CLOSE SQLSERVER_QUERY ORM_QUERY
 %token       EXTENDS
 %token       VOID DYNAMIC
 %token       NULLTOK QMARK
@@ -305,8 +305,10 @@ layer_decl: LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON { $
 attribute_decl:
     IDENTIFIER COLON INT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "int"); } else { printf("Error: No hay clase definida para el atributo '%s'.\n", $1); } }
   | IDENTIFIER COLON STRING SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "string"); } else { printf("Error: No hay clase definida para el atributo '%s'.\n", $1); } }
+  | IDENTIFIER COLON FLOAT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "float"); } else { printf("Error: No hay clase definida para el atributo '%s'.\n", $1); } }
   | IDENTIFIER COLON INT QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "int?"); } }
   | IDENTIFIER COLON STRING QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "string?"); } }
+  | IDENTIFIER COLON FLOAT QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "float?"); } }
   ;
 
 constructor_decl:
@@ -438,6 +440,8 @@ var_decl:
 statement:
 func_call_expr SEMICOLON { $$ = $1; }
 |   MYSQL_CLOSE LPAREN expression RPAREN SEMICOLON { $$ = create_call_node("mysql_close", $3); }
+|   POSTGRES_CLOSE LPAREN expression RPAREN SEMICOLON { $$ = create_call_node("postgres_close", $3); }
+|   SQLSERVER_CLOSE LPAREN expression RPAREN SEMICOLON { $$ = create_call_node("sqlserver_close", $3); }
 
 
 |
@@ -539,6 +543,12 @@ func_call_expr:
     | MYSQL_CLOSE LPAREN expression RPAREN { 
         //printf("PARSER: Reducing MYSQL_CLOSE\n"); 
         fflush(stdout); $$ = create_call_node("mysql_close", $3); }
+    | NEW POSTGRES_CONNECT LPAREN expression_list RPAREN { $$ = create_call_node("postgres_connect", $4); }
+    | NEW POSTGRES_QUERY LPAREN expression_list RPAREN   { $$ = create_call_node("postgres_query", $4); }
+    | POSTGRES_CLOSE LPAREN expression RPAREN            { $$ = create_call_node("postgres_close", $3); }
+    | NEW SQLSERVER_CONNECT LPAREN expression_list RPAREN { $$ = create_call_node("sqlserver_connect", $4); }
+    | NEW SQLSERVER_QUERY LPAREN expression_list RPAREN   { $$ = create_call_node("sqlserver_query", $4); }
+    | SQLSERVER_CLOSE LPAREN expression RPAREN            { $$ = create_call_node("sqlserver_close", $3); }
     | ORM_QUERY LPAREN expression_list RPAREN { 
         //printf("PARSER: Reducing ORM_QUERY\n"); 
         fflush(stdout); $$ = create_call_node("orm_query", $3); }

@@ -9,17 +9,17 @@ bison -d -o parser.tab.c parser.y --warnings=none
 flex -o lex.yy.c parser.l
 
 echo "[dev] compiling interpreter objects..."
-gcc -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -O0 -g -c \
-    ast.c bytecode.c mysql_bridge.c orm_bridge.c typeeasy_api.c debugger.c \
+gcc -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -O0 -g -c \
+    ast.c bytecode.c mysql_bridge.c postgres_bridge.c sqlserver_bridge.c db_params.c orm_bridge.c typeeasy_api.c debugger.c \
     parser.tab.c lex.yy.c strvars.c
 
 echo "[dev] linking typeeasy_api..."
 cd /app
 gcc -I/app/api_server -I/app/src -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -O0 -g \
     /app/api_server/servidor_api.c /app/api_server/typeeasy.c /app/api_server/civetweb.c \
-    /app/src/ast.o /app/src/bytecode.o /app/src/mysql_bridge.o /app/src/orm_bridge.o \
+    /app/src/ast.o /app/src/bytecode.o /app/src/mysql_bridge.o /app/src/postgres_bridge.o /app/src/sqlserver_bridge.o /app/src/db_params.o /app/src/orm_bridge.o \
     /app/src/typeeasy_api.o /app/src/debugger.o /app/src/parser.tab.o /app/src/lex.yy.o /app/src/strvars.o \
-    -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto -lmysqlclient -lfl -lm
+    -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto -lmysqlclient -lpq -lsybdb -lfl -lm
 
 echo "[dev] starting typeeasy_api on :8080"
 exec /app/typeeasy_api

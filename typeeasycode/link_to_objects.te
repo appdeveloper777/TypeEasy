@@ -28,6 +28,47 @@ foreach (let item in filtrados) {
     item.Mostrar();    
 }
 
+// =====================================================
+// Conexión a MySQL (XAMPP en host Windows, puerto 3308)
+// =====================================================
+let mysql_conn = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
+let mysql_result = new mysql_query(mysql_conn, "SELECT nombre, precio FROM productos LIMIT 20", "json");
+print("Productos desde MySQL:");
+println(mysql_result);
+mysql_close(mysql_conn);
+
+// =====================================================
+// Conexión a PostgreSQL (host Windows, puerto 5432)
+// =====================================================
+let pg_conn = new postgres_connect("host.docker.internal", "postgres", "postgres", "meri", 5432);
+let pg_result = new postgres_query(pg_conn, "SELECT nombre, precio FROM productos LIMIT 20", "json");
+print("Productos desde PostgreSQL:");
+println(pg_result);
+postgres_close(pg_conn);
+
+// =====================================================
+// Conexión a SQL Server (host Windows, puerto 1433)
+// =====================================================
+let mssql_conn = new sqlserver_connect("host.docker.internal", "sa", "YourStrong!Pass", "meri", 1433);
+let mssql_result = new sqlserver_query(mssql_conn, "SELECT TOP 20 nombre, precio FROM productos", "json");
+print("Productos desde SQL Server:");
+println(mssql_result);
+sqlserver_close(mssql_conn);
+
+// =====================================================
+// Estilo Dapper: queries parametrizadas con @nombre
+// =====================================================
+let mysql_conn2 = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
+let dapper_result = new mysql_query(
+    mysql_conn2,
+    "SELECT nombre, precio FROM productos WHERE precio > @min AND nombre LIKE @pat",
+    { "@min": 1, "@pat": "%a%" },
+    "json"
+);
+print("Dapper-style MySQL:");
+println(dapper_result);
+mysql_close(mysql_conn2);
+
 /*for (let _item in filtrados) {
     print("Producto:");
     _item.Mostrar();

@@ -619,11 +619,27 @@ void cleanup() {
 static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
     (void)cbdata;
 
-    // Construir HTML dinámicamente con las rutas descubiertas
-    char html[16384];
+    // Construir HTML dinámicamente con las rutas descubiertas (buffer dinámico:
+    // soporta cientos de endpoints sin truncar).
+    size_t cap = 262144; /* 256 KB inicial: cubre el header HTML+CSS+JS y ~300 rutas */
+    char *html = (char*)malloc(cap);
+    if (!html) {
+        mg_printf(conn, "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n");
+        return 1;
+    }
     int offset = 0;
+#define ENSURE_CAP(extra) do { \
+        if ((size_t)offset + (size_t)(extra) + 1 >= cap) { \
+            size_t nc = cap; \
+            while (nc < (size_t)offset + (size_t)(extra) + 1) nc *= 2; \
+            char *nb = (char*)realloc(html, nc); \
+            if (!nb) { free(html); mg_printf(conn, "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"); return 1; } \
+            html = nb; cap = nc; \
+        } \
+    } while (0)
     
-    offset += snprintf(html + offset, sizeof(html) - offset,
+    ENSURE_CAP(8192);
+    offset += snprintf(html + offset, cap - offset,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
         "Connection: close\r\n"
@@ -726,7 +742,7 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         entry = entry->next;
     }
     
-    offset += snprintf(html + offset, sizeof(html) - offset,
+    offset += snprintf(html + offset, cap - offset,
         "<p class='count'><strong>%d</strong> ruta(s) dinámica(s) cargada(s):</p>",
         route_count);
     
@@ -734,15 +750,18 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
     entry = global_routes;
     int endpoint_id = 0;
     if (entry == NULL) {
-        offset += snprintf(html + offset, sizeof(html) - offset,
+        ENSURE_CAP(256);
+        offset += snprintf(html + offset, cap - offset,
             "<p>No hay rutas descubiertas. Crea archivos .te con bloques 'endpoint { }' en /app/apis/</p>");
     } else {
-        while (entry && offset < sizeof(html) - 1000) {
+        while (entry) {
             // Determinar badge color basado en response type
             const char *badge_class = (entry->response_type && strcmp(entry->response_type, "xml") == 0) ? "xml-badge" : "json-badge";
             const char *badge_text = (entry->response_type && strcmp(entry->response_type, "xml") == 0) ? "XML" : "JSON";
             
-            offset += snprintf(html + offset, sizeof(html) - offset,
+            ENSURE_CAP(2048 + (entry->route_path ? strlen(entry->route_path) * 3 : 0)
+                            + (entry->function_name ? strlen(entry->function_name) : 0));
+            offset += snprintf(html + offset, cap - offset,
                 "<div class='endpoint'>"
                 "<span class='method get'>GET</span>"
                 "<span class='route'>%s</span>"
@@ -771,7 +790,8 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         }
     }        
     
-    offset += snprintf(html + offset, sizeof(html) - offset,
+    ENSURE_CAP(512);
+    offset += snprintf(html + offset, cap - offset,
         "<hr>"
         "<p style='color: #999; font-size: 12px;'>TypeEasy Dynamic API Server - Embedded Mode - Endpoints auto-discovered from .te files</p>"
         "</div>"
@@ -779,6 +799,8 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         "</html>");
     
     mg_write(conn, html, offset);
+    free(html);
+#undef ENSURE_CAP
     return 1;
 }
 

@@ -121,6 +121,12 @@
 "mysql_connect"          { return MYSQL_CONNECT; }
 "mysql_close"            { return MYSQL_CLOSE; }
 "mysql_query"            { return MYSQL_QUERY; }
+"postgres_connect"       { return POSTGRES_CONNECT; }
+"postgres_close"         { return POSTGRES_CLOSE; }
+"postgres_query"         { return POSTGRES_QUERY; }
+"sqlserver_connect"      { return SQLSERVER_CONNECT; }
+"sqlserver_close"        { return SQLSERVER_CLOSE; }
+"sqlserver_query"        { return SQLSERVER_QUERY; }
 "orm_query"              { return ORM_QUERY; }
 
 "var"                   { return VAR; }

@@ -8,6 +8,8 @@
 #include <ctype.h>
 #include "bytecode.h"
 #include "mysql_bridge.h"
+#include "postgres_bridge.h"
+#include "sqlserver_bridge.h"
 #include "debugger.h"
 
 /* Ola 10: JIT availability — must be defined BEFORE any use further down. */
@@ -716,6 +718,12 @@ int call_native_function(const char *name, ASTNode *arg) {
         native_mysql_close(arg);
         return 1;
     }
+    if (strcmp(name, "postgres_connect") == 0) { native_postgres_connect(arg); return 1; }
+    if (strcmp(name, "postgres_query") == 0)   { native_postgres_query(arg);   return 1; }
+    if (strcmp(name, "postgres_close") == 0)   { native_postgres_close(arg);   return 1; }
+    if (strcmp(name, "sqlserver_connect") == 0) { native_sqlserver_connect(arg); return 1; }
+    if (strcmp(name, "sqlserver_query") == 0)   { native_sqlserver_query(arg);   return 1; }
+    if (strcmp(name, "sqlserver_close") == 0)   { native_sqlserver_close(arg);   return 1; }
     return 0;
 }
 
@@ -9566,6 +9574,24 @@ static int csv_attr_is_nullable(const char *t) {
 /* Sentinel global: cuando un wrapper CSV ASTNode tiene `type` apuntando
  * a este string compartido, free_ast() lo deja vivo (evita strdup por fila). */
 char *g_csv_wrapper_obj_type = NULL;
+
+/* ---------- Fast-row primitives (export público para MySQL ORM, etc.) ----------
+ * Wrappers no-static sobre las primitivas internas. Mantenemos las internas
+ * estáticas para no exponer estructuras (CSVChunk, ASTNodePool). */
+void *te_orm_arena_alloc(size_t n) { return csv_arena_alloc(n); }
+char *te_orm_arena_strdup(const char *s) { return csv_arena_strdup(s); }
+char *te_orm_arena_dup(const char *s, size_t n) { return csv_arena_dup(s, n); }
+ASTNode *te_orm_pool_alloc(void) { return ast_pool_alloc(); }
+const char *te_orm_wrapper_obj_type(void) {
+    if (!g_csv_wrapper_obj_type) g_csv_wrapper_obj_type = csv_arena_strdup("OBJECT");
+    return g_csv_wrapper_obj_type;
+}
+int te_orm_attr_kind(const char *t) {
+    if (csv_attr_is_int(t)) return 0;
+    if (csv_attr_is_string(t)) return 1;
+    return 2;
+}
+int te_orm_attr_is_nullable(const char *t) { return csv_attr_is_nullable(t); }
 
 /* ---------- Parallel CSV parsing ----------
  * Cada worker procesa un rango [start, end) del buffer (mmap MAP_PRIVATE).

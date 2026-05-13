@@ -1,0 +1,32 @@
+// Benchmark del fast-path ORM streaming (Paso A + B).
+// Se ejecuta con TE_ORM_TIMING=1 para imprimir us/row.
+class Usu {
+    Id : int;
+    usuario : string;
+    email : string;
+    __constructor(_id:int, _u:string, _e:string) {
+        this.Id = _id;
+        this.usuario = _u;
+        this.email = _e;
+    }
+}
+
+let conn = new mysql_connect(
+    "gateway01.us-east-1.prod.aws.tidbcloud.com",
+    "2XCY4FHDYiMMcdi.root",
+    "dMal8ex6FlLgprno",
+    "test",
+    4000
+);
+
+println("== fast-path: 1000 filas ==");
+let l1k = new mysql_query(conn, "SELECT * FROM usuarios LIMIT 1000", Usu);
+
+println("== fast-path: 10000 filas ==");
+let l10k = new mysql_query(conn, "SELECT * FROM usuarios LIMIT 10000", Usu);
+
+println("== fast-path: 30000 filas ==");
+let l30k = new mysql_query(conn, "SELECT * FROM usuarios LIMIT 30000", Usu);
+
+mysql_close(conn);
+println("done");

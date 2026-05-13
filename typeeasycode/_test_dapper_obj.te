@@ -1,0 +1,30 @@
+class Usuario {
+  Id : int;
+  usuario : string;
+  email : string;
+  __constructor(_id : int, _usuario : string, _email : string) {
+    this.Id = _id;
+    this.usuario = _usuario;
+    this.email = _email;
+  }
+}
+
+println("[STEP 1] start");
+string host = "gateway01.us-east-1.prod.aws.tidbcloud.com";
+string user = "2XCY4FHDYiMMcdi.root";
+string pass = "dMal8ex6FlLgprno";
+string db   = "test";
+int port = 4000;
+let conn_id = new mysql_connect(host, user, pass, db, port);
+println("[STEP 2] connected");
+let filtro = new Usuario(1, "O'Reilly Book", "test");
+println("[STEP 3] obj created");
+let r6 = new mysql_query(
+    conn_id,
+    "INSERT INTO usuarios (usuario, email) VALUES (@usuario, @email)",
+    filtro
+);
+println("[STEP 4] query done");
+println(r6);
+mysql_close(conn_id);
+println("[STEP 5] closed");
