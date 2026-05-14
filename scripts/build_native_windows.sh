@@ -52,6 +52,18 @@ fi
 
 CFLAGS_NATIVE="-O2 -Wall -I. -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 ${MYSQL_CFLAGS}"
 
+# Compatibilidad con GCC 14+ (MSYS2 actual): el codigo asume C11/POSIX implicito,
+# pero GCC 14 promovio varios warnings a errores por defecto (C23). Los demotamos
+# a warnings para no tener que tocar el codigo fuente en esta release.
+CFLAGS_NATIVE+=" -std=gnu11"
+CFLAGS_NATIVE+=" -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L"
+CFLAGS_NATIVE+=" -Wno-error=implicit-function-declaration"
+CFLAGS_NATIVE+=" -Wno-error=incompatible-pointer-types"
+CFLAGS_NATIVE+=" -Wno-error=int-conversion"
+CFLAGS_NATIVE+=" -Wno-error=implicit-int"
+CFLAGS_NATIVE+=" -Wno-error=discarded-qualifiers"
+CFLAGS_NATIVE+=" -fcommon"
+
 echo "=== Generando parser/lexer ==="
 bison -d -o parser.tab.c parser.y --warnings=none
 flex -o lex.yy.c parser.l
