@@ -379,7 +379,34 @@ int main(int argc, char *argv[]) {
     if (debug_env != NULL && strcmp(debug_env, "1") == 0) {
         g_debug_mode = 1;
     }
-  
+
+    /* --version / -v / --help / -h: respondidos antes de parsear nada mas. */
+#ifndef TYPEEASY_VERSION
+#define TYPEEASY_VERSION "0.0.1"
+#endif
+    for (int vi = 1; vi < argc; vi++) {
+        if (strcmp(argv[vi], "--version") == 0 || strcmp(argv[vi], "-v") == 0 || strcmp(argv[vi], "-V") == 0) {
+            printf("TypeEasy %s\n", TYPEEASY_VERSION);
+            return 0;
+        }
+        if (strcmp(argv[vi], "--help") == 0 || strcmp(argv[vi], "-h") == 0) {
+            printf("TypeEasy %s\n", TYPEEASY_VERSION);
+            printf("Uso: %s <archivo.te> [opciones]\n", argv[0]);
+            printf("Opciones:\n");
+            printf("  --version, -v          Muestra la version y sale\n");
+            printf("  --help, -h             Muestra esta ayuda\n");
+            printf("  --repl                 Inicia el REPL interactivo\n");
+            printf("  --test [dir]           Ejecuta tests *_test.te\n");
+            printf("  --syntax-check <f>     Valida sintaxis (JSON output)\n");
+            printf("  --symbols <f>          Lista simbolos (JSON output)\n");
+            printf("  --emit-wat <f> [-o]    Genera WebAssembly text\n");
+            printf("  --emit-wasm <f> [-o]   Genera WebAssembly binary\n");
+            printf("  --debug                Activa logs de debug\n");
+            printf("  --debug-port <p>       Inicia debug server DAP en puerto p\n");
+            return 0;
+        }
+    }
+
     clock_t inicio = clock();
     
     if (argc < 2) {

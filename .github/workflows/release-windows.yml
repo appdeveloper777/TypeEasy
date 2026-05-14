@@ -57,6 +57,8 @@ jobs:
 
       - name: Build native TypeEasy and package folder
         shell: msys2 {0}
+        env:
+          TYPEEASY_VERSION: ${{ steps.meta.outputs.version }}
         run: |
           bash scripts/build_native_windows.sh
           bash scripts/package_windows_release.sh "${{ steps.meta.outputs.version }}"

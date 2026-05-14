@@ -32,7 +32,7 @@ SPARK_OBJ = $(SPARK_DIR)/dataframe.o
 
 CC = gcc
 CXX = g++
-CFLAGS = -Wall -g -O3 -mavx2 -mbmi -pthread -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1
+CFLAGS = -Wall -g -O3 -mavx2 -mbmi -pthread -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 $(CFLAGS_EXTRA)
 CXXFLAGS = -Wall -g -O3 -std=c++17
 LIBS_SCRIPT = -lfl -lm -lmysqlclient -lpq -lsybdb -lpthread -ldl
 LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto -lmysqlclient -lpq -lsybdb -lcurl
