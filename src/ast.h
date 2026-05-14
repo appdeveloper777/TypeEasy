@@ -317,6 +317,14 @@ ASTNode *create_object_literal_node(ASTNode *kv_list);
 ASTNode *create_access_node(ASTNode *base, ASTNode *index_expr);
 ASTNode *create_method_call_node_alone(ASTNode *objectNode, const char *methodName, ASTNode *args);
 
+/* Estos dos faltaban tambien y producian el MISMO crash LLP64 en
+ * Win64 con OBJECT_LITERAL multi-key (`{ "a": 1, "b": 2 }`) y con
+ * llamadas a funciones con multiples argumentos. Regla de la casa:
+ * TODA funcion que retorna puntero y se llama desde parser.y / parser.l
+ * DEBE tener prototipo declarado en ast.h. */
+ASTNode *append_kv_pair(ASTNode *list, ASTNode *pair);
+ASTNode *append_argument_raw(ASTNode *list, ASTNode *arg);
+
 /* Inicializar el pool global de threads CSV.
  * Llamar desde main() antes de ejecutar el script TE.
  * n = número total de workers deseados (incluyendo el main thread). */
