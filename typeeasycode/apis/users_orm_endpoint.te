@@ -40,8 +40,8 @@ endpoint {
     string db   = "test";
     int port = 4000;
 
-     let conn_id = new mysql_connect(host, user, pass, db, port);      
- 
+    let conn_id = new mysql_connect(host, user, pass, db, port, { "tls": 1 }); 
+    
 
     var filtro = new FiltroProducto(1, "O'Reilly Book6", "test3");
     let r6 = new mysql_query(

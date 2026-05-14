@@ -5,6 +5,7 @@
 #include "ast.h" 
 #include "wasm_backend.h"
 #include "debugger.h"
+#include "typeeasy_api_server.h"
 
 /* --- Prototipos de las funciones en tu "Motor" --- */
 ASTNode* parse_file(FILE* file);
@@ -406,6 +407,9 @@ int main(int argc, char *argv[]) {
             printf("  --emit-wasm <f> [-o]   Genera WebAssembly binary\n");
             printf("  --debug                Activa logs de debug\n");
             printf("  --debug-port <p>       Inicia debug server DAP en puerto p\n");
+            printf("  --api [-p PORT]        Levanta servidor HTTP con los endpoints del .te\n");
+            printf("  --port <p>             Puerto para --api (default 8080)\n");
+            printf("  --host <h>             Host bind para --api (default 0.0.0.0)\n");
             return 0;
         }
     }
@@ -429,6 +433,9 @@ int main(int argc, char *argv[]) {
     const char *test_dir = NULL;
     int syntax_check_mode = 0;
     int symbols_mode = 0;
+    int api_mode = 0;
+    int api_port = 8080;
+    const char *api_host = "0.0.0.0";
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--emit-wat") == 0) {
@@ -444,6 +451,16 @@ int main(int argc, char *argv[]) {
             syntax_check_mode = 1;
         } else if (strcmp(argv[i], "--symbols") == 0) {
             symbols_mode = 1;
+        } else if (strcmp(argv[i], "--api") == 0) {
+            api_mode = 1;
+        } else if ((strcmp(argv[i], "--port") == 0 || strcmp(argv[i], "-p") == 0) && i + 1 < argc) {
+            api_port = atoi(argv[++i]);
+        } else if (strncmp(argv[i], "--port=", 7) == 0) {
+            api_port = atoi(argv[i] + 7);
+        } else if (strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
+            api_host = argv[++i];
+        } else if (strncmp(argv[i], "--host=", 7) == 0) {
+            api_host = argv[i] + 7;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: -o requiere una ruta de salida.\n");
@@ -468,6 +485,10 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Error: se requiere un archivo .te.\n");
             return 1;
         }
+    }
+    if (api_mode && !script_path) {
+        fprintf(stderr, "Error: --api requiere un archivo .te (ej: typeeasy --api endpoint.te)\n");
+        return 1;
     }
     if ((syntax_check_mode || symbols_mode) && !script_path) {
         fprintf(stderr, "Error: --syntax-check / --symbols requieren un archivo.\n");
@@ -609,6 +630,13 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Uncaught: %s\n", m ? m : "(sin mensaje)");
             return 1;
         }
+    }
+
+    // 5b. Modo --api: levantar servidor HTTP con los endpoints del .te.
+    if (api_mode) {
+        int rc = typeeasy_run_api_server(api_host, api_port);
+        free_ast(script_ast);
+        return rc;
     }
 
     // 6. Modo Invocación

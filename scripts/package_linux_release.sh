@@ -38,6 +38,9 @@ done
 if [[ -f "$ROOT_DIR/typeeasycode/crear_const_variable.te" ]]; then
   cp "$ROOT_DIR/typeeasycode/crear_const_variable.te" "$PKG_DIR/examples/"
 fi
+if [[ -f "$ROOT_DIR/typeeasycode/endpoint.te" ]]; then
+  cp "$ROOT_DIR/typeeasycode/endpoint.te" "$PKG_DIR/examples/"
+fi
 
 cat > "$PKG_DIR/README-LINUX.txt" <<EOF
 TypeEasy Linux Package v${VERSION} (${ARCH})
@@ -45,12 +48,25 @@ TypeEasy Linux Package v${VERSION} (${ARCH})
 Estructura:
 - bin/typeeasy
 - examples/crear_const_variable.te
+- examples/endpoint.te
 
 Uso rapido:
-  ./bin/typeeasy ./examples/crear_const_variable.te
+  Script normal:
+    ./bin/typeeasy ./examples/crear_const_variable.te
+
+  Servidor HTTP embebido (--api):
+    ./bin/typeeasy --api ./examples/endpoint.te --port 9000
+    # luego en otra terminal:
+    curl http://localhost:9000/ping
+
+Flags utiles:
+  --api <archivo.te>     Levanta servidor HTTP con los endpoints del .te
+  --port <p>             Puerto (default 8080)
+  --host <h>             Host bind (default 0.0.0.0)
+  --help                 Lista todas las opciones
 
 Dependencias runtime (instalar en el host):
-  sudo apt-get install -y libmariadb3 libpq5 libsybdb5
+  sudo apt-get install -y libmariadb3 libpq5 libsybdb5 libssl3
 
 Este paquete corresponde a una release inicial (0.0.1).
 EOF
@@ -71,6 +87,10 @@ if [[ -f "$ROOT_DIR/typeeasycode/crear_const_variable.te" ]]; then
   install -m 0644 "$ROOT_DIR/typeeasycode/crear_const_variable.te" \
                   "$DEB_DIR/usr/share/typeeasy/examples/"
 fi
+if [[ -f "$ROOT_DIR/typeeasycode/endpoint.te" ]]; then
+  install -m 0644 "$ROOT_DIR/typeeasycode/endpoint.te" \
+                  "$DEB_DIR/usr/share/typeeasy/examples/"
+fi
 
 for doc in README.md BUILD.md; do
   if [[ -f "$ROOT_DIR/$doc" ]]; then
@@ -89,7 +109,7 @@ Priority: optional
 Architecture: ${ARCH}
 Maintainer: TypeEasy <noreply@typeeasy.dev>
 Installed-Size: ${INSTALLED_SIZE}
-Depends: libc6, libmariadb3, libpq5, libsybdb5
+Depends: libc6, libmariadb3, libpq5, libsybdb5, libssl3
 Description: TypeEasy interpreter and framework
  Interprete y framework experimental escrito en C que permite crear
  sintaxis propias, scripts y endpoints REST sin depender de Docker.

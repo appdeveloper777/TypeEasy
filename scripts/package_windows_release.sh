@@ -31,6 +31,9 @@ done
 if [[ -f "$ROOT_DIR/typeeasycode/crear_const_variable.te" ]]; then
   cp "$ROOT_DIR/typeeasycode/crear_const_variable.te" "$PKG_DIR/examples/"
 fi
+if [[ -f "$ROOT_DIR/typeeasycode/endpoint.te" ]]; then
+  cp "$ROOT_DIR/typeeasycode/endpoint.te" "$PKG_DIR/examples/"
+fi
 
 if command -v ldd >/dev/null 2>&1; then
   # ldd en MSYS2 imprime: "libfoo.dll => /mingw64/bin/libfoo.dll (0xADDR)"
@@ -95,9 +98,22 @@ TypeEasy Windows Package v${VERSION}
 Estructura:
 - bin/typeeasy.exe
 - examples/crear_const_variable.te
+- examples/endpoint.te
 
-Uso rapido (PowerShell):
-  .\\bin\\typeeasy.exe .\\examples\\crear_const_variable.te
+Uso rapido (PowerShell o CMD):
+  Script normal:
+    .\\bin\\typeeasy.exe .\\examples\\crear_const_variable.te
+
+  Servidor HTTP embebido (--api):
+    .\\bin\\typeeasy.exe --api .\\examples\\endpoint.te --port 9000
+    # luego en otra consola:
+    curl http://localhost:9000/ping
+
+Flags utiles:
+  --api <archivo.te>     Levanta servidor HTTP con los endpoints del .te
+  --port <p>             Puerto (default 8080)
+  --host <h>             Host bind (default 0.0.0.0)
+  --help                 Lista todas las opciones
 
 Este paquete corresponde a una release inicial (0.0.1).
 EOF

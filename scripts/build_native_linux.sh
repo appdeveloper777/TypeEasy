@@ -6,7 +6,7 @@
 #   sudo apt-get update
 #   sudo apt-get install -y build-essential flex bison \
 #                           libmariadb-dev libpq-dev \
-#                           freetds-dev pkg-config
+#                           freetds-dev libssl-dev pkg-config
 #
 # Uso:
 #   bash scripts/build_native_linux.sh

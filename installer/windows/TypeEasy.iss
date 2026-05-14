@@ -51,6 +51,7 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
 
 [Run]
 Filename: "{cmd}"; Parameters: "/k cd /d ""{app}"" && .\\bin\\typeeasy.exe --help"; Description: "Abrir TypeEasy en consola"; Flags: postinstall nowait skipifsilent
+Filename: "{cmd}"; Parameters: "/k cd /d ""{app}"" && .\\bin\\typeeasy.exe --api .\\examples\\endpoint.te --port 9000"; Description: "Probar servidor HTTP (--api endpoint.te en :9000)"; Flags: postinstall nowait skipifsilent unchecked
 
 [Code]
 function NeedsAddPath(Param: string): Boolean;

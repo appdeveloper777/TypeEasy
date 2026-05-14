@@ -96,7 +96,7 @@ WORKDIR /typeeasy
 
 # Instala la librería 'libfl' que falta (+ gdbserver para depuración remota)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libfl2 default-libmysqlclient-dev libpq5 libsybdb5 wabt gdbserver && \
+    apt-get install -y --no-install-recommends libfl2 default-libmysqlclient-dev libpq5 libsybdb5 libssl3 wabt gdbserver && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

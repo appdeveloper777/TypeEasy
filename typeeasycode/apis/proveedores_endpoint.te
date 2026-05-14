@@ -1,5 +1,5 @@
-// La clase para los items de la orden es la misma, ¡reutilizamos código!
-class LineaItem {
+// Clase de items de la orden (renombrada para evitar colision con facturas_endpoint.te)
+class LineaItemOrden {
     producto: string;
     cantidad: int;
     precio: int;

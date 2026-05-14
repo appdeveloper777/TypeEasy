@@ -12,7 +12,7 @@ MAIN_AGENT_OBJ = $(MAIN_AGENT_C:.c=.o)
 BISON_FILE = parser.y
 FLEX_FILE = parser.l
 # Archivos del motor incluyendo la nueva API embebida
-MOTOR_C_FILES = ast.c bytecode.c mysql_bridge.c postgres_bridge.c sqlserver_bridge.c db_params.c orm_bridge.c typeeasy_api.c wasm_backend.c debugger.c te_builtins.c
+MOTOR_C_FILES = ast.c bytecode.c mysql_bridge.c postgres_bridge.c sqlserver_bridge.c db_params.c orm_bridge.c typeeasy_api.c typeeasy_api_server.c wasm_backend.c debugger.c te_builtins.c
 MOTOR_OBJS = $(MOTOR_C_FILES:.c=.o)
 
 BISON_C = parser.tab.c
@@ -34,7 +34,7 @@ CC = gcc
 CXX = g++
 CFLAGS = -Wall -g -O3 -mavx2 -mbmi -pthread -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 $(CFLAGS_EXTRA)
 CXXFLAGS = -Wall -g -O3 -std=c++17
-LIBS_SCRIPT = -lfl -lm -lmysqlclient -lpq -lsybdb -lpthread -ldl
+LIBS_SCRIPT = -lfl -lm -lmysqlclient -lpq -lsybdb -lpthread -ldl -lssl -lcrypto
 LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto -lmysqlclient -lpq -lsybdb -lcurl
 
 # --- OBJETIVO PRINCIPAL ---
@@ -71,9 +71,9 @@ $(STRVARS_OBJ): strvars.c
 	$(CC) $(CFLAGS) -c strvars.c -o $(STRVARS_OBJ)
 
 # --- REGLAS DE EJECUTABLES ---
-# 1. 'typeeasy' (intérprete para scripts)
-$(EXEC_SCRIPT): $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ)
-	$(CC) $(CFLAGS) -o $(EXEC_SCRIPT) $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(LIBS_SCRIPT)
+# 1. 'typeeasy' (intérprete para scripts) — ahora linkea civetweb para soporte --api
+$(EXEC_SCRIPT): $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ)
+	$(CC) $(CFLAGS) -o $(EXEC_SCRIPT) $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ) $(LIBS_SCRIPT)
 
 # 2. 'servidor_agent' (servidor del agente)
 $(EXEC_AGENT): $(MAIN_AGENT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ)

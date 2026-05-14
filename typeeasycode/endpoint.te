@@ -1,0 +1,31 @@
+// Endpoint de ejemplo para `typeeasy --api endpoint.te`.
+//
+// Ejecutalo con:
+//   typeeasy --api endpoint.te                   (puerto 8080 por defecto)
+//   typeeasy --api endpoint.te --port 9000       (otro puerto)
+//   typeeasy --api endpoint.te --host 127.0.0.1  (solo loopback)
+//
+// El cuerpo de la respuesta debe enviarse con `return json(<var>)`,
+// `return json("<string-literal>")` o `return xml(...)`.
+// Un `return json({...})` con object literal inline NO se serializa todavia
+// (limitacion del intérprete): asigna a variable primero.
+
+endpoint {
+    [HttpGet("/")]
+    home() {
+        return json("{\"msg\":\"Hola desde TypeEasy --api\",\"rutas\":[\"/\",\"/ping\",\"/users/{id}\"]}");
+    }
+
+    [HttpGet("/ping")]
+    ping() {
+        return json("{\"pong\":1}");
+    }
+
+    [HttpGet("/users/{id}")]
+    get_user() {
+        // El parametro {id} se obtiene con http_param("id").
+        let id = http_param("id");
+        let body = concat("{\"id\":\"", id, "\",\"name\":\"Demo\"}");
+        return json(body);
+    }
+}
