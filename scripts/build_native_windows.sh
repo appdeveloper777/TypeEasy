@@ -80,7 +80,7 @@ gcc -O2 -o typeeasy.exe \
     ast.o bytecode.o mysql_bridge.o orm_bridge.o typeeasy_api.o wasm_backend.o debugger.o \
     db_params.o te_builtins.o db_stubs_win.o \
     strvars.o \
-    ${MYSQL_LIB} -lm -lws2_32
+    ${MYSQL_LIB} -lm -lws2_32 -lpthread
 
 echo ""
 echo "=== Listo: src/typeeasy.exe ==="

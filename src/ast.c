@@ -55,6 +55,14 @@ void te_capture_error(int line, const char *msg, const char *near) {
 #define TE_JIT_AVAILABLE 1
 #define TE_HAS_MMAP 1
 #define TE_HAS_PTHREAD 1
+#elif defined(_WIN32)
+/* MSYS2/mingw-w64 trae winpthreads y soporta clock_gettime; no hay JIT ni mmap
+ * pero si pthread, asi que CSV multi-thread funciona en Windows tambien. */
+#include <pthread.h>
+#include <time.h>
+#define TE_JIT_AVAILABLE 0
+#define TE_HAS_MMAP 0
+#define TE_HAS_PTHREAD 1
 #else
 #define TE_JIT_AVAILABLE 0
 #define TE_HAS_MMAP 0
