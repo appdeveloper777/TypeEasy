@@ -65,8 +65,9 @@ CFLAGS_NATIVE+=" -Wno-error=discarded-qualifiers"
 CFLAGS_NATIVE+=" -fcommon"
 
 # Version del binario: tomada de la env var TYPEEASY_VERSION (CI la pasa desde el tag).
+# Pasamos como token bare (sin comillas) — typeeasy_main.c lo stringifica con TE_XSTR.
 TE_VER="${TYPEEASY_VERSION:-0.0.1}"
-CFLAGS_NATIVE+=" -DTYPEEASY_VERSION=\"${TE_VER}\""
+CFLAGS_NATIVE+=" -DTYPEEASY_VERSION=${TE_VER}"
 
 echo "=== Generando parser/lexer ==="
 bison -d -o parser.tab.c parser.y --warnings=none

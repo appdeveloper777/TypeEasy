@@ -52,7 +52,7 @@ jobs:
                 flex bison libfl-dev libssl-dev default-libmysqlclient-dev \
                 libcurl4-openssl-dev libpq-dev freetds-dev &&
               make -C /app/src clean &&
-              make -C /app/src typeeasy CFLAGS_EXTRA="-DTYPEEASY_VERSION=\"${TYPEEASY_VERSION}\""
+              make -C /app/src typeeasy CFLAGS_EXTRA=-DTYPEEASY_VERSION=${TYPEEASY_VERSION}
             '
           ls -lh src/typeeasy
 

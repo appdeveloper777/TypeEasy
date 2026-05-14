@@ -382,15 +382,18 @@ int main(int argc, char *argv[]) {
 
     /* --version / -v / --help / -h: respondidos antes de parsear nada mas. */
 #ifndef TYPEEASY_VERSION
-#define TYPEEASY_VERSION "0.0.1"
+#define TYPEEASY_VERSION 0.0.1
 #endif
+#define TE_XSTR_(x) #x
+#define TE_XSTR(x) TE_XSTR_(x)
+    const char *TE_VERSION_STR = TE_XSTR(TYPEEASY_VERSION);
     for (int vi = 1; vi < argc; vi++) {
         if (strcmp(argv[vi], "--version") == 0 || strcmp(argv[vi], "-v") == 0 || strcmp(argv[vi], "-V") == 0) {
-            printf("TypeEasy %s\n", TYPEEASY_VERSION);
+            printf("TypeEasy %s\n", TE_VERSION_STR);
             return 0;
         }
         if (strcmp(argv[vi], "--help") == 0 || strcmp(argv[vi], "-h") == 0) {
-            printf("TypeEasy %s\n", TYPEEASY_VERSION);
+            printf("TypeEasy %s\n", TE_VERSION_STR);
             printf("Uso: %s <archivo.te> [opciones]\n", argv[0]);
             printf("Opciones:\n");
             printf("  --version, -v          Muestra la version y sale\n");
