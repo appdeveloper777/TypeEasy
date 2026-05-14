@@ -2,7 +2,17 @@
 #include "debugger.h"
 #include <string.h>
 #include <stdlib.h>
-#include <unistd.h>
+
+#ifdef _WIN32
+  #include <io.h>
+  #include <fcntl.h>
+  #define pipe(fds) _pipe((fds), 65536, _O_BINARY)
+  #ifndef STDOUT_FILENO
+    #define STDOUT_FILENO _fileno(stdout)
+  #endif
+#else
+  #include <unistd.h>
+#endif
 
 // Declaraciones externas de funciones del intérprete
 extern ASTNode* parse_file(FILE* file);

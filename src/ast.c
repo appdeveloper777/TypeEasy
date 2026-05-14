@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <math.h>
 #include <ctype.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include "bytecode.h"
 #include "mysql_bridge.h"
 #include "postgres_bridge.h"
@@ -13,19 +15,29 @@
 #include "debugger.h"
 #include "te_builtins.h"
 
+/* Headers POSIX/sockets disponibles en todas las plataformas (MSYS2 / Linux / macOS).
+ * En Windows usamos winsock; en POSIX, sockets BSD. */
+#ifdef _WIN32
+  #include <io.h>
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #ifndef STDOUT_FILENO
+    #define STDOUT_FILENO _fileno(stdout)
+  #endif
+#else
+  #include <unistd.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>
+#endif
+
 /* Ola 10: JIT availability — must be defined BEFORE any use further down. */
 #if defined(__linux__) && defined(__x86_64__)
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <sys/vfs.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <stddef.h>
 #include <pthread.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
 
 /* Phase F: globals shared with test runner (typeeasy_main.c).
  * Defined here as weak so binaries that don't link the test runner
@@ -9390,7 +9402,6 @@ static char *csv_mmap_file(const char *filename, size_t *out_len) {
 #else
     FILE *fp = fopen(filename, "rb");
     if (!fp) return NULL;
-    extern char *csv_read_all(FILE *fp, size_t *out_len);
     char *buf = csv_read_all(fp, out_len);
     fclose(fp);
     return buf;

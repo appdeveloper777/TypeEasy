@@ -33,16 +33,29 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Version objetivo: ${VERSION}"
 
-      - name: Install build dependencies
+      - name: Build TypeEasy binary inside reproducible Docker image
+        # Compilamos dentro de gcc:13.2.0 (la misma imagen que usa src/Dockerfile)
+        # para evitar los breaking changes de gcc 14 en ubuntu-latest.
+        # El binario resultante es nativo Linux x86_64 y no requiere Docker en runtime.
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/app \
+            -w /app \
+            gcc:13.2.0 \
+            bash -c "
+              apt-get update &&
+              apt-get install -y --no-install-recommends \
+                flex bison libssl-dev default-libmysqlclient-dev \
+                libcurl4-openssl-dev libpq-dev freetds-dev &&
+              make -C /app/src clean &&
+              make -C /app/src typeeasy
+            "
+          ls -lh src/typeeasy
+
+      - name: Install packaging tools (host)
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential flex bison pkg-config \
-            libmariadb-dev libpq-dev freetds-dev \
-            dpkg-dev
-
-      - name: Build native TypeEasy
-        run: bash scripts/build_native_linux.sh
+          sudo apt-get install -y dpkg-dev
 
       - name: Package tar.gz and .deb
         run: bash scripts/package_linux_release.sh "${{ steps.meta.outputs.version }}"
