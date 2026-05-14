@@ -17,6 +17,11 @@
 
 set -euo pipefail
 
+# Capturar repo root ANTES de cualquier cd (luego trabajamos en $WORK y $0 deja
+# de resolver). Resolver con realpath para tener absoluto.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 VER="${MARIADB_CC_VERSION:-3.4.8}"
 URL="https://github.com/mariadb-corporation/mariadb-connector-c/archive/refs/tags/v${VER}.tar.gz"
 
@@ -68,7 +73,6 @@ ldd "$DLL" >&2 || true
 # Copiar a un path estable dentro del repo para que sobreviva entre pasos de
 # GitHub Actions (cada step abre un shell nuevo y $RUNNER_TEMP/cygpath no
 # siempre coinciden). Caller usa LIBMARIADB_OPENSSL_DLL=dist/external/libmariadb.dll
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR="$REPO_ROOT/dist/external"
 mkdir -p "$OUT_DIR"
 OUT_DLL="$OUT_DIR/libmariadb.dll"
