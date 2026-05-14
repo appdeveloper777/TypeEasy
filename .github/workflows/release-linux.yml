@@ -11,6 +11,9 @@ on:
         required: false
         default: "0.0.1"
 
+permissions:
+  contents: write
+
 jobs:
   release-linux:
     runs-on: ubuntu-latest

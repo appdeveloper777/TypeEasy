@@ -11,6 +11,9 @@ on:
         required: false
         default: "0.0.1"
 
+permissions:
+  contents: write
+
 jobs:
   release-windows:
     runs-on: windows-latest

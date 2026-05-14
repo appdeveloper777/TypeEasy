@@ -69,13 +69,16 @@ bison -d -o parser.tab.c parser.y --warnings=none
 flex -o lex.yy.c parser.l
 
 echo "=== Compilando módulos del motor ==="
-gcc $CFLAGS_NATIVE -fno-semantic-interposition -c ast.c bytecode.c mysql_bridge.c orm_bridge.c typeeasy_api.c wasm_backend.c debugger.c
+gcc $CFLAGS_NATIVE -fno-semantic-interposition -c \
+    ast.c bytecode.c mysql_bridge.c orm_bridge.c typeeasy_api.c \
+    wasm_backend.c debugger.c db_params.c te_builtins.c db_stubs_win.c
 gcc $CFLAGS_NATIVE -c parser.tab.c lex.yy.c strvars.c typeeasy_main.c
 
 echo "=== Linkando typeeasy.exe ==="
 gcc -O2 -o typeeasy.exe \
     typeeasy_main.o parser.tab.o lex.yy.o \
     ast.o bytecode.o mysql_bridge.o orm_bridge.o typeeasy_api.o wasm_backend.o debugger.o \
+    db_params.o te_builtins.o db_stubs_win.o \
     strvars.o \
     ${MYSQL_LIB} -lm -lws2_32
 
