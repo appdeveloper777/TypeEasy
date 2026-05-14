@@ -74,6 +74,18 @@ if [[ -n "$MSYS_BIN" ]]; then
   done
 fi
 
+# Override: si el caller (CI o build local) construyo una libmariadb.dll
+# contra OPENSSL via scripts/build_mariadb_openssl_dll.sh, reemplazamos la
+# de MSYS2 (Schannel) por esa. Schannel falla contra los NLB de AWS
+# (TiDB Cloud, PlanetScale, Aiven) con SEC_E_DECRYPT_FAILURE.
+if [[ -n "${LIBMARIADB_OPENSSL_DLL:-}" && -f "$LIBMARIADB_OPENSSL_DLL" ]]; then
+  echo "Reemplazando libmariadb.dll (Schannel) con build OpenSSL: $LIBMARIADB_OPENSSL_DLL"
+  cp -f "$LIBMARIADB_OPENSSL_DLL" "$PKG_DIR/bin/libmariadb.dll"
+  ls -lh "$PKG_DIR/bin/libmariadb.dll"
+elif [[ -n "${LIBMARIADB_OPENSSL_DLL:-}" ]]; then
+  echo "WARNING: LIBMARIADB_OPENSSL_DLL=$LIBMARIADB_OPENSSL_DLL no existe, se mantiene la de MSYS2 (Schannel)" >&2
+fi
+
 echo "Contenido final de bin/:"
 ls -lh "$PKG_DIR/bin/"
 

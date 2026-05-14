@@ -51,9 +51,28 @@ jobs:
             mingw-w64-x86_64-libmariadbclient
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-make
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-openssl
             flex
             bison
             make
+
+      - name: Build OpenSSL-based libmariadb.dll
+        shell: msys2 {0}
+        id: openssl_libmariadb
+        env:
+          MARIADB_CC_VERSION: "3.4.8"
+        run: |
+          set -euo pipefail
+          # MSYS2 ships libmariadbclient compiled with Schannel; AWS NLB-fronted
+          # MySQL services (TiDB Cloud, etc.) reject Schannel handshakes with
+          # SEC_E_DECRYPT_FAILURE. Rebuild against OpenSSL and surface path.
+          DLL=$(bash scripts/build_mariadb_openssl_dll.sh | tail -n1)
+          echo "Built: $DLL"
+          test -f "$DLL"
+          # Use stable workspace-relative path so the next step (fresh shell)
+          # finds the DLL without depending on $RUNNER_TEMP/cygpath.
+          echo "LIBMARIADB_OPENSSL_DLL=dist/external/libmariadb.dll" >> "$GITHUB_ENV"
 
       - name: Build native TypeEasy and package folder
         shell: msys2 {0}
