@@ -2,9 +2,10 @@
  *
  * En MSYS2 no instalamos libpq ni freetds para mantener el instalador ligero
  * de la primera release (v0.0.1). El interprete sigue funcionando para
- * todo lo demas (MySQL incluido); solo postgres_*/sqlserver_* devuelven
- * "no soportado" en esta plataforma. En Linux el Makefile sigue compilando
- * los bridges reales (postgres_bridge.c / sqlserver_bridge.c).
+ * todo lo demas (MySQL incluido); solo las funciones postgres_xxx y
+ * sqlserver_xxx devuelven "no soportado" en esta plataforma.
+ * En Linux el Makefile sigue compilando los bridges reales
+ * (postgres_bridge.c / sqlserver_bridge.c).
  */
 
 #include <stdio.h>
