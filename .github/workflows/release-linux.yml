@@ -1,0 +1,68 @@
+name: Release - Linux Installer
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version a publicar (sin prefijo v)"
+        required: false
+        default: "0.0.1"
+
+jobs:
+  release-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_NAME}" == v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="0.0.1"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version objetivo: ${VERSION}"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential flex bison pkg-config \
+            libmariadb-dev libpq-dev freetds-dev \
+            dpkg-dev
+
+      - name: Build native TypeEasy
+        run: bash scripts/build_native_linux.sh
+
+      - name: Package tar.gz and .deb
+        run: bash scripts/package_linux_release.sh "${{ steps.meta.outputs.version }}"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: typeeasy-linux-v${{ steps.meta.outputs.version }}
+          path: |
+            dist/linux/TypeEasy-${{ steps.meta.outputs.version }}-linux-amd64.tar.gz
+            dist/linux/typeeasy_${{ steps.meta.outputs.version }}_amd64.deb
+            dist/linux/SHA256SUMS-${{ steps.meta.outputs.version }}.txt
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/linux/TypeEasy-${{ steps.meta.outputs.version }}-linux-amd64.tar.gz
+            dist/linux/typeeasy_${{ steps.meta.outputs.version }}_amd64.deb
+            dist/linux/SHA256SUMS-${{ steps.meta.outputs.version }}.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true

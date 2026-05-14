@@ -1,0 +1,89 @@
+name: Release - Windows Installer
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version a publicar (sin prefijo v)"
+        required: false
+        default: "0.0.1"
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: meta
+        shell: pwsh
+        run: |
+          $eventName = "${{ github.event_name }}"
+          $refName = "${{ github.ref_name }}"
+          $inputVersion = "${{ github.event.inputs.version }}"
+
+          if ($eventName -eq "push" -and $refName.StartsWith("v")) {
+            $version = $refName.Substring(1)
+          } elseif (-not [string]::IsNullOrWhiteSpace($inputVersion)) {
+            $version = $inputVersion
+          } else {
+            $version = "0.0.1"
+          }
+
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Version objetivo: $version"
+
+      - name: Setup MSYS2 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-flex
+            mingw-w64-x86_64-bison
+            mingw-w64-x86_64-libmariadbclient
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-make
+
+      - name: Build native TypeEasy and package folder
+        shell: msys2 {0}
+        run: |
+          bash scripts/build_native_windows.sh
+          bash scripts/package_windows_release.sh "${{ steps.meta.outputs.version }}"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+
+      - name: Build installer and hashes
+        shell: pwsh
+        run: |
+          .\scripts\build_windows_installer.ps1 -Version "${{ steps.meta.outputs.version }}"
+          .\scripts\write_release_hashes.ps1 -Version "${{ steps.meta.outputs.version }}"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: typeeasy-windows-v${{ steps.meta.outputs.version }}
+          path: |
+            dist/windows/TypeEasy-${{ steps.meta.outputs.version }}-win64.zip
+            dist/windows/TypeEasy-Setup-v${{ steps.meta.outputs.version }}.exe
+            dist/windows/SHA256SUMS-${{ steps.meta.outputs.version }}.txt
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/windows/TypeEasy-${{ steps.meta.outputs.version }}-win64.zip
+            dist/windows/TypeEasy-Setup-v${{ steps.meta.outputs.version }}.exe
+            dist/windows/SHA256SUMS-${{ steps.meta.outputs.version }}.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true
