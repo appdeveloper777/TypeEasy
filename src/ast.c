@@ -72,11 +72,31 @@ void te_capture_error(int line, const char *msg, const char *near) {
 /* Detección portable de número de CPUs (sysconf no existe en MSYS2/mingw). */
 #if defined(_WIN32)
 #  include <windows.h>
+#  include <io.h>
 static inline long te_nprocs_online(void) {
     SYSTEM_INFO si;
     GetSystemInfo(&si);
     return (long)si.dwNumberOfProcessors;
 }
+/* mingw no trae pread(); emulamos con ReadFile + OVERLAPPED (thread-safe,
+ * no toca el file pointer global). fd es un descriptor de CRT, lo
+ * convertimos a HANDLE Win32. */
+#  include <sys/types.h>
+static inline ssize_t te_pread(int fd, void *buf, size_t count, off_t offset) {
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    OVERLAPPED ov; memset(&ov, 0, sizeof(ov));
+    ov.Offset     = (DWORD)((unsigned long long)offset & 0xFFFFFFFFu);
+    ov.OffsetHigh = (DWORD)(((unsigned long long)offset >> 32) & 0xFFFFFFFFu);
+    DWORD got = 0;
+    if (!ReadFile(h, buf, (DWORD)count, &got, &ov)) {
+        DWORD e = GetLastError();
+        if (e == ERROR_HANDLE_EOF) return 0;
+        return -1;
+    }
+    return (ssize_t)got;
+}
+#  define pread(fd, buf, count, off) te_pread((fd), (buf), (count), (off))
 #else
 #  include <unistd.h>
 static inline long te_nprocs_online(void) {
