@@ -69,6 +69,22 @@ void te_capture_error(int line, const char *msg, const char *near) {
 #define TE_HAS_PTHREAD 0
 #endif
 
+/* Detección portable de número de CPUs (sysconf no existe en MSYS2/mingw). */
+#if defined(_WIN32)
+#  include <windows.h>
+static inline long te_nprocs_online(void) {
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return (long)si.dwNumberOfProcessors;
+}
+#else
+#  include <unistd.h>
+static inline long te_nprocs_online(void) {
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return (n > 0) ? n : 1;
+}
+#endif
+
 #if defined(__AVX2__)
 #include <immintrin.h>
 #define TE_HAS_AVX2 1
@@ -9343,7 +9359,7 @@ static char *csv_read_file(const char *filename, size_t *out_len, int *out_is_mm
 #if TE_HAS_PTHREAD
     /* Múltiples pread paralelos saturan el queue 9P de WSL2 → mayor throughput.
      * 4 threads = sweet spot para bind-mount Windows→WSL2→Docker. */
-    long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+    long ncpu = te_nprocs_online();
     int nio = (int)ncpu;
     if (nio > 4) nio = 4;
     if (nio < 1) nio = 1;
@@ -10603,7 +10619,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
     if (forced == 0) {
         can_parallel = 0;
     } else if (len - pos > (256u * 1024u)) {
-        long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+        long ncpu = te_nprocs_online();
         if (ncpu < 1) ncpu = 1;
         /* Cap adaptativo según tamaño del archivo.
          * Re-medido mayo 2026 (best-of-30): el sweet spot real es
