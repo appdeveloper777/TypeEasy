@@ -45,11 +45,12 @@ jobs:
           update: true
           install: >-
             mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-flex
-            mingw-w64-x86_64-bison
             mingw-w64-x86_64-libmariadbclient
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-make
+            flex
+            bison
+            make
 
       - name: Build native TypeEasy and package folder
         shell: msys2 {0}
