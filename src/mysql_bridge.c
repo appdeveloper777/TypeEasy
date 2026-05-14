@@ -556,18 +556,45 @@ void native_mysql_connect(ASTNode* args) {
     
     MYSQL* conn = mysql_init(NULL);
     if (!conn) {
-        //printf("[MySQL] Error: mysql_init failed\n"); fflush(stdout);
+        fprintf(stderr, "[MySQL] Error: mysql_init failed\n"); fflush(stderr);
         ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
         return;
     }
-    
-    // Habilitar SSL (necesario para TiDB Cloud y otros servicios seguros)
+
+    /* TLS: forzar SSL pero NO verificar el cert del servidor.
+     * Razon: el instalador de Windows no bundlea un CA bundle, asi que
+     * con verificacion estricta servicios como TiDB Cloud / PlanetScale
+     * fallarian con "SSL connection error: certificate verify failed".
+     * Quien necesite verificacion estricta puede setear las env vars de
+     * libmariadb (MARIADB_TLS_VERIFY_SERVER_CERT=1, MARIADB_TLS_CA_FILE=...)
+     * antes de ejecutar typeeasy, o llamar mysql_options manualmente
+     * desde un plugin nativo. Para uso "out of the box" priorizamos
+     * "funciona contra cualquier servicio TLS" sobre "MITM-proof". */
+    /* unsigned char es ABI-compatible con my_bool en libmysqlclient y
+     * libmariadb (ambos lo definen como char). Evita depender del typedef
+     * que cambio de nombre entre versiones. */
+#ifdef MYSQL_OPT_SSL_ENFORCE
+    {
+        unsigned char ssl_on = 1;
+        mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &ssl_on);
+    }
+#endif
+#ifdef MYSQL_OPT_SSL_VERIFY_SERVER_CERT
+    {
+        unsigned char verify_off = 0;
+        mysql_options(conn, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify_off);
+    }
+#endif
+    /* Llamada legacy: con CA NULL libmariadb usa OpenSSL sin pinning. */
     mysql_ssl_set(conn, NULL, NULL, NULL, NULL, NULL);
 
     if (!mysql_real_connect(conn, host, user, pass, db, port, NULL, CLIENT_SSL)) {
-        //printf("[MySQL] Error de conexión: %s\n", mysql_error(conn)); fflush(stdout);
+        unsigned int err_no = mysql_errno(conn);
+        const char* err_msg = mysql_error(conn);
+        fprintf(stderr, "[MySQL] Error de conexion (errno=%u): %s\n",
+                err_no, err_msg ? err_msg : "(sin mensaje)"); fflush(stderr);
         ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
