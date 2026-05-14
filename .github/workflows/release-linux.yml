@@ -45,7 +45,7 @@ jobs:
             bash -c "
               apt-get update &&
               apt-get install -y --no-install-recommends \
-                flex bison libssl-dev default-libmysqlclient-dev \
+                flex bison libfl-dev libssl-dev default-libmysqlclient-dev \
                 libcurl4-openssl-dev libpq-dev freetds-dev &&
               make -C /app/src clean &&
               make -C /app/src typeeasy

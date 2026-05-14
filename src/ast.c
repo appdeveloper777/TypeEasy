@@ -9290,6 +9290,7 @@ static void *csv_pread_io_worker(void *p) {
 
 /* Forward declare: definida más abajo (mmap-based loader). */
 static char *csv_mmap_file(const char *filename, size_t *out_len);
+static char *csv_read_all(FILE *fp, size_t *out_len);
 
 static char *csv_read_file(const char *filename, size_t *out_len, int *out_is_mmap) {
     if (out_is_mmap) *out_is_mmap = 0;
