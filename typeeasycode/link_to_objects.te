@@ -13,6 +13,17 @@ class Producto {
   }
 }
 
+class FiltroProducto {
+      id: int;
+      usuario: string;
+      email: string;
+    __constructor(_id: int, _usuario: string, _email: string) {
+        this.id = _id;
+        this.usuario = _usuario;
+        this.email = _email;
+    }
+}
+
 let productos_del_papa_leon = [
     new Producto("Chocolate", 1),
     new Producto("Panetón", 2),
@@ -28,48 +39,35 @@ foreach (let item in filtrados) {
     item.Mostrar();    
 }
 
-// =====================================================
-// Conexión a MySQL (XAMPP en host Windows, puerto 3308)
-// =====================================================
-let mysql_conn = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
-let mysql_result = new mysql_query(mysql_conn, "SELECT nombre, precio FROM productos LIMIT 20", "json");
-print("Productos desde MySQL:");
-println(mysql_result);
-mysql_close(mysql_conn);
+string host = "gateway01.us-east-1.prod.aws.tidbcloud.com";
+    string user = "2XCY4FHDYiMMcdi.root";
+    string pass = "dMal8ex6FlLgprno";
+    string db   = "test";
+    int port = 4000;
 
-// =====================================================
-// Conexión a PostgreSQL (host Windows, puerto 5432)
-// =====================================================
-let pg_conn = new postgres_connect("host.docker.internal", "postgres", "postgres", "meri", 5432);
-let pg_result = new postgres_query(pg_conn, "SELECT nombre, precio FROM productos LIMIT 20", "json");
-print("Productos desde PostgreSQL:");
-println(pg_result);
-postgres_close(pg_conn);
+     // TiDB Cloud requiere TLS (servicio cloud detras de NLB de AWS).
+     // Pasar { "tls": 1 } activa TLS 1.2 en el cliente.
+     let conn_id = new mysql_connect(host, user, pass, db, port, { "tls": 1 }); 
 
-// =====================================================
-// Conexión a SQL Server (host Windows, puerto 1433)
-// =====================================================
-let mssql_conn = new sqlserver_connect("host.docker.internal", "sa", "YourStrong!Pass", "meri", 1433);
-let mssql_result = new sqlserver_query(mssql_conn, "SELECT TOP 20 nombre, precio FROM productos", "json");
-print("Productos desde SQL Server:");
-println(mssql_result);
-sqlserver_close(mssql_conn);
-
-// =====================================================
-// Estilo Dapper: queries parametrizadas con @nombre
-// =====================================================
-let mysql_conn2 = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
-let dapper_result = new mysql_query(
-    mysql_conn2,
-    "SELECT nombre, precio FROM productos WHERE precio > @min AND nombre LIKE @pat",
-    { "@min": 1, "@pat": "%a%" },
-    "json"
+       var filtro = new FiltroProducto(1, "O'Reilly Book6", "test3");
+    let r6 = new mysql_query(
+    conn_id,
+    "INSERT INTO usuarios (usuario, email) VALUES (@usuario, @email)",
+      { "@usuario": "O'Reilly Book", "@email": "test9" }
 );
-print("Dapper-style MySQL:");
-println(dapper_result);
-mysql_close(mysql_conn2);
+    println("[r6_insert] ");
+    println(r6);
+    
+    string query = "SELECT * FROM usuarios WHERE Id > @min_id ORDER BY Id DESC LIMIT @lim";
+   
+    
+    let usuarios = new mysql_query(conn_id, query,
+        { "@min_id": 0, "@lim": 5 },
+        FiltroProducto);
 
-/*for (let _item in filtrados) {
-    print("Producto:");
-    _item.Mostrar();
-}*/
+    int count = usuarios.length;
+
+    for (let item in usuarios) {
+        println("Usuario ORM:");
+        println(item.usuario);
+    }
