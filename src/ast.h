@@ -294,6 +294,29 @@ ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id
 ASTNode *create_kv_pair_node(char *key, ASTNode *value);
 char* get_node_string(ASTNode *node);
 
+/* ------------------------------------------------------------------
+ * Prototipos faltantes usados por el parser (parser.y / parser.tab.c).
+ *
+ * CRITICO en Windows x64 (LLP64): sin estos prototipos, GCC asume
+ * `int (*)()` por la regla de "implicit function declaration" y
+ * trunca el puntero retornado a 32 bits → segfault al primer deref
+ * del nodo retornado (ej. `d->value = 1` justo despues de
+ * `create_var_decl_node`). Sintoma reportado en v0.0.1 del .exe Win64:
+ * cualquier `let`/`var`/`const` top-level crasheaba en parse-time.
+ * Mismo patron documentado previamente para `create_kv_pair_node`.
+ * ------------------------------------------------------------------ */
+ASTNode *create_var_decl_node(char *id, ASTNode *value);
+ASTNode *create_function_call_node(const char *funcName, ASTNode *args);
+ASTNode *create_string_node(char *value);
+ASTNode *create_if_node(ASTNode *condition, ASTNode *if_branch, ASTNode *else_branch);
+ASTNode *create_agent_node(char *name, ASTNode *body);
+ASTNode *create_listener_node(ASTNode *event_expr, ASTNode *body);
+ASTNode *create_bridge_node(char *name, ASTNode *call_expr_node);
+ASTNode *create_state_decl_node(char *name, ASTNode *value_expr);
+ASTNode *create_object_literal_node(ASTNode *kv_list);
+ASTNode *create_access_node(ASTNode *base, ASTNode *index_expr);
+ASTNode *create_method_call_node_alone(ASTNode *objectNode, const char *methodName, ASTNode *args);
+
 /* Inicializar el pool global de threads CSV.
  * Llamar desde main() antes de ejecutar el script TE.
  * n = número total de workers deseados (incluyendo el main thread). */

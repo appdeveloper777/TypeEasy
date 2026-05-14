@@ -63,6 +63,33 @@ jobs:
           bash scripts/build_native_windows.sh
           bash scripts/package_windows_release.sh "${{ steps.meta.outputs.version }}"
 
+      - name: Smoke test (let / var / const must not segfault)
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          # Regression guard: en v0.0.1 el .exe Win64 crasheaba al parsear
+          # cualquier `let`/`var`/`const` por falta de prototipos en ast.h
+          # (truncacion de puntero retornado a 32 bits en LLP64). Si esto
+          # vuelve a pasar, el build debe fallar antes de publicar.
+          BIN="dist/windows/TypeEasy-${TYPEEASY_VERSION}-win64/bin/typeeasy.exe"
+          if [ ! -x "$BIN" ]; then
+            echo "ERROR: no encuentro $BIN" >&2
+            ls -la dist/windows/ || true
+            exit 1
+          fi
+          mkdir -p .smoke
+          printf 'let n = 1;\nvar s = "hi";\nconst k = 7;\nprintln(n);\nprintln(s);\nprintln(k);\n' > .smoke/_smoke.te
+          out="$("$BIN" .smoke/_smoke.te 2>&1)"
+          echo "----- smoke output -----"
+          echo "$out"
+          echo "------------------------"
+          echo "$out" | grep -q "^1$" || { echo "FAIL: salida inesperada (let)"; exit 1; }
+          echo "$out" | grep -q "^hi$" || { echo "FAIL: salida inesperada (var)"; exit 1; }
+          echo "$out" | grep -q "^7$" || { echo "FAIL: salida inesperada (const)"; exit 1; }
+          echo "Smoke test OK"
+        env:
+          TYPEEASY_VERSION: ${{ steps.meta.outputs.version }}
+
       - name: Install Inno Setup
         shell: pwsh
         run: |
