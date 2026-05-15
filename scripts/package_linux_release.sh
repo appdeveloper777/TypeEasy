@@ -68,6 +68,20 @@ Flags utiles:
 Dependencias runtime (instalar en el host):
   sudo apt-get install -y libmariadb3 libpq5 libsybdb5 libssl3
 
+Correr como servicio (recomendado en produccion, instalado por el .deb):
+  # 1) Editar el archivo .te a servir y el host de bind
+  sudo vi /etc/default/typeeasy-api
+
+  # 2) Habilitar 1 o varias instancias (cada una en un puerto distinto)
+  sudo systemctl enable --now typeeasy-api@9001
+  sudo systemctl enable --now typeeasy-api@9002
+
+  # 3) Para escalar: poner nginx delante con load balancing
+  sudo cp /usr/share/typeeasy/nginx/typeeasy-api.conf \
+          /etc/nginx/sites-available/typeeasy-api
+  sudo ln -s /etc/nginx/sites-available/typeeasy-api /etc/nginx/sites-enabled/
+  sudo nginx -t && sudo systemctl reload nginx
+
 Este paquete corresponde a una release inicial (0.0.1).
 EOF
 
@@ -79,9 +93,26 @@ rm -rf "$DEB_DIR" "$DEB_FILE"
 mkdir -p "$DEB_DIR/DEBIAN" \
          "$DEB_DIR/usr/bin" \
          "$DEB_DIR/usr/share/typeeasy/examples" \
-         "$DEB_DIR/usr/share/doc/typeeasy"
+         "$DEB_DIR/usr/share/typeeasy/nginx" \
+         "$DEB_DIR/usr/share/doc/typeeasy" \
+         "$DEB_DIR/lib/systemd/system" \
+         "$DEB_DIR/etc/default"
 
 install -m 0755 "$BIN_PATH" "$DEB_DIR/usr/bin/typeeasy"
+
+# systemd unit (instanced) + defaults + nginx sample
+if [[ -f "$ROOT_DIR/installer/linux/typeeasy-api@.service" ]]; then
+  install -m 0644 "$ROOT_DIR/installer/linux/typeeasy-api@.service" \
+                  "$DEB_DIR/lib/systemd/system/typeeasy-api@.service"
+fi
+if [[ -f "$ROOT_DIR/installer/linux/typeeasy-api.default" ]]; then
+  install -m 0644 "$ROOT_DIR/installer/linux/typeeasy-api.default" \
+                  "$DEB_DIR/etc/default/typeeasy-api"
+fi
+if [[ -f "$ROOT_DIR/installer/linux/nginx/typeeasy-api.conf" ]]; then
+  install -m 0644 "$ROOT_DIR/installer/linux/nginx/typeeasy-api.conf" \
+                  "$DEB_DIR/usr/share/typeeasy/nginx/typeeasy-api.conf"
+fi
 
 if [[ -f "$ROOT_DIR/typeeasycode/crear_const_variable.te" ]]; then
   install -m 0644 "$ROOT_DIR/typeeasycode/crear_const_variable.te" \
@@ -114,6 +145,47 @@ Description: TypeEasy interpreter and framework
  Interprete y framework experimental escrito en C que permite crear
  sintaxis propias, scripts y endpoints REST sin depender de Docker.
 EOF
+
+# Marca /etc/default/typeeasy-api como conffile (no se sobreescribe en upgrades)
+cat > "$DEB_DIR/DEBIAN/conffiles" <<EOF
+/etc/default/typeeasy-api
+EOF
+
+# Hook post-install: systemd daemon-reload (no habilita ni arranca instancias automaticamente)
+cat > "$DEB_DIR/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+exit 0
+EOF
+chmod 0755 "$DEB_DIR/DEBIAN/postinst"
+
+# Hook pre-remove: detiene cualquier instancia activa de typeeasy-api@*
+cat > "$DEB_DIR/DEBIAN/prerm" <<'EOF'
+#!/bin/sh
+set -e
+if [ -d /run/systemd/system ]; then
+    for unit in $(systemctl list-units --no-legend 'typeeasy-api@*.service' 2>/dev/null | awk '{print $1}'); do
+        systemctl stop "$unit" >/dev/null 2>&1 || true
+        systemctl disable "$unit" >/dev/null 2>&1 || true
+    done
+fi
+exit 0
+EOF
+chmod 0755 "$DEB_DIR/DEBIAN/prerm"
+
+# Hook post-remove: daemon-reload tras desinstalar el unit
+cat > "$DEB_DIR/DEBIAN/postrm" <<'EOF'
+#!/bin/sh
+set -e
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+exit 0
+EOF
+chmod 0755 "$DEB_DIR/DEBIAN/postrm"
 
 if command -v dpkg-deb >/dev/null 2>&1; then
   dpkg-deb --build --root-owner-group "$DEB_DIR" "$DEB_FILE" >/dev/null

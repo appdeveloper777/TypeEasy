@@ -13,7 +13,7 @@
 endpoint {
     [HttpGet("/")]
     home() {
-        return json("{\"msg\":\"Hola desde TypeEasy --api\",\"rutas\":[\"/\",\"/ping\",\"/users/{id}\"]}");
+        return json("{\"msg\":\"Hola amigos desde TypeEasy --api\",\"rutas\":[\"/\",\"/ping\",\"/users/{id}\"]}");
     }
 
     [HttpGet("/ping")]
