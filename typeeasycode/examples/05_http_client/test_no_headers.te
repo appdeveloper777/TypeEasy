@@ -1,0 +1,16 @@
+print("test 1");
+let r1 = http_get("http://typeeasy:9000/ping");
+print(r1);
+
+print("test 2");
+let r2 = http_get("https://api.github.com/zen");
+print(r2);
+
+print("test 3");
+let body = "{\"hello\":\"world\"}";
+let r3 = http_post("http://typeeasy:9000/", body);
+print(r3);
+
+print("test 4");
+let r4 = http_request("GET", "http://typeeasy:9000/users/42");
+print(r4);

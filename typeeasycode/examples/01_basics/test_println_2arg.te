@@ -1,0 +1,1 @@
+println(write_file("a","b"))

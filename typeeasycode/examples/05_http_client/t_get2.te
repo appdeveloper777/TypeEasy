@@ -1,0 +1,2 @@
+let r = http_get("http://typeeasy:9000/ping", "User-Agent: TE");
+print(r);

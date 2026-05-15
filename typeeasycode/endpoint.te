@@ -28,4 +28,12 @@ endpoint {
         let body = concat("{\"id\":\"", id, "\",\"name\":\"Demo\"}");
         return json(body);
     }
+
+    [HttpPost("/echo")]
+    echo() {
+        let body = request_body();
+        let ct   = request_header("Content-Type");
+        let resp = concat("{\"received\":\"", body, "\",\"contentType\":\"", ct, "\"}");
+        return json(resp);
+    }
 }

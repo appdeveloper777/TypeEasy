@@ -1,0 +1,4 @@
+let body = "{\"name\":\"Ana\",\"edad\":30}";
+let headers = "Content-Type: application/json";
+let r = http_post("http://typeeasy:9000/echo", body, headers);
+println(r);

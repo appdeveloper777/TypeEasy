@@ -5,14 +5,16 @@
 endpoint {
     [HttpGet("/api/mysql/usuarios")]
     GetUsuariosMySQL() {
-        // Conexión a MySQL de XAMPP en la máquina host (Windows)
-        // host.docker.internal:3308 - puerto de XAMPP
+        // Conexión a MySQL/MariaDB de XAMPP en la máquina host (Windows).
+        // host.docker.internal -> resuelve al gateway gracias a `extra_hosts`
+        // en docker-compose.yml. Usuario dedicado `typeeasy`/`typeeasy`
+        // creado en phpMyAdmin con: GRANT ALL ON meri.* TO 'typeeasy'@'%'.
         string host = "host.docker.internal";
-        string user = "root";
-        string pass = "";
+        string user = "typeeasy";
+        string pass = "typeeasy";
         string db   = "meri";
-        int port = 3308;
-        string query = "SELECT * FROM users LIMIT 20";
+        int port = 3306;
+        string query = "SELECT * FROM bd_facutas_totales LIMIT 20";
         string format = "xml";
         
         let conn_id = new mysql_connect(host, user, pass, db, port);        
@@ -24,5 +26,7 @@ endpoint {
         
         // Retornar resultado como XML
         return xml(result);
+
+
     }
 }

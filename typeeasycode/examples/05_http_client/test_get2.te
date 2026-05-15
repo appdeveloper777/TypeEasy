@@ -1,0 +1,2 @@
+let r = http_get("https://api.github.com/zen", "User-Agent: TypeEasy");
+print(r);

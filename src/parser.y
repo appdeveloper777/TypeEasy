@@ -420,17 +420,26 @@ expression:
 ;
 
 var_decl:
-    LET IDENTIFIER ASSIGN IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN SEMICOLON
-      { ASTNode *listExpr = $6; ASTNode *lambda = $8; 
-        ASTNode *filterCall = create_list_function_call_node(listExpr, $4, lambda); 
-        filterCall->type = strdup("FILTER_CALL"); 
-        ASTNode* d = create_var_decl_node($2, filterCall); d->value = 1; /* let = immutable */ $$ = d; }
-
-  | VAR IDENTIFIER ASSIGN IDENTIFIER LPAREN expression COMMA lambda_expression RPAREN SEMICOLON
-      { ASTNode *listExpr = $6; ASTNode *lambda = $8;
-        ASTNode *filterCall = create_list_function_call_node(listExpr, $4, lambda);
-        filterCall->type = strdup("FILTER_CALL");
-        $$ = create_var_decl_node($2, filterCall); }
+    LET IDENTIFIER ASSIGN IDENTIFIER LPAREN expression_list RPAREN SEMICOLON
+      { ASTNode *args = $6; ASTNode *first = args; ASTNode *second = args ? args->right : NULL; ASTNode *third = second ? second->right : NULL;
+        ASTNode *call;
+        if (second && !third && second->type && strcmp(second->type, "LAMBDA") == 0 && (strcmp($4, "filter") == 0 || strcmp($4, "map") == 0)) {
+          args->right = NULL;
+          call = create_list_function_call_node(first, $4, second);
+        } else {
+          call = create_call_node($4, args);
+        }
+        ASTNode* d = create_var_decl_node($2, call); d->value = 1; /* let = immutable */ $$ = d; }
+  | VAR IDENTIFIER ASSIGN IDENTIFIER LPAREN expression_list RPAREN SEMICOLON
+      { ASTNode *args = $6; ASTNode *first = args; ASTNode *second = args ? args->right : NULL; ASTNode *third = second ? second->right : NULL;
+        ASTNode *call;
+        if (second && !third && second->type && strcmp(second->type, "LAMBDA") == 0 && (strcmp($4, "filter") == 0 || strcmp($4, "map") == 0)) {
+          args->right = NULL;
+          call = create_list_function_call_node(first, $4, second);
+        } else {
+          call = create_call_node($4, args);
+        }
+        $$ = create_var_decl_node($2, call); }
 
 
 
@@ -536,7 +545,6 @@ func_call_expr SEMICOLON { $$ = $1; }
 
 func_call_expr:
     IDENTIFIER LPAREN RPAREN { $$ = create_call_node($1, NULL); }
-    | IDENTIFIER LPAREN expression RPAREN { $$ = create_call_node($1, $3); }
     | IDENTIFIER LPAREN expression_list RPAREN { $$ = create_call_node($1, $3); }
     /* Fase 2: NEW IDENTIFIER (...) for non-class names is handled by the
      * `NEW IDENTIFIER LPAREN expression_list RPAREN` rule in `expression`
@@ -577,29 +585,11 @@ statement_list:
   ;
 
 expression_list:
-        IDENTIFIER                                { 
-            //printf("PARSER: expr_list -> IDENTIFIER\n"); 
-            fflush(stdout); $$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1); $$->id = strdup($1); }
-    | NUMBER                                    { 
-        //printf("PARSER: expr_list -> NUMBER\n"); 
-        fflush(stdout); $$ = create_ast_leaf("NUMBER", $1, NULL, NULL); }
-    | STRING_LITERAL                            { 
-        //printf("PARSER: expr_list -> STRING_LITERAL\n"); 
-        fflush(stdout); $$ = create_ast_leaf("STRING", 0, $1, NULL); }
-    | expression                                { 
-        //printf("PARSER: expr_list -> expression\n"); 
+        expression                                { 
         fflush(stdout); $$ = $1; }
-    | expression_list COMMA IDENTIFIER          { 
-       // printf("PARSER: expr_list -> list, IDENTIFIER\n");
-         fflush(stdout); ASTNode* id_node = create_ast_leaf("IDENTIFIER", 0, NULL, $3); id_node->id = strdup($3); $$ = add_statement($1, id_node); }
-    | expression_list COMMA NUMBER              { 
-        //printf("PARSER: expr_list -> list, NUMBER\n"); 
-        fflush(stdout); $$ = add_statement($1, create_ast_leaf("NUMBER", $3, NULL, NULL)); }
-    | expression_list COMMA STRING_LITERAL      { 
-        //printf("PARSER: expr_list -> list, STRING_LITERAL\n"); 
-        fflush(stdout); $$ = add_statement($1, create_ast_leaf("STRING", 0, $3, NULL)); }
     | expression_list COMMA expression          { 
-        //printf("PARSER: expr_list -> list, expression\n");
+         fflush(stdout); $$ = add_statement($1, $3); }
+    | expression_list COMMA lambda_expression   {
          fflush(stdout); $$ = add_statement($1, $3); }
   ;
 

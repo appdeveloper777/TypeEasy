@@ -66,7 +66,7 @@ Flags utiles:
   --help                 Lista todas las opciones
 
 Dependencias runtime (instalar en el host):
-  sudo apt-get install -y libmariadb3 libpq5 libsybdb5 libssl3
+  sudo apt-get install -y libmariadb3 libpq5 libsybdb5 libssl3 libcurl4
 
 Correr como servicio (recomendado en produccion, instalado por el .deb):
   # 1) Editar el archivo .te a servir y el host de bind
@@ -140,7 +140,7 @@ Priority: optional
 Architecture: ${ARCH}
 Maintainer: TypeEasy <noreply@typeeasy.dev>
 Installed-Size: ${INSTALLED_SIZE}
-Depends: libc6, libmariadb3, libpq5, libsybdb5, libssl3
+Depends: libc6, libmariadb3, libpq5, libsybdb5, libssl3, libcurl4, ca-certificates
 Description: TypeEasy interpreter and framework
  Interprete y framework experimental escrito en C que permite crear
  sintaxis propias, scripts y endpoints REST sin depender de Docker.

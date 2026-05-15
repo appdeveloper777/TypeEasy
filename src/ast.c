@@ -32,6 +32,12 @@
   #include <netdb.h>
 #endif
 
+/* libcurl optional: enabled with -DTE_HAVE_LIBCURL at compile time.
+ * Provides HTTPS + custom headers + arbitrary methods for http_*. */
+#ifdef TE_HAVE_LIBCURL
+  #include <curl/curl.h>
+#endif
+
 /* Ola 10: JIT availability — must be defined BEFORE any use further down. */
 #if defined(__linux__) && defined(__x86_64__)
 #include <sys/mman.h>
@@ -7159,6 +7165,113 @@ static char* te_http_request(const char *method, const char *url, const char *bo
     return out;
 }
 
+/* ─── HTTP client (libcurl backend, opcional) ───────────────────────────
+ * Si TE_HAVE_LIBCURL esta definido, te_http_do() rutea por libcurl
+ * (HTTPS + headers custom + cualquier metodo). Si no, cae al fallback
+ * te_http_request() que solo soporta HTTP plano sin headers.
+ *
+ * Formato de headers_str: lineas "Header: value" separadas por '\n'.
+ *   "Authorization: Bearer XXX\nX-Custom: 1"
+ */
+#ifdef TE_HAVE_LIBCURL
+struct te_curl_buf { char *p; size_t len, cap; };
+
+static size_t te_curl_write_cb(void *ptr, size_t sz, size_t nm, void *ud) {
+    struct te_curl_buf *b = (struct te_curl_buf*)ud;
+    size_t add = sz * nm;
+    if (b->len + add + 1 > b->cap) {
+        size_t nc = b->cap ? b->cap : 4096;
+        while (nc < b->len + add + 1) nc *= 2;
+        char *np = (char*)realloc(b->p, nc);
+        if (!np) return 0;
+        b->p = np; b->cap = nc;
+    }
+    memcpy(b->p + b->len, ptr, add);
+    b->len += add;
+    b->p[b->len] = 0;
+    return add;
+}
+
+static char* te_http_request_curl(const char *method, const char *url,
+                                   const char *body, const char *headers_str) {
+    if (!url) return NULL;
+    static int curl_inited = 0;
+    if (!curl_inited) { curl_global_init(CURL_GLOBAL_DEFAULT); curl_inited = 1; }
+    CURL *c = curl_easy_init();
+    if (!c) return NULL;
+    struct te_curl_buf buf = {0};
+    struct curl_slist *hdrs = NULL;
+    int caller_set_ctype = 0;
+
+    curl_easy_setopt(c, CURLOPT_URL, url);
+    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(c, CURLOPT_USERAGENT, "TypeEasy/1.0");
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, te_curl_write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &buf);
+    /* Por compatibilidad: aceptar certs autofirmados desactivado por default;
+     * si el usuario lo necesita puede setear TE_HTTP_INSECURE=1 en el env. */
+    if (getenv("TE_HTTP_INSECURE") && strcmp(getenv("TE_HTTP_INSECURE"), "1") == 0) {
+        curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 0L);
+    }
+
+    if (method && strcmp(method, "GET") != 0) {
+        curl_easy_setopt(c, CURLOPT_CUSTOMREQUEST, method);
+    }
+    if (body && *body) {
+        curl_easy_setopt(c, CURLOPT_POSTFIELDS, body);
+        curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
+    }
+
+    if (headers_str && *headers_str) {
+        const char *p = headers_str;
+        while (*p) {
+            const char *nl = strchr(p, '\n');
+            size_t L = nl ? (size_t)(nl - p) : strlen(p);
+            while (L > 0 && (p[L-1] == '\r' || p[L-1] == ' ' || p[L-1] == '\t')) L--;
+            if (L > 0) {
+                char *line = (char*)malloc(L + 1);
+                if (line) {
+                    memcpy(line, p, L); line[L] = 0;
+                    if (strncasecmp(line, "Content-Type:", 13) == 0) caller_set_ctype = 1;
+                    hdrs = curl_slist_append(hdrs, line);
+                    free(line);
+                }
+            }
+            if (!nl) break;
+            p = nl + 1;
+        }
+    }
+    /* Default Content-Type para POST/PUT/PATCH si caller no lo seteo. */
+    if (body && *body && !caller_set_ctype) {
+        hdrs = curl_slist_append(hdrs, "Content-Type: application/json");
+    }
+    if (hdrs) curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
+
+    CURLcode rc = curl_easy_perform(c);
+    if (hdrs) curl_slist_free_all(hdrs);
+    curl_easy_cleanup(c);
+    if (rc != CURLE_OK) {
+        if (buf.p) free(buf.p);
+        return NULL;
+    }
+    return buf.p ? buf.p : strdup("");
+}
+#endif /* TE_HAVE_LIBCURL */
+
+/* Wrapper unico que decide entre libcurl (full features) y fallback TCP. */
+static char* te_http_do(const char *method, const char *url,
+                         const char *body, const char *headers_str) {
+#ifdef TE_HAVE_LIBCURL
+    return te_http_request_curl(method, url, body, headers_str);
+#else
+    (void)headers_str;
+    return te_http_request(method, url, body);
+#endif
+}
+
 static int te_builtin_dispatch(ASTNode *node) {
     if (!node || !node->id) return 0;
     const char *fn = node->id;
@@ -7407,20 +7520,47 @@ static int te_builtin_dispatch(ASTNode *node) {
         return 1;
     }
     if (strcmp(fn, "http_get") == 0) {
-        char *url = a0 ? get_node_string(a0) : NULL;
-        char *body = url ? te_http_request("GET", url, NULL) : NULL;
+        /* http_get(url) | http_get(url, headers) */
+        char *url   = a0 ? get_node_string(a0) : NULL;
+        char *hdrs  = a1 ? get_node_string(a1) : NULL;
+        char *body  = url ? te_http_do("GET", url, NULL, hdrs) : NULL;
         if (url) free(url);
+        if (hdrs) free(hdrs);
         ASTNode *r = create_ast_leaf("STRING", 0, body ? body : "", NULL);
         if (body) free(body);
         add_or_update_variable("__ret__", r);
         return 1;
     }
     if (strcmp(fn, "http_post") == 0) {
+        /* http_post(url, body) | http_post(url, body, headers) */
         char *url  = a0 ? get_node_string(a0) : NULL;
         char *post = a1 ? get_node_string(a1) : NULL;
-        char *body = url ? te_http_request("POST", url, post ? post : "") : NULL;
+        ASTNode *a2 = a1 ? a1->right : NULL;
+        char *hdrs = a2 ? get_node_string(a2) : NULL;
+        char *body = url ? te_http_do("POST", url, post ? post : "", hdrs) : NULL;
         if (url) free(url);
         if (post) free(post);
+        if (hdrs) free(hdrs);
+        ASTNode *r = create_ast_leaf("STRING", 0, body ? body : "", NULL);
+        if (body) free(body);
+        add_or_update_variable("__ret__", r);
+        return 1;
+    }
+    if (strcmp(fn, "http_request") == 0) {
+        /* http_request(method, url) |
+         * http_request(method, url, body) |
+         * http_request(method, url, body, headers) */
+        char *method = a0 ? get_node_string(a0) : NULL;
+        char *url    = a1 ? get_node_string(a1) : NULL;
+        ASTNode *a2  = a1 ? a1->right : NULL;
+        ASTNode *a3  = a2 ? a2->right : NULL;
+        char *post   = a2 ? get_node_string(a2) : NULL;
+        char *hdrs   = a3 ? get_node_string(a3) : NULL;
+        char *body   = (method && url) ? te_http_do(method, url, post, hdrs) : NULL;
+        if (method) free(method);
+        if (url) free(url);
+        if (post) free(post);
+        if (hdrs) free(hdrs);
         ASTNode *r = create_ast_leaf("STRING", 0, body ? body : "", NULL);
         if (body) free(body);
         add_or_update_variable("__ret__", r);

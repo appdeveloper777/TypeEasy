@@ -67,7 +67,7 @@ WORKDIR /app
 
 # Instala las librerías SSL de runtime Y la librería de Flex (libfl2)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libssl3 libfl2 default-libmysqlclient-dev libpq5 libsybdb5 && \
+    apt-get install -y --no-install-recommends libssl3 libfl2 default-libmysqlclient-dev libpq5 libsybdb5 libcurl4 ca-certificates && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -96,7 +96,7 @@ WORKDIR /typeeasy
 
 # Instala la librería 'libfl' que falta (+ gdbserver para depuración remota)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libfl2 default-libmysqlclient-dev libpq5 libsybdb5 libssl3 wabt gdbserver && \
+    apt-get install -y --no-install-recommends libfl2 default-libmysqlclient-dev libpq5 libsybdb5 libssl3 libcurl4 ca-certificates wabt gdbserver && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

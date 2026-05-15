@@ -1,0 +1,3 @@
+let body = "hello";
+let r = http_post("http://typeeasy:9000/", body);
+print(r);

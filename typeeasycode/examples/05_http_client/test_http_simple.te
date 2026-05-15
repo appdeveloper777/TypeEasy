@@ -1,0 +1,2 @@
+let r1 = http_get("http://typeeasy:9000/ping");
+print(r1);

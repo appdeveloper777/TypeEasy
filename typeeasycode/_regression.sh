@@ -1,54 +1,57 @@
 #!/bin/bash
+# Regression suite. Corre desde el container typeeasy con cwd=/code (= typeeasycode/).
+# Tras la reorganizacion de mayo 2026 los tests viven bajo examples/<categoria>/.
 PASS=0; FAIL=0; SKIP=0
 run_test() {
   local f="$1"; local expect="$2"
   local out
-  out=$(./typeeasy "/code/$f" 2>/dev/null)
+  out=$(/typeeasy/typeeasy "/code/$f" 2>/dev/null)
   local code=$?
   if [ $code -ne 0 ]; then
-    echo "FAIL [exit=$code] $f"
-    FAIL=$((FAIL+1))
+    echo "FAIL [exit=$code] $f"; FAIL=$((FAIL+1))
   elif [ -n "$expect" ] && [ "$out" != "$expect" ]; then
-    echo "FAIL [expected='$expect' got='$out'] $f"
-    FAIL=$((FAIL+1))
+    echo "FAIL [expected='$expect' got='$out'] $f"; FAIL=$((FAIL+1))
   else
-    echo "PASS $f"
-    PASS=$((PASS+1))
+    echo "PASS $f"; PASS=$((PASS+1))
   fi
 }
 
-# Core language tests
-run_test "test_arr.te"       ""
-run_test "test_arr_mut.te"   ""
-run_test "test_compound.te"  ""
-run_test "test_concat.te"    ""
-run_test "test_if.te"        ""
-run_test "test_logic.te"     ""
-run_test "test_map.te"       ""
-run_test "test_map_has.te"   ""
-run_test "test_math1.te"     ""
-run_test "test_null.te"      ""
-run_test "test_nullaware.te" ""
-run_test "test_print.te"     ""
-run_test "test_try.te"       ""
-run_test "test_while.te"     ""
-run_test "test_interp.te"    ""
-run_test "test_stdlib.te"    ""
-run_test "test_let_objeto.te" ""
-run_test "test_let_string.te" ""
-run_test "test_method_return.te" ""
-run_test "test_producto_methods.te" ""
-run_test "crear_clase.te"    ""
+# 01_basics
+for t in test_arr test_arr_mut test_compound test_concat test_if test_logic test_map test_map_has test_math1 test_null test_nullaware test_print test_while test_let_objeto test_let_string test_min2 bucle_for unario_menos; do
+  run_test "examples/01_basics/${t}.te" ""
+done
 
-# CSV tests
-run_test "test_csv_check.te" "10000
-Panetón_0,2"
-run_test "bench_csv_big.te"  "200000"
+# 02_oop
+for t in crear_clase herencia_de_clases test_method_return test_producto_methods; do
+  run_test "examples/02_oop/${t}.te" ""
+done
+
+# 03_functional
+for t in lambdas_higher_order _test_filter _test_filter2 _test_filter3; do
+  run_test "examples/03_functional/${t}.te" ""
+done
+
+# 04_stdlib_io
+for t in stdlib_json_file_http test_stdlib test_interp test_try smoke_test; do
+  run_test "examples/04_stdlib_io/${t}.te" ""
+done
+
+# 05_http_client (requiere typeeasy --api en :9000)
+for t in test_http_full test_post_echo t_get2 t_post2 t_wf2; do
+  run_test "examples/05_http_client/${t}.te" ""
+done
+
+# 06_csv
+for t in test_csv_check _test_access; do
+  run_test "examples/06_csv/${t}.te" ""
+done
+
+# Raiz: referenciados externamente
 run_test "link_to_objects.te" ""
 
-# Filter tests
-run_test "_test_filter.te"   ""
-run_test "_test_access.te"   ""
+# 08_bytecode
+run_test "examples/08_bytecode/bytecode_ext_mod_bit_shift.te" ""
 
 echo ""
 echo "=== TOTAL: PASS=$PASS FAIL=$FAIL SKIP=$SKIP ==="
+exit $FAIL

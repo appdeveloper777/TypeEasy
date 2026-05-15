@@ -1,0 +1,22 @@
+print("=== test 1: HTTP local (typeeasy --api en :9000) ===");
+let r1 = http_get("http://typeeasy:9000/ping");
+print(r1);
+
+print("");
+print("=== test 2: HTTPS externo + header User-Agent custom ===");
+let r2 = http_get("https://api.github.com/zen", "User-Agent: TypeEasy-test");
+print(r2);
+
+print("");
+print("=== test 3: http_post local con header custom ===");
+let body = "{\"hello\":\"world\"}";
+let r3 = http_post("http://typeeasy:9000/", body, "X-Test: 1");
+print(r3);
+
+print("");
+print("=== test 4: http_request GET con path param ===");
+let r4 = http_request("GET", "http://typeeasy:9000/users/42");
+print(r4);
+
+print("");
+print("=== done ===");

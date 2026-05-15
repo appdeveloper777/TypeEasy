@@ -1,0 +1,13 @@
+println("=== Test 1: GET local ===");
+println(http_get("http://typeeasy:9000/ping"));
+
+println("=== Test 2: HTTPS GET con header ===");
+println(http_get("https://api.github.com/zen", "User-Agent: TypeEasy-test"));
+
+println("=== Test 3: POST con body+header ===");
+println(http_post("http://typeeasy:9000/", "{\"hello\":\"world\"}", "X-Test: 1"));
+
+println("=== Test 4: http_request GET ===");
+println(http_request("GET", "http://typeeasy:9000/users/42"));
+
+println("=== FIN ===");
