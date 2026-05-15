@@ -22,6 +22,10 @@ services:
     image: typeeasy-api
     ports:
       - "8080:8080"
+    extra_hosts:
+      # Asegura que `host.docker.internal` resuelva al gateway IPv4 del host
+      # (necesario para conectar a XAMPP MySQL en Windows desde el container).
+      - "host.docker.internal:host-gateway"
     environment:
       - TYPEEASY_DEBUG=0
       # --- CSV reader tuning (opcional) ---
@@ -54,6 +58,10 @@ services:
     command: ["--api", "endpoint.te", "--port", "9000"]
     ports:
       - "9000:9000"
+    extra_hosts:
+      # Permite alcanzar XAMPP MySQL (y otros servicios del host Windows)
+      # via `host.docker.internal` con IPv4 estable.
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./typeeasycode:/code
     environment:
