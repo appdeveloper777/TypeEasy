@@ -65,7 +65,7 @@ print("¡Hola, mundo!");
 2. Construye y ejecuta:
 
 ```bash
-docker compose build
+docker compose up -d --build typeeasy
 docker compose run --rm typeeasy hola.te
 ```
 
