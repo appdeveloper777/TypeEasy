@@ -258,33 +258,30 @@ Options:
     fi
   fi
 
-  # --- Auto-regenerate OpenAPI spec + Swagger UI (no extra command needed) ---
+  # --- Clean up any legacy auto-generated docs files from earlier versions ---
+  # The TypeEasy binary already serves an interactive Swagger UI at /, so the
+  # old apis/_swagger_docs.te file is unnecessary and would only pollute the
+  # routes list. Remove it silently if present.
+  rm -f ./apis/_swagger_docs.te 2>/dev/null || true
+
   local docs_host="$host"
   [[ "$docs_host" == "0.0.0.0" ]] && docs_host="localhost"
-  if [[ -d "$apis_dir" ]] && ls "$apis_dir"/*.te >/dev/null 2>&1; then
-    TYPEEASY_DOCS_PORT="$port" TYPEEASY_DOCS_HOST="$docs_host" \
-      cmd_docs >/dev/null 2>&1 || true
-  fi
+  local docs_url="http://$docs_host:$port/"
 
   # --- Banner ---
   local hr_tag; [[ "$hotreload" == "1" ]] && hr_tag="ON" || hr_tag="OFF"
   local mode_tag; [[ "$env_mode" == "prod" ]] && mode_tag="PROD (watchdog, auto-restart)" || mode_tag="DEV"
-  local docs_url=""
-  if [[ -f ./apis/_swagger_docs.te ]]; then
-    docs_url="http://$docs_host:$port/"
-  fi
   echo "============================================================"
   echo "  TypeEasy serve  [$mode_tag]"
   echo "  apis:       $apis_dir"
   echo "  bind:       http://$host:$port"
   echo "  workers:    $workers"
   echo "  hot-reload: $hr_tag"
-  echo "  openapi:    http://$docs_host:$port/openapi.json"
-  [[ -n "$docs_url" ]] && echo "  swagger UI: $docs_url"
+  echo "  swagger UI: $docs_url"
   echo "============================================================"
 
   # --- Auto-open Swagger UI in browser (dev only, native branch) ---
-  if [[ "$env_mode" == "dev" && $use_docker -eq 0 && -n "$docs_url" && -z "${TYPEEASY_NO_OPEN:-}" ]]; then
+  if [[ "$env_mode" == "dev" && $use_docker -eq 0 && -z "${TYPEEASY_NO_OPEN:-}" ]]; then
     (
       sleep 1
       if command -v cmd.exe >/dev/null 2>&1; then
@@ -466,12 +463,11 @@ cmd_service() {
 }
 
 # ============================================================================
-# docs — Generate OpenAPI 3.1 spec + Swagger UI viewer
+# docs — Open the built-in Swagger UI (served by the TypeEasy binary at /)
 # ============================================================================
-# Parses apis/*.te looking for [HttpVerb("/path")] + funcname(args) and emits:
-#   apis/_swagger_docs.te   ← endpoint GET /openapi.json (served by TypeEasy)
-#   docs/index.html         ← Swagger UI from CDN, fetches /openapi.json
-# Open ./docs/index.html in your browser. CORS is enabled on the server.
+# The TypeEasy server already serves an interactive Swagger UI at the root
+# path. This command just removes any legacy generated files and opens the
+# browser at http://host:port/.
 cmd_docs() {
   require_project
 
@@ -482,222 +478,36 @@ cmd_docs() {
     *) die "Unknown flag: $1 (try: typeeasy docs [--clean])" ;;
   esac
 
+  # Always remove legacy auto-generated files (they were never wired into the
+  # server's request handlers and only confuse hot-reload).
+  rm -f ./apis/_swagger_docs.te ./docs/index.html 2>/dev/null || true
+
   if [[ $clean -eq 1 ]]; then
-    rm -f ./apis/_swagger_docs.te ./docs/index.html
-    info "Removed generated docs files."
+    info "Removed legacy docs files."
     return 0
   fi
 
-  [[ -d ./apis ]] || die "No ./apis/ directory found. Run 'typeeasy gen' first."
-
-  # Resolve host/port for the HTML viewer.
-  # cmd_serve can pre-set TYPEEASY_DOCS_HOST/PORT to keep docs in sync with
-  # whatever flags the user passed (--port, --host).
   local port host
-  port="${TYPEEASY_DOCS_PORT:-}"
-  if [[ -z "$port" ]]; then
-    port="$(toml_get env.dev port)"; [[ -z "$port" ]] && port="$(toml_get server port)"
-    [[ -z "$port" ]] && port="8080"
-  fi
-  host="${TYPEEASY_DOCS_HOST:-}"
-  if [[ -z "$host" ]]; then
-    host="$(toml_get env.dev host)"; [[ -z "$host" ]] && host="$(toml_get server host)"
-    [[ -z "$host" ]] && host="127.0.0.1"
-  fi
-  # 0.0.0.0 isn't reachable from a browser — rewrite to localhost
+  port="$(toml_get env.dev port)"; [[ -z "$port" ]] && port="$(toml_get server port)"
+  [[ -z "$port" ]] && port="8080"
+  host="$(toml_get env.dev host)"; [[ -z "$host" ]] && host="$(toml_get server host)"
+  [[ -z "$host" ]] && host="127.0.0.1"
   [[ "$host" == "0.0.0.0" ]] && host="localhost"
 
-  local project_name
-  project_name="$(toml_get project name)"; [[ -z "$project_name" ]] && project_name="TypeEasy API"
+  local url="http://${host}:${port}/"
+  info "Swagger UI is served by the TypeEasy server at: $url"
+  info "Make sure 'typeeasy serve' is running, then open the URL."
 
-  mkdir -p ./docs ./apis
-
-  # --- 1) Build OpenAPI 3.1 JSON from apis/*.te ---------------------------
-  local openapi_json
-  openapi_json="$(awk -v title="$project_name" '
-    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
-    function emit_path_param(name) {
-      return "{\"name\":\"" name "\",\"in\":\"path\",\"required\":true,\"schema\":{\"type\":\"string\"}}"
-    }
-    function emit_query_param(name) {
-      return "{\"name\":\"" name "\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"string\"}}"
-    }
-    function tag_from_path(p,    parts, n) {
-      sub(/^\//, "", p)
-      n = split(p, parts, "/")
-      if (parts[1] == "api" && n >= 2) return parts[2]
-      return parts[1]
-    }
-    function build_endpoint(method, path, fn, args,
-                            i, n, parts, body_props, params_arr,
-                            arg_name, path_params_set, requires_body, body_json,
-                            tmp, pname, already, out, eq) {
-      n = split(args, parts, /[ \t]*,[ \t]*/)
-      path_params_set = ""
-      tmp = path
-      while (match(tmp, /\{[^}]+\}/)) {
-        pname = substr(tmp, RSTART+1, RLENGTH-2)
-        path_params_set = path_params_set "|" pname "|"
-        tmp = substr(tmp, RSTART+RLENGTH)
-      }
-      params_arr = ""
-      body_props = ""
-      requires_body = (method == "POST" || method == "PUT" || method == "PATCH")
-      for (i = 1; i <= n; i++) {
-        arg_name = trim(parts[i])
-        if (arg_name == "") continue
-        if (index(path_params_set, "|" arg_name "|") > 0) {
-          if (params_arr != "") params_arr = params_arr ","
-          params_arr = params_arr emit_path_param(arg_name)
-        } else if (requires_body) {
-          if (body_props != "") body_props = body_props ","
-          body_props = body_props "\"" arg_name "\":{\"type\":\"string\"}"
-        } else {
-          if (params_arr != "") params_arr = params_arr ","
-          params_arr = params_arr emit_query_param(arg_name)
-        }
-      }
-      tmp = path
-      while (match(tmp, /\{[^}]+\}/)) {
-        pname = substr(tmp, RSTART+1, RLENGTH-2)
-        already = (index(params_arr, "\"name\":\"" pname "\"") > 0)
-        if (!already) {
-          if (params_arr != "") params_arr = params_arr ","
-          params_arr = params_arr emit_path_param(pname)
-        }
-        tmp = substr(tmp, RSTART+RLENGTH)
-      }
-      body_json = ""
-      if (requires_body && body_props != "") {
-        body_json = ",\"requestBody\":{\"required\":true,\"content\":{\"application/json\":{\"schema\":{\"type\":\"object\",\"properties\":{" body_props "}}}}}"
-      }
-      out = "\"" tolower(method) "\":{"
-      out = out "\"summary\":\"" fn "\","
-      out = out "\"operationId\":\"" tolower(method) "_" fn "\","
-      out = out "\"tags\":[\"" tag_from_path(path) "\"],"
-      out = out "\"parameters\":[" params_arr "]"
-      out = out body_json
-      out = out ",\"responses\":{\"200\":{\"description\":\"OK\",\"content\":{\"application/json\":{}}}}"
-      out = out "}"
-      return out
-    }
-    BEGIN { pending_method=""; pending_path=""; ec=0 }
-    FNR == 1 { skip_file = (FILENAME ~ /_swagger_docs\.te$/) ? 1 : 0 }
-    skip_file { next }
-    {
-      line = $0
-      ix = index(line, "//"); if (ix > 0) line = substr(line, 1, ix-1)
-      if (match(line, /\[Http(Get|Post|Put|Delete|Patch)\("[^"]+"\)\]/)) {
-        m = substr(line, RSTART, RLENGTH)
-        if (match(m, /Http[A-Za-z]+/)) {
-          pending_method = toupper(substr(m, RSTART+4, RLENGTH-4))
-        }
-        if (match(m, /"[^"]+"/)) {
-          pending_path = substr(m, RSTART+1, RLENGTH-2)
-        }
-        next
-      }
-      if (pending_method != "" && match(line, /[A-Za-z_][A-Za-z_0-9]*[ \t]*\([^)]*\)/)) {
-        decl = substr(line, RSTART, RLENGTH)
-        eq = index(decl, "(")
-        fn = trim(substr(decl, 1, eq-1))
-        args = substr(decl, eq+1)
-        sub(/\).*/, "", args)
-        endpoints[++ec] = pending_method "\x01" pending_path "\x01" fn "\x01" args
-        pending_method = ""; pending_path = ""
-      }
-    }
-    END {
-      printf "{\"openapi\":\"3.1.0\","
-      printf "\"info\":{\"title\":\"%s\",\"version\":\"1.0.0\"},", title
-      printf "\"paths\":{"
-      for (i = 1; i <= ec; i++) {
-        split(endpoints[i], a, "\x01")
-        paths_methods[a[2]] = paths_methods[a[2]] ((paths_methods[a[2]] != "") ? "," : "") build_endpoint(a[1], a[2], a[3], a[4])
-        seen_path[a[2]] = 1
-      }
-      first = 1
-      for (p in seen_path) {
-        if (!first) printf ","
-        first = 0
-        printf "\"%s\":{%s}", p, paths_methods[p]
-      }
-      printf "}}"
-    }
-  ' ./apis/*.te 2>/dev/null)"
-
-  [[ -n "$openapi_json" ]] || die "No endpoints found in ./apis/*.te"
-
-  # --- 2) Write apis/_swagger_docs.te with embedded JSON + Swagger UI HTML ---
-  # Two endpoints: GET /openapi.json (spec) + GET /docs (Swagger UI page).
-  # The server detects <!DOCTYPE html as text/html so the UI renders in-browser.
-  local escaped_json
-  escaped_json="$(printf '%s' "$openapi_json" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-
-  # Build Swagger UI HTML pointing to relative /openapi.json (works regardless of host/port)
-  local swagger_html
-  swagger_html='<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><title>'"${project_name}"' — API Docs</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"/><style>body{margin:0;background:#fafafa}</style></head><body><div id="swagger-ui"></div><script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script><script>window.ui=SwaggerUIBundle({url:"/openapi.json",dom_id:"#swagger-ui",deepLinking:true,presets:[SwaggerUIBundle.presets.apis]});</script></body></html>'
-  local escaped_html
-  escaped_html="$(printf '%s' "$swagger_html" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-
-  cat > ./apis/_swagger_docs.te <<TE
-/********************************************************************
- * AUTO-GENERATED by 'typeeasy docs' — do not edit by hand.
- * Regenerate with: typeeasy docs
- * Remove with:     typeeasy docs --clean
- ********************************************************************/
-
-endpoint {
-
-  [HttpGet("/openapi.json")]
-  openapi_spec() {
-      return json("${escaped_json}");
-  }
-
-  [HttpGet("/")]
-  swagger_ui() {
-      // Body starts with <!DOCTYPE html → server emits text/html content-type
-      return json("${escaped_html}");
-  }
+  if [[ -z "${TYPEEASY_NO_OPEN:-}" ]]; then
+    if command -v cmd.exe >/dev/null 2>&1; then
+      cmd.exe /c start "" "$url" >/dev/null 2>&1 || true
+    elif command -v xdg-open >/dev/null 2>&1; then
+      xdg-open "$url" >/dev/null 2>&1 || true
+    elif command -v open >/dev/null 2>&1; then
+      open "$url" >/dev/null 2>&1 || true
+    fi
+  fi
 }
-TE
-
-  # --- 3) Write docs/index.html as fallback (file:// viewer) --------------
-  cat > ./docs/index.html <<HTML
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>${project_name} — API Docs</title>
-  <link rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
-  <style>body{margin:0;background:#fafafa}</style>
-</head>
-<body>
-  <div id="swagger-ui"></div>
-  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-  <script>
-    window.ui = SwaggerUIBundle({
-      url: 'http://${host}:${port}/openapi.json',
-      dom_id: '#swagger-ui',
-      deepLinking: true,
-      presets: [SwaggerUIBundle.presets.apis],
-    });
-  </script>
-</body>
-</html>
-HTML
-
-  info "Generated: ./apis/_swagger_docs.te    (endpoints / + /openapi.json)"
-  info "Generated: ./docs/index.html          (fallback file:// viewer)"
-  echo
-  echo "  Run:        typeeasy serve --dev"
-  echo "  Swagger UI: http://${host}:${port}/"
-  echo "  Raw spec:   http://${host}:${port}/openapi.json"
-  echo
-  echo "  To remove generated docs:  typeeasy docs --clean"
-}
-
 cmd_help() {
   cat <<EOF
 typeeasy $VERSION — CLI for TypeEasy projects
@@ -707,7 +517,7 @@ USAGE:
   typeeasy gen resource <name>    Generate CRUD endpoint + migration
   typeeasy gen endpoint <name>    Generate empty endpoint
   typeeasy serve [--dev|--prod]   Run server from typeeasy.toml
-  typeeasy docs [--clean]         Generate OpenAPI spec + Swagger UI viewer
+  typeeasy docs [--clean]         Open the built-in Swagger UI in browser
   typeeasy install --systemd      Install as systemd service (Linux, sudo)
   typeeasy deploy                 rsync apis/ to configured prod + restart
   typeeasy logs                   Tail journalctl for the service
