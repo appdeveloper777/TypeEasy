@@ -90,7 +90,7 @@ jobs:
           # cualquier `let`/`var`/`const` por falta de prototipos en ast.h
           # (truncacion de puntero retornado a 32 bits en LLP64). Si esto
           # vuelve a pasar, el build debe fallar antes de publicar.
-          BIN="dist/windows/TypeEasy-${TYPEEASY_VERSION}-win64/bin/typeeasy.exe"
+          BIN="dist/windows/TypeEasy-${TYPEEASY_VERSION}-win64/bin/typeeasy-bin.exe"
           if [ ! -x "$BIN" ]; then
             echo "ERROR: no encuentro $BIN" >&2
             ls -la dist/windows/ || true
