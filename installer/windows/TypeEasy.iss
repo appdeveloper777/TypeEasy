@@ -45,6 +45,12 @@ Name: "addtopath"; Description: "Agregar TypeEasy al PATH (recomendado)"; GroupD
 ;   {app}\cli\templates\        (scaffolds para 'typeeasy new')
 Source: "{#SourceDir}\\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
+[InstallDelete]
+; Limpia binarios .exe de versiones previas (<= 0.0.10 primera build) que
+; quedarian con prioridad sobre los .cmd nuevos via PATHEXT.
+Type: files; Name: "{app}\\bin\\typeeasy.exe"
+Type: files; Name: "{app}\\bin\\te.exe"
+
 [Icons]
 Name: "{autoprograms}\\TypeEasy"; Filename: "{app}\\bin\\typeeasy.cmd"; WorkingDir: "{app}"
 Name: "{autodesktop}\\TypeEasy"; Filename: "{app}\\bin\\typeeasy.cmd"; WorkingDir: "{app}"; Tasks: desktopicon
