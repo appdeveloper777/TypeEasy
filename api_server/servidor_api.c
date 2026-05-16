@@ -9,8 +9,12 @@
 #include <pthread.h>
 #ifdef _WIN32
 #include <windows.h>
+#ifdef _MSC_VER
+#define strncasecmp _strnicmp
+#endif
 #else
 #include <unistd.h>
+#include <strings.h>
 #endif
 #include "civetweb.h"
 #include <mysql/mysql.h>
@@ -470,7 +474,16 @@ static char *strip_leading_garbage(char *result, const char **content_type_out) 
     }
     char *p = result;
     while (*p && isspace((unsigned char)*p)) p++;
-    if (*p == '<') { *content_type_out = "application/xml"; return p; }
+    /* HTML detection (case-insensitive): <!DOCTYPE html...> or <html... */
+    if (*p == '<') {
+        if ((strncasecmp(p, "<!DOCTYPE html", 14) == 0) ||
+            (strncasecmp(p, "<html", 5) == 0)) {
+            *content_type_out = "text/html; charset=utf-8";
+            return p;
+        }
+        *content_type_out = "application/xml";
+        return p;
+    }
     char *ja = strstr(result, "[{");
     char *jo = strstr(result, "{\"");
     if (ja && (!jo || ja < jo)) { *content_type_out = "application/json"; return ja; }

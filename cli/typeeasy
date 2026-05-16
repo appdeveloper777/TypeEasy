@@ -269,13 +269,9 @@ Options:
   # --- Banner ---
   local hr_tag; [[ "$hotreload" == "1" ]] && hr_tag="ON" || hr_tag="OFF"
   local mode_tag; [[ "$env_mode" == "prod" ]] && mode_tag="PROD (watchdog, auto-restart)" || mode_tag="DEV"
-  local docs_html_abs=""
-  if [[ -f ./docs/index.html ]]; then
-    docs_html_abs="$(cd ./docs && pwd)/index.html"
-    # Convert Git-Bash /c/... to C:/... for file:// URL
-    case "$docs_html_abs" in
-      /[a-zA-Z]/*) docs_html_abs="$(printf '%s' "$docs_html_abs" | sed -E 's|^/([a-zA-Z])/|\U\1:/|')" ;;
-    esac
+  local docs_url=""
+  if [[ -f ./apis/_swagger_docs.te ]]; then
+    docs_url="http://$docs_host:$port/docs"
   fi
   echo "============================================================"
   echo "  TypeEasy serve  [$mode_tag]"
@@ -284,19 +280,19 @@ Options:
   echo "  workers:    $workers"
   echo "  hot-reload: $hr_tag"
   echo "  openapi:    http://$docs_host:$port/openapi.json"
-  [[ -n "$docs_html_abs" ]] && echo "  swagger UI: file:///$docs_html_abs"
+  [[ -n "$docs_url" ]] && echo "  swagger UI: $docs_url"
   echo "============================================================"
 
   # --- Auto-open Swagger UI in browser (dev only, native branch) ---
-  if [[ "$env_mode" == "dev" && $use_docker -eq 0 && -n "$docs_html_abs" && -z "${TYPEEASY_NO_OPEN:-}" ]]; then
+  if [[ "$env_mode" == "dev" && $use_docker -eq 0 && -n "$docs_url" && -z "${TYPEEASY_NO_OPEN:-}" ]]; then
     (
       sleep 1
       if command -v cmd.exe >/dev/null 2>&1; then
-        cmd.exe /c start "" "file:///$docs_html_abs" >/dev/null 2>&1 || true
+        cmd.exe /c start "" "$docs_url" >/dev/null 2>&1 || true
       elif command -v xdg-open >/dev/null 2>&1; then
-        xdg-open "file:///$docs_html_abs" >/dev/null 2>&1 || true
+        xdg-open "$docs_url" >/dev/null 2>&1 || true
       elif command -v open >/dev/null 2>&1; then
-        open "file:///$docs_html_abs" >/dev/null 2>&1 || true
+        open "$docs_url" >/dev/null 2>&1 || true
       fi
     ) &
   fi
@@ -632,10 +628,17 @@ cmd_docs() {
 
   [[ -n "$openapi_json" ]] || die "No endpoints found in ./apis/*.te"
 
-  # --- 2) Write apis/_swagger_docs.te with embedded JSON ------------------
-  # Escape for embedding inside a TypeEasy "..." string literal
-  local escaped
-  escaped="$(printf '%s' "$openapi_json" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  # --- 2) Write apis/_swagger_docs.te with embedded JSON + Swagger UI HTML ---
+  # Two endpoints: GET /openapi.json (spec) + GET /docs (Swagger UI page).
+  # The server detects <!DOCTYPE html as text/html so the UI renders in-browser.
+  local escaped_json
+  escaped_json="$(printf '%s' "$openapi_json" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+
+  # Build Swagger UI HTML pointing to relative /openapi.json (works regardless of host/port)
+  local swagger_html
+  swagger_html='<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><title>'"${project_name}"' — API Docs</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"/><style>body{margin:0;background:#fafafa}</style></head><body><div id="swagger-ui"></div><script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script><script>window.ui=SwaggerUIBundle({url:"/openapi.json",dom_id:"#swagger-ui",deepLinking:true,presets:[SwaggerUIBundle.presets.apis]});</script></body></html>'
+  local escaped_html
+  escaped_html="$(printf '%s' "$swagger_html" | sed 's/\\/\\\\/g; s/"/\\"/g')"
 
   cat > ./apis/_swagger_docs.te <<TE
 /********************************************************************
@@ -648,12 +651,18 @@ endpoint {
 
   [HttpGet("/openapi.json")]
   openapi_spec() {
-      return json("${escaped}");
+      return json("${escaped_json}");
+  }
+
+  [HttpGet("/docs")]
+  swagger_ui() {
+      // Body starts with <!DOCTYPE html → server emits text/html content-type
+      return json("${escaped_html}");
   }
 }
 TE
 
-  # --- 3) Write docs/index.html (Swagger UI viewer) -----------------------
+  # --- 3) Write docs/index.html as fallback (file:// viewer) --------------
   cat > ./docs/index.html <<HTML
 <!DOCTYPE html>
 <html lang="en">
@@ -679,12 +688,12 @@ TE
 </html>
 HTML
 
-  info "Generated: ./apis/_swagger_docs.te    (endpoint GET /openapi.json)"
-  info "Generated: ./docs/index.html          (Swagger UI viewer)"
+  info "Generated: ./apis/_swagger_docs.te    (endpoints /openapi.json + /docs)"
+  info "Generated: ./docs/index.html          (fallback file:// viewer)"
   echo
-  echo "  1) Run:    typeeasy serve --dev"
-  echo "  2) Open:   ./docs/index.html  in your browser"
-  echo "             (or: http://localhost:${port}/openapi.json for raw spec)"
+  echo "  Run:       typeeasy serve --dev"
+  echo "  Swagger UI: http://${host}:${port}/docs"
+  echo "  Raw spec:   http://${host}:${port}/openapi.json"
   echo
   echo "  To remove generated docs:  typeeasy docs --clean"
 }
