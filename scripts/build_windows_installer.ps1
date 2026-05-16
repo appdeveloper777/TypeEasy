@@ -21,7 +21,7 @@ if (-not (Test-Path $IssPath)) {
     throw "No se encontro el script de Inno Setup: $IssPath"
 }
 
-$BinaryPath = Join-Path $SourceDir "bin/typeeasy.exe"
+$BinaryPath = Join-Path $SourceDir "bin/typeeasy-bin.exe"
 if (-not (Test-Path $BinaryPath)) {
     throw "No se encontro el binario en el paquete: $BinaryPath"
 }
