@@ -1,0 +1,25 @@
+// Bench LINQ agregaciones sobre 10M filas (CSV) — TypeEasy v0.0.11
+// Solo agregaciones O(n) sin materializar listas, para comparar limpio con Python.
+//
+// Uso (medir wall-clock con `time` del shell):
+//   time docker compose run --rm typeeasy examples/12_linq_csv_10M/bench_linq_10M.te
+//
+// CSV requerido: /code/productos_10000000.csv (10M filas: nombre,precio).
+
+class Producto {
+  nombre : string;
+  precio : int;
+}
+
+let productos = from "productos_10000000.csv", Producto;
+println("filas=" + productos.length);
+
+// --- agregaciones puras (sin materializar) ---
+// Nota: cada lambda call sobre 10M items consume memoria significativa en
+// v0.0.11; evitar concatenar muchas agregaciones en una sola corrida si el
+// container tiene <8GB. Para una corrida más liviana ver bench_linq_1M.te.
+println("sumBy.precio="    + productos.sumBy(fn(p) => p.precio));
+println("countWhere>50="   + productos.countWhere(fn(p) => p.precio > 50));
+println("countWhere<10="   + productos.countWhere(fn(p) => p.precio < 10));
+
+println("OK");
