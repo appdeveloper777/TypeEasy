@@ -412,10 +412,11 @@ expression:
         ClassNode *cls = find_class($2);
         if (cls) { $$ = (ASTNode *)create_object_with_args(cls, NULL); }
         else     { $$ = create_call_node($2, NULL); } }
-  | NEW IDENTIFIER LPAREN expr_list RPAREN 
+  | NEW IDENTIFIER LPAREN expression_list RPAREN 
       { /* Fase 2: NEW Foo(args) — class instantiation, or builtin call if no class.
-         * This is what makes `new sqlserver_query(conn, sql, params, fmt)` work
-         * without dedicated tokens — the dispatcher routes by name at runtime. */
+         * Uses expression_list (chained via ->right) so the constructor invocation
+         * walker can iterate args via arg->right. expr_list (used for list literals)
+         * chains via ->next now, which is incompatible with the constructor walker. */
         ClassNode *cls = find_class($2);
         if (cls) { $$ = create_object_with_args(cls, $4); free($2); }
         else     { $$ = create_call_node($2, $4); } }

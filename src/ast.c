@@ -2798,6 +2798,21 @@ static ASTNode* build_item_from_value(ASTNode *value) {
     ASTNode *new_item = (ASTNode*)calloc(1, sizeof(ASTNode));
     memset(new_item, 0, sizeof(ASTNode));
     if (!value) { new_item->type = strdup("NUMBER"); return new_item; }
+    /* v0.0.11: preserve OBJECT items (e.g., user-class instances inside lists)
+     * so callers of minBy/maxBy/first/last/firstWhere etc. can access attrs. */
+    if (value->type && strcmp(value->type, "OBJECT") == 0) {
+        new_item->type = strdup("OBJECT");
+        new_item->id = value->id ? strdup(value->id) : NULL;
+        new_item->extra = value->extra;  /* ObjectNode* */
+        return new_item;
+    }
+    if (value->type && (strcmp(value->type, "LIST") == 0 ||
+                        strcmp(value->type, "MAP") == 0 ||
+                        strcmp(value->type, "OBJECT_LITERAL") == 0)) {
+        /* Return the original list/map directly — they're shared by design. */
+        free(new_item);
+        return value;
+    }
     if (value->type && strcmp(value->type, "STRING") == 0) {
         new_item->type = strdup("STRING");
         new_item->str_value = strdup(value->str_value ? value->str_value : "");
@@ -12029,8 +12044,11 @@ ASTNode *create_list_node(ASTNode *items) {
 
 ASTNode *append_to_list_parser(ASTNode *list, ASTNode *item) {
     if (!list) { if (item) item->next = NULL; return item; }
-    /* v0.0.11 fix: chain via ->next so BINOP/method-call items (which use
-     * ->right for their own right operand) are not clobbered. */
+    /* v0.0.11 fix: chain via ->next ONLY so BINOP/method-call items (which use
+     * ->right for their own right operand) are not clobbered. Constructor arg
+     * walkers that previously walked ->right have been migrated to use
+     * expression_list (still ->right) for NEW; this list-literal builder is
+     * for `[...]` only. */
     ASTNode *cur = list;
     while (cur->next) cur = cur->next;
     cur->next = item;
