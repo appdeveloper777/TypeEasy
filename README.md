@@ -71,6 +71,27 @@ docker compose run --rm typeeasy hola.te
 
 ---
 
+## ⚡ CLI `typeeasy` (alias `te`) — estilo Rails
+
+Desde **v0.0.10** TypeEasy incluye un CLI tipo Rails/Cargo para crear proyectos, generar endpoints y levantar el server sin boilerplate:
+
+```bash
+te new mi-app                  # crea estructura completa del proyecto
+cd mi-app
+te gen resource producto       # apis/producto.te + migrations/NNN_create_producto.sql
+te serve --dev                 # levanta el server local con hot-reload
+te serve --prod                # modo producción con watchdog auto-restart
+```
+
+Subcomandos principales: `new`, `gen resource|endpoint`, `serve [--dev|--prod] [--docker]`, `migrate`, `console`, `version`, `help`.
+
+El CLI detecta automáticamente el binario nativo instalado (Windows installer, `.deb` de Linux o árbol fuente) y, si no encuentra ninguno, hace fallback transparente a Docker.
+
+📖 **Detalles completos, flags, modos `--dev`/`--prod`, instalación nativa y producción con systemd/nginx**:
+👉 https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.0.10
+
+---
+
 ## 🎨 Soporte de VS Code (colores + debugger)
 
 El repo incluye una extensión local de VS Code que aporta **resaltado de sintaxis** y **debugger F5/F10/F11** para archivos `.te`. Para instalarla después de clonar:
