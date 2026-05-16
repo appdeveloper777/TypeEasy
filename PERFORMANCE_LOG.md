@@ -2194,3 +2194,56 @@ ret).
 - **Sin caching float en registros**: cada iteración hace 2 movsd a
   memoria por var loop-carried float. Aceptable para un primer
   fast-path; Ola 18+ podría agregar pool xmm6..xmm15.
+
+---
+
+## Run: `v0.0.10 — bench_csv 10M (Windows native)` — 2026-05-16
+
+Comparativa CSV grande: lectura de 10,000,000 filas (181 MB,
+`productos_10000000.csv`) usando `from "...csv", Producto;` con y sin
+`__constructor`, vs Python 3.13.5 con `__slots__`.
+
+**Setup**: Windows nativo, `typeeasy-bin.exe` v0.0.10 (commit `f021e43`,
+instalador Inno Setup), MSYS2 bash. Todos los tiempos son **cache caliente**
+(2da corrida después del cold-load de 181 MB que toma ~19 s).
+
+| Versión | `real` | vs Python |
+|---|---|---|
+| TypeEasy **sin** `__constructor` ([bench_csv_10M_noctor.te](typeeasycode/bench_csv_10M_noctor.te)) | **4.16 s** | **6.6× más rápido** |
+| TypeEasy **con** `__constructor` ([bench_csv_10M_ctor.te](typeeasycode/bench_csv_10M_ctor.te)) | **5.58 s** | **4.9× más rápido** |
+| Python 3.13.5 `__slots__` ([bench_csv_10M_noctor.py](typeeasycode/bench_csv_10M_noctor.py)) | 27.48 s | 1.0× baseline |
+
+**Output verificado idéntico en los 3 runs**:
+
+```
+filas=10000000
+primer producto: Chocolate,1
+```
+
+### Observaciones
+
+- **Overhead del `__constructor`**: 5.58 vs 4.16 s → **+34%** por las 10M
+  llamadas al método con 2 asignaciones `this.x = x`. Sin ctor, el
+  runtime nativo de `from "..csv", Class` puebla los campos directamente
+  por offset de slot. Costo razonable para un despacho de método con
+  ámbito propio + bind de `this`.
+- **Cold cache**: el primer run absoluto fue 18.97 s (181 MB cargados
+  desde NVMe). Una vez que el archivo está en page cache, el costo real
+  es ~4-5 s en TypeEasy.
+- **Por qué TypeEasy gana 5-7× a Python**:
+  1. `from "..csv", Class` es una primitiva en C — Python ejecuta el
+     bucle `for row in csv.reader(f): p = Producto(); p.x = ...`
+     completamente en bytecode interpretado.
+  2. Sin ctor, no hay despacho ni armado de frame por fila.
+  3. Layout fijo de campos en TypeEasy = acceso por offset; Python con
+     `__slots__` también lo tiene pero el bucle de fill sigue siendo
+     interpretado.
+- **Sin `__slots__`** Python se acercaría a 40-50 s por el overhead de
+  `__dict__` por instancia (10M dicts).
+
+### Conclusión
+
+TypeEasy v0.0.10 es **competitivo en workloads I/O + materialización de
+objetos masivos**, gracias a que `from "..csv", Class` es una primitiva
+nativa. El despacho de `__constructor` agrega ~25-35% pero deja al
+intérprete aún 5× sobre CPython en este escenario.

@@ -1,0 +1,16 @@
+// Stress 10M con __constructor explícito (comparar vs bench_csv_10M_noctor.te).
+class Producto {
+  nombre : string;
+  precio : int;
+
+  __constructor(nombre : string, precio : int) {
+    this.nombre = nombre;
+    this.precio = precio;
+  }
+}
+
+let productos = from "productos_10000000.csv", Producto;
+int cantidad = productos.length;
+println("filas=" + cantidad);
+let p0 = productos[0];
+println("primer producto: " + p0.nombre + "," + p0.precio);
