@@ -1,0 +1,6 @@
+let host = env("DB_HOST", "localhost");
+let port = env("PORT", "8080");
+let mode = env("MODE");
+println("host=" + host);
+println("port=" + port);
+println("mode=[" + mode + "]");

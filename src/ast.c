@@ -7636,6 +7636,53 @@ static int adapt_load_native(ASTNode *node, ASTNode *args) {
     return 1;
 }
 
+/* env("KEY")            -> string ("" if unset)
+ * env("KEY", "default") -> string (default if unset/empty)
+ * The 2-arg form is the idiomatic way to provide a fallback. */
+static int adapt_env(ASTNode *node, ASTNode *args) {
+    (void)node;
+    if (args) evaluate_native_args(args);
+    char *key = args ? get_node_string(args) : NULL;
+    const char *val = (key && *key) ? getenv(key) : NULL;
+    if (key) free(key);
+    if (val && *val) {
+        add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, val, NULL));
+    } else {
+        /* unset/empty: use the optional 2nd arg as default, else "" */
+        ASTNode *a1 = args ? args->right : NULL;
+        char *def = a1 ? get_node_string(a1) : NULL;
+        add_or_update_variable("__ret__",
+            create_ast_leaf("STRING", 0, def ? def : "", NULL));
+        if (def) free(def);
+    }
+    return 1;
+}
+
+/* env_required("KEY") -> string. Same as env(), but throws when the
+ * variable is missing or empty so the script aborts (or is caught by
+ * a surrounding try { } catch). */
+static int adapt_env_required(ASTNode *node, ASTNode *args) {
+    (void)node;
+    extern int throw_flag;
+    extern char *throw_message;
+    if (args) evaluate_native_args(args);
+    char *key = args ? get_node_string(args) : NULL;
+    const char *val = (key && *key) ? getenv(key) : NULL;
+    if (!val || !*val) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "env_required: missing environment variable '%s'", key ? key : "(null)");
+        if (throw_message) { free(throw_message); throw_message = NULL; }
+        throw_message = strdup(buf);
+        throw_flag = 1;
+        if (key) free(key);
+        add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, "", NULL));
+        return 1;
+    }
+    if (key) free(key);
+    add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, val, NULL));
+    return 1;
+}
+
 /* Called once by te_builtins_ensure_loaded(). Idempotent — overwrites are OK.
  * Add new core builtins here as one-liners. */
 void te_register_ast_builtins(void) {
@@ -7649,6 +7696,8 @@ void te_register_ast_builtins(void) {
     te_builtin_register("sqlserver_query",   adapt_sqlserver_query);
     te_builtin_register("sqlserver_close",   adapt_sqlserver_close);
     te_builtin_register("load_native",       adapt_load_native);
+    te_builtin_register("env",               adapt_env);
+    te_builtin_register("env_required",      adapt_env_required);
     /* Other builtins (json, xml, request_*, response_*, len, range,
      * read_file, http_get, etc.) still served by the legacy if-chains
      * in call_native_function / te_builtin_dispatch. They can be migrated
