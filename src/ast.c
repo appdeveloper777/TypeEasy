@@ -431,6 +431,7 @@ static int list_length(ASTNode *list);
 static ASTNode* resolve_to_list(ASTNode *node);
 static ASTNode* resolve_to_map(ASTNode *node);
 static int map_length(ASTNode *map);
+static void interpret_call_method(ASTNode *node);
 
 // Helper function to get string representation of any node
 char* get_node_string(ASTNode* node) {
@@ -447,6 +448,20 @@ char* get_node_string(ASTNode* node) {
             if (r->vtype == VAL_STRING) return strdup(r->value.string_value ? r->value.string_value : "");
             if (r->vtype == VAL_INT)    { snprintf(temp, sizeof(temp), "%d", r->value.int_value); return strdup(temp); }
             if (r->vtype == VAL_FLOAT)  { snprintf(temp, sizeof(temp), "%f", r->value.float_value); return strdup(temp); }
+        }
+        return strdup("");
+    }
+
+    /* v0.0.11: nested method call — invoke and read __ret__.
+     * Enables `"sum=" + nums.sum()` and similar LINQ chains in string contexts. */
+    if (node->type && strcmp(node->type, "CALL_METHOD") == 0) {
+        interpret_call_method(node);
+        Variable *r = find_variable("__ret__");
+        if (r) {
+            if (r->vtype == VAL_STRING) return strdup(r->value.string_value ? r->value.string_value : "");
+            if (r->vtype == VAL_INT)    { snprintf(temp, sizeof(temp), "%d", r->value.int_value); return strdup(temp); }
+            if (r->vtype == VAL_FLOAT)  { snprintf(temp, sizeof(temp), "%g", r->value.float_value); return strdup(temp); }
+            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) return strdup("null");
         }
         return strdup("");
     }
@@ -7981,6 +7996,37 @@ static void interpret_call_func(ASTNode *node) {
 
 static void interpret_call_method(ASTNode *node) {
     ASTNode *objNode = node->left;
+
+    /* v0.0.11: chained method/function call — `a.foo().bar()` or `foo().bar()`.
+     * Evaluate the inner call first, bind result to a unique temp variable,
+     * and rewrite node->left to an ID node so the rest of this function
+     * (which assumes objNode is an identifier) works unchanged. */
+    if (objNode && objNode->type &&
+        (strcmp(objNode->type, "CALL_METHOD") == 0 || strcmp(objNode->type, "CALL_FUNC") == 0)) {
+        if (strcmp(objNode->type, "CALL_METHOD") == 0) interpret_call_method(objNode);
+        else interpret_call_func(objNode);
+        Variable *rv = find_variable("__ret__");
+        if (rv && rv->vtype == VAL_OBJECT && rv->value.object_value) {
+            static int _chain_seq = 0;
+            char tmp[40];
+            snprintf(tmp, sizeof(tmp), "__chain_%d__", _chain_seq++);
+            ASTNode *holder = (ASTNode*)calloc(1, sizeof(ASTNode));
+            holder->type = strdup(rv->type ? rv->type : "LIST");
+            /* For LIST/MAP, add_or_update_variable stores value as ASTNode*
+             * via object_value, so synthesize a wrapper that points to it. */
+            ASTNode *inner = (ASTNode*)(intptr_t)rv->value.object_value;
+            holder->left = inner ? inner->left : NULL;
+            holder->str_value = inner ? inner->str_value : NULL;
+            holder->value = inner ? inner->value : 0;
+            add_or_update_variable(tmp, holder);
+            ASTNode *id = (ASTNode*)calloc(1, sizeof(ASTNode));
+            id->type = strdup("ID");
+            id->id = strdup(tmp);
+            node->left = id;
+            objNode = id;
+        }
+    }
+
     Variable *v = (objNode && objNode->id) ? find_variable(objNode->id) : NULL;
     return_flag = 0;
     return_node = NULL;
@@ -8262,7 +8308,26 @@ static void interpret_call_method(ASTNode *node) {
                 strcmp(node->id, "forEach") == 0 ||
                 strcmp(node->id, "find") == 0 ||
                 strcmp(node->id, "any") == 0 ||
-                strcmp(node->id, "every") == 0)) {
+                strcmp(node->id, "every") == 0 ||
+                /* v0.0.11 LINQ-style operators (lambda required) */
+                strcmp(node->id, "where") == 0 ||
+                strcmp(node->id, "select") == 0 ||
+                strcmp(node->id, "all") == 0 ||
+                strcmp(node->id, "none") == 0 ||
+                strcmp(node->id, "firstWhere") == 0 ||
+                strcmp(node->id, "lastWhere") == 0 ||
+                strcmp(node->id, "countWhere") == 0 ||
+                strcmp(node->id, "sumBy") == 0 ||
+                strcmp(node->id, "avgBy") == 0 ||
+                strcmp(node->id, "minBy") == 0 ||
+                strcmp(node->id, "maxBy") == 0 ||
+                strcmp(node->id, "takeWhile") == 0 ||
+                strcmp(node->id, "skipWhile") == 0 ||
+                strcmp(node->id, "flatMap") == 0 ||
+                strcmp(node->id, "selectMany") == 0 ||
+                strcmp(node->id, "groupBy") == 0 ||
+                strcmp(node->id, "orderBy") == 0 ||
+                strcmp(node->id, "orderByDescending") == 0)) {
             ASTNode *arg = node->right;
             ASTNode *fn = NULL;
             if (arg && arg->type && strcmp(arg->type, "LAMBDA") == 0) {
@@ -8278,7 +8343,12 @@ static void interpret_call_method(ASTNode *node) {
                 add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
                 return;
             }
+            /* v0.0.11: normalize aliases so we can reuse existing branches */
             const char *fname = node->id;
+            if (strcmp(fname, "where") == 0) fname = "filter";
+            else if (strcmp(fname, "select") == 0) fname = "map";
+            else if (strcmp(fname, "all") == 0) fname = "every";
+            else if (strcmp(fname, "firstWhere") == 0) fname = "find";
             if (strcmp(fname, "map") == 0) {
                 ASTNode *result = create_list_node(NULL);
                 ASTNode *item = list->left;
@@ -8392,6 +8462,411 @@ static void interpret_call_method(ASTNode *node) {
                     item = item->next;
                 }
                 add_or_update_variable("__ret__", create_ast_leaf_number("INT", all, NULL, NULL));
+                return;
+            }
+            /* ===== v0.0.11 LINQ-style higher-order operators ===== */
+            if (strcmp(fname, "none") == 0) {
+                ASTNode *item = list->left;
+                int none_match = 1;
+                while (item) {
+                    ASTNode *r = call_lambda(fn, item);
+                    if (r && evaluate_expression(r) != 0) { none_match = 0; break; }
+                    item = item->next;
+                }
+                add_or_update_variable("__ret__", create_ast_leaf_number("INT", none_match, NULL, NULL));
+                return;
+            }
+            if (strcmp(fname, "lastWhere") == 0) {
+                ASTNode *item = list->left;
+                ASTNode *last_match = NULL;
+                while (item) {
+                    ASTNode *r = call_lambda(fn, item);
+                    if (r && evaluate_expression(r) != 0) last_match = item;
+                    item = item->next;
+                }
+                if (last_match) add_or_update_variable("__ret__", build_item_from_value(last_match));
+                else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                return;
+            }
+            if (strcmp(fname, "countWhere") == 0) {
+                ASTNode *item = list->left;
+                int cnt = 0;
+                while (item) {
+                    ASTNode *r = call_lambda(fn, item);
+                    if (r && evaluate_expression(r) != 0) cnt++;
+                    item = item->next;
+                }
+                add_or_update_variable("__ret__", create_ast_leaf_number("INT", cnt, NULL, NULL));
+                return;
+            }
+            if (strcmp(fname, "sumBy") == 0) {
+                ASTNode *item = list->left;
+                double acc = 0.0;
+                int is_int = 1;
+                while (item) {
+                    ASTNode *r = call_lambda(fn, item);
+                    if (r) {
+                        double v = evaluate_expression(r);
+                        if (v != (double)(long long)v) is_int = 0;
+                        acc += v;
+                    }
+                    item = item->next;
+                }
+                if (is_int && acc == (double)(long long)acc) {
+                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)acc, NULL, NULL));
+                } else {
+                    char buf[64]; snprintf(buf, sizeof(buf), "%g", acc);
+                    add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                }
+                return;
+            }
+            if (strcmp(fname, "avgBy") == 0) {
+                ASTNode *item = list->left;
+                double acc = 0.0; int cnt = 0;
+                while (item) {
+                    ASTNode *r = call_lambda(fn, item);
+                    if (r) { acc += evaluate_expression(r); cnt++; }
+                    item = item->next;
+                }
+                double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
+                char buf[64]; snprintf(buf, sizeof(buf), "%g", res);
+                add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                return;
+            }
+            if (strcmp(fname, "minBy") == 0 || strcmp(fname, "maxBy") == 0) {
+                int want_max = (strcmp(fname, "maxBy") == 0);
+                ASTNode *item = list->left;
+                ASTNode *best_item = NULL;
+                double best_key = 0.0;
+                int first = 1;
+                while (item) {
+                    ASTNode *r = call_lambda(fn, item);
+                    double k = r ? evaluate_expression(r) : 0.0;
+                    if (first) { best_key = k; best_item = item; first = 0; }
+                    else if (want_max ? (k > best_key) : (k < best_key)) { best_key = k; best_item = item; }
+                    item = item->next;
+                }
+                if (best_item) add_or_update_variable("__ret__", build_item_from_value(best_item));
+                else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                return;
+            }
+            if (strcmp(fname, "takeWhile") == 0) {
+                ASTNode *result = create_list_node(NULL);
+                ASTNode *item = list->left;
+                while (item) {
+                    ASTNode *r = call_lambda(fn, item);
+                    if (!r || evaluate_expression(r) == 0) break;
+                    te_list_append(result, build_item_from_value(item));
+                    item = item->next;
+                }
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+            if (strcmp(fname, "skipWhile") == 0) {
+                ASTNode *result = create_list_node(NULL);
+                ASTNode *item = list->left;
+                int skipping = 1;
+                while (item) {
+                    if (skipping) {
+                        ASTNode *r = call_lambda(fn, item);
+                        if (!r || evaluate_expression(r) == 0) skipping = 0;
+                    }
+                    if (!skipping) te_list_append(result, build_item_from_value(item));
+                    item = item->next;
+                }
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+            if (strcmp(fname, "flatMap") == 0 || strcmp(fname, "selectMany") == 0) {
+                ASTNode *result = create_list_node(NULL);
+                ASTNode *item = list->left;
+                while (item) {
+                    ASTNode *r = call_lambda(fn, item);
+                    if (r && r->type && strcmp(r->type, "LIST") == 0) {
+                        ASTNode *inner = r->left;
+                        while (inner) {
+                            te_list_append(result, build_item_from_value(inner));
+                            inner = inner->next;
+                        }
+                    } else if (r) {
+                        te_list_append(result, r);
+                    }
+                    item = item->next;
+                }
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+            if (strcmp(fname, "groupBy") == 0) {
+                /* Returns LIST of OBJECT_LITERAL {key, items: LIST}. Linear probe
+                 * for key equality (string-compared). Adequate for small/medium N. */
+                ASTNode *result = create_list_node(NULL);
+                ASTNode *item = list->left;
+                while (item) {
+                    ASTNode *kr = call_lambda(fn, item);
+                    char *key_str = kr ? get_node_string(kr) : strdup("");
+                    /* find existing group */
+                    ASTNode *gcur = result->left;
+                    ASTNode *found_group = NULL;
+                    while (gcur) {
+                        if (gcur->type && strcmp(gcur->type, "OBJECT_LITERAL") == 0) {
+                            ASTNode *kvs = gcur->left;
+                            while (kvs) {
+                                if (kvs->id && strcmp(kvs->id, "key") == 0 && kvs->left) {
+                                    char *gk = get_node_string(kvs->left);
+                                    int eq = (gk && key_str && strcmp(gk, key_str) == 0);
+                                    if (gk) free(gk);
+                                    if (eq) { found_group = gcur; break; }
+                                }
+                                kvs = kvs->next;
+                            }
+                        }
+                        if (found_group) break;
+                        gcur = gcur->next;
+                    }
+                    if (!found_group) {
+                        /* build new group: OBJECT_LITERAL with key + items=LIST */
+                        ASTNode *grp = (ASTNode*)calloc(1, sizeof(ASTNode));
+                        grp->type = strdup("OBJECT_LITERAL");
+                        ASTNode *kv_key = create_kv_pair_node("key", create_ast_leaf("STRING", 0, key_str, NULL));
+                        ASTNode *items_list = create_list_node(NULL);
+                        ASTNode *kv_items = create_kv_pair_node("items", items_list);
+                        grp->left = kv_key;
+                        kv_key->next = kv_items;
+                        te_list_append(result, grp);
+                        found_group = grp;
+                    }
+                    /* append item to found_group.items */
+                    ASTNode *kvs = found_group->left;
+                    while (kvs) {
+                        if (kvs->id && strcmp(kvs->id, "items") == 0 && kvs->left) {
+                            te_list_append(kvs->left, build_item_from_value(item));
+                            break;
+                        }
+                        kvs = kvs->next;
+                    }
+                    free(key_str);
+                    item = item->next;
+                }
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+            if (strcmp(fname, "orderBy") == 0 || strcmp(fname, "orderByDescending") == 0) {
+                int descending = (strcmp(fname, "orderByDescending") == 0);
+                /* Materialize items + their keys into parallel arrays, sort, rebuild list. */
+                int n = list_length(list);
+                if (n <= 0) { add_or_update_variable("__ret__", create_list_node(NULL)); return; }
+                ASTNode **items_arr = (ASTNode**)calloc(n, sizeof(ASTNode*));
+                double *keys = (double*)calloc(n, sizeof(double));
+                char **skeys = (char**)calloc(n, sizeof(char*));
+                int is_str_key = 0;
+                int i = 0;
+                ASTNode *it = list->left;
+                while (it && i < n) {
+                    ASTNode *k = call_lambda(fn, it);
+                    if (k && k->type && strcmp(k->type, "STRING") == 0) {
+                        is_str_key = 1;
+                        skeys[i] = strdup(k->str_value ? k->str_value : "");
+                    } else if (k) {
+                        keys[i] = evaluate_expression(k);
+                    }
+                    items_arr[i] = it;
+                    i++; it = it->next;
+                }
+                /* Simple insertion sort — O(n^2) but stable + small. */
+                for (int a = 1; a < n; a++) {
+                    ASTNode *cur_item = items_arr[a];
+                    double cur_k = keys[a];
+                    char *cur_s = skeys[a];
+                    int b = a - 1;
+                    while (b >= 0) {
+                        int cmp;
+                        if (is_str_key) {
+                            int c = strcmp(skeys[b] ? skeys[b] : "", cur_s ? cur_s : "");
+                            cmp = descending ? (c < 0) : (c > 0);
+                        } else {
+                            cmp = descending ? (keys[b] < cur_k) : (keys[b] > cur_k);
+                        }
+                        if (!cmp) break;
+                        items_arr[b+1] = items_arr[b];
+                        keys[b+1] = keys[b];
+                        skeys[b+1] = skeys[b];
+                        b--;
+                    }
+                    items_arr[b+1] = cur_item;
+                    keys[b+1] = cur_k;
+                    skeys[b+1] = cur_s;
+                }
+                ASTNode *result = create_list_node(NULL);
+                for (int a = 0; a < n; a++) {
+                    te_list_append(result, build_item_from_value(items_arr[a]));
+                    if (skeys[a]) free(skeys[a]);
+                }
+                free(items_arr); free(keys); free(skeys);
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+        }
+
+        /* ===== v0.0.11 LINQ: numeric / no-arg methods on LIST ===== */
+        if (list && node->id && (
+                strcmp(node->id, "sum") == 0 ||
+                strcmp(node->id, "avg") == 0 ||
+                strcmp(node->id, "average") == 0 ||
+                strcmp(node->id, "minVal") == 0 ||
+                strcmp(node->id, "maxVal") == 0 ||
+                strcmp(node->id, "first") == 0 ||
+                strcmp(node->id, "last") == 0 ||
+                strcmp(node->id, "take") == 0 ||
+                strcmp(node->id, "skip") == 0 ||
+                strcmp(node->id, "distinct") == 0 ||
+                strcmp(node->id, "toList") == 0 ||
+                strcmp(node->id, "concat") == 0)) {
+            const char *fname = node->id;
+            if (strcmp(fname, "sum") == 0) {
+                double acc = 0.0; int is_int = 1;
+                ASTNode *it = list->left;
+                while (it) {
+                    double v = it->str_value ? atof(it->str_value) : (double)it->value;
+                    if (v != (double)(long long)v) is_int = 0;
+                    acc += v;
+                    it = it->next;
+                }
+                if (is_int && acc == (double)(long long)acc) {
+                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)acc, NULL, NULL));
+                } else {
+                    char buf[64]; snprintf(buf, sizeof(buf), "%g", acc);
+                    add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                }
+                return;
+            }
+            if (strcmp(fname, "avg") == 0 || strcmp(fname, "average") == 0) {
+                double acc = 0.0; int cnt = 0;
+                ASTNode *it = list->left;
+                while (it) {
+                    acc += it->str_value ? atof(it->str_value) : (double)it->value;
+                    cnt++; it = it->next;
+                }
+                double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
+                char buf[64]; snprintf(buf, sizeof(buf), "%g", res);
+                add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                return;
+            }
+            if (strcmp(fname, "minVal") == 0 || strcmp(fname, "maxVal") == 0) {
+                int want_max = (strcmp(fname, "maxVal") == 0);
+                ASTNode *it = list->left;
+                if (!it) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return; }
+                int is_str = (it->type && strcmp(it->type, "STRING") == 0);
+                double best_n = 0.0; char *best_s = NULL;
+                if (is_str) best_s = it->str_value ? it->str_value : "";
+                else best_n = it->str_value ? atof(it->str_value) : (double)it->value;
+                ASTNode *best_node = it;
+                it = it->next;
+                while (it) {
+                    if (is_str) {
+                        const char *cs = it->str_value ? it->str_value : "";
+                        int c = strcmp(cs, best_s);
+                        if (want_max ? (c > 0) : (c < 0)) { best_s = (char*)cs; best_node = it; }
+                    } else {
+                        double v = it->str_value ? atof(it->str_value) : (double)it->value;
+                        if (want_max ? (v > best_n) : (v < best_n)) { best_n = v; best_node = it; }
+                    }
+                    it = it->next;
+                }
+                add_or_update_variable("__ret__", build_item_from_value(best_node));
+                return;
+            }
+            if (strcmp(fname, "first") == 0) {
+                if (list->left) add_or_update_variable("__ret__", build_item_from_value(list->left));
+                else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                return;
+            }
+            if (strcmp(fname, "last") == 0) {
+                ASTNode *cur = list->left;
+                if (!cur) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return; }
+                while (cur->next) cur = cur->next;
+                add_or_update_variable("__ret__", build_item_from_value(cur));
+                return;
+            }
+            if (strcmp(fname, "take") == 0) {
+                int n = node->right ? (int)evaluate_expression(node->right) : 0;
+                ASTNode *result = create_list_node(NULL);
+                ASTNode *it = list->left;
+                int i = 0;
+                while (it && i < n) {
+                    te_list_append(result, build_item_from_value(it));
+                    it = it->next; i++;
+                }
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+            if (strcmp(fname, "skip") == 0) {
+                int n = node->right ? (int)evaluate_expression(node->right) : 0;
+                ASTNode *result = create_list_node(NULL);
+                ASTNode *it = list->left;
+                int i = 0;
+                while (it) {
+                    if (i >= n) te_list_append(result, build_item_from_value(it));
+                    it = it->next; i++;
+                }
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+            if (strcmp(fname, "distinct") == 0) {
+                ASTNode *result = create_list_node(NULL);
+                ASTNode *it = list->left;
+                while (it) {
+                    /* Linear probe — O(n^2). Fine for typical LINQ usage. */
+                    ASTNode *cur = result->left;
+                    int dup = 0;
+                    char *cur_str = NULL;
+                    int is_str = (it->type && strcmp(it->type, "STRING") == 0);
+                    double cur_n = 0.0;
+                    if (is_str) cur_str = it->str_value ? it->str_value : "";
+                    else cur_n = it->str_value ? atof(it->str_value) : (double)it->value;
+                    while (cur) {
+                        int cur_is_str = (cur->type && strcmp(cur->type, "STRING") == 0);
+                        if (is_str && cur_is_str) {
+                            if (strcmp(cur->str_value ? cur->str_value : "", cur_str) == 0) { dup = 1; break; }
+                        } else if (!is_str && !cur_is_str) {
+                            double v = cur->str_value ? atof(cur->str_value) : (double)cur->value;
+                            if (v == cur_n) { dup = 1; break; }
+                        }
+                        cur = cur->next;
+                    }
+                    if (!dup) te_list_append(result, build_item_from_value(it));
+                    it = it->next;
+                }
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+            if (strcmp(fname, "toList") == 0) {
+                ASTNode *result = create_list_node(NULL);
+                ASTNode *it = list->left;
+                while (it) { te_list_append(result, build_item_from_value(it)); it = it->next; }
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+            if (strcmp(fname, "concat") == 0) {
+                ASTNode *result = create_list_node(NULL);
+                ASTNode *it = list->left;
+                while (it) { te_list_append(result, build_item_from_value(it)); it = it->next; }
+                /* Resolve other arg — must be LIST */
+                ASTNode *arg = node->right;
+                ASTNode *other_list = NULL;
+                if (arg) {
+                    if (arg->type && strcmp(arg->type, "LIST") == 0) other_list = arg;
+                    else if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+                        Variable *ov = find_variable(arg->id);
+                        if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "LIST") == 0) {
+                            other_list = (ASTNode*)(intptr_t)ov->value.object_value;
+                        }
+                    }
+                }
+                if (other_list) {
+                    ASTNode *oi = other_list->left;
+                    while (oi) { te_list_append(result, build_item_from_value(oi)); oi = oi->next; }
+                }
+                add_or_update_variable("__ret__", result);
                 return;
             }
         }
@@ -11519,16 +11994,8 @@ ASTNode *create_list_node(ASTNode *items) {
     node->str_value = NULL;
     node->value = 0;
     
-    // Convertir la lista enlazada de 'right' a 'next'
-    if(items) {
-        ASTNode *cur = items;
-        while(cur) {
-            ASTNode* temp = cur->right; // Guardamos el siguiente item (de la regla expr_list)
-            cur->right = NULL;         // Limpiamos 'right'
-            cur->next = temp;          // Lo movemos a 'next'
-            cur = temp;
-        }
-    }
+    // v0.0.11: items now come pre-chained via ->next from append_to_list_parser.
+    // No right→next conversion needed (and doing it would clobber BINOP right operands).
 
     /* Ola 14c: pre-build TEListIdx así el primer push es O(1) puro
      * sin pasar por la rama lazy-build de te_list_append. */
@@ -11561,13 +12028,13 @@ ASTNode *create_list_node(ASTNode *items) {
 }
 
 ASTNode *append_to_list_parser(ASTNode *list, ASTNode *item) {
-    if (!list) return item;
+    if (!list) { if (item) item->next = NULL; return item; }
+    /* v0.0.11 fix: chain via ->next so BINOP/method-call items (which use
+     * ->right for their own right operand) are not clobbered. */
     ASTNode *cur = list;
-    while (cur->right) {
-        cur = cur->right;
-    }
-    cur->right = item; // Usamos 'right' temporalmente
-    item->right = NULL;
+    while (cur->next) cur = cur->next;
+    cur->next = item;
+    if (item) item->next = NULL;
     return list;
 }
 
@@ -11769,6 +12236,38 @@ ASTNode* call_lambda(ASTNode *lambda, ASTNode *argsList) {
         ASTNode *r = create_ast_leaf("STRING", 0, s, NULL);
         free(s);
         return r;
+    }
+    /* v0.0.11: lambda expression-body returns a LIST/MAP literal directly.
+     * For LIST, build a fresh list with each item evaluated (items may be
+     * expressions like `n * 10` that reference bound params). */
+    if (body->type && strcmp(body->type, "LIST") == 0) {
+        ASTNode *result = create_list_node(NULL);
+        ASTNode *it = body->left;
+        while (it) {
+            ASTNode *valNode = NULL;
+            if (it->type && (strcmp(it->type, "STRING") == 0 ||
+                             strcmp(it->type, "LIST") == 0 ||
+                             strcmp(it->type, "MAP") == 0 ||
+                             strcmp(it->type, "OBJECT_LITERAL") == 0 ||
+                             strcmp(it->type, "NULL") == 0)) {
+                valNode = it;
+            } else if (is_string_type(it)) {
+                char *s = get_node_string(it);
+                valNode = create_ast_leaf("STRING", 0, s, NULL);
+                free(s);
+            } else {
+                double dv = evaluate_expression(it);
+                if (dv == (double)(long long)dv) valNode = create_ast_leaf_number("NUMBER", (int)dv, NULL, NULL);
+                else { char buf[64]; snprintf(buf, sizeof(buf), "%g", dv); valNode = create_ast_leaf("FLOAT", 0, buf, NULL); }
+            }
+            te_list_append(result, valNode);
+            it = it->next;
+        }
+        return result;
+    }
+    if (body->type && (strcmp(body->type, "MAP") == 0 ||
+                       strcmp(body->type, "OBJECT_LITERAL") == 0)) {
+        return body;
     }
     /* Si la expresión produce un OBJECT/LIST/MAP, evaluate_expression no lo refleja.
      * Detectar referencias a IDENTIFIER que apunten a OBJECT/LIST/MAP. */

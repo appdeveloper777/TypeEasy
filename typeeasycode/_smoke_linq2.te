@@ -1,0 +1,3 @@
+let nums = [1,2,3,4,5];
+let r = nums.filter(fn(n) => n > 2);
+println(r.length);

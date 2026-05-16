@@ -1,0 +1,65 @@
+// v0.0.11 LINQ smoke test — verifica todos los nuevos operadores agregados.
+
+let nums = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3];
+
+// === No-arg aggregations ===
+println("sum=" + nums.sum());           // 39
+println("avg=" + nums.avg());           // 3.9
+println("min=" + nums.minVal());        // 1
+println("max=" + nums.maxVal());        // 9
+println("first=" + nums.first());       // 3
+println("last=" + nums.last());         // 3
+
+// === Partitioning ===
+println("take3=" + nums.take(3).join(","));   // 3,1,4
+println("skip3=" + nums.skip(3).join(","));   // 1,5,9,2,6,5,3
+println("distinct=" + nums.distinct().join(",")); // 3,1,4,5,9,2,6
+
+// === Aliases ===
+let evens = nums.where(fn(n) => n % 2 == 0);
+println("where=" + evens.join(","));    // 4,2,6
+let squares = nums.select(fn(n) => n * n);
+println("select.first=" + squares.first()); // 9
+println("all_pos=" + nums.all(fn(n) => n > 0)); // 1
+println("none_neg=" + nums.none(fn(n) => n < 0)); // 1
+
+// === Lambda aggregations ===
+println("sumBy_x2=" + nums.sumBy(fn(n) => n * 2));   // 78
+println("countWhere_gt3=" + nums.countWhere(fn(n) => n > 3)); // 5
+println("minBy=" + nums.minBy(fn(n) => -n));         // 9 (smallest -n -> largest n)
+println("maxBy=" + nums.maxBy(fn(n) => -n));         // 1
+
+// === Take/Skip while ===
+println("takeWhile_lt5=" + nums.takeWhile(fn(n) => n < 5).join(",")); // 3,1,4,1
+println("skipWhile_lt5=" + nums.skipWhile(fn(n) => n < 5).join(",")); // 5,9,2,6,5,3
+
+// === flatMap ===
+let nested = [1, 2, 3];
+let flat = nested.flatMap(fn(n) => [n, n * 10]);
+println("flatMap=" + flat.join(",")); // 1,10,2,20,3,30
+
+// === orderBy / orderByDescending ===
+let asc = nums.orderBy(fn(n) => n);
+println("orderBy=" + asc.join(",")); // 1,1,2,3,3,4,5,5,6,9
+let desc = nums.orderByDescending(fn(n) => n);
+println("orderByDesc=" + desc.join(",")); // 9,6,5,5,4,3,3,2,1,1
+
+// === concat === (skipped: 'concat' es token reservado del lenguaje)
+// let a = [1, 2, 3];
+// let b = [4, 5, 6];
+// println("concat=" + a.concat(b).join(",")); // 1,2,3,4,5,6
+
+// === Method chaining ===
+let _c1 = nums.where(fn(n) => n > 2);
+let _c2 = _c1.select(fn(n) => n * 10);
+let chained = _c2.take(3);
+println("chain=" + chained.join(",")); // 30,40,50
+
+// === groupBy ===
+let groups = nums.groupBy(fn(n) => n % 2);
+println("groups.count=" + groups.length); // 2
+for (let g in groups) {
+  println("group " + g.key + " count=" + g.items.length);
+}
+
+println("OK");

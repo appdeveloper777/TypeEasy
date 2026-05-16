@@ -374,9 +374,13 @@ expression:
   | object_literal      { $$ = $1; }
   | expression DOT IDENTIFIER LPAREN RPAREN     {         $$ = create_method_call_node($1, $3, NULL); }
   | expression DOT IDENTIFIER LPAREN expression_list RPAREN       { $$ = create_method_call_node($1, $3, $5); }
-  | expression DOT IDENTIFIER LPAREN lambda RPAREN       {  
-         if (strcmp($3, "filter")==0) { $$ = create_list_function_call_node($1, $3, $5); } 
-         else { $$ = create_method_call_node($1, $3, NULL); } free($3); }
+  | expression DOT IDENTIFIER LPAREN lambda RPAREN       {
+         /* v0.0.11: pasar el lambda como argumento a CUALQUIER método higher-order
+          * (map, filter, where, select, sumBy, orderBy, groupBy, etc.). Antes solo
+          * 'filter' funcionaba; el lambda se descartaba para todo lo demás. */
+         if (strcmp($3, "filter")==0) { $$ = create_list_function_call_node($1, $3, $5); }
+         else { $$ = create_method_call_node($1, $3, $5); }
+         free($3); }
   | expression DOT IDENTIFIER
       { ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3); 
         $$ = create_ast_node("ACCESS_ATTR", $1, attr); }
@@ -606,8 +610,8 @@ list_literal:
 
 
 lambda:
-    IDENTIFIER ARROW                { /*printf(" [DEBUG] Reconocido LAMBDA\n");*/ }
-  | LPAREN IDENTIFIER RPAREN ARROW expression  { $$ = create_lambda_node($2, $5); free($2); }
+    IDENTIFIER ARROW expression                  { $$ = create_lambda_node($1, $3); free($1); }
+  | LPAREN IDENTIFIER RPAREN ARROW expression    { $$ = create_lambda_node($2, $5); free($2); }
   ;
 
 /* Fase B: lambda first-class con N parámetros y body expr o block. */
