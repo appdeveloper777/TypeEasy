@@ -38,6 +38,8 @@ Name: "addtopath"; Description: "Agregar TypeEasy al PATH (recomendado)"; GroupD
 
 [Files]
 Source: "{#SourceDir}\\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; Alias corto: 'te' === 'typeeasy'. Copia el mismo .exe con otro nombre.
+Source: "{#SourceDir}\\bin\\typeeasy.exe"; DestDir: "{app}\\bin"; DestName: "te.exe"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\\TypeEasy"; Filename: "{app}\\bin\\typeeasy.exe"; WorkingDir: "{app}"

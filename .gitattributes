@@ -7,3 +7,10 @@
 # Do not count benchmark/generated .te files in the language stats donut.
 benchmarks/**     linguist-vendored
 typeeasycode/_*.te linguist-generated
+
+# Shell scripts and templates must keep LF line endings on Windows
+# (bash will choke on CRLF with "$'\r': command not found").
+cli/typeeasy        text eol=lf
+cli/templates/**    text eol=lf
+installer/linux/**  text eol=lf
+*.sh                text eol=lf

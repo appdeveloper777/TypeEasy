@@ -1,0 +1,39 @@
+# {{PROJECT_NAME}}
+
+TypeEasy application.
+
+## Quick start
+
+```bash
+# Dev local (hot-reload)
+typeeasy serve
+
+# Generar un nuevo CRUD
+typeeasy gen resource producto
+
+# Deploy a producción
+typeeasy deploy
+```
+
+## Estructura
+
+```
+{{PROJECT_NAME}}/
+├── apis/           # Endpoints .te (uno por concepto)
+├── lib/            # Clases y helpers compartidos
+├── config/         # Variables por entorno
+├── migrations/     # Scripts SQL
+├── tests/          # Test endpoints
+└── typeeasy.toml   # Manifesto del proyecto
+```
+
+## Comandos útiles
+
+| Comando | Acción |
+|---|---|
+| `typeeasy serve` | Corre dev local con hot-reload |
+| `typeeasy gen resource <name>` | Genera CRUD completo (.te + .sql) |
+| `typeeasy gen endpoint <name>` | Genera endpoint vacío |
+| `typeeasy logs` | Tail de logs del servicio |
+| `typeeasy status` | Estado del servicio |
+| `typeeasy deploy` | Publica al servidor configurado |

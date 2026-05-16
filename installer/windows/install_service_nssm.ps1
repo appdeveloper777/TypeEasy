@@ -1,32 +1,32 @@
-# Instala TypeEasy --api como servicio de Windows usando NSSM.
+# Instala TypeEasy --api-dir como servicio de Windows usando NSSM.
 # Requisitos: NSSM en PATH (https://nssm.cc) y TypeEasy ya instalado.
 #
 # Uso (PowerShell elevada):
-#   .\install_service_nssm.ps1 -EndpointFile "C:\TypeEasy\endpoint.te" -Port 9001
-#   .\install_service_nssm.ps1 -EndpointFile "C:\TypeEasy\endpoint.te" -Port 9002
+#   .\install_service_nssm.ps1 -ApisDir "C:\TypeEasy\apis" -Port 9001
+#   .\install_service_nssm.ps1 -ApisDir "C:\TypeEasy\apis" -Port 9002
 #
 # Para escalar: instalar varias instancias en puertos distintos y poner
 # un IIS / nginx / Azure Front Door delante haciendo load balancing.
 
 param(
     [Parameter(Mandatory=$true)]
-    [string]$EndpointFile,
+    [string]$ApisDir,
 
     [int]$Port = 9001,
 
     [string]$BindHost = "127.0.0.1",
 
-    [string]$TypeEasyExe = "C:\Program Files\TypeEasy\typeeasy.exe",
+    [string]$TypeEasyExe = "C:\Program Files\TypeEasy\typeeasy-server.exe",
 
     [string]$ServiceName = ""
 )
 
 if (-not (Test-Path $TypeEasyExe)) {
-    Write-Error "No se encontro typeeasy.exe en: $TypeEasyExe"
+    Write-Error "No se encontro typeeasy-server.exe en: $TypeEasyExe"
     exit 1
 }
-if (-not (Test-Path $EndpointFile)) {
-    Write-Error "No se encontro el archivo endpoint: $EndpointFile"
+if (-not (Test-Path $ApisDir)) {
+    Write-Error "No se encontro el directorio de endpoints: $ApisDir"
     exit 1
 }
 if (-not (Get-Command nssm -ErrorAction SilentlyContinue)) {
@@ -43,7 +43,7 @@ Write-Host "Instalando servicio: $ServiceName" -ForegroundColor Cyan
 $logDir = "C:\ProgramData\TypeEasy\logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
-$args = "--api `"$EndpointFile`" --host $BindHost --port $Port"
+$args = "--api-dir `"$ApisDir`" --host $BindHost --port $Port"
 
 nssm install $ServiceName $TypeEasyExe $args
 nssm set $ServiceName AppStdout "$logDir\$ServiceName.out.log"

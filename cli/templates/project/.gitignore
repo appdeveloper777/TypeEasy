@@ -1,0 +1,17 @@
+# TypeEasy
+apis_broken/
+*.log
+*.pid
+.typeeasy/        # Carpeta temporal del CLI (merged endpoints)
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+config/*.local.env
+.env

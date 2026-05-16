@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# ============================================================================
+# te — Short alias for the `typeeasy` CLI.
+# Identical behaviour; just shorter to type.
+#   te new mi-app
+#   te gen resource producto
+#   te serve --dev
+# ============================================================================
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$DIR/typeeasy" "$@"

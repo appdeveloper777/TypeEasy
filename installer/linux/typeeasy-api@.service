@@ -1,12 +1,12 @@
 [Unit]
-# Plantilla de servicio systemd para TypeEasy --api.
+# Plantilla de servicio systemd para TypeEasy --api-dir.
 # Usa instancia = puerto. Ejemplo:
 #   sudo systemctl enable --now typeeasy-api@9001
 #   sudo systemctl enable --now typeeasy-api@9002
 #
-# El archivo .te a servir se configura en /etc/default/typeeasy-api
-# (variable TYPEEASY_API_FILE). Cada instancia puede sobreescribirlo
-# creando /etc/default/typeeasy-api@9001, /etc/default/typeeasy-api@9002, etc.
+# El directorio de endpoints (.te) se configura en /etc/default/typeeasy-api
+# (variable TYPEEASY_APIS_DIR). Cada instancia puede sobreescribirlo creando
+# /etc/default/typeeasy-api@9001, /etc/default/typeeasy-api@9002, etc.
 Description=TypeEasy API server (port %i)
 After=network.target
 
@@ -14,9 +14,9 @@ After=network.target
 Type=simple
 EnvironmentFile=-/etc/default/typeeasy-api
 EnvironmentFile=-/etc/default/typeeasy-api@%i
-Environment=TYPEEASY_API_FILE=/usr/share/typeeasy/examples/endpoint.te
-Environment=TYPEEASY_API_HOST=127.0.0.1
-ExecStart=/usr/bin/typeeasy --api ${TYPEEASY_API_FILE} --host ${TYPEEASY_API_HOST} --port %i
+Environment=TYPEEASY_APIS_DIR=/opt/typeeasy/apis
+Environment=TYPEEASY_HOST=127.0.0.1
+ExecStart=/usr/bin/typeeasy-server --api-dir ${TYPEEASY_APIS_DIR} --host ${TYPEEASY_HOST} --port %i
 Restart=on-failure
 RestartSec=2
 User=www-data

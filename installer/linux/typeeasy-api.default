@@ -2,9 +2,9 @@
 # Se aplica a TODAS las instancias salvo que exista
 # /etc/default/typeeasy-api@<port> que lo sobreescriba.
 
-# Archivo .te a servir.
-TYPEEASY_API_FILE=/usr/share/typeeasy/examples/endpoint.te
+# Directorio con los endpoints .te a servir (un solo proceso carga todos).
+TYPEEASY_APIS_DIR=/opt/typeeasy/apis
 
 # Host donde bindear. Para que solo escuche local (recomendado si usas
 # nginx delante), dejar 127.0.0.1. Para exponer directo, usar 0.0.0.0.
-TYPEEASY_API_HOST=127.0.0.1
+TYPEEASY_HOST=127.0.0.1

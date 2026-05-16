@@ -61,6 +61,14 @@ static ScriptFile *g_scripts = NULL;
 static int         g_hotreload = 0;
 static char      **g_main_argv = NULL;  /* saved for execv self-restart */
 
+/* === Runtime config ===
+ * Resolution precedence: CLI flag > env var > built-in default.
+ * Populated in main() before any subsystem starts. */
+static char g_apis_dir[1024]         = ""; /* directory scanned for *.te endpoints */
+static char g_single_api_file[1024]  = ""; /* if non-empty, only this .te is served */
+static int  g_port                   = 8080; /* HTTP listen port */
+static char g_host[128]              = ""; /* bind address (empty => civetweb default = all) */
+
 static void track_script(const char *path, time_t m) {
     ScriptFile *s = (ScriptFile*)malloc(sizeof(ScriptFile));
     s->path = strdup(path); s->mtime = m; s->next = g_scripts; g_scripts = s;
@@ -101,7 +109,10 @@ static int hotreload_changed(void) {
         if (stat(s->path, &st) != 0) return 1;
         if (st.st_mtime != s->mtime)  return 1;
     }
-    FILE *fp = popen("ls -1 /app/apis/*.te 2>/dev/null", "r");
+    if (g_single_api_file[0]) return 0; /* single-file mode: only tracked file matters */
+    char hr_cmd[1280];
+    snprintf(hr_cmd, sizeof(hr_cmd), "ls -1 %s/*.te 2>/dev/null", g_apis_dir);
+    FILE *fp = popen(hr_cmd, "r");
     if (fp) {
         char line[1035];
         int newfile = 0;
@@ -275,11 +286,23 @@ void discover_routes() {
     int files_failed_load = 0;
     int files_failed_discover = 0;
 
-    // Linux command to list files (for Docker)
-    fp = popen("ls -1 /app/apis/*.te 2>/dev/null", "r");
-    if (fp == NULL) {
-        printf("[ERROR] No se pudo listar el directorio apis/\n");
-        return;
+    /* Single-file mode: skip ls, feed one path directly to the loop. */
+    if (g_single_api_file[0]) {
+        printf("[LOG] Escaneando endpoint unico: %s\n", g_single_api_file);
+        fp = tmpfile();
+        if (!fp) { fprintf(stderr, "[ERROR] tmpfile() falló\n"); return; }
+        fprintf(fp, "%s\n", g_single_api_file);
+        rewind(fp);
+    } else {
+        /* Build `ls` command using configured apis dir (CLI flag, env var, or default). */
+        char ls_cmd[1280];
+        snprintf(ls_cmd, sizeof(ls_cmd), "ls -1 %s/*.te 2>/dev/null", g_apis_dir);
+        printf("[LOG] Escaneando endpoints en: %s\n", g_apis_dir);
+        fp = popen(ls_cmd, "r");
+        if (fp == NULL) {
+            fprintf(stderr, "[ERROR] No se pudo listar el directorio: %s\n", g_apis_dir);
+            return;
+        }
     }
 
     while (fgets(path, sizeof(path), fp) != NULL) {
@@ -396,7 +419,7 @@ void discover_routes() {
         
         free(discover_result);
     }
-    pclose(fp);
+    if (g_single_api_file[0]) fclose(fp); else pclose(fp);
 
     {
         int ok = files_total - files_failed_load - files_failed_discover;
@@ -1073,7 +1096,11 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
  * If enable_debug != 0, opens the debugger listener (only slot 0). */
 static int run_worker_ext(int enable_debug) {
     struct mg_context *ctx;
-    const char *options[] = {"listening_ports", "8080", NULL};
+    /* Build civetweb listening_ports spec: "HOST:PORT" or just "PORT". */
+    char port_spec[160];
+    if (g_host[0]) snprintf(port_spec, sizeof(port_spec), "%s:%d", g_host, g_port);
+    else           snprintf(port_spec, sizeof(port_spec), "%d", g_port);
+    const char *options[] = {"listening_ports", port_spec, NULL};
 
     signal(SIGINT,  signal_handler);
     signal(SIGTERM, signal_handler);
@@ -1096,7 +1123,7 @@ static int run_worker_ext(int enable_debug) {
         return 1;
     }
     g_mg_ctx = ctx;
-    printf("[WORKER %d] listo en :8080%s\n", (int)getpid(),
+    printf("[WORKER %d] listo en %s%s\n", (int)getpid(), port_spec,
            enable_debug ? " [DEBUG ON]" : ""); fflush(stdout);
 
     mg_set_request_handler(ctx, "/",      manejadorRaiz,        NULL);
@@ -1115,10 +1142,16 @@ static int run_worker(void) { return run_worker_ext(0); }
 /* Supervisor's own .te tracker: just stat, no parsing. */
 static void supervisor_track_scripts(void) {
     free_scripts();
-    FILE *fp = popen("ls -1 /app/apis/*.te 2>/dev/null", "r");
+    struct stat st;
+    if (g_single_api_file[0]) {
+        if (stat(g_single_api_file, &st) == 0) track_script(g_single_api_file, st.st_mtime);
+        return;
+    }
+    char ls_cmd[1280];
+    snprintf(ls_cmd, sizeof(ls_cmd), "ls -1 %s/*.te 2>/dev/null", g_apis_dir);
+    FILE *fp = popen(ls_cmd, "r");
     if (!fp) return;
     char line[1035];
-    struct stat st;
     while (fgets(line, sizeof(line), fp)) {
         line[strcspn(line, "\r\n")] = 0;
         if (stat(line, &st) == 0) track_script(line, st.st_mtime);
@@ -1167,23 +1200,129 @@ static int find_worker_slot(pid_t pid) {
     return -1;
 }
 
-int main(void) {
-    /* Save argv for child re-exec (legacy; no longer used by reload path). */
-    static char *argv0_buf = NULL;
-    static char *fake_argv[2];
-    {
-        char buf[1024];
-        ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-        if (n > 0) { buf[n] = '\0'; argv0_buf = strdup(buf); }
-        else argv0_buf = strdup("/app/typeeasy_api");
-        fake_argv[0] = argv0_buf;
-        fake_argv[1] = NULL;
-        g_main_argv = fake_argv;
+static void print_usage(const char *prog) {
+    fprintf(stderr,
+        "TypeEasy API server\n"
+        "Usage: %s [options]\n"
+        "\n"
+        "Options:\n"
+        "  --api <file>       Serve a single .te endpoint file\n"
+        "                     (mutually exclusive with --api-dir)\n"
+        "  --api-dir <path>   Directory containing .te endpoint files\n"
+        "                     (aliases: --api-folder)\n"
+        "                     (default: $TYPEEASY_APIS_DIR or /app/apis)\n"
+        "  --port <n>         HTTP listen port\n"
+        "                     (default: $TYPEEASY_PORT or 8080)\n"
+        "  --host <addr>      Bind address, e.g. 127.0.0.1 or 0.0.0.0\n"
+        "                     (default: $TYPEEASY_HOST or all interfaces)\n"
+        "  --workers <n>      Worker processes\n"
+        "                     (default: $TYPEEASY_WORKERS or auto-detect)\n"
+        "  --hotreload        Reload .te files on change (dev mode)\n"
+        "                     (default: $TYPEEASY_HOTRELOAD)\n"
+        "  -h, --help         Show this help and exit\n"
+        "  -v, --version      Show version and exit\n"
+        "\n"
+        "Examples:\n"
+        "  %s                                 # defaults (Docker-style)\n"
+        "  %s --api-dir /opt/mi-app/apis --port 9001\n"
+        "  %s --api endpoint.te --port 9002    # single-file mode\n"
+        "  %s --api-dir ./apis --hotreload     # dev local\n",
+        prog, prog, prog, prog, prog);
+}
+
+int main(int argc, char **argv) {
+    /* Save real argv globally so supervisor's execv preserves all flags. */
+    g_main_argv = argv;
+
+    /* --- Parse CLI args (precedence: flag > env > default) --- */
+    const char *cli_apis_dir = NULL;
+    const char *cli_api_file = NULL;
+    const char *cli_host     = NULL;
+    int  cli_port    = -1;
+    int  cli_workers = -1;
+    int  cli_hot     = -1;  /* -1 = unset */
+
+    for (int i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        if      (!strcmp(a, "-h") || !strcmp(a, "--help"))    { print_usage(argv[0]); return 0; }
+        else if (!strcmp(a, "-v") || !strcmp(a, "--version")) { printf("typeeasy api-server (build " __DATE__ ")\n"); return 0; }
+        else if (!strcmp(a, "--hotreload"))                   { cli_hot = 1; }
+        else if ((!strcmp(a, "--api") || !strcmp(a, "--api-file")) && i + 1 < argc) { cli_api_file = argv[++i]; }
+        else if ((!strcmp(a, "--api-dir") || !strcmp(a, "--api-folder")) && i + 1 < argc) { cli_apis_dir = argv[++i]; }
+        else if (!strcmp(a, "--port")    && i + 1 < argc)     { cli_port     = atoi(argv[++i]); }
+        else if (!strcmp(a, "--host")    && i + 1 < argc)     { cli_host     = argv[++i]; }
+        else if (!strcmp(a, "--workers") && i + 1 < argc)     { cli_workers  = atoi(argv[++i]); }
+        else {
+            fprintf(stderr, "[ERROR] Unknown argument: %s\n", a);
+            print_usage(argv[0]);
+            return 2;
+        }
     }
 
-    const char *hr = getenv("TYPEEASY_HOTRELOAD");
-    g_hotreload = (hr && (*hr == '1' || *hr == 't' || *hr == 'T' || *hr == 'y' || *hr == 'Y')) ? 1 : 0;
+    /* --- Resolve single-file vs apis_dir --- */
+    if (cli_api_file && cli_apis_dir) {
+        fprintf(stderr, "[ERROR] --api y --api-dir son mutuamente exclusivos.\n");
+        return 2;
+    }
+    if (cli_api_file) {
+        snprintf(g_single_api_file, sizeof(g_single_api_file), "%s", cli_api_file);
+        /* Derive parent dir for any consumers that still read g_apis_dir. */
+        const char *slash = strrchr(cli_api_file, '/');
+#ifdef _WIN32
+        const char *bslash = strrchr(cli_api_file, '\\');
+        if (bslash && (!slash || bslash > slash)) slash = bslash;
+#endif
+        if (slash) {
+            size_t n = (size_t)(slash - cli_api_file);
+            if (n >= sizeof(g_apis_dir)) n = sizeof(g_apis_dir) - 1;
+            memcpy(g_apis_dir, cli_api_file, n); g_apis_dir[n] = '\0';
+        } else {
+            snprintf(g_apis_dir, sizeof(g_apis_dir), "%s", ".");
+        }
+    } else {
+        const char *env_dir = getenv("TYPEEASY_APIS_DIR");
+        if      (cli_apis_dir) snprintf(g_apis_dir, sizeof(g_apis_dir), "%s", cli_apis_dir);
+        else if (env_dir)      snprintf(g_apis_dir, sizeof(g_apis_dir), "%s", env_dir);
+        else                   snprintf(g_apis_dir, sizeof(g_apis_dir), "%s", "/app/apis");
+    }
+
+    /* --- Resolve port --- */
+    const char *env_port = getenv("TYPEEASY_PORT");
+    if      (cli_port > 0)         g_port = cli_port;
+    else if (env_port && *env_port) g_port = atoi(env_port);
+    /* else keep default 8080 from declaration */
+
+    /* --- Resolve host --- */
+    const char *env_host = getenv("TYPEEASY_HOST");
+    if      (cli_host)             snprintf(g_host, sizeof(g_host), "%s", cli_host);
+    else if (env_host && *env_host) snprintf(g_host, sizeof(g_host), "%s", env_host);
+    /* else empty => civetweb listens on all interfaces */
+
+    /* --- Resolve hot-reload --- */
+    if (cli_hot >= 0) {
+        g_hotreload = cli_hot;
+    } else {
+        const char *hr = getenv("TYPEEASY_HOTRELOAD");
+        g_hotreload = (hr && (*hr == '1' || *hr == 't' || *hr == 'T' || *hr == 'y' || *hr == 'Y')) ? 1 : 0;
+    }
+
+    /* --- Workers: CLI > env (handled by detect_num_workers) > auto --- */
+    if (cli_workers > 0) {
+        char buf[16]; snprintf(buf, sizeof(buf), "%d", cli_workers);
+        setenv("TYPEEASY_WORKERS", buf, 1);
+    }
     g_num_workers = detect_num_workers();
+
+    if (g_single_api_file[0]) {
+        printf("[CONFIG] api_file=%s  port=%d  host=%s  workers=%d  hotreload=%s\n",
+               g_single_api_file, g_port, g_host[0] ? g_host : "(all)",
+               g_num_workers, g_hotreload ? "ON" : "OFF");
+    } else {
+        printf("[CONFIG] apis_dir=%s  port=%d  host=%s  workers=%d  hotreload=%s\n",
+               g_apis_dir, g_port, g_host[0] ? g_host : "(all)",
+               g_num_workers, g_hotreload ? "ON" : "OFF");
+    }
+    fflush(stdout);
 
     /* Single-worker + no hot-reload => no supervisor (lean prod single proc). */
     if (g_num_workers == 1 && !g_hotreload) {
