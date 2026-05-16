@@ -6,6 +6,7 @@ src/parser.output
 
 # Ejecutables
 typeeasy
+!cli/typeeasy
 
 # WAHA Sessions (datos privados de WhatsApp)
 waha_sessions/

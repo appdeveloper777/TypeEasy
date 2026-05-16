@@ -1,0 +1,504 @@
+#!/usr/bin/env bash
+# ============================================================================
+# typeeasy — CLI for TypeEasy projects
+# ----------------------------------------------------------------------------
+# Subcommands:
+#   new <name>            Create a new project
+#   gen resource <name>   Generate CRUD endpoint + migration
+#   gen endpoint <name>   Generate empty endpoint
+#   serve                 Run dev server (hot-reload)
+#   install --systemd     Install as systemd service (Linux)
+#   deploy                rsync apis/ to configured prod host + restart
+#   logs                  Tail service logs
+#   status                Service status
+#   start | stop | restart
+#   version | help
+#
+# Backend:
+#   The real HTTP server is the C binary, expected at:
+#     $TYPEEASY_BIN  (default: /usr/bin/typeeasy-server)
+# ============================================================================
+# Portable strict mode: avoid `pipefail` (not supported by minimal shells
+# like ash/busybox that may be picked up on Windows when invoked from CMD).
+set -eu
+# Try to enable pipefail if the shell supports it (bash, zsh).
+(set -o pipefail 2>/dev/null) && set -o pipefail || true
+
+VERSION="0.1.0"
+
+# --- Locate binary + templates ---
+# Resolution order: $TYPEEASY_BIN > typeeasy-bin (Linux .deb / Windows install)
+# > typeeasy-server (legacy api_server) > Windows .exe in {app}\bin > source tree.
+#
+# IMPORTANT: we never resolve to "/usr/bin/typeeasy" because on Linux that path
+# IS this very bash script (CLI wrapper). Using it would cause an infinite loop.
+TYPEEASY_BIN="${TYPEEASY_BIN:-}"
+_SELF_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+if [[ -z "$TYPEEASY_BIN" || ! -x "$TYPEEASY_BIN" ]]; then
+  for cand in \
+    "/usr/bin/typeeasy-bin" \
+    "/usr/bin/typeeasy-server" \
+    "/usr/local/bin/typeeasy-bin" \
+    "/usr/local/bin/typeeasy-server" \
+    "/c/Program Files/TypeEasy/bin/typeeasy-bin.exe" \
+    "/c/Program Files (x86)/TypeEasy/bin/typeeasy-bin.exe" \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/typeeasy-bin.exe" \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/typeeasy.exe" \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/typeeasy_api" \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/typeeasy"; do
+    # Skip self (avoid bash wrapper invoking itself if installed at same path)
+    [[ "$cand" == "$_SELF_PATH" ]] && continue
+    if [[ -x "$cand" ]]; then TYPEEASY_BIN="$cand"; break; fi
+  done
+fi
+# Detect server flavor: "api" (v0.0.5 interpreter, --api file.te single-file)
+#                      "dir" (api_server binary with --api-dir folder support)
+# Set TYPEEASY_BIN_MODE=auto|api|dir to override.
+TYPEEASY_BIN_MODE="${TYPEEASY_BIN_MODE:-auto}"
+
+# Templates dir: $TYPEEASY_TEMPLATES (env) > installed location > source tree
+TEMPLATES_DIR="${TYPEEASY_TEMPLATES:-}"
+if [[ -z "$TEMPLATES_DIR" ]]; then
+  for cand in \
+    "/usr/share/typeeasy/templates" \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/templates"; do
+    [[ -d "$cand" ]] && TEMPLATES_DIR="$cand" && break
+  done
+fi
+
+# --- Helpers ---
+die()  { echo "[typeeasy] ERROR: $*" >&2; exit 1; }
+info() { echo "[typeeasy] $*"; }
+
+require_project() {
+  [[ -f "./typeeasy.toml" ]] || die "Not in a TypeEasy project (no typeeasy.toml here). Run 'typeeasy new <name>' first."
+}
+
+# Capitalize first letter (portable, no ${var^}).
+cap_first() { printf '%s' "$1" | awk '{print toupper(substr($0,1,1)) substr($0,2)}'; }
+
+# Read a key from typeeasy.toml under a given section. Very simple parser.
+toml_get() {
+  local section="$1" key="$2" file="${3:-./typeeasy.toml}"
+  awk -v s="[$section]" -v k="$key" '
+    $0 == s { in_s = 1; next }
+    /^\[/   { in_s = 0 }
+    in_s && $1 == k && $2 == "=" {
+      sub(/^[^=]*=[ ]*/, "")
+      gsub(/^["]|["]$/, "")
+      print
+      exit
+    }' "$file" 2>/dev/null
+}
+
+# Apply template substitution. Reads $1, writes $2, using env vars NAME, etc.
+render_template() {
+  local src="$1" dst="$2"
+  [[ -f "$src" ]] || die "Template not found: $src"
+  sed \
+    -e "s|{{PROJECT_NAME}}|${PROJECT_NAME:-}|g" \
+    -e "s|{{NAME}}|${NAME:-}|g" \
+    -e "s|{{NAME_CAP}}|${NAME_CAP:-}|g" \
+    -e "s|{{TABLE}}|${TABLE:-}|g" \
+    -e "s|{{DB_HOST}}|${DB_HOST:-127.0.0.1}|g" \
+    -e "s|{{DB_PORT}}|${DB_PORT:-3306}|g" \
+    -e "s|{{DB_USER}}|${DB_USER:-typeeasy}|g" \
+    -e "s|{{DB_PASS}}|${DB_PASS:-typeeasy}|g" \
+    -e "s|{{DB_NAME}}|${DB_NAME:-meri}|g" \
+    "$src" > "$dst"
+}
+
+# ============================================================================
+# Subcommands
+# ============================================================================
+
+cmd_new() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "Usage: typeeasy new <project-name>"
+  [[ ! -e "$name" ]] || die "Directory '$name' already exists."
+
+  info "Creating project '$name' ..."
+  local src="$TEMPLATES_DIR/project"
+  [[ -d "$src" ]] || die "Project templates not found at: $src"
+
+  mkdir -p "$name"
+  cp -r "$src/." "$name/"
+
+  PROJECT_NAME="$name"
+  # Render templates (those ending in .tmpl)
+  while IFS= read -r -d '' tpl; do
+    local out="${tpl%.tmpl}"
+    render_template "$tpl" "$out"
+    rm -f "$tpl"
+  done < <(find "$name" -type f -name '*.tmpl' -print0)
+
+  info "Project '$name' created."
+  echo
+  echo "  cd $name"
+  echo "  typeeasy gen resource producto"
+  echo "  typeeasy serve"
+}
+
+cmd_gen() {
+  local kind="${1:-}" name="${2:-}"
+  [[ -n "$kind" && -n "$name" ]] || die "Usage: typeeasy gen <resource|endpoint> <name>"
+  require_project
+
+  NAME="$name"
+  NAME_CAP="$(cap_first "$name")"
+  TABLE="${name}s"
+
+  # Load DB config from typeeasy.toml
+  DB_HOST="$(toml_get database host)"; DB_HOST="${DB_HOST:-127.0.0.1}"
+  DB_PORT="$(toml_get database port)"; DB_PORT="${DB_PORT:-3306}"
+  DB_USER="$(toml_get database user)"; DB_USER="${DB_USER:-typeeasy}"
+  DB_PASS="$(toml_get database pass)"; DB_PASS="${DB_PASS:-typeeasy}"
+  DB_NAME="$(toml_get database name)"; DB_NAME="${DB_NAME:-meri}"
+
+  case "$kind" in
+    resource)
+      local out_te="./apis/${name}_endpoint.te"
+      local out_sql="./migrations/$(date +%Y%m%d%H%M%S)_create_${TABLE}.sql"
+      [[ ! -e "$out_te" ]] || die "$out_te already exists."
+      mkdir -p ./apis ./migrations
+      render_template "$TEMPLATES_DIR/resource/endpoint.te.tmpl"   "$out_te"
+      render_template "$TEMPLATES_DIR/resource/migration.sql.tmpl" "$out_sql"
+      info "Created: $out_te"
+      info "Created: $out_sql"
+      echo
+      echo "  Apply migration:  mysql -u$DB_USER -p$DB_PASS $DB_NAME < $out_sql"
+      echo "  Try:              curl http://localhost:8080/api/$name"
+      ;;
+    endpoint)
+      local out_te="./apis/${name}_endpoint.te"
+      [[ ! -e "$out_te" ]] || die "$out_te already exists."
+      mkdir -p ./apis
+      render_template "$TEMPLATES_DIR/endpoint/endpoint.te.tmpl" "$out_te"
+      info "Created: $out_te"
+      ;;
+    *) die "Unknown generator: $kind (use 'resource' or 'endpoint')" ;;
+  esac
+}
+
+cmd_serve() {
+  require_project
+
+  # --- Parse flags first (--dev / --prod determines defaults) ---
+  local env_mode="dev"  # default = dev
+  local use_docker=0
+  local cli_port="" cli_host="" cli_workers=""
+  local cli_hotreload=""  # "1" / "0" / "" (use mode default)
+  local pass_args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dev)             env_mode="dev"; shift ;;
+      --prod)            env_mode="prod"; shift ;;
+      --docker)          use_docker=1; shift ;;
+      --port)            cli_port="$2"; shift 2 ;;
+      --host)            cli_host="$2"; shift 2 ;;
+      --workers)         cli_workers="$2"; shift 2 ;;
+      --hotreload)       cli_hotreload="1"; shift ;;
+      --no-hotreload)    cli_hotreload="0"; shift ;;
+      *)                 pass_args+=("$1"); shift ;;
+    esac
+  done
+
+  # --- Resolve config with precedence: CLI flag > [env.X] > [server] > defaults ---
+  local section="env.$env_mode"
+  local apis_dir port host workers hotreload
+
+  apis_dir="$(toml_get "$section" apis_dir)"
+  [[ -z "$apis_dir" ]] && apis_dir="$(toml_get server apis_dir)"
+  apis_dir="${apis_dir:-./apis}"
+
+  port="${cli_port:-$(toml_get "$section" port)}"
+  [[ -z "$port" ]] && port="$(toml_get server port)"
+  port="${port:-8080}"
+
+  host="${cli_host:-$(toml_get "$section" host)}"
+  [[ -z "$host" ]] && host="$(toml_get server host)"
+  if [[ -z "$host" ]]; then
+    [[ "$env_mode" == "prod" ]] && host="0.0.0.0" || host="127.0.0.1"
+  fi
+
+  workers="${cli_workers:-$(toml_get "$section" workers)}"
+  [[ -z "$workers" ]] && workers="$(toml_get server workers)"
+  if [[ -z "$workers" || "$workers" == "0" ]]; then
+    [[ "$env_mode" == "prod" ]] && workers="auto" || workers="1"
+  fi
+
+  if [[ -n "$cli_hotreload" ]]; then
+    hotreload="$cli_hotreload"
+  else
+    hotreload="$(toml_get "$section" hotreload)"
+    [[ -z "$hotreload" ]] && { [[ "$env_mode" == "prod" ]] && hotreload="0" || hotreload="1"; }
+  fi
+
+  # --- Auto-fallback to Docker if native binary missing ---
+  if [[ ! -x "$TYPEEASY_BIN" ]]; then
+    if command -v docker >/dev/null 2>&1; then
+      use_docker=1
+      info "Native binary not found at $TYPEEASY_BIN — falling back to Docker mode."
+    else
+      die "Server binary not found at $TYPEEASY_BIN and 'docker' is not installed.
+Options:
+  - Install TypeEasy server:   typeeasy install --systemd   (Linux)
+  - Set custom path:           export TYPEEASY_BIN=/path/to/typeeasy-server
+  - Use Docker:                typeeasy serve --docker"
+    fi
+  fi
+
+  # --- Banner ---
+  local hr_tag; [[ "$hotreload" == "1" ]] && hr_tag="ON" || hr_tag="OFF"
+  local mode_tag; [[ "$env_mode" == "prod" ]] && mode_tag="PROD (watchdog, auto-restart)" || mode_tag="DEV"
+  echo "============================================================"
+  echo "  TypeEasy serve  [$mode_tag]"
+  echo "  apis:       $apis_dir"
+  echo "  bind:       http://$host:$port"
+  echo "  workers:    $workers"
+  echo "  hot-reload: $hr_tag"
+  echo "============================================================"
+
+  # --- Docker branch ---
+  if [[ $use_docker -eq 1 ]]; then
+    command -v docker >/dev/null 2>&1 || die "Docker not found in PATH."
+    local apis_abs
+    apis_abs="$(cd "$apis_dir" 2>/dev/null && pwd)" || die "apis_dir not found: $apis_dir"
+    case "$apis_abs" in
+      /[a-zA-Z]/*) apis_abs="$(printf '%s' "$apis_abs" | sed -E 's|^/([a-zA-Z])/|\U\1:/|')" ;;
+    esac
+    local repo_dir="${TYPEEASY_REPO:-}"
+    if [[ -z "$repo_dir" ]]; then
+      local sd; sd="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+      [[ -f "$sd/docker-compose.yml" ]] && repo_dir="$sd"
+    fi
+    [[ -n "$repo_dir" && -f "$repo_dir/docker-compose.yml" ]] \
+      || die "Cannot find TypeEasy docker-compose.yml. Set TYPEEASY_REPO=/path/to/TypeEasy"
+
+    cd "$repo_dir"
+    local stale
+    stale="$(docker ps -aq --filter "name=typeeasy-api-run" 2>/dev/null || true)"
+    if [[ -n "$stale" ]]; then
+      info "Cleaning up stale containers..."
+      docker rm -f $stale >/dev/null 2>&1 || true
+    fi
+    export MSYS_NO_PATHCONV=1
+    export MSYS2_ARG_CONV_EXCL='*'
+
+    local docker_restart=""
+    [[ "$env_mode" == "prod" ]] && docker_restart="--restart unless-stopped"
+
+    if [[ "$env_mode" == "prod" ]]; then
+      # Detached + named so user can manage via typeeasy stop/restart
+      docker rm -f typeeasy-api-prod >/dev/null 2>&1 || true
+      exec docker compose run -d --service-ports --name typeeasy-api-prod \
+        -e TYPEEASY_HOTRELOAD="$hotreload" \
+        -e TYPEEASY_APIS_DIR=/app/apis \
+        -e TYPEEASY_PORT="$port" \
+        -e TYPEEASY_HOST="$host" \
+        -v "${apis_abs}:/app/apis" \
+        api
+    else
+      exec docker compose run --rm --service-ports \
+        -e TYPEEASY_HOTRELOAD="$hotreload" \
+        -e TYPEEASY_APIS_DIR=/app/apis \
+        -e TYPEEASY_PORT="$port" \
+        -e TYPEEASY_HOST="$host" \
+        -v "${apis_abs}:/app/apis" \
+        api
+    fi
+  fi
+
+  # --- Native branch ---
+  # Detect binary capability: does it support --api-dir, or only --api <file>?
+  local bin_mode="$TYPEEASY_BIN_MODE"
+  if [[ "$bin_mode" == "auto" ]]; then
+    if "$TYPEEASY_BIN" --help 2>&1 | grep -q -- "--api-dir"; then
+      bin_mode="dir"
+    else
+      bin_mode="api"
+    fi
+  fi
+
+  local args=()
+  if [[ "$bin_mode" == "dir" ]]; then
+    # New server binary: supports --api-dir, --workers, --hotreload
+    args=(--api-dir "$apis_dir" --host "$host" --port "$port")
+    [[ "$hotreload" == "1" ]] && args+=(--hotreload)
+    [[ "$workers" != "auto" ]] && args+=(--workers "$workers")
+  else
+    # v0.0.5 interpreter: --api <file> single-file only.
+    # Merge all .te in apis_dir into one transient file.
+    mkdir -p ./.typeeasy
+    local merged="./.typeeasy/_merged_${env_mode}.te"
+    if ls "$apis_dir"/*.te >/dev/null 2>&1; then
+      {
+        echo "// Auto-generated by 'typeeasy serve' — DO NOT EDIT."
+        echo "// Source files: $apis_dir/*.te"
+        echo ""
+        for f in "$apis_dir"/*.te; do
+          echo "// === $(basename "$f") ==="
+          cat "$f"
+          echo ""
+        done
+      } > "$merged"
+      info "Merged $(ls "$apis_dir"/*.te | wc -l) endpoint file(s) -> $merged"
+    else
+      die "No se encontraron archivos .te en $apis_dir. Crealos con 'typeeasy gen resource <name>'."
+    fi
+    args=(--api "$merged" --host "$host" --port "$port")
+    # NOTE: v0.0.5 binary lacks --hotreload and --workers. Watchdog (--prod)
+    # still works since it just re-spawns the process.
+  fi
+  args+=("${pass_args[@]}")
+
+  if [[ "$env_mode" == "prod" ]]; then
+    # Watchdog loop: re-spawn the binary on any non-zero exit, with backoff.
+    # On Linux for real prod, prefer: sudo typeeasy install --systemd
+    info "Watchdog activo — el server se reiniciará automáticamente si crashea."
+    info "Ctrl+C para detener."
+    local fail_count=0 backoff=1
+    while true; do
+      "$TYPEEASY_BIN" "${args[@]}"
+      local ec=$?
+      if [[ $ec -eq 0 ]]; then
+        info "Server salió limpio (exit 0). Bye."
+        exit 0
+      fi
+      fail_count=$((fail_count + 1))
+      info "[WATCHDOG] Server crasheó (exit $ec). Reiniciando en ${backoff}s (fallo #$fail_count)..."
+      sleep "$backoff"
+      [[ $backoff -lt 30 ]] && backoff=$((backoff * 2))
+    done
+  else
+    exec "$TYPEEASY_BIN" "${args[@]}"
+  fi
+}
+
+cmd_install() {
+  local mode="${1:---systemd}"
+  case "$mode" in
+    --systemd)
+      [[ "$(uname -s)" == "Linux" ]] || die "--systemd is Linux-only."
+      [[ $EUID -eq 0 ]] || die "Run with sudo."
+      info "Installing systemd service ..."
+      install -m 755 "$TYPEEASY_BIN" /usr/bin/typeeasy-server
+      install -m 755 "$0"            /usr/bin/typeeasy
+
+      local installer_dir
+      installer_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../installer/linux" 2>/dev/null && pwd)" || true
+      [[ -d "$installer_dir" ]] || installer_dir="/usr/share/typeeasy/installer/linux"
+
+      install -m 644 "$installer_dir/typeeasy-api@.service" /etc/systemd/system/typeeasy-api@.service
+      [[ -f /etc/default/typeeasy-api ]] || install -m 644 "$installer_dir/typeeasy-api.default" /etc/default/typeeasy-api
+
+      systemctl daemon-reload
+      info "Done. Now: sudo systemctl enable --now typeeasy-api@8080"
+      ;;
+    *) die "Unknown install mode: $mode" ;;
+  esac
+}
+
+cmd_deploy() {
+  require_project
+  local host user remote
+  host="$(toml_get prod host)";       [[ -n "$host" ]]   || die "Set [prod] host in typeeasy.toml"
+  user="$(toml_get prod user)";       user="${user:-typeeasy}"
+  remote="$(toml_get prod remote_dir)"; [[ -n "$remote" ]] || die "Set [prod] remote_dir in typeeasy.toml"
+
+  info "Deploying ./apis/ → $user@$host:$remote/apis/"
+  rsync -avz --delete ./apis/ "$user@$host:$remote/apis/"
+
+  local port; port="$(toml_get prod port)"; port="${port:-8080}"
+  info "Restarting typeeasy-api@${port} on $host ..."
+  ssh "$user@$host" "sudo systemctl restart typeeasy-api@${port}"
+  info "Deploy complete. Check: typeeasy logs (or ssh and: journalctl -u typeeasy-api@${port} -f)"
+}
+
+cmd_service() {
+  local action="$1"
+  local port; port="$(toml_get server port 2>/dev/null || true)"; port="${port:-8080}"
+  case "$action" in
+    logs)    journalctl -u "typeeasy-api@${port}" -f ;;
+    status)  systemctl status "typeeasy-api@${port}" ;;
+    start)   sudo systemctl start    "typeeasy-api@${port}" ;;
+    stop)    sudo systemctl stop     "typeeasy-api@${port}" ;;
+    restart) sudo systemctl restart  "typeeasy-api@${port}" ;;
+  esac
+}
+
+cmd_help() {
+  cat <<EOF
+typeeasy $VERSION — CLI for TypeEasy projects
+
+USAGE:
+  typeeasy new <name>             Create a new project
+  typeeasy gen resource <name>    Generate CRUD endpoint + migration
+  typeeasy gen endpoint <name>    Generate empty endpoint
+  typeeasy serve [--dev|--prod]   Run server from typeeasy.toml
+  typeeasy install --systemd      Install as systemd service (Linux, sudo)
+  typeeasy deploy                 rsync apis/ to configured prod + restart
+  typeeasy logs                   Tail journalctl for the service
+  typeeasy status                 systemctl status of the service
+  typeeasy start | stop | restart
+  typeeasy version
+  typeeasy help
+
+SERVE MODES:
+  --dev    (default)   1 worker, hot-reload ON,  bind 127.0.0.1, foreground
+  --prod               auto workers, hot-reload OFF, bind 0.0.0.0,
+                       watchdog auto-restart si el server crashea
+
+  Overrides:  --port N  --host H  --workers N  --hotreload  --no-hotreload
+  Container:  --docker  (fuerza modo Docker en lugar de binario nativo)
+
+DIRECT SERVER MODE (no project required):
+  typeeasy --api <file.te> [--port N] [--host H] [--hotreload]
+  typeeasy --api-dir <path>  [--port N] [--host H] [--hotreload] [--workers N]
+
+EXAMPLES:
+  typeeasy --api endpoint.te --port 9002
+  typeeasy --api-dir ./apis --port 9001 --hotreload
+  typeeasy serve                          # uses ./typeeasy.toml
+
+ENVIRONMENT:
+  TYPEEASY_BIN        Path to C server binary  (default: /usr/bin/typeeasy-server)
+  TYPEEASY_TEMPLATES  Path to templates dir    (default: /usr/share/typeeasy/templates)
+
+QUICK START:
+  typeeasy new mi-app
+  cd mi-app
+  typeeasy gen resource producto
+  typeeasy serve
+EOF
+}
+
+# ============================================================================
+# Dispatcher
+# ============================================================================
+# If first arg starts with `--` and is NOT a known global flag, treat the whole
+# invocation as a direct pass-through to the C binary. Enables:
+#   typeeasy --api endpoint.te --port 9002
+#   typeeasy --api-dir ./apis --port 9001 --hotreload
+case "${1:-help}" in
+  --api|--api-file|--api-dir|--api-folder|--port|--host|--workers|--hotreload)
+    [[ -x "$TYPEEASY_BIN" ]] || die "Server binary not found at $TYPEEASY_BIN. Set TYPEEASY_BIN."
+    exec "$TYPEEASY_BIN" "$@"
+    ;;
+esac
+
+case "${1:-help}" in
+  new)        shift; cmd_new "$@" ;;
+  gen)        shift; cmd_gen "$@" ;;
+  serve)      shift; cmd_serve "$@" ;;
+  install)    shift; cmd_install "$@" ;;
+  deploy)     shift; cmd_deploy "$@" ;;
+  logs)       cmd_service logs ;;
+  status)     cmd_service status ;;
+  start)      cmd_service start ;;
+  stop)       cmd_service stop ;;
+  restart)    cmd_service restart ;;
+  version|-v|--version) echo "typeeasy $VERSION" ;;
+  help|-h|--help|"")    cmd_help ;;
+  *) die "Unknown command: $1 (try: typeeasy help)" ;;
+esac
