@@ -37,13 +37,17 @@ Name: "desktopicon"; Description: "Crear acceso directo en el escritorio"; Group
 Name: "addtopath"; Description: "Agregar TypeEasy al PATH (recomendado)"; GroupDescription: "Opciones adicionales:";
 
 [Files]
+; Empaquetado por scripts/package_windows_release.sh:
+;   {app}\bin\typeeasy-bin.exe  (interprete C)
+;   {app}\bin\typeeasy.cmd      (smart dispatcher Rails-style)
+;   {app}\bin\te.cmd            (alias)
+;   {app}\cli\typeeasy          (bash script invocado por el .cmd via Git Bash)
+;   {app}\cli\templates\        (scaffolds para 'typeeasy new')
 Source: "{#SourceDir}\\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
-; Alias corto: 'te' === 'typeeasy'. Copia el mismo .exe con otro nombre.
-Source: "{#SourceDir}\\bin\\typeeasy.exe"; DestDir: "{app}\\bin"; DestName: "te.exe"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\\TypeEasy"; Filename: "{app}\\bin\\typeeasy.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\\TypeEasy"; Filename: "{app}\\bin\\typeeasy.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autoprograms}\\TypeEasy"; Filename: "{app}\\bin\\typeeasy.cmd"; WorkingDir: "{app}"
+Name: "{autodesktop}\\TypeEasy"; Filename: "{app}\\bin\\typeeasy.cmd"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Registry]
 ; Agrega {app}\bin al PATH del usuario para que `typeeasy hola.te` funcione desde cualquier consola.
@@ -52,8 +56,8 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
     Check: NeedsAddPath(ExpandConstant('{app}\\bin')); Tasks: addtopath
 
 [Run]
-Filename: "{cmd}"; Parameters: "/k cd /d ""{app}"" && .\\bin\\typeeasy.exe --help"; Description: "Abrir TypeEasy en consola"; Flags: postinstall nowait skipifsilent
-Filename: "{cmd}"; Parameters: "/k cd /d ""{app}"" && .\\bin\\typeeasy.exe --api .\\examples\\endpoint.te --port 9000"; Description: "Probar servidor HTTP (--api endpoint.te en :9000)"; Flags: postinstall nowait skipifsilent unchecked
+Filename: "{cmd}"; Parameters: "/k cd /d ""{app}"" && .\\bin\\typeeasy.cmd --help"; Description: "Abrir TypeEasy en consola"; Flags: postinstall nowait skipifsilent
+Filename: "{cmd}"; Parameters: "/k cd /d ""{app}"" && .\\bin\\typeeasy.cmd --api .\\examples\\endpoint.te --port 9000"; Description: "Probar servidor HTTP (--api endpoint.te en :9000)"; Flags: postinstall nowait skipifsilent unchecked
 
 [Code]
 function NeedsAddPath(Param: string): Boolean;

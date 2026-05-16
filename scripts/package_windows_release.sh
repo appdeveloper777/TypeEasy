@@ -18,9 +18,21 @@ if [[ ! -f "$BIN_PATH" ]]; then
 fi
 
 rm -rf "$PKG_DIR"
-mkdir -p "$PKG_DIR/bin" "$PKG_DIR/examples"
+mkdir -p "$PKG_DIR/bin" "$PKG_DIR/examples" "$PKG_DIR/cli/templates"
 
-cp "$BIN_PATH" "$PKG_DIR/bin/typeeasy.exe"
+# Binary is renamed to typeeasy-bin.exe so the smart .cmd wrapper takes
+# precedence on PATH (Windows PATHEXT default puts .EXE before .CMD).
+cp "$BIN_PATH" "$PKG_DIR/bin/typeeasy-bin.exe"
+
+# Smart dispatcher wrappers (Rails subcommands -> bash CLI, flags/files -> interp)
+cp "$ROOT_DIR/installer/windows/typeeasy.cmd" "$PKG_DIR/bin/typeeasy.cmd"
+cp "$ROOT_DIR/installer/windows/te.cmd"       "$PKG_DIR/bin/te.cmd"
+
+# Rails-style bash CLI + templates (invoked by wrappers via Git Bash)
+cp "$ROOT_DIR/cli/typeeasy" "$PKG_DIR/cli/typeeasy"
+cp "$ROOT_DIR/cli/te"       "$PKG_DIR/cli/te"
+chmod +x "$PKG_DIR/cli/typeeasy" "$PKG_DIR/cli/te"
+cp -r "$ROOT_DIR/cli/templates/." "$PKG_DIR/cli/templates/"
 
 for doc in README.md BUILD.md; do
   if [[ -f "$ROOT_DIR/$doc" ]]; then
@@ -96,26 +108,50 @@ cat > "$PKG_DIR/README-WINDOWS.txt" <<EOF
 TypeEasy Windows Package v${VERSION}
 
 Estructura:
-- bin/typeeasy.exe
-- examples/crear_const_variable.te
-- examples/endpoint.te
+- bin/typeeasy-bin.exe   (intérprete C)
+- bin/typeeasy.cmd       (CLI Rails-style, dispatcher)
+- bin/te.cmd             (alias corto)
+- cli/typeeasy           (bash script — requiere Git Bash)
+- cli/te                 (alias bash)
+- cli/templates/         (scaffolds para 'typeeasy new')
+- examples/
 
-Uso rapido (PowerShell o CMD):
-  Script normal:
-    .\\bin\\typeeasy.exe .\\examples\\crear_const_variable.te
+Uso rápido (PowerShell o CMD):
+
+  CLI Rails-style (requiere Git Bash instalado):
+    typeeasy new mi-app
+    cd mi-app
+    typeeasy gen resource producto
+    typeeasy serve --dev
+
+  Script directo (no requiere Git Bash):
+    typeeasy .\\examples\\crear_const_variable.te
 
   Servidor HTTP embebido (--api):
-    .\\bin\\typeeasy.exe --api .\\examples\\endpoint.te --port 9000
+    typeeasy --api .\\examples\\endpoint.te --port 9000
     # luego en otra consola:
     curl http://localhost:9000/ping
 
-Flags utiles:
+El alias 'te' funciona idéntico a 'typeeasy'.
+
+Flags útiles (intérprete):
   --api <archivo.te>     Levanta servidor HTTP con los endpoints del .te
   --port <p>             Puerto (default 8080)
   --host <h>             Host bind (default 0.0.0.0)
   --help                 Lista todas las opciones
 
-Este paquete corresponde a una release inicial (0.0.1).
+Subcomandos Rails-style:
+  new <nombre>           Crea proyecto nuevo
+  gen resource <nombre>  Genera endpoint CRUD + migración SQL
+  gen endpoint <nombre>  Genera endpoint vacío
+  serve [--dev|--prod]   Levanta servidor local
+  migrate                Aplica migraciones SQL
+  console                REPL del intérprete
+
+Nota: los subcomandos Rails-style (new/gen/serve/...) requieren Git Bash
+instalado: https://git-scm.com/download/win
+
+Esta versión es v${VERSION}.
 EOF
 
 echo "Paquete generado en: $PKG_DIR"

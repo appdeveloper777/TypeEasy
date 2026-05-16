@@ -62,10 +62,13 @@ if ! id typeeasy &>/dev/null; then
 fi
 
 # --- Install binary + wrapper ---
-echo "[install] Installing /usr/bin/typeeasy-server ..."
+echo "[install] Installing /usr/bin/typeeasy-server (interpreter) ..."
 install -m 755 "$BINARY" /usr/bin/typeeasy-server
 
-echo "[install] Installing /usr/bin/typeeasy ..."
+# Alias /usr/bin/typeeasy-bin -> typeeasy-server, en linea con .deb y CLI lookup
+ln -sf typeeasy-server /usr/bin/typeeasy-bin
+
+echo "[install] Installing /usr/bin/typeeasy (CLI wrapper) ..."
 install -m 755 "$REPO_DIR/cli/typeeasy" /usr/bin/typeeasy
 
 echo "[install] Installing /usr/bin/te (alias) ..."

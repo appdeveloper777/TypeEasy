@@ -24,10 +24,19 @@ fi
 
 # --- 1) Carpeta portable + tar.gz -------------------------------------------
 rm -rf "$PKG_DIR" "$TARBALL"
-mkdir -p "$PKG_DIR/bin" "$PKG_DIR/examples"
+mkdir -p "$PKG_DIR/bin" "$PKG_DIR/examples" "$PKG_DIR/cli/templates"
 
-cp "$BIN_PATH" "$PKG_DIR/bin/typeeasy"
+# Native interpreter (renombrado para no chocar con el bash CLI wrapper)
+cp "$BIN_PATH" "$PKG_DIR/bin/typeeasy-bin"
+chmod +x "$PKG_DIR/bin/typeeasy-bin"
+
+# Bash CLI Rails-style + alias 'te'
+cp "$ROOT_DIR/cli/typeeasy" "$PKG_DIR/bin/typeeasy"
 chmod +x "$PKG_DIR/bin/typeeasy"
+ln -sf typeeasy "$PKG_DIR/bin/te"
+
+# Templates Rails-style
+cp -r "$ROOT_DIR/cli/templates/." "$PKG_DIR/cli/templates/"
 
 for doc in README.md BUILD.md; do
   if [[ -f "$ROOT_DIR/$doc" ]]; then
@@ -93,12 +102,23 @@ rm -rf "$DEB_DIR" "$DEB_FILE"
 mkdir -p "$DEB_DIR/DEBIAN" \
          "$DEB_DIR/usr/bin" \
          "$DEB_DIR/usr/share/typeeasy/examples" \
+         "$DEB_DIR/usr/share/typeeasy/templates" \
          "$DEB_DIR/usr/share/typeeasy/nginx" \
          "$DEB_DIR/usr/share/doc/typeeasy" \
          "$DEB_DIR/lib/systemd/system" \
          "$DEB_DIR/etc/default"
 
-install -m 0755 "$BIN_PATH" "$DEB_DIR/usr/bin/typeeasy"
+# Intérprete C → /usr/bin/typeeasy-bin (renombrado: el wrapper bash ocupa /usr/bin/typeeasy)
+install -m 0755 "$BIN_PATH" "$DEB_DIR/usr/bin/typeeasy-bin"
+
+# CLI Rails-style → /usr/bin/typeeasy (dispatcher; se auto-detecta y nunca se llama a sí mismo)
+install -m 0755 "$ROOT_DIR/cli/typeeasy" "$DEB_DIR/usr/bin/typeeasy"
+
+# Alias corto 'te'
+ln -sf typeeasy "$DEB_DIR/usr/bin/te"
+
+# Templates para 'typeeasy new'
+cp -r "$ROOT_DIR/cli/templates/." "$DEB_DIR/usr/share/typeeasy/templates/"
 
 # systemd unit (instanced) + defaults + nginx sample
 if [[ -f "$ROOT_DIR/installer/linux/typeeasy-api@.service" ]]; then
