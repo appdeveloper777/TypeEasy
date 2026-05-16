@@ -135,7 +135,7 @@
 "println"               { return PRINTLN; }
 "fprint"                { return FPRINT; }
 "fprintln"              { return FPRINTLN; }
-"const"                 { return CONST; }
+"const"                 { yylval.sval = strdup(yytext); return CONST; }
 "fn"                    { return FN; }
 
 "HttpGet"               { return HTTPGET; }
@@ -155,16 +155,16 @@
 "case"                  { return CASE; }
 "endpoint"              { return ENDPOINT; }
 "node"                  { return NODE; }
-"@Cache"                { return CACHE; }
+"@Cache"                { yylval.sval = strdup(yytext); return CACHE; }
 
 "for"                   { return FOR; }
 "foreach"               { return FOREACH; }
 "concat"                { return CONCAT; }
 "in"                    { return IN; }
 
-"int"                   { return INT; }
-"float"                 { return FLOAT; }
-"string"                { return STRING; }
+"int"                   { yylval.sval = strdup(yytext); return INT; }
+"float"                 { yylval.sval = strdup(yytext); return FLOAT; }
+"string"                { yylval.sval = strdup(yytext); return STRING; }
 "void"                  { return VOID; }
 "dynamic"               { return DYNAMIC; }
 "null"                  { return NULLTOK; }
@@ -195,8 +195,8 @@
 "?."                    { return QDOT; }
 "??"                    { return QQ; }
 "?"                     { return QMARK; }
-"["                     { return LSBRACKET;}
-"]"                     { return RSBRACKET;}
+"["                     { yylval.sval = strdup(yytext); return LSBRACKET;}
+"]"                     { yylval.sval = strdup(yytext); return RSBRACKET;}
 "("                     { return LPAREN; }
 ")"                     { return RPAREN; }
 "{"                     { return LBRACKET; }
