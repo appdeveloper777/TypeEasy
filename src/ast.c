@@ -417,6 +417,12 @@ void native_xml(ASTNode *arg) {
 }
 
 
+/* Forward declarations: usados antes de su definición para soportar
+ * resolución de arr[i].attr en get_node_string / is_string_type. */
+static ASTNode* list_get_item(ASTNode *list, int idx);
+static int list_length(ASTNode *list);
+static ASTNode* resolve_to_list(ASTNode *node);
+
 // Helper function to get string representation of any node
 char* get_node_string(ASTNode* node) {
     if (!node) return strdup("");
@@ -487,9 +493,28 @@ char* get_node_string(ASTNode* node) {
     if (node->type && strcmp(node->type, "ACCESS_ATTR") == 0) {
         ASTNode *o = node->left;
         ASTNode *a = node->right;
-        Variable *v = find_variable(o->id);
-        if (v && v->vtype == VAL_OBJECT) {
-            ObjectNode *obj = v->value.object_value;
+        if (!o || !a) return strdup("");
+        ObjectNode *obj = NULL;
+        /* Caso 1: o es IDENTIFIER → variable OBJECT. */
+        if (o->id) {
+            Variable *v = find_variable(o->id);
+            if (v && v->vtype == VAL_OBJECT) obj = v->value.object_value;
+        }
+        /* Caso 2: arr[i].attr — o es ACCESS_EXPR sobre LIST. */
+        if (!obj && o->type && strcmp(o->type, "ACCESS_EXPR") == 0) {
+            ASTNode *list = resolve_to_list(o->left);
+            if (list && o->right) {
+                int idx = (int)evaluate_expression(o->right);
+                if (idx >= 0 && idx < list_length(list)) {
+                    ASTNode *item = list_get_item(list, idx);
+                    if (item && item->type && strcmp(item->type, "OBJECT") == 0) {
+                        obj = item->extra ? (ObjectNode*)item->extra
+                                          : (ObjectNode*)(intptr_t)item->value;
+                    }
+                }
+            }
+        }
+        if (obj && obj->class) {
             for (int i = 0; i < obj->class->attr_count; i++) {
                 if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
                     Variable *attr = &obj->attributes[i];
@@ -2373,21 +2398,37 @@ int is_string_type(ASTNode *node) {
     if (node->type && strcmp(node->type, "ACCESS_ATTR") == 0) {
         ASTNode *o = node->left;
         ASTNode *a = node->right;
-        /* Bug fix: si o->id es NULL (p.ej. arr[i].attr donde o es ACCESS_EXPR),
-         * no podemos buscar variable; tratar como no-string. */
-        if (!o || !o->id) return 0;
-        Variable *v = find_variable(o->id);
-        if (v && v->vtype == VAL_OBJECT) {
-            ObjectNode *obj = v->value.object_value;
-             if (!obj) {
-                ASTNode *wrapper = (ASTNode*)(intptr_t)v->value.object_value;
-                if (wrapper && wrapper->extra) obj = (ObjectNode *)wrapper->extra;
+        if (!o || !a) return 0;
+        ObjectNode *obj = NULL;
+        /* Caso 1: o es IDENTIFIER (var de tipo OBJECT). */
+        if (o->id) {
+            Variable *v = find_variable(o->id);
+            if (v && v->vtype == VAL_OBJECT) {
+                obj = v->value.object_value;
+                if (!obj) {
+                    ASTNode *wrapper = (ASTNode*)(intptr_t)v->value.object_value;
+                    if (wrapper && wrapper->extra) obj = (ObjectNode *)wrapper->extra;
+                }
             }
-            if (obj) {
-                for (int i = 0; i < obj->class->attr_count; i++) {
-                    if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
-                        if (obj->attributes[i].vtype == VAL_STRING) return 1;
+        }
+        /* Caso 2: arr[i].attr — o es ACCESS_EXPR. Resolvemos el item OBJECT. */
+        if (!obj && o->type && strcmp(o->type, "ACCESS_EXPR") == 0) {
+            ASTNode *list = resolve_to_list(o->left);
+            if (list && o->right) {
+                int idx = (int)evaluate_expression(o->right);
+                if (idx >= 0 && idx < list_length(list)) {
+                    ASTNode *item = list_get_item(list, idx);
+                    if (item && item->type && strcmp(item->type, "OBJECT") == 0) {
+                        obj = item->extra ? (ObjectNode*)item->extra
+                                          : (ObjectNode*)(intptr_t)item->value;
                     }
+                }
+            }
+        }
+        if (obj && obj->class) {
+            for (int i = 0; i < obj->class->attr_count; i++) {
+                if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
+                    if (obj->attributes[i].vtype == VAL_STRING) return 1;
                 }
             }
         }
@@ -11102,6 +11143,66 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 throw_message = strdup(buf);
                 throw_flag = 1;
                 return;
+            }
+        }
+    }
+
+    /* Bug fix mayo 2026: `let p = arr[i]` cuando arr es LIST de OBJECT/STRING/INT.
+     * Sin esto, declare_variable cae al final-else y trata p como INT 0, perdiendo
+     * la referencia al ObjectNode. Aplicable a CSV-loaded lists y a literales.
+     * Si el ítem no se puede resolver, cae al flujo legacy. */
+    if (evaluated_value_var == NULL && value_node && value_node->type &&
+        strcmp(value_node->type, "ACCESS_EXPR") == 0) {
+        ASTNode *list = resolve_to_list(value_node->left);
+        if (list) {
+            int idx = (int)evaluate_expression(value_node->right);
+            int len = list_length(list);
+            if (idx >= 0 && idx < len) {
+                ASTNode *item = list_get_item(list, idx);
+                if (item && item->type) {
+                    if (strcmp(item->type, "OBJECT") == 0) {
+                        ObjectNode *obj = item->extra
+                            ? (ObjectNode*)item->extra
+                            : (ObjectNode*)(intptr_t)item->value;
+                        if (obj) {
+                            Variable *var = &vars[var_count++];
+                            var->id = strdup(node->id);
+                            var->is_const = is_const_flag;
+                            var->vtype = VAL_OBJECT;
+                            var->type = strdup("OBJECT");
+                            var->value.object_value = obj;
+                            te_sym_insert(var->id, var_count - 1);
+                            return;
+                        }
+                    } else if (strcmp(item->type, "STRING") == 0) {
+                        Variable *var = &vars[var_count++];
+                        var->id = strdup(node->id);
+                        var->is_const = is_const_flag;
+                        var->vtype = VAL_STRING;
+                        var->type = strdup("STRING");
+                        var->value.string_value = strdup(item->str_value ? item->str_value : "");
+                        te_sym_insert(var->id, var_count - 1);
+                        return;
+                    } else if (strcmp(item->type, "NUMBER") == 0 || strcmp(item->type, "INT") == 0) {
+                        Variable *var = &vars[var_count++];
+                        var->id = strdup(node->id);
+                        var->is_const = is_const_flag;
+                        var->vtype = VAL_INT;
+                        var->type = strdup("INT");
+                        var->value.int_value = item->value;
+                        te_sym_insert(var->id, var_count - 1);
+                        return;
+                    } else if (strcmp(item->type, "FLOAT") == 0) {
+                        Variable *var = &vars[var_count++];
+                        var->id = strdup(node->id);
+                        var->is_const = is_const_flag;
+                        var->vtype = VAL_FLOAT;
+                        var->type = strdup("FLOAT");
+                        var->value.float_value = item->str_value ? atof(item->str_value) : 0.0;
+                        te_sym_insert(var->id, var_count - 1);
+                        return;
+                    }
+                }
             }
         }
     }

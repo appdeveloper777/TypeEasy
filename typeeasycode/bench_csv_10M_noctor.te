@@ -1,0 +1,13 @@
+// Stress 10M sin declarar __constructor.
+// Si TypeEasy soporta clases sin ctor para `from "..csv", Class`, este script funciona igual.
+
+class Producto {
+  nombre : string;
+  precio : int;
+}
+
+let productos = from "productos_10000000.csv", Producto;
+int cantidad = productos.length;
+println("filas=" + cantidad);
+let p0 = productos[0];
+println("primer producto: " + p0.nombre + "," + p0.precio);
