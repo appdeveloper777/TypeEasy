@@ -258,16 +258,48 @@ Options:
     fi
   fi
 
+  # --- Auto-regenerate OpenAPI spec + Swagger UI (no extra command needed) ---
+  local docs_host="$host"
+  [[ "$docs_host" == "0.0.0.0" ]] && docs_host="localhost"
+  if [[ -d "$apis_dir" ]] && ls "$apis_dir"/*.te >/dev/null 2>&1; then
+    TYPEEASY_DOCS_PORT="$port" TYPEEASY_DOCS_HOST="$docs_host" \
+      cmd_docs >/dev/null 2>&1 || true
+  fi
+
   # --- Banner ---
   local hr_tag; [[ "$hotreload" == "1" ]] && hr_tag="ON" || hr_tag="OFF"
   local mode_tag; [[ "$env_mode" == "prod" ]] && mode_tag="PROD (watchdog, auto-restart)" || mode_tag="DEV"
+  local docs_html_abs=""
+  if [[ -f ./docs/index.html ]]; then
+    docs_html_abs="$(cd ./docs && pwd)/index.html"
+    # Convert Git-Bash /c/... to C:/... for file:// URL
+    case "$docs_html_abs" in
+      /[a-zA-Z]/*) docs_html_abs="$(printf '%s' "$docs_html_abs" | sed -E 's|^/([a-zA-Z])/|\U\1:/|')" ;;
+    esac
+  fi
   echo "============================================================"
   echo "  TypeEasy serve  [$mode_tag]"
   echo "  apis:       $apis_dir"
   echo "  bind:       http://$host:$port"
   echo "  workers:    $workers"
   echo "  hot-reload: $hr_tag"
+  echo "  openapi:    http://$docs_host:$port/openapi.json"
+  [[ -n "$docs_html_abs" ]] && echo "  swagger UI: file:///$docs_html_abs"
   echo "============================================================"
+
+  # --- Auto-open Swagger UI in browser (dev only, native branch) ---
+  if [[ "$env_mode" == "dev" && $use_docker -eq 0 && -n "$docs_html_abs" && -z "${TYPEEASY_NO_OPEN:-}" ]]; then
+    (
+      sleep 1
+      if command -v cmd.exe >/dev/null 2>&1; then
+        cmd.exe /c start "" "file:///$docs_html_abs" >/dev/null 2>&1 || true
+      elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "file:///$docs_html_abs" >/dev/null 2>&1 || true
+      elif command -v open >/dev/null 2>&1; then
+        open "file:///$docs_html_abs" >/dev/null 2>&1 || true
+      fi
+    ) &
+  fi
 
   # --- Docker branch ---
   if [[ $use_docker -eq 1 ]]; then
@@ -462,10 +494,22 @@ cmd_docs() {
 
   [[ -d ./apis ]] || die "No ./apis/ directory found. Run 'typeeasy gen' first."
 
-  # Resolve port for the HTML viewer (defaults to dev port, falls back to 8080)
-  local port
-  port="$(toml_get env.dev port)"; [[ -z "$port" ]] && port="$(toml_get server port)"
-  [[ -z "$port" ]] && port="8080"
+  # Resolve host/port for the HTML viewer.
+  # cmd_serve can pre-set TYPEEASY_DOCS_HOST/PORT to keep docs in sync with
+  # whatever flags the user passed (--port, --host).
+  local port host
+  port="${TYPEEASY_DOCS_PORT:-}"
+  if [[ -z "$port" ]]; then
+    port="$(toml_get env.dev port)"; [[ -z "$port" ]] && port="$(toml_get server port)"
+    [[ -z "$port" ]] && port="8080"
+  fi
+  host="${TYPEEASY_DOCS_HOST:-}"
+  if [[ -z "$host" ]]; then
+    host="$(toml_get env.dev host)"; [[ -z "$host" ]] && host="$(toml_get server host)"
+    [[ -z "$host" ]] && host="127.0.0.1"
+  fi
+  # 0.0.0.0 isn't reachable from a browser — rewrite to localhost
+  [[ "$host" == "0.0.0.0" ]] && host="localhost"
 
   local project_name
   project_name="$(toml_get project name)"; [[ -z "$project_name" ]] && project_name="TypeEasy API"
@@ -625,7 +669,7 @@ TE
   <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
   <script>
     window.ui = SwaggerUIBundle({
-      url: 'http://localhost:${port}/openapi.json',
+      url: 'http://${host}:${port}/openapi.json',
       dom_id: '#swagger-ui',
       deepLinking: true,
       presets: [SwaggerUIBundle.presets.apis],
