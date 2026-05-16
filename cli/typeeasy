@@ -437,6 +437,214 @@ cmd_service() {
   esac
 }
 
+# ============================================================================
+# docs — Generate OpenAPI 3.1 spec + Swagger UI viewer
+# ============================================================================
+# Parses apis/*.te looking for [HttpVerb("/path")] + funcname(args) and emits:
+#   apis/_swagger_docs.te   ← endpoint GET /openapi.json (served by TypeEasy)
+#   docs/index.html         ← Swagger UI from CDN, fetches /openapi.json
+# Open ./docs/index.html in your browser. CORS is enabled on the server.
+cmd_docs() {
+  require_project
+
+  local clean=0
+  case "${1:-}" in
+    --clean|-c) clean=1 ;;
+    "") ;;
+    *) die "Unknown flag: $1 (try: typeeasy docs [--clean])" ;;
+  esac
+
+  if [[ $clean -eq 1 ]]; then
+    rm -f ./apis/_swagger_docs.te ./docs/index.html
+    info "Removed generated docs files."
+    return 0
+  fi
+
+  [[ -d ./apis ]] || die "No ./apis/ directory found. Run 'typeeasy gen' first."
+
+  # Resolve port for the HTML viewer (defaults to dev port, falls back to 8080)
+  local port
+  port="$(toml_get env.dev port)"; [[ -z "$port" ]] && port="$(toml_get server port)"
+  [[ -z "$port" ]] && port="8080"
+
+  local project_name
+  project_name="$(toml_get project name)"; [[ -z "$project_name" ]] && project_name="TypeEasy API"
+
+  mkdir -p ./docs ./apis
+
+  # --- 1) Build OpenAPI 3.1 JSON from apis/*.te ---------------------------
+  local openapi_json
+  openapi_json="$(awk -v title="$project_name" '
+    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+    function emit_path_param(name) {
+      return "{\"name\":\"" name "\",\"in\":\"path\",\"required\":true,\"schema\":{\"type\":\"string\"}}"
+    }
+    function emit_query_param(name) {
+      return "{\"name\":\"" name "\",\"in\":\"query\",\"required\":false,\"schema\":{\"type\":\"string\"}}"
+    }
+    function tag_from_path(p,    parts, n) {
+      sub(/^\//, "", p)
+      n = split(p, parts, "/")
+      if (parts[1] == "api" && n >= 2) return parts[2]
+      return parts[1]
+    }
+    function build_endpoint(method, path, fn, args,
+                            i, n, parts, body_props, params_arr,
+                            arg_name, path_params_set, requires_body, body_json,
+                            tmp, pname, already, out, eq) {
+      n = split(args, parts, /[ \t]*,[ \t]*/)
+      path_params_set = ""
+      tmp = path
+      while (match(tmp, /\{[^}]+\}/)) {
+        pname = substr(tmp, RSTART+1, RLENGTH-2)
+        path_params_set = path_params_set "|" pname "|"
+        tmp = substr(tmp, RSTART+RLENGTH)
+      }
+      params_arr = ""
+      body_props = ""
+      requires_body = (method == "POST" || method == "PUT" || method == "PATCH")
+      for (i = 1; i <= n; i++) {
+        arg_name = trim(parts[i])
+        if (arg_name == "") continue
+        if (index(path_params_set, "|" arg_name "|") > 0) {
+          if (params_arr != "") params_arr = params_arr ","
+          params_arr = params_arr emit_path_param(arg_name)
+        } else if (requires_body) {
+          if (body_props != "") body_props = body_props ","
+          body_props = body_props "\"" arg_name "\":{\"type\":\"string\"}"
+        } else {
+          if (params_arr != "") params_arr = params_arr ","
+          params_arr = params_arr emit_query_param(arg_name)
+        }
+      }
+      tmp = path
+      while (match(tmp, /\{[^}]+\}/)) {
+        pname = substr(tmp, RSTART+1, RLENGTH-2)
+        already = (index(params_arr, "\"name\":\"" pname "\"") > 0)
+        if (!already) {
+          if (params_arr != "") params_arr = params_arr ","
+          params_arr = params_arr emit_path_param(pname)
+        }
+        tmp = substr(tmp, RSTART+RLENGTH)
+      }
+      body_json = ""
+      if (requires_body && body_props != "") {
+        body_json = ",\"requestBody\":{\"required\":true,\"content\":{\"application/json\":{\"schema\":{\"type\":\"object\",\"properties\":{" body_props "}}}}}"
+      }
+      out = "\"" tolower(method) "\":{"
+      out = out "\"summary\":\"" fn "\","
+      out = out "\"operationId\":\"" tolower(method) "_" fn "\","
+      out = out "\"tags\":[\"" tag_from_path(path) "\"],"
+      out = out "\"parameters\":[" params_arr "]"
+      out = out body_json
+      out = out ",\"responses\":{\"200\":{\"description\":\"OK\",\"content\":{\"application/json\":{}}}}"
+      out = out "}"
+      return out
+    }
+    BEGIN { pending_method=""; pending_path=""; ec=0 }
+    FNR == 1 { skip_file = (FILENAME ~ /_swagger_docs\.te$/) ? 1 : 0 }
+    skip_file { next }
+    {
+      line = $0
+      ix = index(line, "//"); if (ix > 0) line = substr(line, 1, ix-1)
+      if (match(line, /\[Http(Get|Post|Put|Delete|Patch)\("[^"]+"\)\]/)) {
+        m = substr(line, RSTART, RLENGTH)
+        if (match(m, /Http[A-Za-z]+/)) {
+          pending_method = toupper(substr(m, RSTART+4, RLENGTH-4))
+        }
+        if (match(m, /"[^"]+"/)) {
+          pending_path = substr(m, RSTART+1, RLENGTH-2)
+        }
+        next
+      }
+      if (pending_method != "" && match(line, /[A-Za-z_][A-Za-z_0-9]*[ \t]*\([^)]*\)/)) {
+        decl = substr(line, RSTART, RLENGTH)
+        eq = index(decl, "(")
+        fn = trim(substr(decl, 1, eq-1))
+        args = substr(decl, eq+1)
+        sub(/\).*/, "", args)
+        endpoints[++ec] = pending_method "\x01" pending_path "\x01" fn "\x01" args
+        pending_method = ""; pending_path = ""
+      }
+    }
+    END {
+      printf "{\"openapi\":\"3.1.0\","
+      printf "\"info\":{\"title\":\"%s\",\"version\":\"1.0.0\"},", title
+      printf "\"paths\":{"
+      for (i = 1; i <= ec; i++) {
+        split(endpoints[i], a, "\x01")
+        paths_methods[a[2]] = paths_methods[a[2]] ((paths_methods[a[2]] != "") ? "," : "") build_endpoint(a[1], a[2], a[3], a[4])
+        seen_path[a[2]] = 1
+      }
+      first = 1
+      for (p in seen_path) {
+        if (!first) printf ","
+        first = 0
+        printf "\"%s\":{%s}", p, paths_methods[p]
+      }
+      printf "}}"
+    }
+  ' ./apis/*.te 2>/dev/null)"
+
+  [[ -n "$openapi_json" ]] || die "No endpoints found in ./apis/*.te"
+
+  # --- 2) Write apis/_swagger_docs.te with embedded JSON ------------------
+  # Escape for embedding inside a TypeEasy "..." string literal
+  local escaped
+  escaped="$(printf '%s' "$openapi_json" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+
+  cat > ./apis/_swagger_docs.te <<TE
+/********************************************************************
+ * AUTO-GENERATED by 'typeeasy docs' — do not edit by hand.
+ * Regenerate with: typeeasy docs
+ * Remove with:     typeeasy docs --clean
+ ********************************************************************/
+
+endpoint {
+
+  [HttpGet("/openapi.json")]
+  openapi_spec() {
+      return json("${escaped}");
+  }
+}
+TE
+
+  # --- 3) Write docs/index.html (Swagger UI viewer) -----------------------
+  cat > ./docs/index.html <<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>${project_name} — API Docs</title>
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
+  <style>body{margin:0;background:#fafafa}</style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.ui = SwaggerUIBundle({
+      url: 'http://localhost:${port}/openapi.json',
+      dom_id: '#swagger-ui',
+      deepLinking: true,
+      presets: [SwaggerUIBundle.presets.apis],
+    });
+  </script>
+</body>
+</html>
+HTML
+
+  info "Generated: ./apis/_swagger_docs.te    (endpoint GET /openapi.json)"
+  info "Generated: ./docs/index.html          (Swagger UI viewer)"
+  echo
+  echo "  1) Run:    typeeasy serve --dev"
+  echo "  2) Open:   ./docs/index.html  in your browser"
+  echo "             (or: http://localhost:${port}/openapi.json for raw spec)"
+  echo
+  echo "  To remove generated docs:  typeeasy docs --clean"
+}
+
 cmd_help() {
   cat <<EOF
 typeeasy $VERSION — CLI for TypeEasy projects
@@ -446,6 +654,7 @@ USAGE:
   typeeasy gen resource <name>    Generate CRUD endpoint + migration
   typeeasy gen endpoint <name>    Generate empty endpoint
   typeeasy serve [--dev|--prod]   Run server from typeeasy.toml
+  typeeasy docs [--clean]         Generate OpenAPI spec + Swagger UI viewer
   typeeasy install --systemd      Install as systemd service (Linux, sudo)
   typeeasy deploy                 rsync apis/ to configured prod + restart
   typeeasy logs                   Tail journalctl for the service
@@ -501,6 +710,7 @@ case "${1:-help}" in
   new)        shift; cmd_new "$@" ;;
   gen)        shift; cmd_gen "$@" ;;
   serve)      shift; cmd_serve "$@" ;;
+  docs)       shift; cmd_docs "$@" ;;
   install)    shift; cmd_install "$@" ;;
   deploy)     shift; cmd_deploy "$@" ;;
   logs)       cmd_service logs ;;
