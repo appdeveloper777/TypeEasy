@@ -295,7 +295,7 @@ import "settings/mysql_config.te";
 endpoint {
   [HttpGet("/api/usuarios")]
   GetUsuarios() {
-      let conn = new mysql_connect(global_host, global_user, global_pass, global_db, global_port);
+      let conn = mysql_connect(global_host, global_user, global_pass, global_db, global_port);
       let usuarios = orm_query(conn, "SELECT * FROM usuarios", UsuarioModel);
       mysql_close(conn);
       return xml(usuarios);

@@ -15,11 +15,11 @@ string user = "2XCY4FHDYiMMcdi.root";
 string pass = "dMal8ex6FlLgprno";
 string db   = "test";
 int port = 4000;
-let conn_id = new mysql_connect(host, user, pass, db, port);
+let conn_id = mysql_connect(host, user, pass, db, port);
 println("[STEP 2] connected");
 let filtro = new Usuario(1, "O'Reilly Book", "test");
 println("[STEP 3] obj created");
-let r6 = new mysql_query(
+let r6 = mysql_query(
     conn_id,
     "INSERT INTO usuarios (usuario, email) VALUES (@usuario, @email)",
     filtro

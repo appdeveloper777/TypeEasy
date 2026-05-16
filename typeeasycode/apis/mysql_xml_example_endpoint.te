@@ -14,12 +14,12 @@ endpoint {
         // Conectar a MySQL
         // host.docker.internal:3308 - puerto de XAMPP
         
-        let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
+        let conn_id = mysql_connect("host.docker.internal", "root", "", "meri", 3308);
         
         // Ejecutar query con formato XML
         // NOTA: Con mysql_query, SIEMPRE debes especificar el formato ("json" o "xml")
         // porque retorna un string ya formateado.
-        let result = new mysql_query(conn_id, "SELECT * FROM users LIMIT 5", "xml");
+        let result = mysql_query(conn_id, "SELECT * FROM users LIMIT 5", "xml");
         
         // Cerrar conexión
         mysql_close(conn_id);        
@@ -30,10 +30,10 @@ endpoint {
     [HttpGet("/api/mysql/usuarios/json")]
     GetUsuariosJSON() {
         // Conectar a MySQL
-        let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
+        let conn_id = mysql_connect("host.docker.internal", "root", "", "meri", 3308);
         
         // Ejecutar query con formato JSON (default)
-        let result = new mysql_query(conn_id, "SELECT * FROM users LIMIT 5", "json");
+        let result = mysql_query(conn_id, "SELECT * FROM users LIMIT 5", "json");
         
         // Cerrar conexión
         mysql_close(conn_id);
@@ -45,7 +45,7 @@ endpoint {
     [HttpGet("/api/mysql/usuarios/dynamic")]
     GetUsuariosDynamic() {
         // Conectar a MySQL
-        let conn_id = new mysql_connect("host.docker.internal", "root", "", "meri", 3308);
+        let conn_id = mysql_connect("host.docker.internal", "root", "", "meri", 3308);
         
         // USANDO ORM:
         // orm_query retorna una LISTA de OBJETOS 'Usuario'.

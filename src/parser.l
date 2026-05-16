@@ -330,3 +330,52 @@ int yywrap() {
     }
     return 1;
 }
+
+/* === Bloque B: full lexer state reset between top-level parse_file() calls.
+ * Called from parse_file() in parser.y. Lives here in parser.l because the
+ * YY_CURRENT_BUFFER macro and the BEGIN() / start condition machinery are
+ * only visible inside the flex-generated lex.yy.c translation unit.
+ *
+ * Behavior:
+ *   1) Drain any leftover include-stack buffers from a previously aborted
+ *      parse (e.g., a syntax error inside an "import"-included file). Without
+ *      this, the next parse_file() inherits stale buffers and reports bogus
+ *      "syntax error in line 1" on a perfectly valid file.
+ *   2) Close any FILE* still owned by the include-stack array (mirrors the
+ *      cleanup that yywrap() would have done on a clean EOF).
+ *   3) yyrestart(file) installs a fresh top-level buffer for `file`, resets
+ *      the scanner DFA and clears any pending lookahead.
+ *   4) BEGIN(INITIAL) resets the start condition (e.g., we may have aborted
+ *      while inside <INCL>).
+ */
+void te_lexer_full_reset(FILE* file) {
+    /* (2) close FILE*s tracked by the manual include stack */
+    while (include_stack_ptr > 0) {
+        FILE *cur = include_file_stack[--include_stack_ptr];
+        if (cur) fclose(cur);
+        include_file_stack[include_stack_ptr] = NULL;
+    }
+    /* (1) drain flex's own buffer stack */
+    while (YY_CURRENT_BUFFER) {
+        yypop_buffer_state();
+    }
+    /* (3) fresh buffer for the new file */
+    yyrestart(file);
+    /* (4) back to the default start condition */
+    BEGIN(INITIAL);
+
+    /* (5) Bloque C: free the per-parse import dedup list.
+     * imported_files_list is a global linked list used by <INCL> to skip
+     * circular imports inside ONE parse. Across top-level parse_file() calls
+     * (e.g. one per file in apis/), it must be cleared because:
+     *   a) Two endpoint files importing the same module would silently
+     *      skip the second import and lose its symbols.
+     *   b) It accumulates forever otherwise (memory leak grows with the
+     *      number of files loaded in the api server's lifetime). */
+    while (imported_files_list) {
+        ImportedFile *next = imported_files_list->next;
+        if (imported_files_list->path) free(imported_files_list->path);
+        free(imported_files_list);
+        imported_files_list = next;
+    }
+}

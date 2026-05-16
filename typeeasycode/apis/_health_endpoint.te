@@ -1,0 +1,6 @@
+endpoint {
+    [HttpGet("/api/health")]
+    Health() {
+        return json("ok");
+    }
+}

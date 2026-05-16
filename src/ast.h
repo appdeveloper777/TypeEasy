@@ -194,6 +194,7 @@ typedef struct ParameterNode {
 extern MethodNode *global_methods;
 void runtime_save_initial_var_count();
 void runtime_reset_vars_to_initial_state();
+void te_runtime_reset_flags(void);
 
 /* --- PROTOTIPOS DE TU "MOTOR" (PUROS) --- */
 

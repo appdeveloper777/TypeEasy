@@ -47,10 +47,10 @@ string host = "gateway01.us-east-1.prod.aws.tidbcloud.com";
 
      // TiDB Cloud requiere TLS (servicio cloud detras de NLB de AWS).
      // Pasar { "tls": 1 } activa TLS 1.2 en el cliente.
-     let conn_id = new mysql_connect(host, user, pass, db, port, { "tls": 1 }); 
+     let conn_id = mysql_connect(host, user, pass, db, port, { "tls": 1 }); 
 
        var filtro = new FiltroProducto(1, "O'Reilly Book6", "test3");
-    let r6 = new mysql_query(
+    let r6 = mysql_query(
     conn_id,
     "INSERT INTO usuarios (usuario, email) VALUES (@usuario, @email)",
       { "@usuario": "O'Reilly Book", "@email": "test9" }
@@ -61,7 +61,7 @@ string host = "gateway01.us-east-1.prod.aws.tidbcloud.com";
     string query = "SELECT * FROM usuarios WHERE Id > @min_id ORDER BY Id DESC LIMIT @lim";
    
     
-    let usuarios = new mysql_query(conn_id, query,
+    let usuarios = mysql_query(conn_id, query,
         { "@min_id": 0, "@lim": 5 },
         FiltroProducto);
 

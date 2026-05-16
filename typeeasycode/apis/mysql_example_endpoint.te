@@ -17,10 +17,10 @@ endpoint {
         string query = "SELECT * FROM bd_facutas_totales LIMIT 20";
         string format = "xml";
         
-        let conn_id = new mysql_connect(host, user, pass, db, port);        
+        let conn_id = mysql_connect(host, user, pass, db, port);
         // Ejecutar query
-        let result = new mysql_query(conn_id, query, format);
-        
+        let result = mysql_query(conn_id, query, format);
+
         // Cerrar conexión
         mysql_close(conn_id);
         

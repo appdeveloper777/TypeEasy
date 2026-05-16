@@ -11,7 +11,7 @@ class Usu {
     }
 }
 
-let conn = new mysql_connect(
+let conn = mysql_connect(
     "gateway01.us-east-1.prod.aws.tidbcloud.com",
     "2XCY4FHDYiMMcdi.root",
     "dMal8ex6FlLgprno",
@@ -20,13 +20,13 @@ let conn = new mysql_connect(
 );
 
 println("== fast-path: 1000 filas ==");
-let l1k = new mysql_query(conn, "SELECT * FROM usuarios LIMIT 1000", Usu);
+let l1k = mysql_query(conn, "SELECT * FROM usuarios LIMIT 1000", Usu);
 
 println("== fast-path: 10000 filas ==");
-let l10k = new mysql_query(conn, "SELECT * FROM usuarios LIMIT 10000", Usu);
+let l10k = mysql_query(conn, "SELECT * FROM usuarios LIMIT 10000", Usu);
 
 println("== fast-path: 30000 filas ==");
-let l30k = new mysql_query(conn, "SELECT * FROM usuarios LIMIT 30000", Usu);
+let l30k = mysql_query(conn, "SELECT * FROM usuarios LIMIT 30000", Usu);
 
 mysql_close(conn);
 println("done");

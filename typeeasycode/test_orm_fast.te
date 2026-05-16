@@ -31,7 +31,7 @@ class UFast {
     }
 }
 
-let conn = new mysql_connect(
+let conn = mysql_connect(
     "gateway01.us-east-1.prod.aws.tidbcloud.com",
     "2XCY4FHDYiMMcdi.root",
     "dMal8ex6FlLgprno",
@@ -40,7 +40,7 @@ let conn = new mysql_connect(
 );
 
 // 1. SELECT directo con clase
-let lista = new mysql_query(conn, "SELECT Id, usuario, email FROM usuarios ORDER BY Id DESC LIMIT 10", UFast);
+let lista = mysql_query(conn, "SELECT Id, usuario, email FROM usuarios ORDER BY Id DESC LIMIT 10", UFast);
 
 if (lista.length > 0) {
     println("FAST_OK_LIST");
@@ -81,7 +81,7 @@ if (contador == 10) {
 }
 
 // 6. Dapper params + clase
-let lista2 = new mysql_query(
+let lista2 = mysql_query(
     conn,
     "SELECT Id, usuario, email FROM usuarios WHERE Id > @min ORDER BY Id DESC LIMIT @lim",
     { "@min": 0, "@lim": 3 },

@@ -726,8 +726,23 @@ ASTNode* parse_file(FILE* file) {
     
     // Reset parser state
     root = NULL;
+
+    /* === Bloque B: full lexer state reset between parse_file() calls ===
+     * The api server (servidor_api) calls parse_file() in a loop over apis/*.te.
+     * If a previous parse aborted mid-file (especially mid-include via "import"),
+     * flex leaves leftover buffers on the include stack and the scanner state
+     * machine in a non-INITIAL start condition. The next parse_file() then sees
+     * residual lookahead/buffers and reports bogus "syntax error in line 1" on
+     * a perfectly valid file (the cascade bug).
+     *
+     * te_lexer_full_reset() lives in parser.l where YY_CURRENT_BUFFER, BEGIN()
+     * and start conditions are visible. It pops every buffer, closes leftover
+     * include FILE*s, calls yyrestart(file) and resets to INITIAL.
+     */
+    extern void te_lexer_full_reset(FILE* file);
+    te_lexer_full_reset(file);
     yyin = file;
-    
+
     // Reset lexer state
     extern int yylineno;
     yylineno = 1;

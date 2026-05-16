@@ -191,12 +191,23 @@ void add_route(const char *route, const char *script, const char *func, const ch
 }
 void add_route_full(const char *route, const char *script, const char *func,
                     const char *resp_type, const char *http_method, int cache_ttl) {
+    const char *m = http_method ? http_method : "GET";
+    /* Dedup: typeeasy_discover() acumula rutas de archivos previos en cada
+     * llamada (estado global del intérprete). Evitamos registrar duplicados
+     * por (route, method, function). */
+    for (RouteEntry *it = global_routes; it; it = it->next) {
+        if (strcmp(it->route_path, route) == 0 &&
+            strcmp(it->http_method, m) == 0 &&
+            strcmp(it->function_name, func) == 0) {
+            return; /* ya registrada */
+        }
+    }
     RouteEntry *entry = (RouteEntry*)malloc(sizeof(RouteEntry));
     entry->route_path = strdup(route);
     entry->script_path = strdup(script);
     entry->function_name = strdup(func);
     entry->response_type = strdup(resp_type ? resp_type : "json");
-    entry->http_method = strdup(http_method ? http_method : "GET");
+    entry->http_method = strdup(m);
     entry->cache_ttl = cache_ttl;
     entry->method_node = (void*)typeeasy_find_method(func); /* O(1) hot path */
     entry->next = global_routes;
@@ -260,6 +271,9 @@ void discover_routes() {
     
     FILE *fp;
     char path[1035];
+    int files_total = 0;
+    int files_failed_load = 0;
+    int files_failed_discover = 0;
 
     // Linux command to list files (for Docker)
     fp = popen("ls -1 /app/apis/*.te 2>/dev/null", "r");
@@ -271,11 +285,14 @@ void discover_routes() {
     while (fgets(path, sizeof(path), fp) != NULL) {
         // Eliminar salto de línea
         path[strcspn(path, "\r\n")] = 0;
-        
+        files_total++;
+
         printf("[LOG] Descubriendo rutas en: %s\n", path);
-        
+
         // Cargar script en TypeEasy
         if (!load_typeeasy_script(path)) {
+            files_failed_load++;
+            fprintf(stderr, "[WARN] discover_routes: skip (load failed) %s\n", path);
             continue;
         }
 
@@ -288,7 +305,8 @@ void discover_routes() {
         // Ejecutar discover usando TypeEasy embebido
         char *discover_result = typeeasy_discover(g_typeeasy_ctx, path);
         if (!discover_result) {
-            fprintf(stderr, "[ERROR] No se pudo descubrir rutas en: %s\n", path);
+            files_failed_discover++;
+            fprintf(stderr, "[WARN] discover_routes: skip (discover failed) %s\n", path);
             continue;
         }
         
@@ -379,6 +397,12 @@ void discover_routes() {
         free(discover_result);
     }
     pclose(fp);
+
+    {
+        int ok = files_total - files_failed_load - files_failed_discover;
+        printf("[LOG] discover_routes summary: %d/%d archivos OK (%d load-fail, %d discover-fail)\n",
+               ok, files_total, files_failed_load, files_failed_discover);
+    }
 }
 
 /* Match a registered route pattern (possibly containing {name} segments)
@@ -615,7 +639,39 @@ void cleanup() {
     global_routes = NULL;
 }
 
-// Nuevo manejador para la ruta raíz ("/")
+/* Comparator: sort RouteEntry pointers alphabetically by route_path, then
+ * by HTTP method as tiebreaker. Used by manejadorRaiz to render endpoints
+ * in stable order regardless of file-load order. */
+static int route_cmp_alpha(const void *a, const void *b) {
+    const RouteEntry *ra = *(const RouteEntry * const *)a;
+    const RouteEntry *rb = *(const RouteEntry * const *)b;
+    int c = strcmp(ra->route_path ? ra->route_path : "",
+                   rb->route_path ? rb->route_path : "");
+    if (c) return c;
+    return strcmp(ra->http_method ? ra->http_method : "",
+                  rb->http_method ? rb->http_method : "");
+}
+
+/* Compute the group key for a route: first two path segments, e.g.
+ * "/api/mysql/usuarios" -> "/api/mysql". Falls back to "/api" or "/". */
+static void route_group_key(const char *path, char *out, size_t outsz) {
+    if (!path || !*path) { snprintf(out, outsz, "/"); return; }
+    const char *p = path;
+    if (*p == '/') p++;
+    const char *seg1_end = strchr(p, '/');
+    if (!seg1_end) { snprintf(out, outsz, "/%.*s", (int)strlen(p), p); return; }
+    const char *p2 = seg1_end + 1;
+    const char *seg2_end = strchr(p2, '/');
+    int len2 = seg2_end ? (int)(seg2_end - p2) : (int)strlen(p2);
+    /* Skip path params as group name */
+    if (len2 > 0 && p2[0] == '{') {
+        snprintf(out, outsz, "/%.*s", (int)(seg1_end - p), p);
+        return;
+    }
+    snprintf(out, outsz, "/%.*s/%.*s", (int)(seg1_end - p), p, len2, p2);
+}
+
+// Nuevo manejador para la ruta raíz ("/") — UI estilo Swagger
 static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
     (void)cbdata;
 
@@ -638,166 +694,374 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         } \
     } while (0)
     
-    ENSURE_CAP(8192);
+    ENSURE_CAP(16384);
     offset += snprintf(html + offset, cap - offset,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
         "Connection: close\r\n"
         "\r\n"
         "<!DOCTYPE html>"
-        "<html>"
+        "<html lang='en'>"
         "<head>"
-        "<title>TypeEasy API Documentation</title>"
+        "<meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>TypeEasy API - Swagger</title>"
         "<style>"
-        "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px; background: #f5f5f5; color: #333; }"
-        "h1 { color: #2c3e50; }"
-        ".container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }"
-        ".endpoint { background: #fff; padding: 20px; margin: 15px 0; border: 1px solid #e0e0e0; border-left: 5px solid #4CAF50; border-radius: 4px; transition: box-shadow 0.2s; }"
-        ".endpoint:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }"
-        ".method { display: inline-block; padding: 5px 10px; border-radius: 4px; font-weight: bold; color: white; margin-right: 10px; font-size: 14px; }"
-        ".get { background: #61affe; }"
-        ".post { background: #49cc90; }"
-        ".route { font-family: 'Consolas', 'Monaco', monospace; font-size: 16px; color: #333; font-weight: 600; }"
-        ".json-badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; background: #f0ad4e; color: white; margin-left: 10px; vertical-align: middle; }"
-        ".xml-badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; background: #5bc0de; color: white; margin-left: 10px; vertical-align: middle; }"
-        ".embedded-badge { background: #673ab7; color: white; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: bold; vertical-align: middle; margin-left: 10px; text-transform: uppercase; letter-spacing: 0.5px; }"
-        ".function { color: #7f8c8d; font-size: 14px; margin-top: 8px; font-family: monospace; }"
-        ".count { color: #666; font-size: 14px; margin-bottom: 20px; }"
-        ".controls { margin-top: 15px; display: flex; align-items: center; gap: 10px; }"
-        ".try-btn { background: #4CAF50; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; transition: background 0.2s; }"
-        ".try-btn:hover { background: #43A047; }"
-        ".try-btn:disabled { background: #a5d6a7; cursor: not-allowed; }"
-        ".copy-btn { background: #2196F3; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; display: none; transition: background 0.2s; }"
-        ".copy-btn:hover { background: #1976D2; }"
-        ".exec-time { font-size: 13px; color: #555; font-weight: 600; font-family: monospace; }"
-        ".response { background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 4px; margin-top: 15px; font-family: 'Consolas', 'Monaco', monospace; white-space: pre-wrap; display: none; font-size: 13px; line-height: 1.5; overflow-x: auto; }"
-        ".loading { color: #aaa; font-style: italic; }"
+        "*{box-sizing:border-box}"
+        "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;margin:0;background:#fafafa;color:#3b4151}"
+        "header{background:linear-gradient(135deg,#1b1b1b 0%,#2c3e50 100%);color:#fff;padding:24px 40px;box-shadow:0 2px 8px rgba(0,0,0,0.15)}"
+        "header h1{margin:0;font-size:28px;font-weight:600;display:flex;align-items:center;gap:14px}"
+        "header .subtitle{margin-top:6px;font-size:14px;color:#bfc9d4}"
+        ".embedded-badge{background:#673ab7;color:#fff;padding:4px 12px;border-radius:20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px}"
+        ".stats{display:flex;gap:12px;margin-top:14px;flex-wrap:wrap}"
+        ".stat{background:rgba(255,255,255,0.08);padding:6px 14px;border-radius:14px;font-size:13px;border:1px solid rgba(255,255,255,0.12)}"
+        ".stat b{color:#fff;margin-right:6px}"
+        ".stat.get{border-color:#61affe}.stat.get b{color:#61affe}"
+        ".stat.post{border-color:#49cc90}.stat.post b{color:#49cc90}"
+        ".stat.put{border-color:#fca130}.stat.put b{color:#fca130}"
+        ".stat.delete{border-color:#f93e3e}.stat.delete b{color:#f93e3e}"
+        ".stat.patch{border-color:#50e3c2}.stat.patch b{color:#50e3c2}"
+        "main{max-width:1200px;margin:24px auto;padding:0 24px}"
+        ".toolbar{background:#fff;padding:14px 18px;border:1px solid #e3e3e3;border-radius:6px;margin-bottom:18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}"
+        ".toolbar input[type=text]{flex:1;min-width:260px;padding:8px 12px;border:1px solid #ccc;border-radius:4px;font-size:14px;font-family:inherit}"
+        ".toolbar input[type=text]:focus{outline:none;border-color:#49cc90;box-shadow:0 0 0 2px rgba(73,204,144,0.18)}"
+        ".toolbar .filter-pills{display:flex;gap:6px}"
+        ".pill{background:#eee;border:1px solid transparent;color:#444;padding:5px 10px;border-radius:14px;font-size:12px;cursor:pointer;font-weight:600;letter-spacing:0.3px;user-select:none}"
+        ".pill.active{background:#3b4151;color:#fff}"
+        ".pill[data-m=get].active{background:#61affe}"
+        ".pill[data-m=post].active{background:#49cc90}"
+        ".pill[data-m=put].active{background:#fca130}"
+        ".pill[data-m=delete].active{background:#f93e3e}"
+        ".pill[data-m=patch].active{background:#50e3c2}"
+        ".group{margin-bottom:24px}"
+        ".group-head{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#fff;border:1px solid #e3e3e3;border-radius:6px 6px 0 0;cursor:pointer;user-select:none}"
+        ".group-head h2{margin:0;font-size:18px;color:#3b4151;font-weight:600;font-family:Consolas,monospace}"
+        ".group-head .count-chip{background:#e8e8e8;color:#555;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700}"
+        ".group-head .toggle{margin-left:auto;color:#888;font-size:13px;transition:transform 0.15s}"
+        ".group.collapsed .toggle{transform:rotate(-90deg)}"
+        ".group.collapsed .group-body{display:none}"
+        ".group-body{border:1px solid #e3e3e3;border-top:0;border-radius:0 0 6px 6px;background:#fff}"
+        ".endpoint{border-bottom:1px solid #f0f0f0;padding:0}"
+        ".endpoint:last-child{border-bottom:0}"
+        ".ep-head{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;user-select:none}"
+        ".ep-head:hover{background:#f7f7f7}"
+        ".method{display:inline-block;min-width:60px;text-align:center;padding:4px 8px;border-radius:3px;font-weight:700;color:#fff;font-size:12px;letter-spacing:0.4px;font-family:Consolas,monospace}"
+        ".method.get{background:#61affe}.method.post{background:#49cc90}.method.put{background:#fca130}.method.delete{background:#f93e3e}.method.patch{background:#50e3c2}"
+        ".route{font-family:Consolas,Menlo,monospace;font-size:15px;color:#3b4151;font-weight:600;flex:1;word-break:break-all}"
+        ".route .param{color:#9012fe;font-weight:700}"
+        ".badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.3px}"
+        ".badge.json{background:#fff3cd;color:#856404}"
+        ".badge.xml{background:#d1ecf1;color:#0c5460}"
+        ".badge.cache{background:#e2d4ff;color:#5e35b1}"
+        ".func{color:#7a7a7a;font-size:13px;font-family:Consolas,monospace;margin-right:8px}"
+        ".caret{color:#999;font-size:13px;width:14px;text-align:center;transition:transform 0.15s}"
+        ".endpoint.open .caret{transform:rotate(90deg)}"
+        ".endpoint.open .ep-body{display:block}"
+        ".ep-body{display:none;padding:14px 18px 18px 18px;background:#fafafa;border-top:1px solid #f0f0f0}"
+        ".ep-body label{display:block;font-size:12px;font-weight:600;color:#555;margin:8px 0 4px 0;text-transform:uppercase;letter-spacing:0.3px}"
+        ".ep-body input,.ep-body textarea{width:100%;padding:7px 10px;border:1px solid #ccc;border-radius:3px;font-family:Consolas,monospace;font-size:13px}"
+        ".ep-body textarea{resize:vertical;min-height:90px}"
+        ".params-grid{display:grid;grid-template-columns:160px 1fr;gap:6px 12px;align-items:center;margin-bottom:8px}"
+        ".params-grid label{margin:0;text-transform:none;letter-spacing:0;font-family:Consolas,monospace;color:#9012fe;font-size:13px}"
+        ".ep-actions{margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}"
+        ".btn{border:0;padding:8px 18px;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;transition:opacity 0.15s,background 0.15s}"
+        ".btn-try{background:#49cc90;color:#fff}.btn-try:hover{background:#3eb37e}"
+        ".btn-try:disabled{background:#a5d6a7;cursor:not-allowed}"
+        ".btn-copy{background:#2196F3;color:#fff;display:none}.btn-copy:hover{background:#1976D2}"
+        ".exec-time{font-size:12px;color:#666;font-family:Consolas,monospace;font-weight:600}"
+        ".status-pill{padding:3px 10px;border-radius:11px;font-size:11px;font-weight:700;font-family:Consolas,monospace;display:none}"
+        ".status-pill.ok{background:#d4edda;color:#155724}"
+        ".status-pill.bad{background:#f8d7da;color:#721c24}"
+        ".response{background:#1e1e1e;color:#dcdcdc;padding:14px;border-radius:4px;margin-top:12px;font-family:Consolas,Menlo,monospace;font-size:12px;line-height:1.5;white-space:pre-wrap;display:none;overflow-x:auto;max-height:480px;overflow-y:auto}"
+        ".response.error{color:#ff7676}"
+        ".hidden{display:none !important}"
+        ".empty{padding:30px;text-align:center;color:#888;background:#fff;border:1px dashed #ccc;border-radius:6px}"
+        "footer{text-align:center;padding:20px;color:#999;font-size:12px}"
         "</style>"
-        "<script>"
-        "async function tryEndpoint(route, btnId) {"
-        "  const btn = document.getElementById(btnId);"
-        "  const responseDiv = document.getElementById(btnId + '-response');"
-        "  const timeSpan = document.getElementById(btnId + '-time');"
-        "  const copyBtn = document.getElementById(btnId + '-copy');"
-        "  "
-        "  btn.disabled = true;"
-        "  btn.textContent = 'Loading...';"
-        "  responseDiv.style.display = 'block';"
-        "  responseDiv.className = 'response loading';"
-        "  responseDiv.textContent = 'Ejecutando...';"
-        "  timeSpan.textContent = '';"
-        "  copyBtn.style.display = 'none';"
-        "  "
-        "  try {"
-        "    const response = await fetch(route);"
-        "    const execTime = response.headers.get('X-Execution-Time');"
-        "    const data = await response.text();"
-        "    "
-        "    responseDiv.className = 'response';"
-        "    let output = '';"
-        "    "
-        "    try {"
-        "      const json = JSON.parse(data);"
-        "      output = JSON.stringify(json, null, 2);"
-        "    } catch(e) {"
-        "      output = data;"
-        "    }"
-        "    "
-        "    responseDiv.textContent = output;"
-        "    "
-        "    if (execTime) {"
-        "      timeSpan.textContent = '⏱ ' + execTime + 's';"
-        "    }"
-        "    "
-        "    copyBtn.style.display = 'inline-block';"
-        "    copyBtn.onclick = function() {"
-        "      navigator.clipboard.writeText(output).then(function() {"
-        "        const originalText = copyBtn.textContent;"
-        "        copyBtn.textContent = 'Copied!';"
-        "        setTimeout(() => { copyBtn.textContent = originalText; }, 2000);"
-        "      });"
-        "    };"
-        "    "
-        "  } catch(error) {"
-        "    responseDiv.className = 'response';"
-        "    responseDiv.style.color = '#ff5252';"
-        "    responseDiv.textContent = 'Error: ' + error.message;"
-        "  }"
-        "  "
-        "  btn.disabled = false;"
-        "  btn.textContent = 'Try it out';"
-        "}"
-        "</script>"
         "</head>"
         "<body>"
-        "<div class='container'>"
-        "<h1>TypeEasy API Server <span class='embedded-badge'>EMBEDDED MODE</span></h1>"
-        "<p>El servidor está funcionando correctamente.</p>");
-    
-    // Contar rutas
+        "<header>"
+        "<h1>TypeEasy API <span class='embedded-badge'>Embedded</span></h1>"
+        "<div class='subtitle'>Endpoints auto-descubiertos desde <code>/app/apis/*.te</code></div>");
+
+    /* Collect routes into a sortable array */
     int route_count = 0;
-    RouteEntry *entry = global_routes;
-    while (entry) {
-        route_count++;
-        entry = entry->next;
+    int cnt_get = 0, cnt_post = 0, cnt_put = 0, cnt_delete = 0, cnt_patch = 0, cnt_other = 0;
+    {
+        RouteEntry *e = global_routes;
+        while (e) { route_count++; e = e->next; }
     }
-    
-    offset += snprintf(html + offset, cap - offset,
-        "<p class='count'><strong>%d</strong> ruta(s) dinámica(s) cargada(s):</p>",
-        route_count);
-    
-    // Listar todas las rutas
-    entry = global_routes;
-    int endpoint_id = 0;
-    if (entry == NULL) {
-        ENSURE_CAP(256);
-        offset += snprintf(html + offset, cap - offset,
-            "<p>No hay rutas descubiertas. Crea archivos .te con bloques 'endpoint { }' en /app/apis/</p>");
-    } else {
-        while (entry) {
-            // Determinar badge color basado en response type
-            const char *badge_class = (entry->response_type && strcmp(entry->response_type, "xml") == 0) ? "xml-badge" : "json-badge";
-            const char *badge_text = (entry->response_type && strcmp(entry->response_type, "xml") == 0) ? "XML" : "JSON";
-            
-            ENSURE_CAP(2048 + (entry->route_path ? strlen(entry->route_path) * 3 : 0)
-                            + (entry->function_name ? strlen(entry->function_name) : 0));
-            offset += snprintf(html + offset, cap - offset,
-                "<div class='endpoint'>"
-                "<span class='method get'>GET</span>"
-                "<span class='route'>%s</span>"
-                "<span class='%s'>%s</span>"
-                "<div class='function'>→ %s()</div>"
-                "<div class='controls'>"
-                "<button class='try-btn' id='btn-%d' onclick='tryEndpoint(\"%s\", \"btn-%d\")'>Try it out</button>"
-                "<button class='copy-btn' id='btn-%d-copy'>Copy Response</button>"
-                "<span class='exec-time' id='btn-%d-time'></span>"
-                "</div>"
-                "<div class='response' id='btn-%d-response'></div>"
-                "</div>",
-                entry->route_path,
-                badge_class,
-                badge_text,
-                entry->function_name,
-                endpoint_id,
-                entry->route_path,
-                endpoint_id,
-                endpoint_id,
-                endpoint_id,
-                endpoint_id,
-                endpoint_id);
-            entry = entry->next;
-            endpoint_id++;
+    RouteEntry **arr = NULL;
+    if (route_count > 0) {
+        arr = (RouteEntry**)malloc(sizeof(RouteEntry*) * route_count);
+        if (!arr) { free(html); mg_printf(conn, "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"); return 1; }
+        int i = 0;
+        RouteEntry *e = global_routes;
+        while (e) {
+            arr[i++] = e;
+            const char *m = e->http_method ? e->http_method : "GET";
+            if (!strcmp(m,"GET")) cnt_get++;
+            else if (!strcmp(m,"POST")) cnt_post++;
+            else if (!strcmp(m,"PUT")) cnt_put++;
+            else if (!strcmp(m,"DELETE")) cnt_delete++;
+            else if (!strcmp(m,"PATCH")) cnt_patch++;
+            else cnt_other++;
+            e = e->next;
         }
-    }        
-    
-    ENSURE_CAP(512);
+        qsort(arr, route_count, sizeof(RouteEntry*), route_cmp_alpha);
+    }
+
+    /* Stats row */
+    ENSURE_CAP(1024);
     offset += snprintf(html + offset, cap - offset,
-        "<hr>"
-        "<p style='color: #999; font-size: 12px;'>TypeEasy Dynamic API Server - Embedded Mode - Endpoints auto-discovered from .te files</p>"
+        "<div class='stats'>"
+        "<div class='stat'><b>%d</b>endpoints</div>", route_count);
+    if (cnt_get) offset += snprintf(html + offset, cap - offset, "<div class='stat get'><b>%d</b>GET</div>", cnt_get);
+    if (cnt_post) offset += snprintf(html + offset, cap - offset, "<div class='stat post'><b>%d</b>POST</div>", cnt_post);
+    if (cnt_put) offset += snprintf(html + offset, cap - offset, "<div class='stat put'><b>%d</b>PUT</div>", cnt_put);
+    if (cnt_delete) offset += snprintf(html + offset, cap - offset, "<div class='stat delete'><b>%d</b>DELETE</div>", cnt_delete);
+    if (cnt_patch) offset += snprintf(html + offset, cap - offset, "<div class='stat patch'><b>%d</b>PATCH</div>", cnt_patch);
+    if (cnt_other) offset += snprintf(html + offset, cap - offset, "<div class='stat'><b>%d</b>OTHER</div>", cnt_other);
+    offset += snprintf(html + offset, cap - offset, "</div></header>");
+
+    /* Toolbar */
+    ENSURE_CAP(2048);
+    offset += snprintf(html + offset, cap - offset,
+        "<main>"
+        "<div class='toolbar'>"
+        "<input type='text' id='filter' placeholder='Filtrar por ruta o funcion (ej: mysql, usuario, GET)' oninput='applyFilter()' autocomplete='off'>"
+        "<div class='filter-pills'>"
+        "<span class='pill active' data-m='all' onclick='togglePill(this)'>ALL</span>"
+        "<span class='pill' data-m='get' onclick='togglePill(this)'>GET</span>"
+        "<span class='pill' data-m='post' onclick='togglePill(this)'>POST</span>"
+        "<span class='pill' data-m='put' onclick='togglePill(this)'>PUT</span>"
+        "<span class='pill' data-m='delete' onclick='togglePill(this)'>DELETE</span>"
+        "<span class='pill' data-m='patch' onclick='togglePill(this)'>PATCH</span>"
         "</div>"
-        "</body>"
-        "</html>");
-    
+        "<button class='btn btn-try' style='background:#3b4151' onclick='expandAll(true)'>Expand all</button>"
+        "<button class='btn btn-try' style='background:#888' onclick='expandAll(false)'>Collapse all</button>"
+        "</div>");
+
+    if (route_count == 0) {
+        ENSURE_CAP(512);
+        offset += snprintf(html + offset, cap - offset,
+            "<div class='empty'>No hay rutas registradas. Crea archivos <code>.te</code> con bloques <code>endpoint { }</code> en <code>/app/apis/</code>.</div>");
+    } else {
+        /* Render grouped by prefix. arr is already sorted by route_path so
+         * routes that share a prefix come together. */
+        int endpoint_id = 0;
+        int i = 0;
+        while (i < route_count) {
+            char group[256];
+            route_group_key(arr[i]->route_path, group, sizeof(group));
+            /* find end of this group */
+            int j = i;
+            while (j < route_count) {
+                char g2[256];
+                route_group_key(arr[j]->route_path, g2, sizeof(g2));
+                if (strcmp(group, g2) != 0) break;
+                j++;
+            }
+            int gcount = j - i;
+            ENSURE_CAP(1024 + strlen(group) * 2);
+            offset += snprintf(html + offset, cap - offset,
+                "<div class='group' data-group='%s'>"
+                "<div class='group-head' onclick='this.parentNode.classList.toggle(\"collapsed\")'>"
+                "<h2>%s</h2>"
+                "<span class='count-chip'>%d</span>"
+                "<span class='toggle'>&#9662;</span>"
+                "</div>"
+                "<div class='group-body'>",
+                group, group, gcount);
+
+            for (int k = i; k < j; k++) {
+                RouteEntry *r = arr[k];
+                const char *method = r->http_method ? r->http_method : "GET";
+                char method_lower[16];
+                int mi;
+                for (mi = 0; method[mi] && mi < (int)sizeof(method_lower) - 1; mi++)
+                    method_lower[mi] = (char)tolower((unsigned char)method[mi]);
+                method_lower[mi] = 0;
+
+                const char *rtype = r->response_type ? r->response_type : "json";
+                int has_body = (!strcmp(method, "POST") || !strcmp(method, "PUT") || !strcmp(method, "PATCH"));
+
+                /* Build colorized route HTML highlighting {param} segments. */
+                char route_html[1024];
+                {
+                    int ro = 0;
+                    const char *rp = r->route_path ? r->route_path : "";
+                    int in_param = 0;
+                    while (*rp && ro < (int)sizeof(route_html) - 32) {
+                        if (*rp == '{') {
+                            ro += snprintf(route_html + ro, sizeof(route_html) - ro, "<span class='param'>{");
+                            in_param = 1;
+                            rp++;
+                        } else if (*rp == '}' && in_param) {
+                            ro += snprintf(route_html + ro, sizeof(route_html) - ro, "}</span>");
+                            in_param = 0;
+                            rp++;
+                        } else {
+                            route_html[ro++] = *rp++;
+                        }
+                    }
+                    if (in_param) ro += snprintf(route_html + ro, sizeof(route_html) - ro, "</span>");
+                    route_html[ro] = 0;
+                }
+
+                /* Collect path params from route_path */
+                char params_html[2048] = {0};
+                {
+                    int po = 0;
+                    const char *rp = r->route_path ? r->route_path : "";
+                    while (*rp) {
+                        if (*rp == '{') {
+                            const char *e = strchr(rp, '}');
+                            if (!e) break;
+                            int nl = (int)(e - rp - 1);
+                            if (nl > 0 && nl < 64 && po + 256 < (int)sizeof(params_html)) {
+                                po += snprintf(params_html + po, sizeof(params_html) - po,
+                                    "<label for='ep-%d-p-%.*s'>{%.*s}</label>"
+                                    "<input type='text' id='ep-%d-p-%.*s' data-param='%.*s' placeholder='value for %.*s'>",
+                                    endpoint_id, nl, rp + 1,
+                                    nl, rp + 1,
+                                    endpoint_id, nl, rp + 1,
+                                    nl, rp + 1,
+                                    nl, rp + 1);
+                            }
+                            rp = e + 1;
+                        } else rp++;
+                    }
+                }
+
+                ENSURE_CAP(4096 + strlen(route_html) + strlen(params_html));
+                offset += snprintf(html + offset, cap - offset,
+                    "<div class='endpoint' id='ep-%d' data-method='%s' data-route='%s' data-func='%s'>"
+                    "<div class='ep-head' onclick='toggleEp(%d)'>"
+                    "<span class='caret'>&#9656;</span>"
+                    "<span class='method %s'>%s</span>"
+                    "<span class='route'>%s</span>"
+                    "<span class='func'>%s()</span>"
+                    "<span class='badge %s'>%s</span>",
+                    endpoint_id, method, r->route_path ? r->route_path : "",
+                    r->function_name ? r->function_name : "",
+                    endpoint_id,
+                    method_lower, method,
+                    route_html,
+                    r->function_name ? r->function_name : "",
+                    !strcmp(rtype, "xml") ? "xml" : "json",
+                    !strcmp(rtype, "xml") ? "XML" : "JSON");
+                if (r->cache_ttl > 0) {
+                    offset += snprintf(html + offset, cap - offset,
+                        "<span class='badge cache'>cache %ds</span>", r->cache_ttl);
+                }
+                offset += snprintf(html + offset, cap - offset,
+                    "</div>"
+                    "<div class='ep-body'>");
+                if (params_html[0]) {
+                    offset += snprintf(html + offset, cap - offset,
+                        "<label>Path Parameters</label>"
+                        "<div class='params-grid'>%s</div>", params_html);
+                }
+                if (has_body) {
+                    offset += snprintf(html + offset, cap - offset,
+                        "<label for='ep-%d-body'>Request Body (JSON)</label>"
+                        "<textarea id='ep-%d-body' placeholder='{\\n  \"key\": \"value\"\\n}'></textarea>",
+                        endpoint_id, endpoint_id);
+                }
+                offset += snprintf(html + offset, cap - offset,
+                    "<div class='ep-actions'>"
+                    "<button class='btn btn-try' id='ep-%d-btn' onclick='tryEp(%d)'>Execute</button>"
+                    "<button class='btn btn-copy' id='ep-%d-copy'>Copy</button>"
+                    "<span class='status-pill' id='ep-%d-status'></span>"
+                    "<span class='exec-time' id='ep-%d-time'></span>"
+                    "</div>"
+                    "<pre class='response' id='ep-%d-resp'></pre>"
+                    "</div>"
+                    "</div>",
+                    endpoint_id, endpoint_id, endpoint_id, endpoint_id, endpoint_id, endpoint_id);
+                endpoint_id++;
+            }
+            ENSURE_CAP(64);
+            offset += snprintf(html + offset, cap - offset, "</div></div>");
+            i = j;
+        }
+    }
+
+    if (arr) free(arr);
+
+    /* JS block */
+    ENSURE_CAP(4096);
+    offset += snprintf(html + offset, cap - offset,
+        "</main>"
+        "<footer>TypeEasy Embedded API &middot; %d endpoint(s) &middot; <a href='/' style='color:#888'>refresh</a></footer>"
+        "<script>"
+        "let activeMethods=new Set(['all']);"
+        "function togglePill(el){"
+        " const m=el.dataset.m;"
+        " const pills=document.querySelectorAll('.pill');"
+        " if(m==='all'){activeMethods=new Set(['all']);pills.forEach(p=>p.classList.toggle('active',p.dataset.m==='all'));}"
+        " else{activeMethods.delete('all');pills[0].classList.remove('active');"
+        "  if(activeMethods.has(m)){activeMethods.delete(m);el.classList.remove('active');}else{activeMethods.add(m);el.classList.add('active');}"
+        "  if(activeMethods.size===0){activeMethods.add('all');pills[0].classList.add('active');}}"
+        " applyFilter();"
+        "}"
+        "function applyFilter(){"
+        " const q=(document.getElementById('filter').value||'').toLowerCase().trim();"
+        " document.querySelectorAll('.endpoint').forEach(ep=>{"
+        "  const m=(ep.dataset.method||'').toLowerCase();"
+        "  const r=(ep.dataset.route||'').toLowerCase();"
+        "  const f=(ep.dataset.func||'').toLowerCase();"
+        "  const matchM=activeMethods.has('all')||activeMethods.has(m);"
+        "  const matchQ=!q||r.includes(q)||f.includes(q)||m.includes(q);"
+        "  ep.classList.toggle('hidden',!(matchM&&matchQ));"
+        " });"
+        " document.querySelectorAll('.group').forEach(g=>{"
+        "  const any=g.querySelectorAll('.endpoint:not(.hidden)').length>0;"
+        "  g.classList.toggle('hidden',!any);"
+        "  const chip=g.querySelector('.count-chip');"
+        "  if(chip){chip.textContent=g.querySelectorAll('.endpoint:not(.hidden)').length;}"
+        " });"
+        "}"
+        "function toggleEp(id){document.getElementById('ep-'+id).classList.toggle('open');}"
+        "function expandAll(open){document.querySelectorAll('.endpoint').forEach(ep=>ep.classList.toggle('open',open));document.querySelectorAll('.group').forEach(g=>g.classList.toggle('collapsed',!open));}"
+        "async function tryEp(id){"
+        " const ep=document.getElementById('ep-'+id);"
+        " const method=ep.dataset.method;"
+        " let route=ep.dataset.route;"
+        " ep.querySelectorAll('[data-param]').forEach(inp=>{"
+        "  const v=encodeURIComponent(inp.value||'');"
+        "  route=route.replace('{'+inp.dataset.param+'}',v||('{'+inp.dataset.param+'}'));"
+        " });"
+        " const btn=document.getElementById('ep-'+id+'-btn');"
+        " const resp=document.getElementById('ep-'+id+'-resp');"
+        " const tspan=document.getElementById('ep-'+id+'-time');"
+        " const cbtn=document.getElementById('ep-'+id+'-copy');"
+        " const status=document.getElementById('ep-'+id+'-status');"
+        " btn.disabled=true;btn.textContent='Loading...';"
+        " resp.style.display='block';resp.classList.remove('error');resp.textContent='Ejecutando...';"
+        " tspan.textContent='';cbtn.style.display='none';status.style.display='none';"
+        " const bodyEl=document.getElementById('ep-'+id+'-body');"
+        " const opts={method:method,headers:{}};"
+        " if(bodyEl&&bodyEl.value.trim()){opts.body=bodyEl.value;opts.headers['Content-Type']='application/json';}"
+        " const t0=performance.now();"
+        " try{"
+        "  const r=await fetch(route,opts);"
+        "  const dt=(performance.now()-t0).toFixed(0);"
+        "  const xtime=r.headers.get('X-Execution-Time');"
+        "  const txt=await r.text();"
+        "  let out=txt;try{out=JSON.stringify(JSON.parse(txt),null,2);}catch(e){}"
+        "  resp.textContent=out;"
+        "  status.style.display='inline-block';status.className='status-pill '+(r.ok?'ok':'bad');status.textContent=r.status+' '+r.statusText;"
+        "  tspan.textContent=(xtime?('server '+xtime+'s | '):'')+'wall '+dt+'ms';"
+        "  cbtn.style.display='inline-block';"
+        "  cbtn.onclick=()=>{navigator.clipboard.writeText(out).then(()=>{const o=cbtn.textContent;cbtn.textContent='Copied';setTimeout(()=>cbtn.textContent=o,1400);});};"
+        " }catch(err){resp.classList.add('error');resp.textContent='Error: '+err.message;status.style.display='inline-block';status.className='status-pill bad';status.textContent='NETWORK';}"
+        " btn.disabled=false;btn.textContent='Execute';"
+        "}"
+        "</script>"
+        "</body></html>", route_count);
+
     mg_write(conn, html, offset);
     free(html);
 #undef ENSURE_CAP

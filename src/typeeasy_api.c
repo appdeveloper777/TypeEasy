@@ -222,6 +222,12 @@ int typeeasy_embedded_load_script(TypeEasyEmbeddedContext* ctx, const char* scri
     }
     fprintf(stderr, "[DEBUG] ANTES de interpret_ast(scope global): __ret_var_active=%d\n", __ret_var_active);
     
+    /* Bloque D: clear interpreter control-flow flags before running this
+     * file's global scope. Without this, an aborted previous file (uncaught
+     * throw, top-level return, leaked break/continue) leaves a flag set and
+     * interpret_ast() short-circuits, silently dropping endpoints. */
+    te_runtime_reset_flags();
+
     // Ejecutar scope global para inicializar clases, variables globales, etc.
     interpret_ast(ast);
     

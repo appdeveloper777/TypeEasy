@@ -112,7 +112,7 @@ endpoint {
       string global_query = "SELECT * FROM usuarios LIMIT 10";
 
       // Conectar a MySQL
-      let _conn_id = new mysql_connect(global_host, global_user, global_pass, global_db, global_port);
+      let _conn_id = mysql_connect(global_host, global_user, global_pass, global_db, global_port);
       
       // Ejecutar query con ORM
       let _usuarios = orm_query(_conn_id, global_query, UsuarioModel);
@@ -210,7 +210,7 @@ endpoint {
     [HttpGet("/api/productos")]
     GetProductos() {
         string query = "SELECT * FROM productos";
-        let conn = new mysql_connect(global_host, global_user, global_pass, global_db, global_port);
+        let conn = mysql_connect(global_host, global_user, global_pass, global_db, global_port);
         let productos = orm_query(conn, query, ProductoModel);
         mysql_close(conn);
         return xml(productos);
@@ -230,7 +230,7 @@ endpoint {
         
         // Insertar en base de datos
         string query = "INSERT INTO productos (nombre, precio) VALUES ('" + nombre + "', " + precio + ")";
-        let conn = new mysql_connect(global_host, global_user, global_pass, global_db, global_port);
+        let conn = mysql_connect(global_host, global_user, global_pass, global_db, global_port);
         mysql_execute(conn, query);
         mysql_close(conn);
         
@@ -251,7 +251,7 @@ endpoint {
         
         // Actualizar en base de datos
         string query = "UPDATE productos SET nombre = '" + nombre + "' WHERE id = " + id;
-        let conn = new mysql_connect(global_host, global_user, global_pass, global_db, global_port);
+        let conn = mysql_connect(global_host, global_user, global_pass, global_db, global_port);
         mysql_execute(conn, query);
         mysql_close(conn);
         
@@ -269,7 +269,7 @@ endpoint {
         string id = request.params.id;
         
         string query = "DELETE FROM productos WHERE id = " + id;
-        let conn = new mysql_connect(global_host, global_user, global_pass, global_db, global_port);
+        let conn = mysql_connect(global_host, global_user, global_pass, global_db, global_port);
         mysql_execute(conn, query);
         mysql_close(conn);
         
@@ -377,7 +377,7 @@ typeeasycode/apis/
 Siempre cierra las conexiones a la base de datos:
 
 ```te
-let conn = new mysql_connect(...);
+let conn = mysql_connect(...);
 // ... usar la conexión
 mysql_close(conn);  // ✅ Importante
 ```

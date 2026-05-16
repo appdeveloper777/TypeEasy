@@ -25,7 +25,7 @@ endpoint {
   GetUsuarios() {
       string global_query = "SELECT * FROM usuarios LIMIT 3";
 
-      let _conn_id = new mysql_connect(global_host, global_user, global_pass, global_db, global_port);
+      let _conn_id = mysql_connect(global_host, global_user, global_pass, global_db, global_port);
       let _usuarios = orm_query(_conn_id, global_query, UsuarioModel);
       mysql_close(_conn_id);
 

@@ -975,6 +975,27 @@ const char *get_throw_message(void) { return throw_message; }
 static int break_flag = 0;
 static int continue_flag = 0;
 
+/* === Bloque D: helper to reset all interpreter control-flow flags ===
+ * Called by typeeasy_embedded_load_script() between successive global-scope
+ * loads. Without this, an aborted script (uncaught throw, stray return at
+ * top level, break/continue leaking) leaves a flag set; the next file's
+ * interpret_ast() short-circuits immediately and silently drops its body.
+ *
+ * Exposed via prototype in ast.h. break_flag/continue_flag are file-static
+ * here, so an external "extern int break_flag;" reset would not link — that
+ * is why the reset must live in this translation unit. */
+void te_runtime_reset_flags(void) {
+    return_flag = 0;
+    return_node = NULL;
+    throw_flag = 0;
+    if (throw_message) {
+        free(throw_message);
+        throw_message = NULL;
+    }
+    break_flag = 0;
+    continue_flag = 0;
+}
+
 /* Fase 3a: forward decl */
 char* expand_interp_string(const char *raw);
 

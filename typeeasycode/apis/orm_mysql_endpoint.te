@@ -29,7 +29,7 @@ endpoint {
               string _db   = "meri";
               int _port = 3308;                                
 
-              let _conn_id = new mysql_connect(_host, _user, _pass, _db, _port);           
+              let _conn_id = mysql_connect(_host, _user, _pass, _db, _port);           
               let _usuarios = orm_query(_conn_id, _query, Usuario);
              
               mysql_close(_conn_id);            
