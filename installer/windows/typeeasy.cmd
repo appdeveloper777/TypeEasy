@@ -30,6 +30,7 @@ if /I "%SUB%"=="new"     goto :cli
 if /I "%SUB%"=="gen"     goto :cli
 if /I "%SUB%"=="generate" goto :cli
 if /I "%SUB%"=="serve"   goto :cli
+if /I "%SUB%"=="docs"    goto :cli
 if /I "%SUB%"=="migrate" goto :cli
 if /I "%SUB%"=="console" goto :cli
 if /I "%SUB%"=="install" goto :cli
@@ -39,6 +40,8 @@ if /I "%SUB%"=="status"  goto :cli
 if /I "%SUB%"=="start"   goto :cli
 if /I "%SUB%"=="stop"    goto :cli
 if /I "%SUB%"=="restart" goto :cli
+if /I "%SUB%"=="version" goto :cli
+if /I "%SUB%"=="help"    goto :cli
 
 REM --- Everything else: passthrough to interpreter ---
 "%INTERP%" %*
