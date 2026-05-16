@@ -78,15 +78,25 @@ require_project() {
 cap_first() { printf '%s' "$1" | awk '{print toupper(substr($0,1,1)) substr($0,2)}'; }
 
 # Read a key from typeeasy.toml under a given section. Very simple parser.
+# Handles: key = "value"   # trailing comment   |   key = value
 toml_get() {
   local section="$1" key="$2" file="${3:-./typeeasy.toml}"
   awk -v s="[$section]" -v k="$key" '
     $0 == s { in_s = 1; next }
     /^\[/   { in_s = 0 }
     in_s && $1 == k && $2 == "=" {
-      sub(/^[^=]*=[ ]*/, "")
-      gsub(/^["]|["]$/, "")
-      print
+      # Drop everything up to and including the first "="
+      sub(/^[^=]*=[ \t]*/, "")
+      # If value starts with a quote, take only what is inside the quotes.
+      if (match($0, /^"[^"]*"/)) {
+        v = substr($0, RSTART + 1, RLENGTH - 2)
+      } else {
+        # Unquoted: strip trailing comment, then trim whitespace
+        sub(/[ \t]*#.*$/, "")
+        sub(/[ \t]+$/, "")
+        v = $0
+      }
+      print v
       exit
     }' "$file" 2>/dev/null
 }
