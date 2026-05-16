@@ -1,0 +1,32 @@
+println("=== string.length ===");
+let s = "hello world";
+println(s.length);
+
+println("=== sha256 ===");
+println(sha256("abc"));
+
+println("=== md5_hex ===");
+println(md5_hex("hello"));
+
+println("=== hmac_sha256 ===");
+println(hmac_sha256("key", "The quick brown fox jumps over the lazy dog"));
+
+println("=== base64 roundtrip ===");
+let enc = base64_encode("hello world");
+println(enc);
+println(base64_decode(enc));
+
+println("=== rate_limit ===");
+var i = 0;
+var allowed_count = 0;
+var ok = 0;
+while (i < 5) {
+  ok = rate_limit("test:endpoint", 3, 60);
+  allowed_count = allowed_count + ok;
+  i = i + 1;
+}
+println("allowed=" + allowed_count);
+
+println("=== https + .length ===");
+let body = http_get("https://api.github.com/users/torvalds");
+println("body.length=" + body.length);

@@ -15,6 +15,13 @@
 #include "debugger.h"
 #include "te_builtins.h"
 
+/* Crypto / encoding stdlib (linked via -lssl -lcrypto en el Makefile). */
+#include <openssl/sha.h>
+#include <openssl/md5.h>
+#include <openssl/hmac.h>
+#include <openssl/evp.h>
+#include <time.h>
+
 /* Headers POSIX/sockets disponibles en todas las plataformas (MSYS2 / Linux / macOS).
  * En Windows usamos winsock; en POSIX, sockets BSD. */
 #ifdef _WIN32
@@ -422,6 +429,8 @@ void native_xml(ASTNode *arg) {
 static ASTNode* list_get_item(ASTNode *list, int idx);
 static int list_length(ASTNode *list);
 static ASTNode* resolve_to_list(ASTNode *node);
+static ASTNode* resolve_to_map(ASTNode *node);
+static int map_length(ASTNode *map);
 
 // Helper function to get string representation of any node
 char* get_node_string(ASTNode* node) {
@@ -494,6 +503,20 @@ char* get_node_string(ASTNode* node) {
         ASTNode *o = node->left;
         ASTNode *a = node->right;
         if (!o || !a) return strdup("");
+        /* str.length / list.length / map.length — mayo 2026 */
+        if (a->id && strcmp(a->id, "length") == 0) {
+            ASTNode *list = resolve_to_list(o);
+            if (list) { snprintf(temp, sizeof(temp), "%d", list_length(list)); return strdup(temp); }
+            ASTNode *map = resolve_to_map(o);
+            if (map)  { snprintf(temp, sizeof(temp), "%d", map_length(map));  return strdup(temp); }
+            if (o->id) {
+                Variable *sv = find_variable(o->id);
+                if (sv && sv->vtype == VAL_STRING) {
+                    snprintf(temp, sizeof(temp), "%zu", sv->value.string_value ? strlen(sv->value.string_value) : 0);
+                    return strdup(temp);
+                }
+            }
+        }
         ObjectNode *obj = NULL;
         /* Caso 1: o es IDENTIFIER → variable OBJECT. */
         if (o->id) {
@@ -5974,12 +5997,22 @@ double evaluate_expression(ASTNode *node) {
             if (!vv || (vv->type && strcmp(vv->type, "NULL") == 0)) return 0;
         }
 
-        /* Fase 1a: arr.length sobre listas */
+        /* Fase 1a: arr.length sobre listas / maps / strings */
         if (attr && attr->id && strcmp(attr->id, "length") == 0) {
             ASTNode *list = resolve_to_list(objRef);
             if (list) return (double)list_length(list);
             ASTNode *map = resolve_to_map(objRef);
             if (map) return (double)map_length(map);
+            /* str.length — mayo 2026 */
+            if (objRef && objRef->id) {
+                Variable *sv = find_variable(objRef->id);
+                if (sv && sv->vtype == VAL_STRING)
+                    return (double)(sv->value.string_value ? strlen(sv->value.string_value) : 0);
+            }
+            if (objRef && objRef->type &&
+                (strcmp(objRef->type, "STRING") == 0 || strcmp(objRef->type, "STRING_LITERAL") == 0)) {
+                return (double)(objRef->str_value ? strlen(objRef->str_value) : 0);
+            }
         }
 
         /* Bug fix: arr[i].attr — objRef es un ACCESS_EXPR (indexing),
@@ -7581,6 +7614,117 @@ static int te_builtin_dispatch(ASTNode *node) {
         add_or_update_variable("__ret__", r);
         return 1;
     }
+
+    /* ===== Crypto / encoding stdlib (mayo 2026) =====
+     * sha256(s), md5_hex(s), hmac_sha256(key, msg),
+     * base64_encode(s), base64_decode(s). Devuelven STRING. */
+    if (strcmp(fn, "sha256") == 0) {
+        char *s = a0 ? get_node_string(a0) : NULL;
+        unsigned char md[SHA256_DIGEST_LENGTH];
+        SHA256((const unsigned char*)(s ? s : ""), s ? strlen(s) : 0, md);
+        char hex[SHA256_DIGEST_LENGTH * 2 + 1];
+        for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) sprintf(hex + i*2, "%02x", md[i]);
+        hex[SHA256_DIGEST_LENGTH*2] = 0;
+        if (s) free(s);
+        add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, hex, NULL));
+        return 1;
+    }
+    if (strcmp(fn, "md5_hex") == 0) {
+        char *s = a0 ? get_node_string(a0) : NULL;
+        unsigned char md[MD5_DIGEST_LENGTH];
+        MD5((const unsigned char*)(s ? s : ""), s ? strlen(s) : 0, md);
+        char hex[MD5_DIGEST_LENGTH * 2 + 1];
+        for (int i = 0; i < MD5_DIGEST_LENGTH; i++) sprintf(hex + i*2, "%02x", md[i]);
+        hex[MD5_DIGEST_LENGTH*2] = 0;
+        if (s) free(s);
+        add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, hex, NULL));
+        return 1;
+    }
+    if (strcmp(fn, "hmac_sha256") == 0) {
+        char *key = a0 ? get_node_string(a0) : NULL;
+        char *msg = a1 ? get_node_string(a1) : NULL;
+        unsigned char md[EVP_MAX_MD_SIZE];
+        unsigned int  mdlen = 0;
+        HMAC(EVP_sha256(),
+             key ? key : "", key ? (int)strlen(key) : 0,
+             (const unsigned char*)(msg ? msg : ""), msg ? strlen(msg) : 0,
+             md, &mdlen);
+        char hex[EVP_MAX_MD_SIZE * 2 + 1];
+        for (unsigned int i = 0; i < mdlen; i++) sprintf(hex + i*2, "%02x", md[i]);
+        hex[mdlen*2] = 0;
+        if (key) free(key); if (msg) free(msg);
+        add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, hex, NULL));
+        return 1;
+    }
+    if (strcmp(fn, "base64_encode") == 0) {
+        char *s = a0 ? get_node_string(a0) : NULL;
+        size_t slen = s ? strlen(s) : 0;
+        size_t outcap = 4 * ((slen + 2) / 3) + 1;
+        char *out = (char*)malloc(outcap);
+        int n = EVP_EncodeBlock((unsigned char*)out, (const unsigned char*)(s ? s : ""), (int)slen);
+        out[n] = 0;
+        if (s) free(s);
+        ASTNode *r = create_ast_leaf("STRING", 0, out, NULL);
+        free(out);
+        add_or_update_variable("__ret__", r);
+        return 1;
+    }
+    if (strcmp(fn, "base64_decode") == 0) {
+        char *s = a0 ? get_node_string(a0) : NULL;
+        size_t slen = s ? strlen(s) : 0;
+        size_t outcap = (slen / 4) * 3 + 4;
+        unsigned char *out = (unsigned char*)malloc(outcap + 1);
+        int n = EVP_DecodeBlock(out, (const unsigned char*)(s ? s : ""), (int)slen);
+        /* EVP_DecodeBlock no descuenta el padding '=' — hacerlo aquí. */
+        if (n > 0 && slen >= 1 && s[slen-1] == '=') n--;
+        if (n > 0 && slen >= 2 && s[slen-2] == '=') n--;
+        if (n < 0) n = 0;
+        out[n] = 0;
+        ASTNode *r = create_ast_leaf("STRING", 0, (char*)out, NULL);
+        free(out); if (s) free(s);
+        add_or_update_variable("__ret__", r);
+        return 1;
+    }
+
+    /* ===== Rate limiting (mayo 2026) =====
+     * rate_limit(key, max_requests, window_seconds) → 1 si permitido, 0 si excedido.
+     * Bucket array de 1024 slots con FNV-1a + linear probe. Sin sync (single-thread
+     * por petición). Uso típico:
+     *   let ip = request_header("X-Real-IP");
+     *   if (rate_limit(ip + ":/api/foo", 100, 60) == 0) return "429"; */
+    if (strcmp(fn, "rate_limit") == 0) {
+        static struct { uint64_t hash; int count; long window_start; } buckets[1024];
+        char *key = a0 ? get_node_string(a0) : strdup("");
+        int max  = a1 ? (int)evaluate_expression(a1) : 60;
+        ASTNode *a2 = a1 ? a1->right : NULL;
+        int win  = a2 ? (int)evaluate_expression(a2) : 60;
+        if (max <= 0) max = 1;
+        if (win <= 0) win = 1;
+        uint64_t h = 1469598103934665603ULL;
+        for (const char *p2 = key; *p2; p2++) { h ^= (unsigned char)*p2; h *= 1099511628211ULL; }
+        if (h == 0) h = 1; /* 0 reservado para "slot vacío" */
+        long now = (long)time(NULL);
+        int allowed = 0;
+        for (int probe = 0; probe < 8; probe++) {
+            int idx = (int)((h + probe) & 1023);
+            if (buckets[idx].hash == 0 || buckets[idx].hash == h) {
+                if (buckets[idx].hash == 0 || (now - buckets[idx].window_start) >= win) {
+                    buckets[idx].hash = h;
+                    buckets[idx].window_start = now;
+                    buckets[idx].count = 0;
+                }
+                if (buckets[idx].count < max) {
+                    buckets[idx].count++;
+                    allowed = 1;
+                }
+                break;
+            }
+        }
+        free(key);
+        add_or_update_variable("__ret__", create_ast_leaf_number("INT", allowed, NULL, NULL));
+        return 1;
+    }
+
     if (strcmp(fn, "http_get") == 0) {
         /* http_get(url) | http_get(url, headers) */
         char *url   = a0 ? get_node_string(a0) : NULL;
@@ -11974,12 +12118,20 @@ static void interpret_print(ASTNode *node) {
     if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
         ASTNode *o = arg->left;
         ASTNode *a = arg->right;
-        /* Fase 1a: arr.length */
+        /* Fase 1a: arr.length / map.length / str.length */
         if (a && a->id && strcmp(a->id, "length") == 0) {
             ASTNode *list = resolve_to_list(o);
             if (list) { dbg_printf("%d", list_length(list)); return; }
             ASTNode *map = resolve_to_map(o);
             if (map) { dbg_printf("%d", map_length(map)); return; }
+            /* str.length — mayo 2026 */
+            if (o && o->id) {
+                Variable *sv = find_variable(o->id);
+                if (sv && sv->vtype == VAL_STRING) {
+                    dbg_printf("%zu", sv->value.string_value ? strlen(sv->value.string_value) : 0);
+                    return;
+                }
+            }
         }
         Variable *v = find_variable(o->id);
         if (!v || v->vtype != VAL_OBJECT) {
@@ -12350,7 +12502,7 @@ static void interpret_println(ASTNode *node) {
     if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
         ASTNode *o = arg->left;
         ASTNode *a = arg->right;
-        /* Fase 1a: arr.length */
+        /* Fase 1a: arr.length / map.length / str.length */
         if (a && a->id && strcmp(a->id, "length") == 0) {
             ASTNode *list = resolve_to_list(o);
             if (list) {
@@ -12367,6 +12519,17 @@ static void interpret_println(ASTNode *node) {
                 char tmp[32]; snprintf(tmp, 32, "%d\n", n);
                 append_to_stdout(tmp);
                 return;
+            }
+            /* str.length — mayo 2026 */
+            if (o && o->id) {
+                Variable *sv = find_variable(o->id);
+                if (sv && sv->vtype == VAL_STRING) {
+                    size_t n = sv->value.string_value ? strlen(sv->value.string_value) : 0;
+                    dbg_printf("%zu\n", n);
+                    char tmp[32]; snprintf(tmp, 32, "%zu\n", n);
+                    append_to_stdout(tmp);
+                    return;
+                }
             }
         }
         /* Bug fix: println(arr[i].attr) — o es ACCESS_EXPR.
