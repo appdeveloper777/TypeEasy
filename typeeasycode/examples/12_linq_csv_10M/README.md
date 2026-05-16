@@ -28,12 +28,16 @@ PY
 ## Correr
 
 ```bash
-# TypeEasy
+# TypeEasy — 10M (solo agregaciones)
 time docker compose run --rm typeeasy examples/12_linq_csv_10M/bench_linq_10M.te
 
-# Python (desde typeeasycode/ para que el path relativo del CSV coincida)
+# TypeEasy — 1M (cobertura completa)
+time docker compose run --rm typeeasy examples/12_linq_csv_10M/bench_linq_1M.te
+
+# Python — desde typeeasycode/ para que el path relativo del CSV coincida
 cd typeeasycode
 time python3 examples/12_linq_csv_10M/bench_linq_10M.py
+time python3 examples/12_linq_csv_10M/bench_linq_1M.py
 ```
 
 ## Qué mide
@@ -67,19 +71,28 @@ OK
 
 ## Resultados de referencia
 
-Medidos en este repo (Windows + WSL2 + Docker, CSV de 10M filas, ~180 MB),
-incluyendo carga + tres agregaciones:
+Medidos en este repo (Windows + WSL2 + Docker), incluyendo carga + agregaciones:
+
+### 10M filas (solo agregaciones puras)
 
 | Runtime           | Tiempo total   | sumBy.precio        |
 | ----------------- | -------------- | ------------------- |
 | Python 3.x        | **45 s**       | `50000005000000` ✓  |
 | TypeEasy v0.0.11  | **1 m 30 s**   | `-2147483648` (ovf) |
 
-TypeEasy va ~2× más lento que Python en este escenario. La carga del CSV
-domina el tiempo total en ambos; la diferencia en agregaciones se debe al
-intérprete AST + creación/eval de lambda por fila (10M invocaciones).
+### 1M filas (cobertura completa: agregaciones + `where`/`minBy`/`maxBy`/`take`)
+
+| Runtime           | Tiempo total   | sumBy.precio  |
+| ----------------- | -------------- | ------------- |
+| Python 3.x        | **7.2 s**      | `500500000` ✓ |
+| TypeEasy v0.0.11  | **14.8 s**     | `500500000` ✓ |
+
+A 1M filas **todos los valores coinciden 1-a-1** entre los dos runtimes y
+TypeEasy va ~2× más lento que Python — proporción consistente con la prueba
+de 10M. El cuello principal es la carga del CSV y la invocación masiva de
+lambdas en el intérprete AST.
 
 Operadores que materializan (`where`, `select`, `orderBy`, `take`, `distinct`,
-`minBy`, `maxBy` con OBJECT) deben benchmarkearse aparte con datasets menores
-(p. ej. 1M filas) por consumo de RAM — con 10M filas el container puede ser
-asesinado por OOM (exit 137).
+`minBy`, `maxBy` con OBJECT) se prueban sin problema a **1M**; a **10M** el
+container puede ser asesinado por OOM (exit 137), por eso el bench de 10M se
+limita a agregaciones puras.
