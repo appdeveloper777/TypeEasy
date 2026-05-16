@@ -1,0 +1,11 @@
+// Smoke test: v0.0.10 crypto stdlib + string.length on installer binaries.
+// Expected output (matches NIST/RFC vectors):
+//   ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+//   5d41402abc4b2a76b9719d911017c592
+//   f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
+//   11
+println(sha256("abc"));
+println(md5_hex("hello"));
+println(hmac_sha256("key", "The quick brown fox jumps over the lazy dog"));
+let s = "hello world";
+println(s.length);

@@ -1,0 +1,9 @@
+// Smoke test: let/var/const top-level on native binaries (was SIGSEGV on Windows v0.0.1).
+// Verifies the parser.l yylval.sval fix (commit f021e43).
+// Expected output: 1 / 10 / 20
+let n = 1;
+println(n);
+var x = 10;
+const y = 20;
+println(x);
+println(y);
