@@ -271,7 +271,7 @@ Options:
   local mode_tag; [[ "$env_mode" == "prod" ]] && mode_tag="PROD (watchdog, auto-restart)" || mode_tag="DEV"
   local docs_url=""
   if [[ -f ./apis/_swagger_docs.te ]]; then
-    docs_url="http://$docs_host:$port/docs"
+    docs_url="http://$docs_host:$port/"
   fi
   echo "============================================================"
   echo "  TypeEasy serve  [$mode_tag]"
@@ -654,7 +654,7 @@ endpoint {
       return json("${escaped_json}");
   }
 
-  [HttpGet("/docs")]
+  [HttpGet("/")]
   swagger_ui() {
       // Body starts with <!DOCTYPE html → server emits text/html content-type
       return json("${escaped_html}");
@@ -688,11 +688,11 @@ TE
 </html>
 HTML
 
-  info "Generated: ./apis/_swagger_docs.te    (endpoints /openapi.json + /docs)"
+  info "Generated: ./apis/_swagger_docs.te    (endpoints / + /openapi.json)"
   info "Generated: ./docs/index.html          (fallback file:// viewer)"
   echo
-  echo "  Run:       typeeasy serve --dev"
-  echo "  Swagger UI: http://${host}:${port}/docs"
+  echo "  Run:        typeeasy serve --dev"
+  echo "  Swagger UI: http://${host}:${port}/"
   echo "  Raw spec:   http://${host}:${port}/openapi.json"
   echo
   echo "  To remove generated docs:  typeeasy docs --clean"
