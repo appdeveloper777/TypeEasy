@@ -10,6 +10,17 @@
       "port": 4712
     },
     {
+      "name": "TypeEasy: debug current .te as API (Docker)",
+      "type": "typeeasy",
+      "request": "launch",
+      "program": "${file}",
+      "stopOnEntry": false,
+      "port": 4712,
+      "api": true,
+      "httpPort": 8082,
+      "apiHost": "0.0.0.0"
+    },
+    {
       "name": "TypeEasy: attach to running interpreter (port 4711)",
       "type": "typeeasy",
       "request": "launch",

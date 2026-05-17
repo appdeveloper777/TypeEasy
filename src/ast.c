@@ -773,6 +773,23 @@ static void native_request_query (ASTNode *arg) { const char *k = te_arg_string(
 static void native_request_header(ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_headers, k); te_set_ret_string(v ? v : ""); }
 static void native_request_param (ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_params,  k); te_set_ret_string(v ? v : ""); }
 
+/* v0.0.13: Debug-print que va a stderr (NO entra al pipeline de captura
+ * de stdout que arma el cuerpo HTTP). Pensado para inspeccionar handlers
+ * POST/GET en `docker compose logs typeeasy` sin contaminar la respuesta.
+ *
+ * Usa get_node_string() (no te_arg_string()) para que arguments como
+ *   debug_log(concat(...))      -> evalua la CALL_FUNC anidada
+ *   debug_log(u.name)           -> resuelve ACCESS_ATTR sobre OBJECT
+ *   debug_log("a" + 1)          -> resuelve ADD con coercion a string
+ * funcionen en vez de imprimir vacio. */
+static void native_debug_log(ASTNode *arg) {
+    char *s = get_node_string(arg);
+    fprintf(stderr, "[debug] %s\n", s ? s : "");
+    fflush(stderr);
+    if (s) free(s);
+    te_set_ret_int(0);
+}
+
 /* JSON-encode a TeKV list as { "k": "v", ... } into out (truncates safely). */
 static void te_kv_to_json(TeKV *head, char *out, size_t cap) {
     size_t o = 0;
@@ -862,6 +879,7 @@ int call_native_function(const char *name, ASTNode *arg) {
     if (strcmp(name, "request_params") == 0) { native_request_params_all(arg); return 1; }
     if (strcmp(name, "response_status")== 0) { native_response_status(arg);return 1; }
     if (strcmp(name, "response_header")== 0) { native_response_header(arg);return 1; }
+    if (strcmp(name, "debug_log")      == 0) { native_debug_log(arg);      return 1; }
     if (strcmp(name, "concat") == 0) {
         native_concat(arg);
         return 1;
@@ -1007,6 +1025,7 @@ ASTNode* create_call_node_return_xml(const char* funcName, ASTNode* args) {
 
 ASTNode* create_method_call_node_alone(ASTNode* objectNode, const char* methodName, ASTNode* args) {
     ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
+    if (node) node->line = yylineno;
     node->type = strdup("METHOD_CALL_ALONE");
     node->left = objectNode;
     node->right = args;
@@ -1359,6 +1378,7 @@ void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *
 ObjectNode *create_object(ClassNode *class) {
     ObjectNode *obj = (ObjectNode *)malloc(sizeof(ObjectNode));
     obj->class = class;
+    obj->owning_list = NULL;  /* v0.0.13 (perf) */
     obj->attributes = malloc(class->attr_count * sizeof(Variable));
     for (int i = 0; i < class->attr_count; i++) {
         obj->attributes[i].id    = strdup(class->attributes[i].id);
@@ -6361,6 +6381,9 @@ static void interpret_call_method(ASTNode *node);
 static void interpret_call_method_alone(ASTNode *node);
 static void interpret_var_decl(ASTNode *node);
 static void interpret_assign_attr(ASTNode *node);
+/* v0.0.13 (perf) Forward decl: defined ~line 8245 with TeColCache machinery. */
+struct ASTNode;
+static void te_colcache_invalidate(struct ASTNode *list_head);
 static void interpret_assign(ASTNode *node);
 static void interpret_print(ASTNode *node);
 static void interpret_println(ASTNode *node);
@@ -6820,6 +6843,7 @@ void interpret_ast(ASTNode *node) {
         new_item->next = cur ? cur->next : NULL;
         if (prev) prev->next = new_item; else list->left = new_item;
         te_invalidate_list_cache(list);  /* Ola 14: item replaced */
+        te_colcache_invalidate(list);    /* v0.0.13 (perf) */
         break;
     }
 
@@ -7311,6 +7335,75 @@ static ASTNode* te_json_parse_value(const char **p) {
     memcpy(tmp, start, L); tmp[L] = 0;
     if (is_float) return create_ast_leaf("FLOAT", 0, tmp, NULL);
     return create_ast_leaf_number("INT", atoi(tmp), NULL, NULL);
+}
+
+/* ---------------------------------------------------------------
+ * v0.0.13: POST/PUT body -> typed-class model binding helper.
+ * Parses `json` as an object and copies matching attribute values
+ * into a freshly-created ObjectNode of `cls`. Missing keys keep
+ * the class default; extra keys are ignored. Returns NULL on bad
+ * class; on bad JSON returns an object with defaults.
+ * --------------------------------------------------------------- */
+ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
+    if (!cls) return NULL;
+    ObjectNode *obj = create_object(cls);
+    if (!json || !*json) return obj;
+    const char *p = json;
+    /* Skip leading whitespace (te_json_parse_value also does this). */
+    ASTNode *root = te_json_parse_value(&p);
+    if (!root || !root->type || strcmp(root->type, "OBJECT_LITERAL") != 0) {
+        return obj; /* Not a JSON object; keep defaults. */
+    }
+    for (ASTNode *pair = root->left; pair; pair = pair->right) {
+        const char *key = pair->id;
+        ASTNode *val = pair->left;
+        if (!key || !val || !val->type) continue;
+        for (int a = 0; a < cls->attr_count; a++) {
+            if (!cls->attributes[a].id || strcmp(cls->attributes[a].id, key) != 0) continue;
+            Variable *dst = &obj->attributes[a];
+            const char *atype = cls->attributes[a].type ? cls->attributes[a].type : "int";
+            if (strcmp(atype, "string") == 0) {
+                if (dst->vtype == VAL_STRING && dst->value.string_value) free(dst->value.string_value);
+                if (strcmp(val->type, "STRING") == 0) {
+                    dst->value.string_value = strdup(val->str_value ? val->str_value : "");
+                } else if (strcmp(val->type, "INT") == 0) {
+                    char buf[32]; snprintf(buf, sizeof buf, "%d", val->value);
+                    dst->value.string_value = strdup(buf);
+                } else if (strcmp(val->type, "FLOAT") == 0) {
+                    dst->value.string_value = strdup(val->str_value ? val->str_value : "0");
+                } else {
+                    dst->value.string_value = strdup("");
+                }
+                dst->vtype = VAL_STRING;
+            } else if (strcmp(atype, "float") == 0) {
+                double d = 0;
+                if (strcmp(val->type, "FLOAT") == 0)      d = atof(val->str_value ? val->str_value : "0");
+                else if (strcmp(val->type, "INT") == 0)   d = (double)val->value;
+                else if (strcmp(val->type, "STRING") == 0) d = atof(val->str_value ? val->str_value : "0");
+                dst->value.float_value = d;
+                dst->vtype = VAL_FLOAT;
+            } else {
+                /* int / default */
+                int iv = 0;
+                if (strcmp(val->type, "INT") == 0)         iv = val->value;
+                else if (strcmp(val->type, "FLOAT") == 0)  iv = (int)atof(val->str_value ? val->str_value : "0");
+                else if (strcmp(val->type, "STRING") == 0) iv = atoi(val->str_value ? val->str_value : "0");
+                dst->value.int_value = iv;
+                dst->vtype = VAL_INT;
+            }
+            break;
+        }
+    }
+    /* Note: leaking `root` AST here for simplicity (per-request lifetime). */
+    return obj;
+}
+
+/* Lookup a path-param value by name (returns NULL if not bound). */
+const char *typeeasy_http_find_param(const char *k) {
+    return te_kv_find(g_req_params, k);
+}
+const char *typeeasy_http_find_query(const char *k) {
+    return te_kv_find(g_req_query, k);
 }
 
 /* Minimal HTTP/1.0 client over plain TCP. Returns body as malloc'd string (caller frees), or NULL. */
@@ -7964,6 +8057,15 @@ static int adapt_load_native(ASTNode *node, ASTNode *args) {
     return 1;
 }
 
+/* debug_log("...") -> int(0). Always prints to stderr (bypasses HTTP
+ * response capture). Useful for diagnostics in --api handlers. */
+static int adapt_debug_log(ASTNode *node, ASTNode *args) {
+    (void)node;
+    if (args) evaluate_native_args(args);
+    native_debug_log(args);
+    return 1;
+}
+
 /* env("KEY")            -> string ("" if unset)
  * env("KEY", "default") -> string (default if unset/empty)
  * The 2-arg form is the idiomatic way to provide a fallback. */
@@ -8026,6 +8128,7 @@ void te_register_ast_builtins(void) {
     te_builtin_register("load_native",       adapt_load_native);
     te_builtin_register("env",               adapt_env);
     te_builtin_register("env_required",      adapt_env_required);
+    te_builtin_register("debug_log",         adapt_debug_log);
     /* Other builtins (json, xml, request_*, response_*, len, range,
      * read_file, http_get, etc.) still served by the legacy if-chains
      * in call_native_function / te_builtin_dispatch. They can be migrated
@@ -8116,9 +8219,10 @@ static void interpret_call_func(ASTNode *node) {
         // We rely on the fact that most user functions are called as statements (METHOD_CALL_ALONE).
         // If called as expression, we might need to implement this.
         // For now, let's assume it's not needed for orm_query.
-         printf("Warning: Calling user function '%s' as expression is not fully supported yet.\n", node->id);
+         fprintf(stderr, "Warning: Calling user function '%s' as expression is not fully supported yet.\n", node->id);
     } else {
-        printf("Error: function '%s' not defined.\n", node->id);
+        fprintf(stderr, "Error: function '%s' not defined.\n", node->id);
+        exit(1);
     }
 }
 
@@ -8150,7 +8254,11 @@ typedef enum {
     SPEC_IDENT,
     SPEC_ATTR,
     SPEC_CMP_GT, SPEC_CMP_LT, SPEC_CMP_GE, SPEC_CMP_LE, SPEC_CMP_EQ, SPEC_CMP_NE,
-    SPEC_MOD_K
+    SPEC_MOD_K,
+    /* v0.0.12 #N: string equality fast-path — `fn(p) => p.X == "lit"` /
+     * `fn(p) => p.X != "lit"`. Activates parallel where/countWhere on
+     * string keys (e.g. groupBy patterns over CSV `cat` columns). */
+    SPEC_CMP_EQ_STR, SPEC_CMP_NE_STR
 } LambdaSpec;
 
 typedef struct {
@@ -8159,6 +8267,7 @@ typedef struct {
     long long   k;
     double      k_d;
     int         k_is_float;
+    const char *k_str;          /* SPEC_CMP_EQ_STR/NE_STR: borrowed from AST */
     /* One-shot cache: bound to the first ObjectNode class we see. */
     ClassNode  *cached_class;
     int         cached_idx;
@@ -8191,6 +8300,290 @@ static int te_openmp_enabled(void) {
 }
 #define TE_OMP_MIN_N 10000
 
+/* ==========================================================================
+ *  v0.0.13 (perf): columnar cache for homogeneous OBJECT lists (CSV loads).
+ *  Goal: eliminate the per-item pointer chase + attribute lookup in hot
+ *  LINQ paths (where/sumBy/countWhere) for numeric & string predicates.
+ *
+ *  Build: called once at the tail of `from_csv_to_list` with the resulting
+ *  LIST head and its ClassNode. Walks the items linked list ONCE and
+ *  materializes:
+ *    - items[]        : ASTNode* in original order (parallel array)
+ *    - int_cols[k]    : int64 column for each int attribute k
+ *    - flt_cols[k]    : double column for each float attribute k
+ *    - str_cols[k]    : borrowed const char* column for each string attribute
+ *
+ *  Invalidation: if the list is mutated after build (push/pop/sort/etc), we
+ *  free and clear the cache so subsequent reads fall back to slow path.
+ *
+ *  Read: `te_colcache_for` returns the cache iff the list head holds one,
+ *  the ClassNode matches the FastLambda's resolved class, and the attribute
+ *  is present as a typed column.
+ * ========================================================================== */
+typedef struct TeColCache {
+    ClassNode *cls;
+    int        n_rows;
+    int        nattr;
+    int       *kinds;          /* per-attr: 0=INT, 1=FLOAT, 2=STRING, 3=OTHER */
+    int64_t  **int_cols;       /* int_cols[k] or NULL */
+    double   **flt_cols;       /* flt_cols[k] or NULL */
+    const char ***str_cols;    /* str_cols[k] or NULL; entries borrowed */
+    ASTNode  **items;          /* parallel item pointer array, length n_rows */
+    /* v0.0.13 (perf) Parent-children link: when the parent list is mutated
+     * (or its cache invalidated), all derived caches (from where()) must also
+     * be invalidated to avoid stale columns. */
+    ASTNode   *owner;          /* the LIST ASTNode this cache belongs to */
+    struct TeColCache **children;
+    int        n_children;
+    int        cap_children;
+    struct TeColCache *parent; /* NULL if root (CSV-load cache) */
+} TeColCache;
+
+static void te_colcache_free(TeColCache *c) {
+    if (!c) return;
+    if (c->int_cols) { for (int k=0;k<c->nattr;k++) free(c->int_cols[k]); free(c->int_cols); }
+    if (c->flt_cols) { for (int k=0;k<c->nattr;k++) free(c->flt_cols[k]); free(c->flt_cols); }
+    if (c->str_cols) { for (int k=0;k<c->nattr;k++) free(c->str_cols[k]); free(c->str_cols); }
+    free(c->kinds);
+    free(c->items);
+    free(c->children);
+    free(c);
+}
+
+/* v0.0.13 (perf) Invalidate the columnar mirror cache on any structural list
+ * mutation (push/pop/reverse/sort/etc.). Also recursively invalidates any
+ * child caches derived via where(). Subsequent ops fall back to the
+ * OpenMP-over-objects path (correct, slightly slower). */
+static void te_colcache_invalidate(ASTNode *list_head) {
+    if (!list_head || !list_head->col_cache) return;
+    TeColCache *c = (TeColCache*)list_head->col_cache;
+    /* Detach NULL-out first to avoid re-entry. */
+    list_head->col_cache = NULL;
+    /* Recursively invalidate children. */
+    for (int i = 0; i < c->n_children; i++) {
+        TeColCache *ch = c->children[i];
+        if (ch && ch->owner) te_colcache_invalidate(ch->owner);
+    }
+    /* Detach from parent's children list (if any). */
+    if (c->parent) {
+        TeColCache *p = c->parent;
+        for (int i = 0; i < p->n_children; i++) {
+            if (p->children[i] == c) {
+                p->children[i] = p->children[p->n_children - 1];
+                p->n_children--;
+                break;
+            }
+        }
+    }
+    te_colcache_free(c);
+}
+
+static void te_colcache_add_child(TeColCache *parent, TeColCache *child) {
+    if (!parent || !child) return;
+    if (parent->n_children >= parent->cap_children) {
+        int nc = parent->cap_children ? parent->cap_children * 2 : 4;
+        parent->children = (struct TeColCache**)realloc(parent->children, (size_t)nc * sizeof(struct TeColCache*));
+        parent->cap_children = nc;
+    }
+    parent->children[parent->n_children++] = child;
+    child->parent = parent;
+}
+
+/* Map a Variable.vtype/type to our column kind. */
+static int te_colcache_kind_for_attr(ClassNode *cls, int attr_idx) {
+    if (!cls || attr_idx < 0 || attr_idx >= cls->attr_count) return 3;
+    const char *t = cls->attributes[attr_idx].type;
+    if (!t) return 3;
+    if (!strcmp(t,"int") || !strcmp(t,"INT") || !strcmp(t,"long") ||
+        !strcmp(t,"Integer") || !strcmp(t,"bool") || !strcmp(t,"BOOL")) return 0;
+    if (!strcmp(t,"float") || !strcmp(t,"FLOAT") || !strcmp(t,"double") ||
+        !strcmp(t,"Double")) return 1;
+    if (!strcmp(t,"string") || !strcmp(t,"STRING") || !strcmp(t,"String")) return 2;
+    return 3;
+}
+
+/* Build columnar cache for a LIST whose items are OBJECTs of class `cls`.
+ * Idempotent: frees any previous cache. */
+static void te_colcache_build(ASTNode *list_head, ClassNode *cls) {
+    if (!list_head || !cls) return;
+    /* Free existing cache if present. */
+    if (list_head->col_cache) { te_colcache_free((TeColCache*)list_head->col_cache); list_head->col_cache = NULL; }
+    /* Count rows. */
+    int n = 0;
+    for (ASTNode *it = list_head->left; it; it = it->next) n++;
+    if (n <= 0) return;
+
+    int nattr = cls->attr_count;
+    if (nattr <= 0) return;
+
+    TeColCache *c = (TeColCache*)calloc(1, sizeof(TeColCache));
+    c->cls = cls;
+    c->n_rows = n;
+    c->nattr = nattr;
+    c->kinds = (int*)calloc(nattr, sizeof(int));
+    c->int_cols = (int64_t**)calloc(nattr, sizeof(int64_t*));
+    c->flt_cols = (double**)calloc(nattr, sizeof(double*));
+    c->str_cols = (const char***)calloc(nattr, sizeof(const char**));
+    c->items = (ASTNode**)malloc((size_t)n * sizeof(ASTNode*));
+
+    for (int k = 0; k < nattr; k++) {
+        c->kinds[k] = te_colcache_kind_for_attr(cls, k);
+        if (c->kinds[k] == 0) c->int_cols[k] = (int64_t*)malloc((size_t)n * sizeof(int64_t));
+        else if (c->kinds[k] == 1) c->flt_cols[k] = (double*)malloc((size_t)n * sizeof(double));
+        else if (c->kinds[k] == 2) c->str_cols[k] = (const char**)malloc((size_t)n * sizeof(const char*));
+    }
+
+    /* Phase 1 (serial): walk linked list, fill items[] and validate. */
+    int i = 0;
+    for (ASTNode *it = list_head->left; it; it = it->next, i++) {
+        c->items[i] = it;
+        if (!it->type || strcmp(it->type, "OBJECT") != 0 || !it->extra) {
+            /* Heterogeneous: abort cache build. */
+            te_colcache_free(c);
+            return;
+        }
+        ObjectNode *obj = (ObjectNode*)it->extra;
+        if (obj->class != cls) {
+            te_colcache_free(c);
+            return;
+        }
+        /* v0.0.13 (perf) Tag back-pointer so attribute mutations can
+         * invalidate the cache (see interpret_assign_attr). */
+        obj->owning_list = (void*)list_head;
+        for (int k = 0; k < nattr; k++) {
+            Variable *a = &obj->attributes[k];
+            switch (c->kinds[k]) {
+                case 0: { /* int */
+                    int64_t v = 0;
+                    if (a->vtype == VAL_INT) v = (int64_t)a->value.int_value;
+                    else if (a->vtype == VAL_FLOAT) v = (int64_t)a->value.float_value;
+                    else if (a->vtype == VAL_STRING && a->value.string_value) {
+                        char *end = NULL; long long ll = strtoll(a->value.string_value, &end, 10);
+                        if (end != a->value.string_value) v = (int64_t)ll;
+                    }
+                    c->int_cols[k][i] = v;
+                    break;
+                }
+                case 1: { /* float */
+                    double v = 0.0;
+                    if (a->vtype == VAL_FLOAT) v = a->value.float_value;
+                    else if (a->vtype == VAL_INT) v = (double)a->value.int_value;
+                    else if (a->vtype == VAL_STRING && a->value.string_value) {
+                        char *end = NULL; double d = strtod(a->value.string_value, &end);
+                        if (end != a->value.string_value) v = d;
+                    }
+                    c->flt_cols[k][i] = v;
+                    break;
+                }
+                case 2: { /* string */
+                    c->str_cols[k][i] = (a->vtype == VAL_STRING) ? a->value.string_value : NULL;
+                    break;
+                }
+                default: break;
+            }
+        }
+    }
+    list_head->col_cache = c;
+    c->owner = list_head;
+}
+
+/* v0.0.13 (perf) Build a derived columnar cache by gathering rows of a
+ * parent cache through a boolean mask. The resulting cache shares the same
+ * ClassNode and column kinds but only holds rows where mask[r] != 0.
+ * It is registered as a child so mutations of the parent invalidate it. */
+static TeColCache *te_colcache_build_from_mask(TeColCache *parent, const char *mask,
+                                               ASTNode *result_list_head,
+                                               ASTNode **selected_items, int new_n) {
+    if (!parent || !mask || new_n <= 0) return NULL;
+    TeColCache *c = (TeColCache*)calloc(1, sizeof(TeColCache));
+    c->cls = parent->cls;
+    c->n_rows = new_n;
+    c->nattr = parent->nattr;
+    c->kinds = (int*)malloc((size_t)c->nattr * sizeof(int));
+    memcpy(c->kinds, parent->kinds, (size_t)c->nattr * sizeof(int));
+    c->int_cols = (int64_t**)calloc(c->nattr, sizeof(int64_t*));
+    c->flt_cols = (double**)calloc(c->nattr, sizeof(double*));
+    c->str_cols = (const char***)calloc(c->nattr, sizeof(const char**));
+    c->items = (ASTNode**)malloc((size_t)new_n * sizeof(ASTNode*));
+    if (selected_items) memcpy(c->items, selected_items, (size_t)new_n * sizeof(ASTNode*));
+    for (int k = 0; k < c->nattr; k++) {
+        if (c->kinds[k] == 0 && parent->int_cols[k]) {
+            c->int_cols[k] = (int64_t*)malloc((size_t)new_n * sizeof(int64_t));
+            int w = 0;
+            const int64_t *src = parent->int_cols[k];
+            for (int r = 0; r < parent->n_rows; r++) if (mask[r]) c->int_cols[k][w++] = src[r];
+        } else if (c->kinds[k] == 1 && parent->flt_cols[k]) {
+            c->flt_cols[k] = (double*)malloc((size_t)new_n * sizeof(double));
+            int w = 0;
+            const double *src = parent->flt_cols[k];
+            for (int r = 0; r < parent->n_rows; r++) if (mask[r]) c->flt_cols[k][w++] = src[r];
+        } else if (c->kinds[k] == 2 && parent->str_cols[k]) {
+            c->str_cols[k] = (const char**)malloc((size_t)new_n * sizeof(const char*));
+            int w = 0;
+            const char **src = parent->str_cols[k];
+            for (int r = 0; r < parent->n_rows; r++) if (mask[r]) c->str_cols[k][w++] = src[r];
+        }
+    }
+    c->owner = result_list_head;
+    if (result_list_head) result_list_head->col_cache = c;
+    te_colcache_add_child(parent, c);
+    return c;
+}
+
+/* Resolve attr index by name in class (-1 if missing). */
+static int te_class_attr_idx(ClassNode *cls, const char *name) {
+    if (!cls || !name) return -1;
+    for (int i = 0; i < cls->attr_count; i++) {
+        if (cls->attributes[i].id && !strcmp(cls->attributes[i].id, name)) return i;
+    }
+    return -1;
+}
+
+/* ==========================================================================
+ *  v0.0.13 (perf): SIMD AVX2 path — operates on contiguous int64 columns
+ *  for SPEC_CMP_GT/LT/GE/LE/EQ/NE. 4 lanes of int64 per __m256i. Compares
+ *  produce all-ones mask per lane; we then store 0/1 bytes into mask[].
+ *  Falls back to scalar tail. Compiled in only when __AVX2__ defined.
+ * ========================================================================== */
+#if defined(__AVX2__)
+#include <immintrin.h>
+/* spec values must match the LambdaSpec enum defined just below. To keep
+ * SIMD code self-contained, we pass spec as int and compare against literal
+ * positions; the enum values are stable. */
+static inline void te_simd_cmp_i64(const int64_t *col, int n, int spec, int64_t k, char *mask) {
+    int i = 0;
+    __m256i vk = _mm256_set1_epi64x(k);
+    /* spec values: SPEC_CMP_GT=3, LT=4, GE=5, LE=6, EQ=7, NE=8 (see enum). */
+    for (; i + 4 <= n; i += 4) {
+        __m256i va = _mm256_loadu_si256((const __m256i*)(col + i));
+        __m256i cmp;
+        if (spec == 7)      cmp = _mm256_cmpeq_epi64(va, vk);
+        else if (spec == 8){ cmp = _mm256_cmpeq_epi64(va, vk); cmp = _mm256_xor_si256(cmp, _mm256_set1_epi64x(-1)); }
+        else if (spec == 3) cmp = _mm256_cmpgt_epi64(va, vk);
+        else if (spec == 4) cmp = _mm256_cmpgt_epi64(vk, va);
+        else if (spec == 5){ __m256i lt = _mm256_cmpgt_epi64(vk, va); cmp = _mm256_xor_si256(lt, _mm256_set1_epi64x(-1)); }
+        else if (spec == 6){ __m256i gt = _mm256_cmpgt_epi64(va, vk); cmp = _mm256_xor_si256(gt, _mm256_set1_epi64x(-1)); }
+        else { for (int j=0;j<4;j++) mask[i+j]=0; continue; }
+        int64_t lanes[4];
+        _mm256_storeu_si256((__m256i*)lanes, cmp);
+        mask[i  ] = (lanes[0] != 0);
+        mask[i+1] = (lanes[1] != 0);
+        mask[i+2] = (lanes[2] != 0);
+        mask[i+3] = (lanes[3] != 0);
+    }
+    for (; i < n; i++) {
+        int b = 0;
+        if (spec == 7) b = (col[i] == k);
+        else if (spec == 8) b = (col[i] != k);
+        else if (spec == 3) b = (col[i] >  k);
+        else if (spec == 4) b = (col[i] <  k);
+        else if (spec == 5) b = (col[i] >= k);
+        else if (spec == 6) b = (col[i] <= k);
+        mask[i] = (char)b;
+    }
+}
+#endif
+
 /* Is N an ACCESS_ATTR(<param>, <name>)? */
 static int fl_is_attr_of_param(ASTNode *N, const char *pname, size_t plen) {
     if (!N || !N->type || strcmp(N->type, "ACCESS_ATTR") != 0) return 0;
@@ -8209,6 +8602,7 @@ static LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out) {
     out->cached_idx = -1;
     out->attr_name = NULL;
     out->k = 0; out->k_d = 0.0; out->k_is_float = 0;
+    out->k_str = NULL;
     if (!te_fastpath_enabled()) return SPEC_NONE;
     if (!fn || !fn->left) return SPEC_NONE;
     if (!fn->id || !fn->id[0]) return SPEC_NONE;
@@ -8273,6 +8667,15 @@ static LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out) {
                 out->k_is_float = 1;
                 return s;
             }
+            /* v0.0.12 #N string EQ fast-path: fn(p) => p.X == "literal" or != */
+            if ((s == SPEC_CMP_EQ || s == SPEC_CMP_NE) &&
+                R->type && strcmp(R->type, "STRING") == 0 && R->str_value) {
+                LambdaSpec ss = (s == SPEC_CMP_EQ) ? SPEC_CMP_EQ_STR : SPEC_CMP_NE_STR;
+                out->spec = ss;
+                out->attr_name = body->left->right->id;
+                out->k_str = R->str_value;   /* borrowed; AST owns it */
+                return ss;
+            }
         }
     }
     return SPEC_NONE;
@@ -8316,6 +8719,18 @@ static inline int fl_read_attr(FastLambda *fl, ASTNode *item, double *out_d, int
     return 0;
 }
 
+/* Read string attribute of OBJECT item. Returns borrowed pointer, or NULL. */
+static inline const char* fl_read_attr_str(FastLambda *fl, ASTNode *item) {
+    if (!item || !item->type) return NULL;
+    if (strcmp(item->type, "OBJECT") != 0 || !item->extra) return NULL;
+    ObjectNode *obj = (ObjectNode*)item->extra;
+    int idx = fl_attr_idx(fl, obj);
+    if (idx < 0) return NULL;
+    Variable *a = &obj->attributes[idx];
+    if (a->vtype == VAL_STRING) return a->value.string_value;
+    return NULL;
+}
+
 /* Evaluate fast-path. Returns 1 if handled, 0 if caller must fall back. */
 static inline int fast_eval(FastLambda *fl, ASTNode *item, double *out_d, int *out_is_int) {    if (fl->spec == SPEC_NONE) return 0;
     if (fl->spec == SPEC_IDENT) {
@@ -8327,6 +8742,14 @@ static inline int fast_eval(FastLambda *fl, ASTNode *item, double *out_d, int *o
             *out_d = atof(item->str_value); *out_is_int = 0; return 1;
         }
         return 0;
+    }
+    /* v0.0.12 #N string EQ/NE fast-path. */
+    if (fl->spec == SPEC_CMP_EQ_STR || fl->spec == SPEC_CMP_NE_STR) {
+        const char *s = fl_read_attr_str(fl, item);
+        if (!s) return 0;
+        int eq = (fl->k_str && strcmp(s, fl->k_str) == 0);
+        int b = (fl->spec == SPEC_CMP_EQ_STR) ? eq : !eq;
+        *out_d = (double)b; *out_is_int = 1; return 1;
     }
     double av; int av_is_int;
     if (!fl_read_attr(fl, item, &av, &av_is_int)) return 0;
@@ -8349,6 +8772,205 @@ static inline int fast_eval(FastLambda *fl, ASTNode *item, double *out_d, int *o
         default: return 0;
     }
     *out_d = (double)b; *out_is_int = 1; return 1;
+}
+
+/* ==========================================================================
+ *  v0.0.13 (perf): columnar evaluators — predicate, sum, count over a
+ *  TeColCache. Parallelized with OpenMP when n is large. Returns 1 if the
+ *  caller may use the cached result; 0 if it must fall back to per-item
+ *  path (e.g. attribute not present, type mismatch, unsupported spec).
+ * ========================================================================== */
+static int te_colcache_eval_pred(TeColCache *c, int attr_idx, const FastLambda *fl, char *mask) {
+    if (!c || attr_idx < 0 || attr_idx >= c->nattr || !fl) return 0;
+    int n = c->n_rows;
+    int kind = c->kinds[attr_idx];
+    int spec = (int)fl->spec;
+
+    /* String EQ/NE — column must be string, k_str must be set. */
+    if (spec == SPEC_CMP_EQ_STR || spec == SPEC_CMP_NE_STR) {
+        if (kind != 2 || !c->str_cols[attr_idx] || !fl->k_str) return 0;
+        const char **col = c->str_cols[attr_idx];
+        const char *kstr = fl->k_str;
+        int want_eq = (spec == SPEC_CMP_EQ_STR);
+#ifdef TE_HAVE_OPENMP
+        if (te_openmp_enabled() && n >= TE_OMP_MIN_N) {
+            #pragma omp parallel for schedule(static)
+            for (int i = 0; i < n; i++) {
+                const char *s = col[i];
+                int eq = (s && kstr && strcmp(s, kstr) == 0);
+                mask[i] = (char)(want_eq ? eq : !eq);
+            }
+            return 1;
+        }
+#endif
+        for (int i = 0; i < n; i++) {
+            const char *s = col[i];
+            int eq = (s && kstr && strcmp(s, kstr) == 0);
+            mask[i] = (char)(want_eq ? eq : !eq);
+        }
+        return 1;
+    }
+
+    /* Numeric compare on int column. */
+    if (kind == 0 && (spec == SPEC_CMP_GT || spec == SPEC_CMP_LT ||
+                      spec == SPEC_CMP_GE || spec == SPEC_CMP_LE ||
+                      spec == SPEC_CMP_EQ || spec == SPEC_CMP_NE)) {
+        const int64_t *col = c->int_cols[attr_idx];
+        int64_t k = fl->k_is_float ? (int64_t)fl->k_d : (int64_t)fl->k;
+#ifdef TE_HAVE_OPENMP
+        if (te_openmp_enabled() && n >= TE_OMP_MIN_N) {
+            #pragma omp parallel
+            {
+                int nthr = omp_get_num_threads();
+                int tid  = omp_get_thread_num();
+                int chunk = (n + nthr - 1) / nthr;
+                int s = tid * chunk;
+                int e = s + chunk; if (e > n) e = n;
+                if (s < e) {
+#if defined(__AVX2__)
+                    te_simd_cmp_i64(col + s, e - s, spec, k, mask + s);
+#else
+                    for (int i = s; i < e; i++) {
+                        int b = 0;
+                        switch (spec) {
+                            case SPEC_CMP_EQ: b = (col[i] == k); break;
+                            case SPEC_CMP_NE: b = (col[i] != k); break;
+                            case SPEC_CMP_GT: b = (col[i] >  k); break;
+                            case SPEC_CMP_LT: b = (col[i] <  k); break;
+                            case SPEC_CMP_GE: b = (col[i] >= k); break;
+                            case SPEC_CMP_LE: b = (col[i] <= k); break;
+                        }
+                        mask[i] = (char)b;
+                    }
+#endif
+                }
+            }
+            return 1;
+        }
+#endif
+#if defined(__AVX2__)
+        te_simd_cmp_i64(col, n, spec, k, mask);
+#else
+        for (int i = 0; i < n; i++) {
+            int b = 0;
+            switch (spec) {
+                case SPEC_CMP_EQ: b = (col[i] == k); break;
+                case SPEC_CMP_NE: b = (col[i] != k); break;
+                case SPEC_CMP_GT: b = (col[i] >  k); break;
+                case SPEC_CMP_LT: b = (col[i] <  k); break;
+                case SPEC_CMP_GE: b = (col[i] >= k); break;
+                case SPEC_CMP_LE: b = (col[i] <= k); break;
+            }
+            mask[i] = (char)b;
+        }
+#endif
+        return 1;
+    }
+
+    /* Numeric compare on float column. */
+    if (kind == 1 && (spec == SPEC_CMP_GT || spec == SPEC_CMP_LT ||
+                      spec == SPEC_CMP_GE || spec == SPEC_CMP_LE ||
+                      spec == SPEC_CMP_EQ || spec == SPEC_CMP_NE)) {
+        const double *col = c->flt_cols[attr_idx];
+        double k = fl->k_is_float ? fl->k_d : (double)fl->k;
+#ifdef TE_HAVE_OPENMP
+        if (te_openmp_enabled() && n >= TE_OMP_MIN_N) {
+            #pragma omp parallel for schedule(static)
+            for (int i = 0; i < n; i++) {
+                int b = 0;
+                switch (spec) {
+                    case SPEC_CMP_EQ: b = (col[i] == k); break;
+                    case SPEC_CMP_NE: b = (col[i] != k); break;
+                    case SPEC_CMP_GT: b = (col[i] >  k); break;
+                    case SPEC_CMP_LT: b = (col[i] <  k); break;
+                    case SPEC_CMP_GE: b = (col[i] >= k); break;
+                    case SPEC_CMP_LE: b = (col[i] <= k); break;
+                }
+                mask[i] = (char)b;
+            }
+            return 1;
+        }
+#endif
+        for (int i = 0; i < n; i++) {
+            int b = 0;
+            switch (spec) {
+                case SPEC_CMP_EQ: b = (col[i] == k); break;
+                case SPEC_CMP_NE: b = (col[i] != k); break;
+                case SPEC_CMP_GT: b = (col[i] >  k); break;
+                case SPEC_CMP_LT: b = (col[i] <  k); break;
+                case SPEC_CMP_GE: b = (col[i] >= k); break;
+                case SPEC_CMP_LE: b = (col[i] <= k); break;
+            }
+            mask[i] = (char)b;
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
+/* Sum a numeric column, optionally gated by mask. Returns 1 if handled. */
+static int te_colcache_sum(TeColCache *c, int attr_idx, const char *mask,
+                           long long *out_i, double *out_d, int *out_is_int) {
+    if (!c || attr_idx < 0 || attr_idx >= c->nattr) return 0;
+    int n = c->n_rows;
+    int kind = c->kinds[attr_idx];
+    if (kind == 0) {
+        const int64_t *col = c->int_cols[attr_idx];
+        long long total = 0;
+#ifdef TE_HAVE_OPENMP
+        if (te_openmp_enabled() && n >= TE_OMP_MIN_N) {
+            if (mask) {
+                #pragma omp parallel for reduction(+:total) schedule(static)
+                for (int i = 0; i < n; i++) if (mask[i]) total += (long long)col[i];
+            } else {
+                #pragma omp parallel for reduction(+:total) schedule(static)
+                for (int i = 0; i < n; i++) total += (long long)col[i];
+            }
+            *out_i = total; *out_d = 0.0; *out_is_int = 1; return 1;
+        }
+#endif
+        if (mask) { for (int i=0;i<n;i++) if (mask[i]) total += (long long)col[i]; }
+        else      { for (int i=0;i<n;i++) total += (long long)col[i]; }
+        *out_i = total; *out_d = 0.0; *out_is_int = 1; return 1;
+    }
+    if (kind == 1) {
+        const double *col = c->flt_cols[attr_idx];
+        double total = 0.0;
+#ifdef TE_HAVE_OPENMP
+        if (te_openmp_enabled() && n >= TE_OMP_MIN_N) {
+            if (mask) {
+                #pragma omp parallel for reduction(+:total) schedule(static)
+                for (int i = 0; i < n; i++) if (mask[i]) total += col[i];
+            } else {
+                #pragma omp parallel for reduction(+:total) schedule(static)
+                for (int i = 0; i < n; i++) total += col[i];
+            }
+            *out_d = total; *out_i = 0; *out_is_int = 0; return 1;
+        }
+#endif
+        if (mask) { for (int i=0;i<n;i++) if (mask[i]) total += col[i]; }
+        else      { for (int i=0;i<n;i++) total += col[i]; }
+        *out_d = total; *out_i = 0; *out_is_int = 0; return 1;
+    }
+    return 0;
+}
+
+/* Count where mask==1 (or all rows if mask NULL). */
+static long long te_colcache_count(TeColCache *c, const char *mask) {
+    if (!c) return 0;
+    int n = c->n_rows;
+    if (!mask) return n;
+    long long total = 0;
+#ifdef TE_HAVE_OPENMP
+    if (te_openmp_enabled() && n >= TE_OMP_MIN_N) {
+        #pragma omp parallel for reduction(+:total) schedule(static)
+        for (int i = 0; i < n; i++) total += mask[i] ? 1 : 0;
+        return total;
+    }
+#endif
+    for (int i = 0; i < n; i++) if (mask[i]) total++;
+    return total;
 }
 
 /* ---- orderBy / groupBy support ---- */
@@ -8686,6 +9308,165 @@ static void interpret_call_method(ASTNode *node) {
                             add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                         }
                         return;
+                    }
+                }
+            }
+        }
+    }
+
+    /* ===== v0.0.12 #N Fusion-parallel: where(pred).sumBy(proj) / .countWhere(p2) =====
+     * Detect `xs.where(pred).sumBy(proj)` and `xs.where(pred).countWhere(p2)`
+     * where BOTH lambdas are fast-pathable (SPEC_*). Runs as a single parallel
+     * pass with OpenMP, never materializing the intermediate filtered list.
+     * Falls through if any lambda is not fast-pathable. */
+    if (objNode && objNode->type && strcmp(objNode->type, "CALL_METHOD") == 0 &&
+        objNode->id && node->id) {
+        const char *inner_m = objNode->id;
+        const char *outer_m = node->id;
+        int inner_is_where = (strcmp(inner_m, "where") == 0 || strcmp(inner_m, "filter") == 0);
+        int outer_is_sumBy = (strcmp(outer_m, "sumBy") == 0);
+        int outer_is_countWhere = (strcmp(outer_m, "countWhere") == 0);
+        ASTNode *inner_lhs = objNode->left;
+        if (inner_is_where && (outer_is_sumBy || outer_is_countWhere) &&
+            inner_lhs && inner_lhs->type && inner_lhs->id &&
+            (strcmp(inner_lhs->type, "ID") == 0 || strcmp(inner_lhs->type, "IDENTIFIER") == 0)) {
+            Variable *lv = find_variable(inner_lhs->id);
+            if (lv && lv->type && strcmp(lv->type, "LIST") == 0) {
+                ASTNode *list = (ASTNode*)(intptr_t)lv->value.object_value;
+                ASTNode *pred_arg = objNode->right;
+                ASTNode *pred = NULL;
+                if (pred_arg && pred_arg->type && strcmp(pred_arg->type, "LAMBDA") == 0) pred = pred_arg;
+                else if (pred_arg && pred_arg->type &&
+                         (strcmp(pred_arg->type, "ID") == 0 || strcmp(pred_arg->type, "IDENTIFIER") == 0)) {
+                    Variable *fv = find_variable(pred_arg->id);
+                    if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0)
+                        pred = (ASTNode*)(intptr_t)fv->value.object_value;
+                }
+                ASTNode *proj_arg = node->right;
+                ASTNode *proj = NULL;
+                if (proj_arg && proj_arg->type && strcmp(proj_arg->type, "LAMBDA") == 0) proj = proj_arg;
+                else if (proj_arg && proj_arg->type &&
+                         (strcmp(proj_arg->type, "ID") == 0 || strcmp(proj_arg->type, "IDENTIFIER") == 0)) {
+                    Variable *fv = find_variable(proj_arg->id);
+                    if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0)
+                        proj = (ASTNode*)(intptr_t)fv->value.object_value;
+                }
+                if (pred && proj && list) {
+                    FastLambda flp; fast_lambda_analyze(pred, &flp);
+                    FastLambda flj; fast_lambda_analyze(proj, &flj);
+                    /* v0.0.13 (perf) COLUMNAR FUSION: where(pred).sumBy(proj) or
+                     * .countWhere(p2) where pred maps to typed column AND proj
+                     * (if sumBy) is SPEC_ATTR over a numeric column. */
+                    if (flp.spec != SPEC_NONE && flp.attr_name && list->col_cache) {
+                        TeColCache *cc = (TeColCache*)list->col_cache;
+                        int pidx = te_class_attr_idx(cc->cls, flp.attr_name);
+                        int jidx = (outer_is_countWhere || flj.spec != SPEC_ATTR || !flj.attr_name)
+                                    ? -1 : te_class_attr_idx(cc->cls, flj.attr_name);
+                        if (pidx >= 0 && (outer_is_countWhere || jidx >= 0)) {
+                            int nrow = cc->n_rows;
+                            char *mask = (char*)malloc((size_t)nrow);
+                            if (te_colcache_eval_pred(cc, pidx, &flp, mask)) {
+                                if (outer_is_countWhere) {
+                                    long long total = te_colcache_count(cc, mask);
+                                    free(mask);
+                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)total, NULL, NULL));
+                                    return;
+                                }
+                                long long itotal = 0; double dtotal = 0.0; int is_int = 1;
+                                if (te_colcache_sum(cc, jidx, mask, &itotal, &dtotal, &is_int)) {
+                                    free(mask);
+                                    if (is_int) {
+                                        if (itotal >= INT_MIN && itotal <= INT_MAX) {
+                                            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)itotal, NULL, NULL));
+                                        } else {
+                                            char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
+                                            add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                        }
+                                    } else {
+                                        char buf[64]; snprintf(buf, sizeof(buf), "%g", dtotal);
+                                        add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                    }
+                                    return;
+                                }
+                            }
+                            free(mask);
+                        }
+                    }
+                    if (flp.spec != SPEC_NONE && flj.spec != SPEC_NONE) {
+                        int n = 0;
+                        for (ASTNode *it = list->left; it; it = it->next) n++;
+#ifdef TE_HAVE_OPENMP
+                        if (te_openmp_enabled() && n >= TE_OMP_MIN_N) {
+                            ASTNode **arr = (ASTNode**)malloc((size_t)n * sizeof(ASTNode*));
+                            int i = 0;
+                            for (ASTNode *it = list->left; it; it = it->next) arr[i++] = it;
+                            long long itotal = 0; double dtotal = 0.0; long long cnt = 0;
+                            int fail = 0, any_float = 0;
+                            #pragma omp parallel reduction(+:itotal,dtotal,cnt)
+                            {
+                                FastLambda flp_local = flp; flp_local.cached_class = NULL; flp_local.cached_idx = -1;
+                                FastLambda flj_local = flj; flj_local.cached_class = NULL; flj_local.cached_idx = -1;
+                                #pragma omp for schedule(static)
+                                for (int k = 0; k < n; k++) {
+                                    double vp; int vpi;
+                                    if (!fast_eval(&flp_local, arr[k], &vp, &vpi)) { fail = 1; continue; }
+                                    if (vp == 0.0) continue;
+                                    if (outer_is_countWhere) { cnt++; continue; }
+                                    double vj; int vji;
+                                    if (!fast_eval(&flj_local, arr[k], &vj, &vji)) { fail = 1; continue; }
+                                    if (vji) itotal += (long long)vj;
+                                    else { dtotal += vj; any_float = 1; }
+                                }
+                            }
+                            free(arr);
+                            if (!fail) {
+                                if (outer_is_countWhere) {
+                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)cnt, NULL, NULL));
+                                } else if (!any_float) {
+                                    if (itotal >= INT_MIN && itotal <= INT_MAX) {
+                                        add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)itotal, NULL, NULL));
+                                    } else {
+                                        char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
+                                        add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                    }
+                                } else {
+                                    char buf[64]; snprintf(buf, sizeof(buf), "%g", dtotal + (double)itotal);
+                                    add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                }
+                                return;
+                            }
+                        }
+#endif
+                        /* Sequential fused fallback. */
+                        long long itotal = 0; double dtotal = 0.0; long long cnt = 0;
+                        int fail = 0, any_float = 0;
+                        for (ASTNode *it = list->left; it; it = it->next) {
+                            double vp; int vpi;
+                            if (!fast_eval(&flp, it, &vp, &vpi)) { fail = 1; break; }
+                            if (vp == 0.0) continue;
+                            if (outer_is_countWhere) { cnt++; continue; }
+                            double vj; int vji;
+                            if (!fast_eval(&flj, it, &vj, &vji)) { fail = 1; break; }
+                            if (vji) itotal += (long long)vj;
+                            else { dtotal += vj; any_float = 1; }
+                        }
+                        if (!fail) {
+                            if (outer_is_countWhere) {
+                                add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)cnt, NULL, NULL));
+                            } else if (!any_float) {
+                                if (itotal >= INT_MIN && itotal <= INT_MAX) {
+                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)itotal, NULL, NULL));
+                                } else {
+                                    char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
+                                    add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                }
+                            } else {
+                                char buf[64]; snprintf(buf, sizeof(buf), "%g", dtotal + (double)itotal);
+                                add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                            }
+                            return;
+                        }
+                        /* fall through to standard chained handling */
                     }
                 }
             }
@@ -9095,7 +9876,86 @@ static void interpret_call_method(ASTNode *node) {
             if (strcmp(fname, "filter") == 0) {
                 ASTNode *result = create_list_node(NULL);
                 ASTNode *item = list->left;
+                /* v0.0.13 (perf) COLUMNAR FAST PATH: list has col_cache and
+                 * predicate matches a typed column. Skips per-item pointer
+                 * chase entirely. Uses AVX2 + OpenMP inside helper. */
+                if (fl.spec != SPEC_NONE && fl.attr_name && list->col_cache) {
+                    TeColCache *cc = (TeColCache*)list->col_cache;
+                    int aidx = te_class_attr_idx(cc->cls, fl.attr_name);
+                    if (aidx >= 0) {
+                        int n = cc->n_rows;
+                        char *mask = (char*)malloc((size_t)n);
+                        if (te_colcache_eval_pred(cc, aidx, &fl, mask)) {
+                            /* Build result list AND collect pointers to the new
+                             * items so we can attach a derived columnar cache. */
+                            int new_n = 0;
+                            ASTNode **sel = (ASTNode**)malloc((size_t)n * sizeof(ASTNode*));
+                            for (int k = 0; k < n; k++) {
+                                if (mask[k]) {
+                                    ASTNode *ni = build_item_from_value(cc->items[k]);
+                                    te_list_append(result, ni);
+                                    sel[new_n++] = ni;
+                                }
+                            }
+                            if (new_n > 0) {
+                                te_colcache_build_from_mask(cc, mask, result, sel, new_n);
+                            }
+                            free(sel);
+                            free(mask);
+                            add_or_update_variable("__ret__", result);
+                            return;
+                        }
+                        free(mask);
+                    }
+                }
                 if (fl.spec != SPEC_NONE) {
+#ifdef TE_HAVE_OPENMP
+                    /* v0.0.12 #N: parallel filter on fast-path. Pattern:
+                     *   1) materialize item pointers into arr[n] (sequential, cheap)
+                     *   2) parallel evaluate predicate into mask[n] of chars
+                     *   3) sequential build of result list from mask
+                     * The build is sequential because te_list_append walks the
+                     * list tail and updates ->next chains; doing it in the main
+                     * thread avoids needing a thread-safe append. The cost is
+                     * O(matches), which is much smaller than O(n) predicate eval. */
+                    if (te_openmp_enabled()) {
+                        int n = 0;
+                        for (ASTNode *it = item; it; it = it->next) n++;
+                        if (n >= TE_OMP_MIN_N) {
+                            ASTNode **arr = (ASTNode**)malloc((size_t)n * sizeof(ASTNode*));
+                            char *mask = (char*)malloc((size_t)n);
+                            int i = 0;
+                            for (ASTNode *it = item; it; it = it->next) arr[i++] = it;
+                            int fail = 0;
+                            #pragma omp parallel
+                            {
+                                FastLambda fl_local = fl;
+                                fl_local.cached_class = NULL; fl_local.cached_idx = -1;
+                                #pragma omp for schedule(static)
+                                for (int k = 0; k < n; k++) {
+                                    double v; int vint;
+                                    if (!fast_eval(&fl_local, arr[k], &v, &vint)) {
+                                        mask[k] = 0; fail = 1;
+                                    } else {
+                                        mask[k] = (v != 0.0) ? 1 : 0;
+                                    }
+                                }
+                            }
+                            if (!fail) {
+                                for (int k = 0; k < n; k++) {
+                                    if (mask[k]) te_list_append(result, build_item_from_value(arr[k]));
+                                }
+                                free(arr); free(mask);
+                                add_or_update_variable("__ret__", result);
+                                return;
+                            }
+                            free(arr); free(mask);
+                            /* fall through to sequential fallback */
+                            result = create_list_node(NULL);
+                            item = list->left;
+                        }
+                    }
+#endif
                     int ok = 1;
                     while (item) {
                         double v; int vint;
@@ -9299,6 +10159,22 @@ static void interpret_call_method(ASTNode *node) {
             if (strcmp(fname, "countWhere") == 0) {
                 ASTNode *item = list->left;
                 int cnt = 0;
+                /* v0.0.13 (perf) COLUMNAR FAST PATH for countWhere. */
+                if (fl.spec != SPEC_NONE && fl.attr_name && list->col_cache) {
+                    TeColCache *cc = (TeColCache*)list->col_cache;
+                    int aidx = te_class_attr_idx(cc->cls, fl.attr_name);
+                    if (aidx >= 0) {
+                        int n = cc->n_rows;
+                        char *mask = (char*)malloc((size_t)n);
+                        if (te_colcache_eval_pred(cc, aidx, &fl, mask)) {
+                            long long total = te_colcache_count(cc, mask);
+                            free(mask);
+                            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)total, NULL, NULL));
+                            return;
+                        }
+                        free(mask);
+                    }
+                }
                 if (fl.spec != SPEC_NONE) {
                     int ok = 1;
 #ifdef TE_HAVE_OPENMP
@@ -9357,6 +10233,29 @@ static void interpret_call_method(ASTNode *node) {
             }
             if (strcmp(fname, "sumBy") == 0) {
                 ASTNode *item = list->left;
+                /* v0.0.13 (perf) COLUMNAR FAST PATH: sumBy(fn(p)=>p.attr) over
+                 * an int/float column. Uses parallel reduction inside helper. */
+                if (fl.spec == SPEC_ATTR && fl.attr_name && list->col_cache) {
+                    TeColCache *cc = (TeColCache*)list->col_cache;
+                    int aidx = te_class_attr_idx(cc->cls, fl.attr_name);
+                    if (aidx >= 0) {
+                        long long itotal = 0; double dtotal = 0.0; int is_int = 1;
+                        if (te_colcache_sum(cc, aidx, NULL, &itotal, &dtotal, &is_int)) {
+                            if (is_int) {
+                                if (itotal >= INT_MIN && itotal <= INT_MAX) {
+                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)itotal, NULL, NULL));
+                                } else {
+                                    char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
+                                    add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                }
+                            } else {
+                                char buf[64]; snprintf(buf, sizeof(buf), "%g", dtotal);
+                                add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                            }
+                            return;
+                        }
+                    }
+                }
                 /* Fast-path: numeric pattern over OBJECT list — use int64 acc to
                  * avoid the 32-bit overflow that hits at ~10M-row benches. */
                 if (fl.spec != SPEC_NONE) {
@@ -10286,11 +11185,13 @@ static void interpret_call_method(ASTNode *node) {
             }
             new_item->next = NULL;
             te_list_append(list, new_item);   /* Ola 14b: O(1) amortizado */
+            te_colcache_invalidate(list);     /* v0.0.13 (perf) */
             return;
         }
         if (list && node->id && strcmp(node->id, "pop") == 0) {
             ASTNode *cur = list->left;
             if (!cur) return;
+            te_colcache_invalidate(list);     /* v0.0.13 (perf) */
             if (!cur->next) { list->left = NULL; te_invalidate_list_cache(list); return; }
             while (cur->next && cur->next->next) cur = cur->next;
             cur->next = NULL;
@@ -10337,6 +11238,7 @@ static void interpret_call_method(ASTNode *node) {
             while (cur) { nxt = cur->next; cur->next = prev; prev = cur; cur = nxt; }
             list->left = prev;
             te_invalidate_list_cache(list);  /* Ola 14 */
+            te_colcache_invalidate(list);    /* v0.0.13 (perf) */
             return;
         }
         if (list && node->id && strcmp(node->id, "sort") == 0) {
@@ -10380,6 +11282,7 @@ static void interpret_call_method(ASTNode *node) {
             }
             list->left = sorted;
             te_invalidate_list_cache(list);  /* Ola 14 */
+            te_colcache_invalidate(list);    /* v0.0.13 (perf) */
             return;
         }
         if (list && node->id && strcmp(node->id, "get") == 0) {
@@ -11357,6 +12260,7 @@ ObjectNode* clone_object(ObjectNode *original) {
     }
     ObjectNode *clone = malloc(sizeof(ObjectNode));
     clone->class = original->class;
+    clone->owning_list = NULL;  /* v0.0.13 (perf): clone is not in any list yet */
     clone->attributes = malloc(original->class->attr_count * sizeof(Variable));
     for (int i = 0; i < original->class->attr_count; i++) {
         clone->attributes[i].id = strdup(original->attributes[i].id);
@@ -12992,6 +13896,21 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         fprintf(stderr, "[CSV] mmap=%ldus header=%ldus parse=%ldus tail=%ldus total=%ldus\n",
                 us_mmap, us_header, us_parse, us_end, us_total);
     }
+    /* v0.0.13 (perf): build columnar cache for hot LINQ paths.
+     * Opt-out via TE_COLCACHE=0. */
+    {
+        const char *eco = getenv("TE_COLCACHE");
+        if (!eco || eco[0] != '0') {
+            struct timespec tcc0, tcc1;
+            if (te_timing) clock_gettime(CLOCK_MONOTONIC, &tcc0);
+            te_colcache_build(listNode, cls);
+            if (te_timing) {
+                clock_gettime(CLOCK_MONOTONIC, &tcc1);
+                long us = (tcc1.tv_sec - tcc0.tv_sec)*1000000L + (tcc1.tv_nsec - tcc0.tv_nsec)/1000L;
+                fprintf(stderr, "[CSV] colcache_build=%ldus\n", us);
+            }
+        }
+    }
     return listNode;
 }
 
@@ -13643,6 +14562,9 @@ static void interpret_assign_attr(ASTNode *node) {
         printf("Error: Objeto '%s' no definido o no es un objeto.\n", access->left->id); return;
     }
     ObjectNode *obj = var->value.object_value;
+    /* v0.0.13 (perf) Invalidate columnar mirror cache if this object is in a
+     * cached list. */
+    if (obj && obj->owning_list) te_colcache_invalidate((ASTNode*)obj->owning_list);
     const char *attr_name = access->right->id;
     int idx=-1;
     for(int i=0;i<obj->class->attr_count;i++){

@@ -74,6 +74,26 @@
                 "type": "number",
                 "description": "TCP port for the debugger socket.",
                 "default": 4712
+              },
+              "api": {
+                "type": "boolean",
+                "description": "Run the .te file as an HTTP API server (--api). Required to debug POST/GET handlers — breakpoints fire when requests arrive.",
+                "default": false
+              },
+              "httpPort": {
+                "type": "number",
+                "description": "HTTP port published to the host when api=true.",
+                "default": 8081
+              },
+              "apiHost": {
+                "type": "string",
+                "description": "Bind address inside the container when api=true.",
+                "default": "0.0.0.0"
+              },
+              "attachOnly": {
+                "type": "boolean",
+                "description": "Do not spawn docker; just connect to a running interpreter on `port`.",
+                "default": false
               }
             }
           }
@@ -86,6 +106,16 @@
             "program": "${file}",
             "stopOnEntry": false,
             "port": 4712
+          },
+          {
+            "type": "typeeasy",
+            "request": "launch",
+            "name": "TypeEasy: debug API (POST/GET handlers)",
+            "program": "${file}",
+            "stopOnEntry": false,
+            "port": 4712,
+            "api": true,
+            "httpPort": 8081
           }
         ],
         "configurationSnippets": [
@@ -99,6 +129,20 @@
               "program": "^\"\\${file}\"",
               "stopOnEntry": false,
               "port": 4712
+            }
+          },
+          {
+            "label": "TypeEasy: debug API (POST/GET handlers)",
+            "description": "Run the current .te in --api mode under the debugger. Breakpoints inside handlers fire when HTTP requests arrive.",
+            "body": {
+              "type": "typeeasy",
+              "request": "launch",
+              "name": "TypeEasy: debug API (POST/GET handlers)",
+              "program": "^\"\\${file}\"",
+              "stopOnEntry": false,
+              "port": 4712,
+              "api": true,
+              "httpPort": 8081
             }
           }
         ]

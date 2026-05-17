@@ -1,0 +1,67 @@
+// =============================================================
+// apis/example_httppost.te
+//
+// Ejemplo de [HttpPost] en TypeEasy con DOS variantes:
+//   1) eco crudo del body  (POST /api/echo)
+//   2) model binding JSON -> clase tipada  (POST /api/users)
+//
+// Ejecutar:
+//   typeeasy --api apis/example_httppost.te --port 9101
+//
+// Probar:
+//   curl -X POST -H 'Content-Type: application/json' \
+//        -d 'hola' http://localhost:9101/api/echo
+//
+//   curl -X POST -H 'Content-Type: application/json' \
+//        -d '{"name":"Ana","age":30}' http://localhost:9101/api/users
+//
+// -------------------------------------------------------------
+// DEBUG DE POSTs
+//   Cada handler usa debug_log(...) que escribe a STDERR del
+//   proceso typeeasy y NO entra al cuerpo de la respuesta HTTP.
+//   En Docker se ven con:
+//       docker compose logs -f typeeasy
+//   (No usar println() aqui: su salida se captura como cuerpo
+//   de la respuesta y luego se descarta — no aparece en logs.)
+// =============================================================
+
+class User {
+    name : string;
+    age  : int;
+}
+
+endpoint {
+    // 1) Eco crudo del body.
+    [HttpPost("/api/echo")]
+    echo() {
+        let method = request_method();
+        let path   = request_path();
+        let body   = request_body();
+        let ct     = request_header("Content-Type");
+
+        debug_log(concat("POST ", method, " ", path));
+        debug_log(concat("Content-Type=", ct));
+        debug_log(concat("body=", body));
+
+        let resp = concat(
+            "{\"received\":\"", body,
+            "\",\"contentType\":\"", ct, "\"}"
+        );
+        return json(resp);
+    }
+
+    // 2) Model binding: el body JSON se mapea automaticamente
+    //    a una instancia de la clase declarada como parametro.
+    [HttpPost("/api/users")]
+    crearUsuario(u : User) {
+        debug_log(concat("body=", request_body()));
+        debug_log(concat("u.name=", u.name));
+        debug_log(concat("u.age=",  u.age));
+
+        let resp = concat(
+            "{\"name\":\"", u.name,
+            "\",\"age\":",  u.age, "}"
+        );
+        return json(resp);
+    }
+}

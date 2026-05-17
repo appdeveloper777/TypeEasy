@@ -84,6 +84,11 @@ typedef struct ASTNode {
      * Set by create_ast_* constructors from yylineno. May be slightly off for
      * multi-line constructs (lookahead token); good enough for breakpoint match. */
     int   line;
+    /* v0.0.13 (perf): columnar cache attached to LIST head when items are
+     * homogeneous OBJECTs from a CSV load. NULL on all non-LIST nodes and on
+     * LIST nodes that don't qualify. Owned by the LIST node; freed when the
+     * list is freed (currently leaked at program-end which is fine). */
+    void *col_cache;
 } ASTNode;
 
 // Prototipo nativo ORM debe ir después de ASTNode
@@ -151,6 +156,11 @@ typedef struct ClassNode {
 typedef struct ObjectNode {
     ClassNode *class;
     Variable *attributes;
+    /* v0.0.13 (perf) Back-pointer to the LIST ASTNode that owns this object
+     * (set by te_colcache_build when a columnar mirror is built). NULL means
+     * the object is not in any cached list. Used to invalidate the columnar
+     * cache on attribute mutation. */
+    void *owning_list;
 } ObjectNode;
 
 typedef struct MethodNode {

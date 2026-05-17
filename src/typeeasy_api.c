@@ -328,6 +328,66 @@ MethodNode* typeeasy_find_method(const char* function_name) {
     return NULL;
 }
 
+/* v0.0.13 — model binding helpers (defined in src/ast.c). */
+extern ObjectNode *te_object_from_json(ClassNode *cls, const char *json);
+extern ClassNode  *find_class(char *name);
+extern const char *typeeasy_http_get_body(void);
+extern const char *typeeasy_http_find_param(const char *k);
+extern const char *typeeasy_http_find_query(const char *k);
+extern ASTNode    *create_ast_leaf(char *type, int value, char *str_value, char *id);
+extern ASTNode    *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
+extern void        add_or_update_variable(char *id, ASTNode *value);
+extern void        free_ast(ASTNode *node);
+
+/* Bind a single MethodNode parameter before interpret_ast.
+ * Resolution order:
+ *   1) If type is a registered class  -> parse request body JSON into ObjectNode.
+ *   2) Else look up path-param, query-param (string sources).
+ * The parameter is then exposed as a local variable in the interpreter scope. */
+static void te_bind_param(ParameterNode *p) {
+    if (!p || !p->name) return;
+    const char *ptype = p->type ? p->type : "";
+
+    /* (1) Typed-class parameter <- request body JSON */
+    if (ptype && *ptype) {
+        ClassNode *cls = find_class((char*)ptype);
+        if (cls) {
+            const char *body = typeeasy_http_get_body();
+            ObjectNode *obj = te_object_from_json(cls, body ? body : "");
+            if (obj) {
+                ASTNode *wrap = (ASTNode*)calloc(1, sizeof(ASTNode));
+                wrap->type  = strdup("OBJECT");
+                wrap->id    = strdup(cls->name);
+                wrap->extra = (struct ASTNode*)obj;
+                add_or_update_variable(p->name, wrap);
+                /* wrap held only as a transient carrier; the Variable now
+                 * owns the ObjectNode pointer. Free the wrapper shell. */
+                free(wrap->type); free(wrap->id); free(wrap);
+            }
+            return;
+        }
+    }
+
+    /* (2) Primitive: take from path-params, then query-params. */
+    const char *sval = typeeasy_http_find_param(p->name);
+    if (!sval) sval = typeeasy_http_find_query(p->name);
+    if (!sval) return;
+
+    if (ptype && strcmp(ptype, "int") == 0) {
+        ASTNode *n = create_ast_leaf_number((char*)"INT", atoi(sval), NULL, NULL);
+        add_or_update_variable(p->name, n);
+        free_ast(n);
+    } else if (ptype && strcmp(ptype, "float") == 0) {
+        ASTNode *n = create_ast_leaf((char*)"FLOAT", 0, (char*)sval, NULL);
+        add_or_update_variable(p->name, n);
+        free_ast(n);
+    } else {
+        ASTNode *n = create_ast_leaf((char*)"STRING", 0, (char*)sval, NULL);
+        add_or_update_variable(p->name, n);
+        free_ast(n);
+    }
+}
+
 /* Ejecuta un MethodNode* ya resuelto. Hot path. */
 char* typeeasy_embedded_invoke_method(MethodNode* m) {
     if (!m || !m->body) return NULL;
@@ -345,6 +405,9 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
     __ret_var.vtype = VAL_INT;
     __ret_var.value.int_value = 0;
     return_flag = 0;
+
+    /* v0.0.13: bind declared handler parameters from HTTP request context. */
+    for (ParameterNode *p = m->params; p; p = p->next) te_bind_param(p);
 
     debugger_push_frame(m->name ? m->name : "<endpoint>", m->body);
     interpret_ast(m->body);

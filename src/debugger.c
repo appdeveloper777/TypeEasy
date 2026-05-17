@@ -928,7 +928,14 @@ void debugger_pop_frame(void) {
 void debugger_on_statement(ASTNode *node) {
     if (!g_debug_enabled || !node) return;
     int line = node->line;
-    if (line <= 0) return;
+    if (line <= 0) {
+        if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
+            fprintf(stderr, "[typeeasy-debugger] SKIP line<=0 kind=%d type=%s\n",
+                    (int)node->kind, node->type ? node->type : "(null)");
+            fflush(stderr);
+        }
+        return;
+    }
 
     static int dbg_log_once = 0;
     if (!dbg_log_once) {

@@ -8,9 +8,10 @@ TypeEasy te permite crear APIs REST de forma simple y rápida, usando sintaxis T
 
 1. [Conceptos Básicos](#conceptos-básicos)
 2. [Tu Primer Endpoint](#tu-primer-endpoint)
-3. [Ejemplo Real: Consultar MySQL](#ejemplo-real-consultar-mysql)
-4. [Estructura de Archivos](#estructura-de-archivos)
-5. [Ejecutar tus Endpoints](#ejecutar-tus-endpoints)
+3. [Atajo con el CLI `te` / `typeeasy`](#atajo-con-el-cli-te--typeeasy)
+4. [Ejemplo Real: Consultar MySQL](#ejemplo-real-consultar-mysql)
+5. [Estructura de Archivos](#estructura-de-archivos)
+6. [Ejecutar tus Endpoints](#ejecutar-tus-endpoints)
 
 ---
 
@@ -86,6 +87,115 @@ curl http://localhost:8080/api/proveedores
     "fecha": "2025-09-06"
 }
 ```
+
+---
+
+## ⚡ Atajo con el CLI `te` / `typeeasy`
+
+Desde **v0.0.10** no necesitas crear los archivos a mano ni acordarte
+de los flags de `docker compose`. El CLI `te` (alias de `typeeasy`)
+scaffoldea endpoints y levanta el server con un solo comando, estilo
+Rails/Cargo.
+
+> El CLI detecta automáticamente el binario nativo instalado
+> (Windows installer, `.deb` de Linux o árbol fuente). Si no encuentra
+> ninguno, hace fallback transparente a Docker — así que los mismos
+> comandos funcionan en tu laptop y en CI.
+
+### 1) Crear el proyecto
+
+```bash
+te new mi-app
+cd mi-app
+```
+
+Genera la estructura completa (`typeeasycode/apis/`, `models/`,
+`settings/`, `migrations/`, `docker-compose.yml`, etc.).
+
+### 2) Generar un endpoint nuevo
+
+Dos generadores disponibles:
+
+```bash
+# (a) Endpoint suelto — crea apis/<nombre>.te con un [HttpGet] de muestra:
+te gen endpoint productos
+
+# (b) Resource completo — crea endpoint + migración SQL + modelo ORM:
+te gen resource producto
+```
+
+El generador `resource` produce:
+
+```
+typeeasycode/apis/producto.te                  # endpoint con GET/POST/PUT/DELETE
+typeeasycode/models/Producto.te                # modelo ORM
+migrations/NNN_create_producto.sql             # migración inicial
+```
+
+Después solo editas el handler. Por ejemplo, agregando un POST con
+**model binding** (el body JSON se mapea automaticamente a la clase
+declarada como parámetro del método):
+
+```ts
+class Producto {
+    nombre : string;
+    precio : int;
+}
+
+endpoint {
+    [HttpPost("/api/productos")]
+    crearProducto(p : Producto) {
+        debug_log(concat("nombre=", p.nombre));   // -> stderr (logs)
+        debug_log(concat("precio=", p.precio));
+        return json(concat(
+            "{\"nombre\":\"", p.nombre,
+            "\",\"precio\":", p.precio, "}"
+        ));
+    }
+}
+```
+
+### 3) Levantar el server
+
+```bash
+te serve --dev      # desarrollo: hot-reload al guardar un .te
+te serve --prod     # producción: watchdog + auto-restart
+te serve --docker   # fuerza el path de Docker (skip binario nativo)
+```
+
+Por defecto escucha en `http://localhost:8080`. Probar:
+
+```bash
+curl http://localhost:8080/api/proveedores
+
+curl -X POST -H 'Content-Type: application/json' \
+     -d '{"nombre":"Laptop","precio":1200}' \
+     http://localhost:8080/api/productos
+```
+
+### 4) Otros subcomandos útiles
+
+| Comando              | Hace                                                       |
+| -------------------- | ---------------------------------------------------------- |
+| `te migrate`         | Aplica las migraciones SQL pendientes en `migrations/`.   |
+| `te console`         | REPL interactivo con tu proyecto cargado.                 |
+| `te version`         | Imprime versión del CLI y del runtime.                    |
+| `te help [sub]`      | Ayuda general o de un subcomando.                         |
+
+### 5) Flujo end-to-end típico
+
+```bash
+te new mi-app                  # 1. scaffolding
+cd mi-app
+te gen resource producto       # 2. endpoint + modelo + migración
+te migrate                     # 3. crea la tabla en MySQL
+te serve --dev                 # 4. levanta el server con hot-reload
+# editas typeeasycode/apis/producto.te → el server recarga solo
+```
+
+> 📖 Flags completos, instalación nativa y despliegue con
+> systemd/nginx: ver release notes de
+> [v0.0.10](https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.0.10).
 
 ---
 

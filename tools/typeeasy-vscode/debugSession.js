@@ -72,6 +72,10 @@ class TypeEasyDebugSession extends DebugSession {
       let cur = path.dirname(this._programPath);
       const parts = [];
       let found = null;
+      // Walk all the way up; prefer the OUTERMOST match so a nested
+      // `typeeasycode/typeeasycode/docker-compose.yml` doesn't shadow the
+      // real workspace root.
+      let foundParts = null;
       while (true) {
         const tryRoot = cur;
         try {
@@ -79,13 +83,17 @@ class TypeEasyDebugSession extends DebugSession {
           if (fs.existsSync(path.join(tryRoot, 'typeeasycode')) &&
               fs.existsSync(path.join(tryRoot, 'docker-compose.yml'))) {
             found = tryRoot;
-            break;
+            foundParts = parts.slice();
           }
         } catch (_) {}
         const parent = path.dirname(cur);
         if (parent === cur) break;
         parts.unshift(path.basename(cur));
         cur = parent;
+      }
+      if (found) {
+        parts.length = 0;
+        for (const p of foundParts) parts.push(p);
       }
       if (found) {
         workspaceRoot = found;
@@ -101,18 +109,45 @@ class TypeEasyDebugSession extends DebugSession {
     this.sendEvent(new OutputEvent(`[typeeasy-dap] workspaceRoot=${workspaceRoot}\n`, 'console'));
     this.sendEvent(new OutputEvent(`[typeeasy-dap] program rel=${relInsideTypeeasycode}\n`, 'console'));
 
+    // Optional --api mode: serve the .te as an HTTP API while the
+    // debugger is attached. POST/GET requests against the published
+    // httpPort will hit breakpoints inside the handler bodies.
+    const apiMode  = args.api === true;
+    const httpPort = Number(args.httpPort || 8081);
+    const apiHost  = String(args.apiHost  || '0.0.0.0');
+
     if (!attachOnly) {
       // Spawn docker compose run with the interpreter in --debug-port mode.
+      // Assign a unique --name so we can force-remove the container on disconnect
+      // (killing the compose CLI does NOT stop the container).
+      this._containerName = `typeeasy-dap-${process.pid}-${Date.now()}`;
       const dockerArgs = [
         'compose', 'run', '--rm',
+        '--name', this._containerName,
         '-p', `${port}:${port}`,
+      ];
+      if (apiMode) {
+        dockerArgs.push('-p', `${httpPort}:${httpPort}`);
+      }
+      dockerArgs.push(
         '-v', `${workspaceRoot.replace(/\\/g, '/')}/typeeasycode:/code`,
         '--entrypoint', '/typeeasy/typeeasy',
         'typeeasy',
-        '--debug-port', String(port),
-        `/code/${relInsideTypeeasycode}`
-      ];
+        '--debug-port', String(port)
+      );
+      if (apiMode) {
+        dockerArgs.push(
+          '--api', `/code/${relInsideTypeeasycode}`,
+          '--host', apiHost,
+          '--port', String(httpPort)
+        );
+      } else {
+        dockerArgs.push(`/code/${relInsideTypeeasycode}`);
+      }
       this.sendEvent(new OutputEvent(`[typeeasy-dap] spawn: docker ${dockerArgs.join(' ')}\n`, 'console'));
+      if (apiMode) {
+        this.sendEvent(new OutputEvent(`[typeeasy-dap] API mode: http://localhost:${httpPort} (set breakpoints, then send requests)\n`, 'console'));
+      }
 
       const env = Object.assign({}, process.env, {
         MSYS_NO_PATHCONV: '1',
@@ -305,6 +340,17 @@ class TypeEasyDebugSession extends DebugSession {
   disconnectRequest(response, _args) {
     try { this._sockSend({ cmd: 'disconnect' }); } catch (_) {}
     try { this._socket && this._socket.destroy(); } catch (_) {}
+    // Force-remove the container by name. Killing the compose CLI process is
+    // NOT enough — the container is owned by the Docker daemon and keeps the
+    // port bound. This avoids the "port is already allocated" error on relaunch.
+    if (this._containerName) {
+      try {
+        const dockerCmd = process.platform === 'win32' ? 'docker.exe' : 'docker';
+        cp.spawn(dockerCmd, ['rm', '-f', this._containerName], {
+          stdio: 'ignore', detached: true, windowsHide: true
+        }).unref();
+      } catch (_) {}
+    }
     if (this._dockerProc && !this._dockerProc.killed) {
       try { this._dockerProc.kill(); } catch (_) {}
     }

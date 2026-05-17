@@ -34,6 +34,16 @@
       "port": 4712
     },
     {
+      "name": "TypeEasy: debug API (POST/GET handlers)",
+      "type": "typeeasy",
+      "request": "launch",
+      "program": "${file}",
+      "stopOnEntry": false,
+      "port": 4712,
+      "api": true,
+      "httpPort": 8081
+    },
+    {
       "name": "TypeEasy: ATTACH to running API",
       "type": "typeeasy",
       "request": "launch",

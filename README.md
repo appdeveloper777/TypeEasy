@@ -240,14 +240,49 @@ Todo lo que imprima `print()` / `println()` aparece en la pestaña **Debug Conso
 ### 7. Pila de llamadas (Call Stack)
 Cuando estés dentro de un método, el panel **Call Stack** muestra `Mostrar() → <main>` y puedes hacer clic para saltar entre frames.
 
+### 8. Depurar endpoints HTTP (modo `--api`)
+Para depurar handlers `HttpGet`/`HttpPost`/`HttpPut`/`HttpDelete`/`HttpPatch` necesitas que el intérprete corra como **servidor HTTP** y que VS Code se conecte al DAP en paralelo. Usa esta config en `.vscode/launch.json` (puerto DAP 4712, HTTP 8081):
+
+```json
+{
+  "type": "typeeasy",
+  "request": "launch",
+  "name": "TypeEasy: debug API (endpoints HTTP)",
+  "program": "${file}",
+  "stopOnEntry": false,
+  "port": 4712,
+  "api": true,
+  "httpPort": 8081,
+  "apiHost": "0.0.0.0"
+}
+```
+
+Flujo:
+1. Pon breakpoints dentro del cuerpo del handler (`debug_log(...)`, `let ... = ...`, `return json(...)`).
+2. **F5** — el contenedor arranca en modo `--api` y el adapter conecta. En el Debug Console verás `Escuchando en http://0.0.0.0:8081 (N rutas)`.
+3. Desde otra terminal lanza un request: `curl -X POST http://localhost:8081/api/users -H "Content-Type: application/json" -d '{"name":"Ana"}'`.
+4. VS Code se detendrá en tu breakpoint dentro del handler. Inspecciona `request.body`, locals, etc.
+
+**Depurar varios endpoints en una sesión:** el intérprete recibe **un único archivo** como `program`. Para registrar varios endpoints, crea un bootstrap (por ejemplo `apis/_all_debug.te`) que los importe:
+
+```ts
+import "example_httpget.te";
+import "example_httppost.te";
+import "product_endpoint.te";
+```
+
+y abre ese archivo como activo antes de pulsar **F5**. Verás `Escuchando en ... (N rutas)` con todas las rutas listadas.
+
 ### Solución de problemas
 
 | Problema | Solución |
 |---|---|
-| `connect ECONNREFUSED 127.0.0.1:4711` | Puerto ocupado. Corre `docker rm -f $(docker ps -q --filter "publish=4711")` |
-| Breakpoint no se activa | Verifica que la línea sea una sentencia ejecutable (no comentario, no `}` cerrado) |
+| `connect ECONNREFUSED 127.0.0.1:4711` o `:4712` | Puerto ocupado por un contenedor zombie. Mátalo: `docker rm -f $(docker ps -aq --filter "name=typeeasy-dap")` (Linux/macOS/Git Bash) o `docker rm -f (docker ps -aq --filter "name=typeeasy-dap")` en PowerShell. Si no, listar y matar por ID: `docker ps` → `docker rm -f <ID>`. |
+| `Bind for 0.0.0.0:4712 failed: port is already allocated` | Mismo caso: matar el contenedor anterior con `docker rm -f` (matar el proceso de VS Code **no** limpia el contenedor — lo gestiona el daemon de Docker). La extensión nueva ya etiqueta los contenedores con `--name typeeasy-dap-<pid>-<ts>` y los borra al hacer Stop limpio. |
+| Breakpoint no se activa | Verifica que la línea sea una sentencia ejecutable (no comentario, no `}` cerrado). Si una sentencia válida nunca para, exporta `TYPEEASY_DEBUG_VERBOSE=1` en el container — emitirá `[typeeasy-debugger] SKIP line<=0 kind=K type=T`: indica que el nodo AST tiene `line=0` (falta `node->line = yylineno` en el `create_*_node` de ese tipo). |
 | Sin colores en `.te` | Reinstala la extensión: `bash scripts/install_vscode_extension.sh` y reinicia VS Code |
 | `Docker daemon not running` | Inicia Docker Desktop |
+| Modo `--api`: solo registra 1 ruta | Es por diseño: el intérprete carga **un** archivo. Usa el patrón bootstrap con `import` descrito en la sección 8. |
 
 ---
 

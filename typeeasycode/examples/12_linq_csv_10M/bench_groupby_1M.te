@@ -1,0 +1,79 @@
+// Bench: groupBy + agregaciones múltiples sobre 1M filas (schema cat,precio,stock)
+
+class Producto {
+  cat : string;
+  precio : int;
+  stock : int;
+}
+
+let productos = from "productos_cat_1M.csv", Producto;
+println("filas=" + productos.length);
+
+// 1) sum total + count por categoría (10 grupos)
+// (groupBy → map almacenado tiene limitaciones en esta versión; usamos el patrón
+//  where + sumBy + length por categoría, paralelizado por OpenMP.
+//  Indexar arrays de strings tampoco está soportado en esta versión,
+//  por lo que desenrollamos los 10 grupos manualmente.)
+int totalSum = 0;
+
+let subA = productos.where(fn(p) => p.cat == "A");
+let spA  = subA.sumBy(fn(p) => p.precio);
+println("cat=A count=" + subA.length + " sumPrecio=" + spA);
+totalSum = totalSum + spA;
+
+let subB = productos.where(fn(p) => p.cat == "B");
+let spB  = subB.sumBy(fn(p) => p.precio);
+println("cat=B count=" + subB.length + " sumPrecio=" + spB);
+totalSum = totalSum + spB;
+
+let subC = productos.where(fn(p) => p.cat == "C");
+let spC  = subC.sumBy(fn(p) => p.precio);
+println("cat=C count=" + subC.length + " sumPrecio=" + spC);
+totalSum = totalSum + spC;
+
+let subD = productos.where(fn(p) => p.cat == "D");
+let spD  = subD.sumBy(fn(p) => p.precio);
+println("cat=D count=" + subD.length + " sumPrecio=" + spD);
+totalSum = totalSum + spD;
+
+let subE = productos.where(fn(p) => p.cat == "E");
+let spE  = subE.sumBy(fn(p) => p.precio);
+println("cat=E count=" + subE.length + " sumPrecio=" + spE);
+totalSum = totalSum + spE;
+
+let subF = productos.where(fn(p) => p.cat == "F");
+let spF  = subF.sumBy(fn(p) => p.precio);
+println("cat=F count=" + subF.length + " sumPrecio=" + spF);
+totalSum = totalSum + spF;
+
+let subG = productos.where(fn(p) => p.cat == "G");
+let spG  = subG.sumBy(fn(p) => p.precio);
+println("cat=G count=" + subG.length + " sumPrecio=" + spG);
+totalSum = totalSum + spG;
+
+let subH = productos.where(fn(p) => p.cat == "H");
+let spH  = subH.sumBy(fn(p) => p.precio);
+println("cat=H count=" + subH.length + " sumPrecio=" + spH);
+totalSum = totalSum + spH;
+
+let subI = productos.where(fn(p) => p.cat == "I");
+let spI  = subI.sumBy(fn(p) => p.precio);
+println("cat=I count=" + subI.length + " sumPrecio=" + spI);
+totalSum = totalSum + spI;
+
+let subJ = productos.where(fn(p) => p.cat == "J");
+let spJ  = subJ.sumBy(fn(p) => p.precio);
+println("cat=J count=" + subJ.length + " sumPrecio=" + spJ);
+totalSum = totalSum + spJ;
+
+println("totalSum=" + totalSum);
+
+// 2) min/max global
+let masBarato = productos.minBy(fn(p) => p.precio);
+let masCaro   = productos.maxBy(fn(p) => p.precio);
+println("min=" + masBarato.precio + " max=" + masCaro.precio);
+
+// 3) filter complejo + count
+println("countAhi=" + productos.countWhere(fn(p) => p.precio > 500 && p.stock < 100));
+
+println("OK");

@@ -1,0 +1,39 @@
+// Bench: groupBy + agregaciones múltiples sobre 1M filas (schema cat,precio,stock)
+// Patrón optimizado v0.0.13: chained where(pred).sumBy(proj) + countWhere(pred)
+// con SPEC_CMP_EQ_STR + fusion-parallel (single OpenMP pass per chained call,
+// no intermediate materialization).
+// NOTA: TypeEasy no acepta `let x = a.b().c();` (chained en RHS de let), por eso
+// todas las expresiones encadenadas van inline en println.
+
+class Producto {
+  cat : string;
+  precio : int;
+  stock : int;
+}
+
+let productos = from "productos_cat_1M.csv", Producto;
+println("filas=" + productos.length);
+
+println("cat=A count=" + productos.countWhere(fn(p) => p.cat == "A") + " sumPrecio=" + productos.where(fn(p) => p.cat == "A").sumBy(fn(p) => p.precio));
+println("cat=B count=" + productos.countWhere(fn(p) => p.cat == "B") + " sumPrecio=" + productos.where(fn(p) => p.cat == "B").sumBy(fn(p) => p.precio));
+println("cat=C count=" + productos.countWhere(fn(p) => p.cat == "C") + " sumPrecio=" + productos.where(fn(p) => p.cat == "C").sumBy(fn(p) => p.precio));
+println("cat=D count=" + productos.countWhere(fn(p) => p.cat == "D") + " sumPrecio=" + productos.where(fn(p) => p.cat == "D").sumBy(fn(p) => p.precio));
+println("cat=E count=" + productos.countWhere(fn(p) => p.cat == "E") + " sumPrecio=" + productos.where(fn(p) => p.cat == "E").sumBy(fn(p) => p.precio));
+println("cat=F count=" + productos.countWhere(fn(p) => p.cat == "F") + " sumPrecio=" + productos.where(fn(p) => p.cat == "F").sumBy(fn(p) => p.precio));
+println("cat=G count=" + productos.countWhere(fn(p) => p.cat == "G") + " sumPrecio=" + productos.where(fn(p) => p.cat == "G").sumBy(fn(p) => p.precio));
+println("cat=H count=" + productos.countWhere(fn(p) => p.cat == "H") + " sumPrecio=" + productos.where(fn(p) => p.cat == "H").sumBy(fn(p) => p.precio));
+println("cat=I count=" + productos.countWhere(fn(p) => p.cat == "I") + " sumPrecio=" + productos.where(fn(p) => p.cat == "I").sumBy(fn(p) => p.precio));
+println("cat=J count=" + productos.countWhere(fn(p) => p.cat == "J") + " sumPrecio=" + productos.where(fn(p) => p.cat == "J").sumBy(fn(p) => p.precio));
+
+// totalSum: una sola pasada paralela sobre todos los precios
+println("totalSum=" + productos.sumBy(fn(p) => p.precio));
+
+// min/max global
+let masBarato = productos.minBy(fn(p) => p.precio);
+let masCaro   = productos.maxBy(fn(p) => p.precio);
+println("min=" + masBarato.precio + " max=" + masCaro.precio);
+
+// filter complejo + count (AND no es fast-pathable; cae al path lento)
+println("countAhi=" + productos.countWhere(fn(p) => p.precio > 500 && p.stock < 100));
+
+println("OK");

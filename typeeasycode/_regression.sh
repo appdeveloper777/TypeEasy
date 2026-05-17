@@ -1,7 +1,7 @@
 #!/bin/bash
 # Regression suite. Corre desde el container typeeasy con cwd=/code (= typeeasycode/).
 # Tras la reorganizacion de mayo 2026 los tests viven bajo examples/<categoria>/.
-PASS=0; FAIL=0; SKIP=0
+PASS=0; FAIL=0; SKIP=0; XFAIL=0
 run_test() {
   local f="$1"; local expect="$2"
   local out
@@ -15,10 +15,26 @@ run_test() {
     echo "PASS $f"; PASS=$((PASS+1))
   fi
 }
+# Tests intentionally designed to error (e.g. demonstrate `let` immutability).
+# Counted as XFAIL if exit != 0, FAIL if they unexpectedly pass.
+run_xfail() {
+  local f="$1"
+  /typeeasy/typeeasy "/code/$f" >/dev/null 2>&1
+  local code=$?
+  if [ $code -ne 0 ]; then
+    echo "XFAIL $f"; XFAIL=$((XFAIL+1))
+  else
+    echo "FAIL [unexpected pass] $f"; FAIL=$((FAIL+1))
+  fi
+}
 
 # 01_basics
-for t in test_arr test_arr_mut test_compound test_concat test_if test_logic test_map test_map_has test_math1 test_null test_nullaware test_print test_while test_let_objeto test_let_string test_min2 bucle_for unario_menos; do
+for t in test_arr test_arr_mut test_compound test_concat test_if test_logic test_map test_map_has test_math1 test_null test_nullaware test_print test_while test_min2 bucle_for unario_menos; do
   run_test "examples/01_basics/${t}.te" ""
+done
+# Tests that intentionally demonstrate `let` immutability (must error out).
+for t in test_let_objeto test_let_string; do
+  run_xfail "examples/01_basics/${t}.te"
 done
 
 # 02_oop
@@ -52,6 +68,20 @@ run_test "link_to_objects.te" ""
 # 08_bytecode
 run_test "examples/08_bytecode/bytecode_ext_mod_bit_shift.te" ""
 
+# 09_ml (machine_learning.te requires ML runtime — known broken, skipped)
+run_test "examples/09_ml/crear_imagen_plot.te" ""
+
+# 10_errors (designed to demonstrate syntax errors)
+run_xfail "examples/10_errors/test_errores_graves.te"
+
+# 11_linq_objects
+run_test "examples/11_linq_objects/linq_objetos.te" ""
+
+# 13_linq_concepts (full LINQ surface)
+for t in linq_aggregates linq_distinct linq_first_any_all linq_fusion linq_groupby linq_join linq_lazy linq_orderby linq_reduce linq_select linq_take_skip linq_tomap linq_where linq_zip; do
+  run_test "examples/13_linq_concepts/${t}.te" ""
+done
+
 echo ""
-echo "=== TOTAL: PASS=$PASS FAIL=$FAIL SKIP=$SKIP ==="
+echo "=== TOTAL: PASS=$PASS FAIL=$FAIL XFAIL=$XFAIL SKIP=$SKIP ==="
 exit $FAIL

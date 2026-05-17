@@ -10,7 +10,7 @@ class Producto {
 
 let productos = from "productos.csv", Producto;
 println(productos.length);
-let i = 0;
+var i = 0;
 for (let p in productos) {
   if (i < 3) {
     print(p.nombre);

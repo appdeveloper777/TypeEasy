@@ -6,7 +6,7 @@
 */
 
 // Declaración de variables
-let x = 10;
+var x = 10;
 let y = 5;
 
 // -------------------------------- Ejemplo de if-else------------------------------------------

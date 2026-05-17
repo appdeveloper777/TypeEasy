@@ -1,0 +1,38 @@
+// =============================================================
+// apis/example_httpget.te
+//
+// Ejemplo limpio de [HttpGet] en TypeEasy.
+// Ejecutar:
+//   typeeasy --api apis/example_httpget.te --port 9100
+//
+// Probar:
+//   curl -s http://localhost:9100/api/ping
+//   curl -s http://localhost:9100/api/saludo/Ana
+//   curl -s "http://localhost:9100/api/sumar?a=3&b=4"
+// =============================================================
+
+endpoint {
+    // Endpoint mas simple: respuesta estatica.
+    [HttpGet("/api/ping")]
+    ping() {
+        return json("{\"pong\":1}");
+    }
+
+    // Parametro de ruta: {nombre}. Se obtiene con request_param("nombre").
+    [HttpGet("/api/saludo/{nombre}")]
+    saludo() {
+        let nombre = request_param("nombre");
+        let body = concat("{\"saludo\":\"Hola ", nombre, "\"}");
+        return json(body);
+    }
+
+    // Parametros de query (?a=...&b=...) via request_query.
+    [HttpGet("/api/sumar")]
+    sumar() {
+        let a = request_query("a");
+        let b = request_query("b");
+        // request_query devuelve string; conviertelo cuando hagas aritmetica real.
+        let body = concat("{\"a\":\"", a, "\",\"b\":\"", b, "\"}");
+        return json(body);
+    }
+}

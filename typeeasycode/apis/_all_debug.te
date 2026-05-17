@@ -1,0 +1,26 @@
+// Bootstrap para depurar varias APIs juntas en modo --api.
+// Lanza este archivo con "TypeEasy: debug API (POST/GET handlers)"
+// y todos los endpoints importados quedarán registrados en el mismo
+// servidor HTTP. Añade/quita imports segun lo que necesites probar.
+//
+// IMPORTANTE: las rutas son relativas a este archivo.
+// Si un endpoint depende de MySQL/ORM y no tienes el servicio
+// configurado, comenta su import para evitar errores al arranque.
+
+import "example_httpget.te";
+import "example_httppost.te";
+import "product_endpoint.te";
+
+// Descomenta segun necesidad:
+// import "test_pathparam.te";
+// import "test_request_info.te";
+// import "test_multi_endpoint.te";
+// import "dynamic_test_endpoint.te";
+// import "_health_endpoint.te";
+
+// Endpoints con dependencias externas (MySQL/ORM) -- requieren config:
+// import "usuarios_endpoint.te";
+// import "users_orm_mysql_endpoint.te";
+// import "mysql_example_endpoint.te";
+// import "facturas_endpoint.te";
+// import "proveedores_endpoint.te";

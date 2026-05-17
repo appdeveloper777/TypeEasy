@@ -1,0 +1,6 @@
+let cats = ["A","B","C","D","E","F","G","H","I","J"];
+for(i = 0; 10; 1) {
+  let c = cats[i];
+  println("c=" + c);
+}
+println("done");
