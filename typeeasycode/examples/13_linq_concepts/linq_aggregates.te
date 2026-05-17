@@ -1,0 +1,30 @@
+// LINQ agregaciones — sum, sumBy, count, countWhere, avg, min, max
+
+class Producto {
+  nombre : string;
+  precio : int;
+  stock : int;
+  __constructor(_n : string, _p : int, _s : int) {
+    this.nombre = _n;
+    this.precio = _p;
+    this.stock = _s;
+  }
+}
+
+let productos = [
+  new Producto("manzana", 10, 50),
+  new Producto("pera",    15, 20),
+  new Producto("uva",      8, 80),
+  new Producto("mango",   20, 15)
+];
+
+println("count="       + productos.length);
+println("sumStock="    + productos.sumBy(fn(p) => p.stock));      // 165
+println("sumPrecio="   + productos.sumBy(fn(p) => p.precio));     // 53
+println("avgPrecio="   + productos.avgBy(fn(p) => p.precio));     // 13.25
+println("countCaros="  + productos.countWhere(fn(p) => p.precio > 10));
+
+let masBarato = productos.minBy(fn(p) => p.precio);
+let masCaro   = productos.maxBy(fn(p) => p.precio);
+println("minBy=" + masBarato.nombre);   // uva
+println("maxBy=" + masCaro.nombre);     // mango

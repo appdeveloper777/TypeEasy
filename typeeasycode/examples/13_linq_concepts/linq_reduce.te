@@ -1,0 +1,16 @@
+// LINQ reduce / aggregate / fold — acumular en un solo valor
+// Firma (sobre lista): reduce(fn(acc, x) => nuevoAcc, init)
+// Firma (sobre .lazy()): reduce(init, fn(acc, x) => nuevoAcc)
+
+let nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+let suma     = nums.reduce(fn(a, x) => a + x, 0);
+let producto = nums.aggregate(fn(a, x) => a * x, 1);   // alias
+let maxVal   = nums.maxBy(fn(x) => x);
+
+println("suma="     + suma);      // 55
+println("producto=" + producto);  // 3628800
+println("max="      + maxVal);    // 10
+
+// Variante lazy (orden opuesto: init primero)
+println("sumaLazy=" + nums.lazy().reduce(0, fn(a, x) => a + x));   // 55

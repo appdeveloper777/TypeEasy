@@ -1,0 +1,12 @@
+// debug: distinct + toMap
+let nums = [1, 2, 2, 3];
+let d = nums.distinct();
+println("d.type-test=" + d.length);
+
+let m = {a: 1, b: 2};
+println("m[a]=" + m["a"]);
+
+// toList sanity
+let lst = [10, 20, 30];
+println("lst.length=" + lst.length);
+println("lst.toList.length=" + lst.toList().length);

@@ -7,6 +7,7 @@
 #include <math.h>
 #include <ctype.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include "bytecode.h"
 #include "mysql_bridge.h"
@@ -14,6 +15,10 @@
 #include "sqlserver_bridge.h"
 #include "debugger.h"
 #include "te_builtins.h"
+
+#ifdef TE_HAVE_OPENMP
+#  include <omp.h>
+#endif
 
 /* Crypto / encoding stdlib (linked via -lssl -lcrypto en el Makefile). */
 #include <openssl/sha.h>
@@ -431,6 +436,7 @@ static int list_length(ASTNode *list);
 static ASTNode* resolve_to_list(ASTNode *node);
 static ASTNode* resolve_to_map(ASTNode *node);
 static int map_length(ASTNode *map);
+static ASTNode* map_find_pair(ASTNode *map, const char *key);
 static void interpret_call_method(ASTNode *node);
 
 // Helper function to get string representation of any node
@@ -548,6 +554,26 @@ char* get_node_string(ASTNode* node) {
                     if (item && item->type && strcmp(item->type, "OBJECT") == 0) {
                         obj = item->extra ? (ObjectNode*)item->extra
                                           : (ObjectNode*)(intptr_t)item->value;
+                    }
+                }
+            }
+            /* Caso 3: m["k"].attr — o es ACCESS_EXPR sobre MAP (toMap result). */
+            if (!obj) {
+                ASTNode *map = resolve_to_map(o->left);
+                if (map && o->right && o->right->type) {
+                    const char *key = NULL;
+                    if (strcmp(o->right->type, "STRING") == 0) key = o->right->str_value;
+                    else if (strcmp(o->right->type, "IDENTIFIER") == 0 || strcmp(o->right->type, "ID") == 0) {
+                        Variable *kv = find_variable(o->right->id);
+                        if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+                    }
+                    if (key) {
+                        ASTNode *pair = map_find_pair(map, key);
+                        ASTNode *val  = pair ? pair->left : NULL;
+                        if (val && val->type && strcmp(val->type, "OBJECT") == 0) {
+                            obj = val->extra ? (ObjectNode*)val->extra
+                                             : (ObjectNode*)(intptr_t)val->value;
+                        }
                     }
                 }
             }
@@ -1682,6 +1708,15 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         //    printf("[DIAG] declare_variable: objeto '%s' declarado pero clase no encontrada\n", id);
        // }
     }
+    else if (strcmp(value->type, "LAZY_ITER") == 0) {
+        /* v0.0.12 #8: lazy iterator. The actual LAZY_ITER ASTNode pointer is
+         * either in value->extra (when called from interpret_var_decl with a
+         * wrapper) or value itself (when called directly). */
+        vars[my_index].vtype = VAL_OBJECT;
+        vars[my_index].value.object_value = value->extra
+            ? (ObjectNode *)value->extra
+            : (ObjectNode *)(intptr_t)value;
+    }
     else if (strcmp(value->type, "ACCESS_ATTR") == 0) {
         // Esto maneja: let item = intencion.item;
         ASTNode *o = value->left, *a = value->right;
@@ -1768,6 +1803,11 @@ void add_or_update_variable(char *id, ASTNode *value) {
             __ret_var.vtype = VAL_OBJECT;
             __ret_var.type = strdup("LIST");
             __ret_var.value.object_value = (ObjectNode *)value;
+        } else if (strcmp(value->type, "LAZY_ITER") == 0) {
+            /* v0.0.12 #8: lazy iterator carries pointer to LAZY_ITER ASTNode */
+            __ret_var.vtype = VAL_OBJECT;
+            __ret_var.type = strdup("LAZY_ITER");
+            __ret_var.value.object_value = (ObjectNode *)value;
         } else if (strcmp(value->type, "MAP") == 0 || strcmp(value->type, "OBJECT_LITERAL") == 0) {
             __ret_var.vtype = VAL_OBJECT;
             __ret_var.type = strdup("MAP");
@@ -1803,7 +1843,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
         } else if (strcmp(value->type, "LAMBDA") == 0) {
             var->vtype = VAL_OBJECT;
             var->value.object_value = (ObjectNode *)(intptr_t)value;
-        } else if (strcmp(value->type, "LIST") == 0 || strcmp(value->type, "OBJECT_LITERAL") == 0) {
+        } else if (strcmp(value->type, "LIST") == 0 || strcmp(value->type, "OBJECT_LITERAL") == 0 || strcmp(value->type, "LAZY_ITER") == 0) {
             var->vtype = VAL_OBJECT;
             var->value.object_value = (ObjectNode *)(intptr_t)value;
         } else if (strcmp(value->type, "FLOAT") == 0) {
@@ -1832,7 +1872,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
         } else if (strcmp(value->type, "LAMBDA") == 0) {
             vars[var_count].vtype = VAL_OBJECT;
             vars[var_count].value.object_value = (ObjectNode *)(intptr_t)value;
-        } else if (strcmp(value->type, "LIST") == 0 || strcmp(value->type, "OBJECT_LITERAL") == 0) {
+        } else if (strcmp(value->type, "LIST") == 0 || strcmp(value->type, "OBJECT_LITERAL") == 0 || strcmp(value->type, "LAZY_ITER") == 0) {
             vars[var_count].vtype = VAL_OBJECT;
             vars[var_count].value.object_value = (ObjectNode *)(intptr_t)value;
         } else {
@@ -2793,16 +2833,57 @@ char* expand_interp_string(const char *raw) {
     return out;
 }
 
+/* Forward decl: shared interned "OBJECT" sentinel (defined alongside the CSV
+ * fast loader). free_ast skips free() for nodes whose `type` == this pointer. */
+extern char *g_csv_wrapper_obj_type;
+/* Forward decl: bump-pool allocator (defined alongside CSV loader). Returns a
+ * zeroed ASTNode whose memory lives in t_ast_pool blocks (released at exit).
+ * Callers must set `from_pool=1` so free_ast skips per-node free(). */
+static ASTNode *ast_pool_alloc(void);
+
+/* Pool-allocated wrapper for an OBJECT value. Used by LINQ fast-paths
+ * (orderBy/groupBy) that materialize millions of wrappers per call: avoids the
+ * per-item calloc + strdup("OBJECT") + strdup(class_name). Returns NULL when
+ * the value isn't a plain OBJECT (caller must fall back to build_item_from_value). */
+static inline ASTNode* build_object_wrapper_pooled(ASTNode *value) {
+    if (!value || !value->type || strcmp(value->type, "OBJECT") != 0) return NULL;
+    if (!g_csv_wrapper_obj_type) g_csv_wrapper_obj_type = strdup("OBJECT");
+    ASTNode *w = ast_pool_alloc();  /* slot is calloc'd → zero-initialised */
+    w->type = g_csv_wrapper_obj_type;
+    if (value->id_interned) {
+        w->id = value->id;
+        w->id_interned = 1;
+    } else if (value->id) {
+        /* Fallback: still strdup (rare path; CSV objects are always interned). */
+        w->id = strdup(value->id);
+        w->id_interned = 0;
+    }
+    w->extra = value->extra;   /* ObjectNode* */
+    w->value = value->value;
+    w->from_pool = 1;          /* free_ast: skip free(node) and all field frees */
+    return w;
+}
+
 /* Build a fresh ASTNode item from a runtime value (used for index assign / push). */
 static ASTNode* build_item_from_value(ASTNode *value) {
     ASTNode *new_item = (ASTNode*)calloc(1, sizeof(ASTNode));
     memset(new_item, 0, sizeof(ASTNode));
     if (!value) { new_item->type = strdup("NUMBER"); return new_item; }
     /* v0.0.11: preserve OBJECT items (e.g., user-class instances inside lists)
-     * so callers of minBy/maxBy/first/last/firstWhere etc. can access attrs. */
+     * so callers of minBy/maxBy/first/last/firstWhere etc. can access attrs.
+     * Fast-path (post-Phase 2): when called millions of times by LINQ
+     * materializers (orderBy/groupBy/where/...), strdup("OBJECT") and
+     * strdup(value->id) dominate. Share the sentinel "OBJECT" string (free_ast
+     * already skips g_csv_wrapper_obj_type) and reuse interned class-name id. */
     if (value->type && strcmp(value->type, "OBJECT") == 0) {
-        new_item->type = strdup("OBJECT");
-        new_item->id = value->id ? strdup(value->id) : NULL;
+        if (!g_csv_wrapper_obj_type) g_csv_wrapper_obj_type = strdup("OBJECT");
+        new_item->type = g_csv_wrapper_obj_type;
+        if (value->id_interned) {
+            new_item->id = value->id;
+            new_item->id_interned = 1;
+        } else {
+            new_item->id = value->id ? strdup(value->id) : NULL;
+        }
         new_item->extra = value->extra;  /* ObjectNode* */
         return new_item;
     }
@@ -6079,6 +6160,38 @@ double evaluate_expression(ASTNode *node) {
                     return 0;
                 }
             }
+            /* m["k"].attr — extend to support MAP-indexed objects (toMap result). */
+            ASTNode *map = resolve_to_map(objRef->left);
+            if (map && objRef->right) {
+                const char *key = NULL;
+                if (nk_of(objRef->right) == NK_STRING) key = objRef->right->str_value;
+                else if (nk_of(objRef->right) == NK_IDENTIFIER || nk_of(objRef->right) == NK_ID) {
+                    Variable *kv = find_variable(objRef->right->id);
+                    if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+                }
+                if (key) {
+                    ASTNode *pair = map_find_pair(map, key);
+                    ASTNode *val  = pair ? pair->left : NULL;
+                    ObjectNode *iobj = NULL;
+                    if (val && val->type && strcmp(val->type, "OBJECT") == 0) {
+                        if (val->extra) iobj = (ObjectNode*)val->extra;
+                        else iobj = (ObjectNode*)(intptr_t)val->value;
+                    }
+                    if (iobj && iobj->class) {
+                        for (int i = 0; i < iobj->class->attr_count; i++) {
+                            if (strcmp(iobj->class->attributes[i].id, attr->id) == 0) {
+                                if (iobj->attributes[i].vtype == VAL_INT)
+                                    return iobj->attributes[i].value.int_value;
+                                if (iobj->attributes[i].vtype == VAL_FLOAT)
+                                    return iobj->attributes[i].value.float_value;
+                                return 0;
+                            }
+                        }
+                        printf("Error: attribute '%s' not found in mapped object.\n", attr->id);
+                        return 0;
+                    }
+                }
+            }
             printf("Error: cannot resolve indexed expression for attribute access.\n");
             return 0;
         }
@@ -8009,8 +8122,575 @@ static void interpret_call_func(ASTNode *node) {
     }
 }
 
+/* ============================================================================
+ * Phase 2 — Lambda specializer (LINQ fast-path)
+ *
+ * Many LINQ lambdas follow trivial patterns (e.g. `fn(p) => p.precio`,
+ * `fn(p) => p.precio > 500`). The generic call_lambda path allocates an
+ * AST node, walks variables, evaluates a BINOP tree, and frees temporaries
+ * for every item — that dominates the wall-clock on million-row benches.
+ *
+ * The specializer analyses the lambda body ONCE before the loop and, if it
+ * matches a known shape, runs a tight C loop that reads the OBJECT attribute
+ * directly. The first OBJECT seen caches { class*, idx } so subsequent items
+ * skip the strcmp scan entirely.
+ *
+ * Patterns supported:
+ *   SPEC_IDENT  : fn(p) => p           (identity numeric)
+ *   SPEC_ATTR   : fn(p) => p.X         (attribute read)
+ *   SPEC_CMP_*  : fn(p) => p.X OP K    (compare attr against literal)
+ *   SPEC_MOD_K  : fn(p) => p.X % K     (numeric, used by group keys)
+ *
+ * Activated by default. Set TE_FASTPATH=0 in the environment to disable
+ * for debugging.
+ * ========================================================================== */
+
+typedef enum {
+    SPEC_NONE = 0,
+    SPEC_IDENT,
+    SPEC_ATTR,
+    SPEC_CMP_GT, SPEC_CMP_LT, SPEC_CMP_GE, SPEC_CMP_LE, SPEC_CMP_EQ, SPEC_CMP_NE,
+    SPEC_MOD_K
+} LambdaSpec;
+
+typedef struct {
+    LambdaSpec  spec;
+    const char *attr_name;      /* borrowed from AST, do not free */
+    long long   k;
+    double      k_d;
+    int         k_is_float;
+    /* One-shot cache: bound to the first ObjectNode class we see. */
+    ClassNode  *cached_class;
+    int         cached_idx;
+} FastLambda;
+
+static int te_fastpath_enabled(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *e = getenv("TE_FASTPATH");
+        cached = (e && e[0] == '0') ? 0 : 1;
+    }
+    return cached;
+}
+
+/* OpenMP enable gate. Default ON if compiled with -fopenmp. Set TE_OPENMP=0
+ * to disable at runtime (for benchmarking or debugging). Threshold for
+ * parallelization is 10k items — below that, the materialization + thread
+ * overhead exceeds the gain. */
+static int te_openmp_enabled(void) {
+#ifdef TE_HAVE_OPENMP
+    static int cached = -1;
+    if (cached < 0) {
+        const char *e = getenv("TE_OPENMP");
+        cached = (e && e[0] == '0') ? 0 : 1;
+    }
+    return cached;
+#else
+    return 0;
+#endif
+}
+#define TE_OMP_MIN_N 10000
+
+/* Is N an ACCESS_ATTR(<param>, <name>)? */
+static int fl_is_attr_of_param(ASTNode *N, const char *pname, size_t plen) {
+    if (!N || !N->type || strcmp(N->type, "ACCESS_ATTR") != 0) return 0;
+    ASTNode *L = N->left, *R = N->right;
+    if (!L || !L->type || !L->id) return 0;
+    if (strcmp(L->type, "IDENTIFIER") != 0 && strcmp(L->type, "ID") != 0) return 0;
+    if (strlen(L->id) != plen || memcmp(L->id, pname, plen) != 0) return 0;
+    if (!R || !R->id) return 0;
+    return 1;
+}
+
+/* Analyse lambda body. Returns spec (SPEC_NONE if no fast-path). */
+static LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out) {
+    out->spec = SPEC_NONE;
+    out->cached_class = NULL;
+    out->cached_idx = -1;
+    out->attr_name = NULL;
+    out->k = 0; out->k_d = 0.0; out->k_is_float = 0;
+    if (!te_fastpath_enabled()) return SPEC_NONE;
+    if (!fn || !fn->left) return SPEC_NONE;
+    if (!fn->id || !fn->id[0]) return SPEC_NONE;
+
+    /* Exactly one param? */
+    const char *params = fn->id;
+    int npar = 1;
+    for (const char *q = params; *q; q++) if (*q == '\1') npar++;
+    if (npar != 1) return SPEC_NONE;
+    const char *p_end = params;
+    while (*p_end && *p_end != '\1') p_end++;
+    size_t plen = (size_t)(p_end - params);
+    if (plen == 0 || plen >= 128) return SPEC_NONE;
+
+    ASTNode *body = fn->left;
+    if (body->type && strcmp(body->type, "STATEMENT_LIST") == 0) return SPEC_NONE;
+
+    /* IDENT: body === param */
+    if (body->type && (strcmp(body->type, "IDENTIFIER") == 0 || strcmp(body->type, "ID") == 0)) {
+        if (body->id && strlen(body->id) == plen && memcmp(body->id, params, plen) == 0) {
+            out->spec = SPEC_IDENT;
+            return SPEC_IDENT;
+        }
+        return SPEC_NONE;
+    }
+
+    /* ATTR: body === ACCESS_ATTR(param, X) */
+    if (fl_is_attr_of_param(body, params, plen)) {
+        out->spec = SPEC_ATTR;
+        out->attr_name = body->right->id;
+        return SPEC_ATTR;
+    }
+
+    /* CMP_K / MOD_K: BINOP(ACCESS_ATTR(param,X), NUMBER|FLOAT literal) */
+    if (body->type && body->left && body->right) {
+        LambdaSpec s = SPEC_NONE;
+        if      (strcmp(body->type, "GT")    == 0) s = SPEC_CMP_GT;
+        else if (strcmp(body->type, "LT")    == 0) s = SPEC_CMP_LT;
+        /* NOTE: scanner.l swaps GT_EQ/LT_EQ — token "GT_EQ" is actually `<=`
+         * and "LT_EQ" is actually `>=`. Verified against evaluate_expression
+         * (NK_GT_EQ: r = a<=b; NK_LT_EQ: r = a>=b). Map accordingly. */
+        else if (strcmp(body->type, "GT_EQ") == 0) s = SPEC_CMP_LE;
+        else if (strcmp(body->type, "LT_EQ") == 0) s = SPEC_CMP_GE;
+        else if (strcmp(body->type, "EQ")    == 0) s = SPEC_CMP_EQ;
+        else if (strcmp(body->type, "DIFF")  == 0) s = SPEC_CMP_NE;
+        else if (strcmp(body->type, "MOD")   == 0) s = SPEC_MOD_K;
+        if (s != SPEC_NONE && fl_is_attr_of_param(body->left, params, plen)) {
+            ASTNode *R = body->right;
+            if (R->type && (strcmp(R->type, "NUMBER") == 0 || strcmp(R->type, "INT") == 0)) {
+                out->spec = s;
+                out->attr_name = body->left->right->id;
+                out->k = (long long)R->value;
+                out->k_d = (double)R->value;
+                out->k_is_float = 0;
+                return s;
+            }
+            if (R->type && strcmp(R->type, "FLOAT") == 0 && R->str_value) {
+                out->spec = s;
+                out->attr_name = body->left->right->id;
+                out->k_d = atof(R->str_value);
+                out->k = (long long)out->k_d;
+                out->k_is_float = 1;
+                return s;
+            }
+        }
+    }
+    return SPEC_NONE;
+}
+
+/* Resolve attribute index for `obj`, caching per-class. */
+static inline int fl_attr_idx(FastLambda *fl, ObjectNode *obj) {
+    if (!obj || !obj->class) return -1;
+    if (fl->cached_class == obj->class && fl->cached_idx >= 0) return fl->cached_idx;
+    for (int i = 0; i < obj->class->attr_count; i++) {
+        const char *nm = obj->class->attributes[i].id;
+        if (nm && strcmp(nm, fl->attr_name) == 0) {
+            fl->cached_class = obj->class;
+            fl->cached_idx = i;
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* Read numeric attribute of OBJECT item. Returns 1 on success. */
+static inline int fl_read_attr(FastLambda *fl, ASTNode *item, double *out_d, int *out_is_int) {
+    if (!item || !item->type) return 0;
+    if (strcmp(item->type, "OBJECT") != 0 || !item->extra) return 0;
+    ObjectNode *obj = (ObjectNode*)item->extra;
+    int idx = fl_attr_idx(fl, obj);
+    if (idx < 0) return 0;
+    Variable *a = &obj->attributes[idx];
+    if (a->vtype == VAL_INT)        { *out_d = (double)a->value.int_value;    *out_is_int = 1; return 1; }
+    if (a->vtype == VAL_FLOAT)      { *out_d = a->value.float_value;          *out_is_int = 0; return 1; }
+    /* string-to-number fallback (CSV parsed values may still be tagged as VAL_STRING) */
+    if (a->vtype == VAL_STRING && a->value.string_value) {
+        char *end = NULL;
+        double d = strtod(a->value.string_value, &end);
+        if (end && end != a->value.string_value) {
+            *out_d = d;
+            *out_is_int = (d == (double)(long long)d);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Evaluate fast-path. Returns 1 if handled, 0 if caller must fall back. */
+static inline int fast_eval(FastLambda *fl, ASTNode *item, double *out_d, int *out_is_int) {    if (fl->spec == SPEC_NONE) return 0;
+    if (fl->spec == SPEC_IDENT) {
+        if (!item || !item->type) return 0;
+        if (strcmp(item->type, "NUMBER") == 0 || strcmp(item->type, "INT") == 0) {
+            *out_d = (double)item->value; *out_is_int = 1; return 1;
+        }
+        if (strcmp(item->type, "FLOAT") == 0 && item->str_value) {
+            *out_d = atof(item->str_value); *out_is_int = 0; return 1;
+        }
+        return 0;
+    }
+    double av; int av_is_int;
+    if (!fl_read_attr(fl, item, &av, &av_is_int)) return 0;
+    if (fl->spec == SPEC_ATTR) { *out_d = av; *out_is_int = av_is_int; return 1; }
+    if (fl->spec == SPEC_MOD_K) {
+        if (fl->k == 0) return 0;
+        *out_d = (double)((long long)av % fl->k);
+        *out_is_int = 1;
+        return 1;
+    }
+    double k = fl->k_is_float ? fl->k_d : (double)fl->k;
+    int b = 0;
+    switch (fl->spec) {
+        case SPEC_CMP_GT: b = (av >  k); break;
+        case SPEC_CMP_LT: b = (av <  k); break;
+        case SPEC_CMP_GE: b = (av >= k); break;
+        case SPEC_CMP_LE: b = (av <= k); break;
+        case SPEC_CMP_EQ: b = (av == k); break;
+        case SPEC_CMP_NE: b = (av != k); break;
+        default: return 0;
+    }
+    *out_d = (double)b; *out_is_int = 1; return 1;
+}
+
+/* ---- orderBy / groupBy support ---- */
+/* qsort comparator: sort indices by precomputed key. globals are safe because
+ * TypeEasy LINQ runs on the main interpreter thread (the parallelism is in
+ * CSV loading only). */
+static double *g_sort_keys_d = NULL;
+static char  **g_sort_keys_s = NULL;
+static int     g_sort_is_str = 0;
+static int     g_sort_desc   = 0;
+static int te_sort_cmp_idx(const void *pa, const void *pb) {
+    int a = *(const int*)pa, b = *(const int*)pb;
+    if (g_sort_is_str) {
+        const char *sa = g_sort_keys_s[a] ? g_sort_keys_s[a] : "";
+        const char *sb = g_sort_keys_s[b] ? g_sort_keys_s[b] : "";
+        int c = strcmp(sa, sb);
+        return g_sort_desc ? -c : c;
+    }
+    double da = g_sort_keys_d[a], db = g_sort_keys_d[b];
+    if (da == db) return 0;
+    int c = (da < db) ? -1 : 1;
+    return g_sort_desc ? -c : c;
+}
+
+/* ===== v0.0.12 #8 Lazy iterators — helpers =====
+ * LAZY_ITER node: type="LAZY_ITER", ->left = source LIST node,
+ *                                   ->right = head of OP linked list.
+ * LAZY_OP node:   type="LAZY_OP",   ->id   = op name ("where"|"filter"|
+ *                                                     "select"|"map"|
+ *                                                     "take"|"skip"),
+ *                                   ->left = lambda (for predicate/transform)
+ *                                            or NULL (for take/skip),
+ *                                   ->value = numeric arg (take/skip count),
+ *                                   ->right = next op (linked list).
+ * Intermediate methods append an op and return a NEW LAZY_ITER (no mutation
+ * of the parent — same parent may still be referenced by a variable).
+ * Terminal methods (toList/count/sum/first/forEach/reduce/any/every) drain
+ * the pipeline in a single pass over the source list. */
+
+/* Deep-clone the op chain. Lambdas inside ->left are shared by reference
+ * (they are immutable AST sub-trees). */
+static ASTNode* lazy_clone_ops(ASTNode *head) {
+    ASTNode *new_head = NULL, *tail = NULL;
+    for (ASTNode *cur = head; cur; cur = cur->right) {
+        ASTNode *cp = (ASTNode*)calloc(1, sizeof(ASTNode));
+        cp->type = strdup("LAZY_OP");
+        cp->id   = strdup(cur->id ? cur->id : "");
+        cp->left = cur->left;   /* shared lambda ref */
+        cp->value = cur->value; /* take/skip cap */
+        if (!new_head) new_head = cp; else tail->right = cp;
+        tail = cp;
+    }
+    return new_head;
+}
+
+/* Build a new LAZY_ITER from existing one (or raw LIST) plus one extra op. */
+static ASTNode* lazy_extend(ASTNode *parent_lazy, ASTNode *src_list_raw,
+                            const char *op_name, ASTNode *lambda_arg,
+                            int num_arg) {
+    ASTNode *lz = (ASTNode*)calloc(1, sizeof(ASTNode));
+    lz->type = strdup("LAZY_ITER");
+    lz->left = parent_lazy ? parent_lazy->left : src_list_raw;
+    ASTNode *ops = parent_lazy ? lazy_clone_ops(parent_lazy->right) : NULL;
+    ASTNode *op = (ASTNode*)calloc(1, sizeof(ASTNode));
+    op->type = strdup("LAZY_OP");
+    op->id   = strdup(op_name);
+    op->left = lambda_arg;
+    op->value = num_arg;
+    if (!ops) { lz->right = op; }
+    else { ASTNode *t = ops; while (t->right) t = t->right; t->right = op; lz->right = ops; }
+    return lz;
+}
+
+/* Resolve a method arg to a lambda ASTNode (inline LAMBDA or var of type LAMBDA). */
+static ASTNode* lazy_resolve_lambda_arg(ASTNode *arg) {
+    if (!arg) return NULL;
+    if (arg->type && strcmp(arg->type, "LAMBDA") == 0) return arg;
+    if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+        Variable *fv = find_variable(arg->id);
+        if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0)
+            return (ASTNode*)(intptr_t)fv->value.object_value;
+    }
+    return NULL;
+}
+
+/* Truthy test mirroring fusion/where logic. */
+static int lazy_truthy(ASTNode *r) {
+    if (!r) return 0;
+    if (r->type && strcmp(r->type, "STRING") == 0)
+        return (r->str_value && r->str_value[0]) ? 1 : 0;
+    if (r->type && strcmp(r->type, "NULL") == 0) return 0;
+    return (evaluate_expression(r) != 0) ? 1 : 0;
+}
+
+/* Run intermediate ops on one item. Returns:
+ *   1  -> item passed all ops, *out_item is set (possibly transformed)
+ *   0  -> item filtered out (continue)
+ *  -1  -> pipeline should STOP (take limit reached) */
+static int lazy_run_item(ASTNode *ops, ASTNode *item, ASTNode **out_item,
+                         int *counters) {
+    ASTNode *cur = item;
+    int op_idx = 0;
+    for (ASTNode *op = ops; op; op = op->right, op_idx++) {
+        const char *name = op->id;
+        if (strcmp(name, "where") == 0 || strcmp(name, "filter") == 0) {
+            if (!lazy_truthy(call_lambda(op->left, cur))) return 0;
+        } else if (strcmp(name, "select") == 0 || strcmp(name, "map") == 0) {
+            cur = call_lambda(op->left, cur);
+            if (!cur) return 0;
+        } else if (strcmp(name, "take") == 0) {
+            if (counters[op_idx] >= op->value) return -1;
+            counters[op_idx]++;
+        } else if (strcmp(name, "skip") == 0) {
+            if (counters[op_idx] < op->value) { counters[op_idx]++; return 0; }
+        }
+    }
+    *out_item = cur;
+    return 1;
+}
+
+/* Terminal dispatch — drains pipeline and produces __ret__.
+ * Returns 1 if handled, 0 if t_name is not a known terminal (caller falls
+ * through to allow other methods on the synthesized list, etc). */
+static int lazy_terminal(ASTNode *lazy_node, ASTNode *node) {
+    const char *t_name = node->id;
+    if (!t_name) return 0;
+    int is_toList  = (strcmp(t_name, "toList") == 0 || strcmp(t_name, "toArray") == 0);
+    int is_count   = (strcmp(t_name, "count") == 0);
+    int is_sum     = (strcmp(t_name, "sum") == 0);
+    int is_first   = (strcmp(t_name, "first") == 0);
+    int is_forEach = (strcmp(t_name, "forEach") == 0);
+    int is_reduce  = (strcmp(t_name, "reduce") == 0);
+    int is_any     = (strcmp(t_name, "any") == 0);
+    int is_every   = (strcmp(t_name, "every") == 0);
+    if (!(is_toList || is_count || is_sum || is_first || is_forEach ||
+          is_reduce || is_any || is_every)) return 0;
+
+    ASTNode *ops = lazy_node->right;
+    ASTNode *src = lazy_node->left;
+    int n_ops = 0;
+    for (ASTNode *o = ops; o; o = o->right) n_ops++;
+    int *counters = n_ops > 0 ? (int*)calloc((size_t)n_ops, sizeof(int)) : NULL;
+
+    ASTNode *t_lam = NULL;
+    ASTNode *reduce_acc = NULL;
+    if (is_reduce) {
+        /* reduce(init, fn): args via node->right (init) and ->right->right (fn) */
+        ASTNode *init_arg = node->right;
+        ASTNode *fn_arg = init_arg ? init_arg->right : NULL;
+        if (init_arg) {
+            /* Materialize init through evaluation so e.g. literals/IDs resolve. */
+            ASTNode *iv = build_item_from_value(init_arg);
+            reduce_acc = iv ? iv : init_arg;
+        }
+        t_lam = lazy_resolve_lambda_arg(fn_arg);
+    } else if (is_forEach || is_any || is_every) {
+        t_lam = lazy_resolve_lambda_arg(node->right);
+    }
+
+    ASTNode *result = is_toList ? create_list_node(NULL) : NULL;
+    long long count = 0;
+    double sum_acc = 0.0; int sum_is_int = 1;
+    ASTNode *first_out = NULL;
+    int any_match = 0, every_match = 1;
+
+    ASTNode *item = src ? src->left : NULL;
+    while (item) {
+        ASTNode *out = item;
+        int r = lazy_run_item(ops, item, &out, counters);
+        if (r == -1) break;
+        if (r == 0) { item = item->next; continue; }
+        count++;
+        if (is_toList) {
+            te_list_append(result, build_item_from_value(out));
+        } else if (is_sum) {
+            double v = out->str_value ? atof(out->str_value) : (double)out->value;
+            if (v != (double)(long long)v) sum_is_int = 0;
+            sum_acc += v;
+        } else if (is_first) {
+            first_out = build_item_from_value(out);
+            break;
+        } else if (is_forEach && t_lam) {
+            call_lambda(t_lam, out);
+        } else if (is_reduce && t_lam && reduce_acc) {
+            /* call fn(acc, item) — link via ->right like standard reduce path */
+            ASTNode *saved_right = reduce_acc->right;
+            reduce_acc->right = out;
+            ASTNode *r2 = call_lambda(t_lam, reduce_acc);
+            reduce_acc->right = saved_right;
+            if (r2) reduce_acc = r2;
+        } else if (is_any && t_lam) {
+            if (lazy_truthy(call_lambda(t_lam, out))) { any_match = 1; break; }
+        } else if (is_every && t_lam) {
+            if (!lazy_truthy(call_lambda(t_lam, out))) { every_match = 0; break; }
+        }
+        item = item->next;
+    }
+    if (counters) free(counters);
+
+    if (is_toList) { add_or_update_variable("__ret__", result); return 1; }
+    if (is_count)  { add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)count, NULL, NULL)); return 1; }
+    if (is_sum) {
+        if (sum_is_int && sum_acc == (double)(long long)sum_acc)
+            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)sum_acc, NULL, NULL));
+        else {
+            char buf[64]; snprintf(buf, sizeof(buf), "%g", sum_acc);
+            add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+        }
+        return 1;
+    }
+    if (is_first) {
+        add_or_update_variable("__ret__", first_out ? first_out : create_ast_leaf("NULL", 0, NULL, NULL));
+        return 1;
+    }
+    if (is_forEach) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return 1; }
+    if (is_reduce)  { add_or_update_variable("__ret__", reduce_acc ? reduce_acc : create_ast_leaf("NULL", 0, NULL, NULL)); return 1; }
+    if (is_any)     { add_or_update_variable("__ret__", create_ast_leaf_number("INT", any_match,   NULL, NULL)); return 1; }
+    if (is_every)   { add_or_update_variable("__ret__", create_ast_leaf_number("INT", every_match, NULL, NULL)); return 1; }
+    return 0;
+}
+
 static void interpret_call_method(ASTNode *node) {
     ASTNode *objNode = node->left;
+
+    /* ===== v0.0.12 #5 Fusion peephole: where(p).{select|map|first|find|firstWhere|sum} =====
+     * Detect `xs.where(p).OUTER(...)` where xs is an ID resolving to a LIST.
+     * Avoids materializing the intermediate filtered list. Falls through to
+     * standard chained-call handling if pattern doesn't match. */
+    if (objNode && objNode->type && strcmp(objNode->type, "CALL_METHOD") == 0 &&
+        objNode->id && node->id) {
+        const char *inner_m = objNode->id;
+        const char *outer_m = node->id;
+        int inner_is_where = (strcmp(inner_m, "where") == 0 || strcmp(inner_m, "filter") == 0);
+        int outer_kind = 0; /* 1=map,2=first,3=sum */
+        if      (strcmp(outer_m, "select") == 0 || strcmp(outer_m, "map") == 0) outer_kind = 1;
+        else if (strcmp(outer_m, "first")  == 0 || strcmp(outer_m, "find") == 0 ||
+                 strcmp(outer_m, "firstWhere") == 0) outer_kind = 2;
+        else if (strcmp(outer_m, "sum")    == 0) outer_kind = 3;
+        ASTNode *inner_lhs = objNode->left;
+        if (inner_is_where && outer_kind &&
+            inner_lhs && inner_lhs->type && inner_lhs->id &&
+            (strcmp(inner_lhs->type, "ID") == 0 || strcmp(inner_lhs->type, "IDENTIFIER") == 0)) {
+            Variable *lv = find_variable(inner_lhs->id);
+            if (lv && lv->type && strcmp(lv->type, "LIST") == 0) {
+                ASTNode *list = (ASTNode*)(intptr_t)lv->value.object_value;
+                /* Resolve predicate (inner arg) */
+                ASTNode *pred_arg = objNode->right;
+                ASTNode *pred = NULL;
+                if (pred_arg && pred_arg->type && strcmp(pred_arg->type, "LAMBDA") == 0) pred = pred_arg;
+                else if (pred_arg && pred_arg->type &&
+                         (strcmp(pred_arg->type, "ID") == 0 || strcmp(pred_arg->type, "IDENTIFIER") == 0)) {
+                    Variable *fv = find_variable(pred_arg->id);
+                    if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0)
+                        pred = (ASTNode*)(intptr_t)fv->value.object_value;
+                }
+                /* Resolve outer action lambda (if any: select/firstWhere/find take fn; first/sum/firstWhere optional) */
+                ASTNode *act_arg = node->right;
+                ASTNode *act = NULL;
+                int outer_needs_lambda = (outer_kind == 1 ||
+                                          strcmp(outer_m, "find") == 0 ||
+                                          strcmp(outer_m, "firstWhere") == 0);
+                if (act_arg && act_arg->type && strcmp(act_arg->type, "LAMBDA") == 0) act = act_arg;
+                else if (act_arg && act_arg->type &&
+                         (strcmp(act_arg->type, "ID") == 0 || strcmp(act_arg->type, "IDENTIFIER") == 0)) {
+                    Variable *fv = find_variable(act_arg->id);
+                    if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0)
+                        act = (ASTNode*)(intptr_t)fv->value.object_value;
+                }
+                /* For find/firstWhere, treat outer fn as ADDITIONAL predicate (and-combined).
+                 * For plain first(), no act needed. For sum, no act needed. */
+                if (pred && list && (!outer_needs_lambda || act)) {
+                    /* For first(): outer_kind=2, act may be NULL (plain .first()) or a predicate (find/firstWhere). */
+                    int is_find_variant = (outer_kind == 2 && act != NULL);
+                    ASTNode *result = NULL;
+                    double sum_acc = 0.0; int sum_is_int = 1;
+                    if (outer_kind == 1) result = create_list_node(NULL);
+                    ASTNode *item = list->left;
+                    while (item) {
+                        ASTNode *pr = call_lambda(pred, item);
+                        int truthy = 0;
+                        if (pr) {
+                            if (pr->type && strcmp(pr->type, "STRING") == 0) {
+                                truthy = (pr->str_value && pr->str_value[0]) ? 1 : 0;
+                            } else if (pr->type && strcmp(pr->type, "NULL") == 0) {
+                                truthy = 0;
+                            } else {
+                                truthy = (evaluate_expression(pr) != 0) ? 1 : 0;
+                            }
+                        }
+                        if (truthy) {
+                            if (outer_kind == 1) {
+                                ASTNode *mapped = call_lambda(act, item);
+                                if (mapped) te_list_append(result, mapped);
+                            } else if (outer_kind == 2) {
+                                if (is_find_variant) {
+                                    ASTNode *ar = call_lambda(act, item);
+                                    int at = 0;
+                                    if (ar) {
+                                        if (ar->type && strcmp(ar->type, "STRING") == 0)
+                                            at = (ar->str_value && ar->str_value[0]) ? 1 : 0;
+                                        else if (ar->type && strcmp(ar->type, "NULL") == 0)
+                                            at = 0;
+                                        else
+                                            at = (evaluate_expression(ar) != 0) ? 1 : 0;
+                                    }
+                                    if (at) {
+                                        add_or_update_variable("__ret__", build_item_from_value(item));
+                                        return;
+                                    }
+                                } else {
+                                    add_or_update_variable("__ret__", build_item_from_value(item));
+                                    return;
+                                }
+                            } else if (outer_kind == 3) {
+                                double v = item->str_value ? atof(item->str_value) : (double)item->value;
+                                if (v != (double)(long long)v) sum_is_int = 0;
+                                sum_acc += v;
+                            }
+                        }
+                        item = item->next;
+                    }
+                    if (outer_kind == 1) {
+                        add_or_update_variable("__ret__", result);
+                        return;
+                    }
+                    if (outer_kind == 2) {
+                        add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                        return;
+                    }
+                    if (outer_kind == 3) {
+                        if (sum_is_int && sum_acc == (double)(long long)sum_acc) {
+                            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)sum_acc, NULL, NULL));
+                        } else {
+                            char buf[64]; snprintf(buf, sizeof(buf), "%g", sum_acc);
+                            add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+    }
 
     /* v0.0.11: chained method/function call — `a.foo().bar()` or `foo().bar()`.
      * Evaluate the inner call first, bind result to a unique temp variable,
@@ -8031,6 +8711,7 @@ static void interpret_call_method(ASTNode *node) {
              * via object_value, so synthesize a wrapper that points to it. */
             ASTNode *inner = (ASTNode*)(intptr_t)rv->value.object_value;
             holder->left = inner ? inner->left : NULL;
+            holder->right = inner ? inner->right : NULL;  /* v0.0.12 #8: preserve LAZY_ITER op chain */
             holder->str_value = inner ? inner->str_value : NULL;
             holder->value = inner ? inner->value : 0;
             add_or_update_variable(tmp, holder);
@@ -8308,6 +8989,32 @@ static void interpret_call_method(ASTNode *node) {
         // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
     }
 
+    /* ===== v0.0.12 #8 Lazy iterators dispatch =====
+     * If LHS resolves to a LAZY_ITER, dispatch intermediate/terminal methods
+     * here BEFORE the LIST handlers. */
+    if (v && v->type && strcmp(v->type, "LAZY_ITER") == 0 && node->id) {
+        ASTNode *lz = (ASTNode*)(intptr_t)v->value.object_value;
+        const char *m = node->id;
+        /* Intermediate: where/filter/select/map (lambda) */
+        if (strcmp(m, "where") == 0 || strcmp(m, "filter") == 0 ||
+            strcmp(m, "select") == 0 || strcmp(m, "map") == 0) {
+            ASTNode *lam = lazy_resolve_lambda_arg(node->right);
+            if (lam) {
+                add_or_update_variable("__ret__", lazy_extend(lz, NULL, m, lam, 0));
+                return;
+            }
+        }
+        /* Intermediate: take/skip (int arg) */
+        if (strcmp(m, "take") == 0 || strcmp(m, "skip") == 0) {
+            int n = node->right ? (int)evaluate_expression(node->right) : 0;
+            add_or_update_variable("__ret__", lazy_extend(lz, NULL, m, NULL, n));
+            return;
+        }
+        /* Terminal: toList/toArray/count/sum/first/forEach/reduce/any/every */
+        if (lazy_terminal(lz, node)) return;
+        /* Unknown method on LAZY_ITER — fall through (will error or be a no-op). */
+    }
+
     /* Fase 1b: métodos built-in en LIST: push, pop */
     if (v && v->type && strcmp(v->type, "LIST") == 0) {
         ASTNode *list = (ASTNode*)(intptr_t)v->value.object_value;
@@ -8342,7 +9049,12 @@ static void interpret_call_method(ASTNode *node) {
                 strcmp(node->id, "selectMany") == 0 ||
                 strcmp(node->id, "groupBy") == 0 ||
                 strcmp(node->id, "orderBy") == 0 ||
-                strcmp(node->id, "orderByDescending") == 0)) {
+                strcmp(node->id, "orderByDescending") == 0 ||
+                strcmp(node->id, "distinctBy") == 0 ||
+                strcmp(node->id, "aggregate") == 0 ||
+                strcmp(node->id, "fold") == 0 ||
+                strcmp(node->id, "toMap") == 0 ||
+                strcmp(node->id, "toDictionary") == 0)) {
             ASTNode *arg = node->right;
             ASTNode *fn = NULL;
             if (arg && arg->type && strcmp(arg->type, "LAMBDA") == 0) {
@@ -8364,6 +9076,11 @@ static void interpret_call_method(ASTNode *node) {
             else if (strcmp(fname, "select") == 0) fname = "map";
             else if (strcmp(fname, "all") == 0) fname = "every";
             else if (strcmp(fname, "firstWhere") == 0) fname = "find";
+            else if (strcmp(fname, "aggregate") == 0) fname = "reduce";
+            else if (strcmp(fname, "fold") == 0) fname = "reduce";
+            else if (strcmp(fname, "toDictionary") == 0) fname = "toMap";
+            /* Phase 2 fast-path: pre-analyse the lambda body once. */
+            FastLambda fl; fast_lambda_analyze(fn, &fl);
             if (strcmp(fname, "map") == 0) {
                 ASTNode *result = create_list_node(NULL);
                 ASTNode *item = list->left;
@@ -8378,6 +9095,22 @@ static void interpret_call_method(ASTNode *node) {
             if (strcmp(fname, "filter") == 0) {
                 ASTNode *result = create_list_node(NULL);
                 ASTNode *item = list->left;
+                if (fl.spec != SPEC_NONE) {
+                    int ok = 1;
+                    while (item) {
+                        double v; int vint;
+                        if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
+                        if (v != 0.0) te_list_append(result, build_item_from_value(item));
+                        item = item->next;
+                    }
+                    if (ok) {
+                        add_or_update_variable("__ret__", result);
+                        return;
+                    }
+                    /* fallback: rebuild a fresh list (cannot reuse partial). */
+                    result = create_list_node(NULL);
+                    item = list->left;
+                }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     int truthy = 0;
@@ -8446,6 +9179,23 @@ static void interpret_call_method(ASTNode *node) {
             }
             if (strcmp(fname, "find") == 0) {
                 ASTNode *item = list->left;
+                if (fl.spec != SPEC_NONE) {
+                    int ok = 1;
+                    while (item) {
+                        double v; int vint;
+                        if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
+                        if (v != 0.0) {
+                            add_or_update_variable("__ret__", build_item_from_value(item));
+                            return;
+                        }
+                        item = item->next;
+                    }
+                    if (ok) {
+                        add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                        return;
+                    }
+                    item = list->left;
+                }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     if (r && evaluate_expression(r) != 0) {
@@ -8471,6 +9221,20 @@ static void interpret_call_method(ASTNode *node) {
             if (strcmp(fname, "every") == 0) {
                 ASTNode *item = list->left;
                 int all = 1;
+                if (fl.spec != SPEC_NONE) {
+                    int ok = 1;
+                    while (item) {
+                        double v; int vint;
+                        if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
+                        if (v == 0.0) { all = 0; break; }
+                        item = item->next;
+                    }
+                    if (ok) {
+                        add_or_update_variable("__ret__", create_ast_leaf_number("INT", all, NULL, NULL));
+                        return;
+                    }
+                    item = list->left; all = 1;
+                }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     if (!r || evaluate_expression(r) == 0) { all = 0; break; }
@@ -8483,6 +9247,20 @@ static void interpret_call_method(ASTNode *node) {
             if (strcmp(fname, "none") == 0) {
                 ASTNode *item = list->left;
                 int none_match = 1;
+                if (fl.spec != SPEC_NONE) {
+                    int ok = 1;
+                    while (item) {
+                        double v; int vint;
+                        if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
+                        if (v != 0.0) { none_match = 0; break; }
+                        item = item->next;
+                    }
+                    if (ok) {
+                        add_or_update_variable("__ret__", create_ast_leaf_number("INT", none_match, NULL, NULL));
+                        return;
+                    }
+                    item = list->left; none_match = 1;
+                }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     if (r && evaluate_expression(r) != 0) { none_match = 0; break; }
@@ -8494,6 +9272,21 @@ static void interpret_call_method(ASTNode *node) {
             if (strcmp(fname, "lastWhere") == 0) {
                 ASTNode *item = list->left;
                 ASTNode *last_match = NULL;
+                if (fl.spec != SPEC_NONE) {
+                    int ok = 1;
+                    while (item) {
+                        double v; int vint;
+                        if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
+                        if (v != 0.0) last_match = item;
+                        item = item->next;
+                    }
+                    if (ok) {
+                        if (last_match) add_or_update_variable("__ret__", build_item_from_value(last_match));
+                        else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                        return;
+                    }
+                    item = list->left; last_match = NULL;
+                }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     if (r && evaluate_expression(r) != 0) last_match = item;
@@ -8506,6 +9299,54 @@ static void interpret_call_method(ASTNode *node) {
             if (strcmp(fname, "countWhere") == 0) {
                 ASTNode *item = list->left;
                 int cnt = 0;
+                if (fl.spec != SPEC_NONE) {
+                    int ok = 1;
+#ifdef TE_HAVE_OPENMP
+                    /* Parallel path: count list, materialize pointers, parallel reduce. */
+                    if (te_openmp_enabled()) {
+                        int n = 0;
+                        for (ASTNode *it = item; it; it = it->next) n++;
+                        if (n >= TE_OMP_MIN_N) {
+                            ASTNode **arr = (ASTNode**)malloc((size_t)n * sizeof(ASTNode*));
+                            int i = 0;
+                            for (ASTNode *it = item; it; it = it->next) arr[i++] = it;
+                            long long total = 0; int fail = 0;
+                            #pragma omp parallel reduction(+:total)
+                            {
+                                FastLambda fl_local = fl;
+                                fl_local.cached_class = NULL; fl_local.cached_idx = -1;
+                                #pragma omp for schedule(static)
+                                for (int k = 0; k < n; k++) {
+                                    double v; int vint;
+                                    if (!fast_eval(&fl_local, arr[k], &v, &vint)) { fail = 1; }
+                                    else if (v != 0.0) total++;
+                                }
+                            }
+                            free(arr);
+                            if (!fail) {
+                                add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)total, NULL, NULL));
+                                return;
+                            }
+                            /* fall through to sequential fallback */
+                            ok = 0;
+                        }
+                    }
+                    if (ok)
+#endif
+                    {
+                        while (item) {
+                            double v; int vint;
+                            if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
+                            if (v != 0.0) cnt++;
+                            item = item->next;
+                        }
+                        if (ok) {
+                            add_or_update_variable("__ret__", create_ast_leaf_number("INT", cnt, NULL, NULL));
+                            return;
+                        }
+                    }
+                    item = list->left; cnt = 0;
+                }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     if (r && evaluate_expression(r) != 0) cnt++;
@@ -8516,6 +9357,80 @@ static void interpret_call_method(ASTNode *node) {
             }
             if (strcmp(fname, "sumBy") == 0) {
                 ASTNode *item = list->left;
+                /* Fast-path: numeric pattern over OBJECT list — use int64 acc to
+                 * avoid the 32-bit overflow that hits at ~10M-row benches. */
+                if (fl.spec != SPEC_NONE) {
+                    long long iacc = 0; double dacc = 0.0;
+                    int is_int = 1, ok = 1;
+#ifdef TE_HAVE_OPENMP
+                    if (te_openmp_enabled()) {
+                        int n = 0;
+                        for (ASTNode *it = item; it; it = it->next) n++;
+                        if (n >= TE_OMP_MIN_N) {
+                            ASTNode **arr = (ASTNode**)malloc((size_t)n * sizeof(ASTNode*));
+                            int i = 0;
+                            for (ASTNode *it = item; it; it = it->next) arr[i++] = it;
+                            long long itotal = 0; double dtotal = 0.0;
+                            int fail = 0, any_float = 0;
+                            #pragma omp parallel reduction(+:itotal,dtotal)
+                            {
+                                FastLambda fl_local = fl;
+                                fl_local.cached_class = NULL; fl_local.cached_idx = -1;
+                                #pragma omp for schedule(static)
+                                for (int k = 0; k < n; k++) {
+                                    double v; int vint;
+                                    if (!fast_eval(&fl_local, arr[k], &v, &vint)) { fail = 1; continue; }
+                                    if (vint) itotal += (long long)v;
+                                    else { dtotal += v; any_float = 1; }
+                                }
+                            }
+                            free(arr);
+                            if (!fail) {
+                                if (!any_float) {
+                                    if (itotal >= INT_MIN && itotal <= INT_MAX) {
+                                        add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)itotal, NULL, NULL));
+                                    } else {
+                                        char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
+                                        add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                    }
+                                } else {
+                                    char buf[64]; snprintf(buf, sizeof(buf), "%g", dtotal + (double)itotal);
+                                    add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                }
+                                return;
+                            }
+                            ok = 0;
+                        }
+                    }
+                    if (ok)
+#endif
+                    {
+                        while (item) {
+                            double v; int vint;
+                            if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
+                            if (!vint) is_int = 0;
+                            if (is_int) iacc += (long long)v; else dacc += v;
+                            item = item->next;
+                        }
+                        if (ok) {
+                            if (is_int) {
+                                /* Build a NUMBER node carrying the int64 via str_value
+                                 * when it overflows int32, otherwise the usual int slot. */
+                                if (iacc >= INT_MIN && iacc <= INT_MAX) {
+                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)iacc, NULL, NULL));
+                                } else {
+                                    char buf[32]; snprintf(buf, sizeof(buf), "%lld", iacc);
+                                    add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                }
+                            } else {
+                                char buf[64]; snprintf(buf, sizeof(buf), "%g", dacc + (double)iacc);
+                                add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                            }
+                            return;
+                        }
+                    }
+                    item = list->left; /* reset for fallback */
+                }
                 double acc = 0.0;
                 int is_int = 1;
                 while (item) {
@@ -8538,6 +9453,22 @@ static void interpret_call_method(ASTNode *node) {
             if (strcmp(fname, "avgBy") == 0) {
                 ASTNode *item = list->left;
                 double acc = 0.0; int cnt = 0;
+                if (fl.spec != SPEC_NONE) {
+                    int ok = 1;
+                    while (item) {
+                        double v; int vint;
+                        if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
+                        acc += v; cnt++;
+                        item = item->next;
+                    }
+                    if (ok) {
+                        double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
+                        char buf[64]; snprintf(buf, sizeof(buf), "%g", res);
+                        add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                        return;
+                    }
+                    item = list->left; acc = 0.0; cnt = 0;
+                }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     if (r) { acc += evaluate_expression(r); cnt++; }
@@ -8554,6 +9485,22 @@ static void interpret_call_method(ASTNode *node) {
                 ASTNode *best_item = NULL;
                 double best_key = 0.0;
                 int first = 1;
+                if (fl.spec != SPEC_NONE) {
+                    int ok = 1;
+                    while (item) {
+                        double v; int vint;
+                        if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
+                        if (first) { best_key = v; best_item = item; first = 0; }
+                        else if (want_max ? (v > best_key) : (v < best_key)) { best_key = v; best_item = item; }
+                        item = item->next;
+                    }
+                    if (ok) {
+                        if (best_item) add_or_update_variable("__ret__", build_item_from_value(best_item));
+                        else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                        return;
+                    }
+                    item = list->left; best_item = NULL; first = 1; best_key = 0.0;
+                }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     double k = r ? evaluate_expression(r) : 0.0;
@@ -8568,6 +9515,22 @@ static void interpret_call_method(ASTNode *node) {
             if (strcmp(fname, "takeWhile") == 0) {
                 ASTNode *result = create_list_node(NULL);
                 ASTNode *item = list->left;
+                if (fl.spec != SPEC_NONE) {
+                    int ok = 1;
+                    while (item) {
+                        double v; int vint;
+                        if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
+                        if (v == 0.0) break;
+                        te_list_append(result, build_item_from_value(item));
+                        item = item->next;
+                    }
+                    if (ok) {
+                        add_or_update_variable("__ret__", result);
+                        return;
+                    }
+                    result = create_list_node(NULL);
+                    item = list->left;
+                }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     if (!r || evaluate_expression(r) == 0) break;
@@ -8581,6 +9544,25 @@ static void interpret_call_method(ASTNode *node) {
                 ASTNode *result = create_list_node(NULL);
                 ASTNode *item = list->left;
                 int skipping = 1;
+                if (fl.spec != SPEC_NONE) {
+                    int ok = 1;
+                    while (item) {
+                        if (skipping) {
+                            double v; int vint;
+                            if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
+                            if (v == 0.0) skipping = 0;
+                        }
+                        if (!skipping) te_list_append(result, build_item_from_value(item));
+                        item = item->next;
+                    }
+                    if (ok) {
+                        add_or_update_variable("__ret__", result);
+                        return;
+                    }
+                    result = create_list_node(NULL);
+                    item = list->left;
+                    skipping = 1;
+                }
                 while (item) {
                     if (skipping) {
                         ASTNode *r = call_lambda(fn, item);
@@ -8612,62 +9594,138 @@ static void interpret_call_method(ASTNode *node) {
                 return;
             }
             if (strcmp(fname, "groupBy") == 0) {
-                /* Returns LIST of OBJECT_LITERAL {key, items: LIST}. Linear probe
-                 * for key equality (string-compared). Adequate for small/medium N. */
+                /* Returns LIST of OBJECT_LITERAL {key, items: LIST}.
+                 * Fast-path (numeric int key): linear probe over int64 keys;
+                 * for low-cardinality keys (typical: groupBy day, status, bucket)
+                 * this is ~50× faster than per-item call_lambda + strcmp.
+                 * Slow path is the original string-keyed implementation. */
                 ASTNode *result = create_list_node(NULL);
                 ASTNode *item = list->left;
-                while (item) {
-                    ASTNode *kr = call_lambda(fn, item);
-                    char *key_str = kr ? get_node_string(kr) : strdup("");
-                    /* find existing group */
-                    ASTNode *gcur = result->left;
-                    ASTNode *found_group = NULL;
-                    while (gcur) {
-                        if (gcur->type && strcmp(gcur->type, "OBJECT_LITERAL") == 0) {
-                            ASTNode *kvs = gcur->left;
-                            while (kvs) {
-                                if (kvs->id && strcmp(kvs->id, "key") == 0 && kvs->left) {
-                                    char *gk = get_node_string(kvs->left);
-                                    int eq = (gk && key_str && strcmp(gk, key_str) == 0);
-                                    if (gk) free(gk);
-                                    if (eq) { found_group = gcur; break; }
-                                }
-                                kvs = kvs->next;
+                if (fl.spec != SPEC_NONE && (fl.spec == SPEC_ATTR || fl.spec == SPEC_MOD_K || fl.spec == SPEC_IDENT)) {
+                    int cap = 16, nkeys = 0;
+                    long long *bk = (long long*)malloc(cap * sizeof(long long));
+                    ASTNode **bg = (ASTNode**)malloc(cap * sizeof(ASTNode*));
+                    int ok = 1;
+                    while (item) {
+                        double v; int vint;
+                        if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
+                        long long key = (long long)v;
+                        int idx_g = -1;
+                        for (int g = 0; g < nkeys; g++) if (bk[g] == key) { idx_g = g; break; }
+                        ASTNode *group_items;
+                        if (idx_g < 0) {
+                            if (nkeys == cap) {
+                                cap *= 2;
+                                bk = (long long*)realloc(bk, cap * sizeof(long long));
+                                bg = (ASTNode**)realloc(bg, cap * sizeof(ASTNode*));
                             }
+                            bk[nkeys] = key;
+                            ASTNode *grp = (ASTNode*)calloc(1, sizeof(ASTNode));
+                            grp->type = strdup("OBJECT_LITERAL");
+                            char kbuf[32]; snprintf(kbuf, sizeof(kbuf), "%lld", key);
+                            ASTNode *kv_key = create_kv_pair_node("key", create_ast_leaf("STRING", 0, kbuf, NULL));
+                            group_items = create_list_node(NULL);
+                            ASTNode *kv_items = create_kv_pair_node("items", group_items);
+                            grp->left = kv_key;
+                            kv_key->next = kv_items;
+                            te_list_append(result, grp);
+                            bg[nkeys] = group_items;
+                            nkeys++;
+                        } else {
+                            group_items = bg[idx_g];
                         }
-                        if (found_group) break;
-                        gcur = gcur->next;
-                    }
-                    if (!found_group) {
-                        /* build new group: OBJECT_LITERAL with key + items=LIST */
-                        ASTNode *grp = (ASTNode*)calloc(1, sizeof(ASTNode));
-                        grp->type = strdup("OBJECT_LITERAL");
-                        ASTNode *kv_key = create_kv_pair_node("key", create_ast_leaf("STRING", 0, key_str, NULL));
-                        ASTNode *items_list = create_list_node(NULL);
-                        ASTNode *kv_items = create_kv_pair_node("items", items_list);
-                        grp->left = kv_key;
-                        kv_key->next = kv_items;
-                        te_list_append(result, grp);
-                        found_group = grp;
-                    }
-                    /* append item to found_group.items */
-                    ASTNode *kvs = found_group->left;
-                    while (kvs) {
-                        if (kvs->id && strcmp(kvs->id, "items") == 0 && kvs->left) {
-                            te_list_append(kvs->left, build_item_from_value(item));
-                            break;
+                        {
+                            ASTNode *w = build_object_wrapper_pooled(item);
+                            te_list_append(group_items, w ? w : build_item_from_value(item));
                         }
-                        kvs = kvs->next;
+                        item = item->next;
                     }
-                    free(key_str);
-                    item = item->next;
+                    free(bk); free(bg);
+                    if (ok) {
+                        add_or_update_variable("__ret__", result);
+                        return;
+                    }
+                    /* fallback: rebuild from scratch */
+                    result = create_list_node(NULL);
+                    item = list->left;
+                }
+                /* Slow path (string keys via lambda eval): replace O(n^2) linear
+                 * scan over groups with open-addressing hash table. Critical when
+                 * grouping 100K+ rows by a string attribute. */
+                {
+                    size_t hcap = 64;
+                    size_t hcount = 0;
+                    char    **hk = (char**)calloc(hcap, sizeof(char*));
+                    ASTNode **hv = (ASTNode**)calloc(hcap, sizeof(ASTNode*));
+                    while (item) {
+                        ASTNode *kr = call_lambda(fn, item);
+                        char *key_str = kr ? get_node_string(kr) : strdup("");
+                        /* FNV-1a 32-bit hash */
+                        uint32_t h = 2166136261u;
+                        for (const unsigned char *p = (const unsigned char*)key_str; *p; p++) {
+                            h ^= *p; h *= 16777619u;
+                        }
+                        size_t mask = hcap - 1;
+                        size_t i_h = (size_t)h & mask;
+                        while (hk[i_h] && strcmp(hk[i_h], key_str) != 0) i_h = (i_h + 1) & mask;
+                        ASTNode *group_items;
+                        if (!hk[i_h]) {
+                            hk[i_h] = key_str;   /* hash table owns this strdup */
+                            ASTNode *grp = (ASTNode*)calloc(1, sizeof(ASTNode));
+                            grp->type = strdup("OBJECT_LITERAL");
+                            ASTNode *kv_key = create_kv_pair_node("key",
+                                create_ast_leaf("STRING", 0, key_str, NULL));
+                            group_items = create_list_node(NULL);
+                            ASTNode *kv_items = create_kv_pair_node("items", group_items);
+                            grp->left = kv_key;
+                            kv_key->next = kv_items;
+                            te_list_append(result, grp);
+                            hv[i_h] = group_items;
+                            hcount++;
+                            /* Grow at 50% load */
+                            if (hcount * 2 >= hcap) {
+                                size_t new_cap = hcap * 2;
+                                char    **nhk = (char**)calloc(new_cap, sizeof(char*));
+                                ASTNode **nhv = (ASTNode**)calloc(new_cap, sizeof(ASTNode*));
+                                size_t nmask = new_cap - 1;
+                                for (size_t k = 0; k < hcap; k++) {
+                                    if (!hk[k]) continue;
+                                    uint32_t h2 = 2166136261u;
+                                    for (const unsigned char *p = (const unsigned char*)hk[k]; *p; p++) {
+                                        h2 ^= *p; h2 *= 16777619u;
+                                    }
+                                    size_t j = (size_t)h2 & nmask;
+                                    while (nhk[j]) j = (j + 1) & nmask;
+                                    nhk[j] = hk[k]; nhv[j] = hv[k];
+                                }
+                                free(hk); free(hv);
+                                hk = nhk; hv = nhv; hcap = new_cap;
+                            }
+                        } else {
+                            group_items = hv[i_h];
+                            free(key_str);  /* duplicate of existing key — drop */
+                        }
+                        {
+                            ASTNode *w = build_object_wrapper_pooled(item);
+                            te_list_append(group_items, w ? w : build_item_from_value(item));
+                        }
+                        item = item->next;
+                    }
+                    /* Free hash table: hk[] strings are owned by us (not aliased
+                     * into result tree — STRING leaves were created via intern). */
+                    for (size_t k = 0; k < hcap; k++) if (hk[k]) free(hk[k]);
+                    free(hk); free(hv);
                 }
                 add_or_update_variable("__ret__", result);
                 return;
             }
             if (strcmp(fname, "orderBy") == 0 || strcmp(fname, "orderByDescending") == 0) {
                 int descending = (strcmp(fname, "orderByDescending") == 0);
-                /* Materialize items + their keys into parallel arrays, sort, rebuild list. */
+                /* Materialize items + their keys into parallel arrays, sort, rebuild list.
+                 * Phase 2: replaced O(n^2) insertion sort with O(n log n) qsort and
+                 * added fast-path key extraction (no call_lambda when lambda is a
+                 * trivial accessor / arithmetic). Sort indices, not the heavy
+                 * ASTNode* themselves, to keep swaps cheap. */
                 int n = list_length(list);
                 if (n <= 0) { add_or_update_variable("__ret__", create_list_node(NULL)); return; }
                 ASTNode **items_arr = (ASTNode**)calloc(n, sizeof(ASTNode*));
@@ -8676,50 +9734,220 @@ static void interpret_call_method(ASTNode *node) {
                 int is_str_key = 0;
                 int i = 0;
                 ASTNode *it = list->left;
-                while (it && i < n) {
-                    ASTNode *k = call_lambda(fn, it);
-                    if (k && k->type && strcmp(k->type, "STRING") == 0) {
-                        is_str_key = 1;
-                        skeys[i] = strdup(k->str_value ? k->str_value : "");
-                    } else if (k) {
-                        keys[i] = evaluate_expression(k);
+                int fast_ok = 0;
+                if (fl.spec != SPEC_NONE) {
+                    fast_ok = 1;
+                    while (it && i < n) {
+                        double v; int vint;
+                        if (!fast_eval(&fl, it, &v, &vint)) { fast_ok = 0; break; }
+                        keys[i] = v;
+                        items_arr[i] = it;
+                        i++; it = it->next;
                     }
-                    items_arr[i] = it;
-                    i++; it = it->next;
+                    if (!fast_ok) {
+                        /* Reset and continue via slow path below. */
+                        i = 0; it = list->left;
+                        memset(keys, 0, n * sizeof(double));
+                        memset(items_arr, 0, n * sizeof(ASTNode*));
+                    }
                 }
-                /* Simple insertion sort — O(n^2) but stable + small. */
-                for (int a = 1; a < n; a++) {
-                    ASTNode *cur_item = items_arr[a];
-                    double cur_k = keys[a];
-                    char *cur_s = skeys[a];
-                    int b = a - 1;
-                    while (b >= 0) {
-                        int cmp;
-                        if (is_str_key) {
-                            int c = strcmp(skeys[b] ? skeys[b] : "", cur_s ? cur_s : "");
-                            cmp = descending ? (c < 0) : (c > 0);
-                        } else {
-                            cmp = descending ? (keys[b] < cur_k) : (keys[b] > cur_k);
+                if (!fast_ok) {
+                    while (it && i < n) {
+                        ASTNode *k = call_lambda(fn, it);
+                        if (k && k->type && strcmp(k->type, "STRING") == 0) {
+                            is_str_key = 1;
+                            skeys[i] = strdup(k->str_value ? k->str_value : "");
+                        } else if (k) {
+                            keys[i] = evaluate_expression(k);
                         }
-                        if (!cmp) break;
-                        items_arr[b+1] = items_arr[b];
-                        keys[b+1] = keys[b];
-                        skeys[b+1] = skeys[b];
-                        b--;
+                        items_arr[i] = it;
+                        i++; it = it->next;
                     }
-                    items_arr[b+1] = cur_item;
-                    keys[b+1] = cur_k;
-                    skeys[b+1] = cur_s;
                 }
+                int *idx = (int*)malloc(n * sizeof(int));
+                for (int a = 0; a < n; a++) idx[a] = a;
+                g_sort_keys_d = keys;
+                g_sort_keys_s = skeys;
+                g_sort_is_str = is_str_key;
+                g_sort_desc   = descending;
+                qsort(idx, (size_t)n, sizeof(int), te_sort_cmp_idx);
                 ASTNode *result = create_list_node(NULL);
+                /* Pool fast-path: if all items are plain OBJECTs (typical for LINQ
+                 * over CSV), allocate wrappers from the bump pool — avoids n×calloc
+                 * and n×strdup. Otherwise fall back to build_item_from_value. */
                 for (int a = 0; a < n; a++) {
-                    te_list_append(result, build_item_from_value(items_arr[a]));
-                    if (skeys[a]) free(skeys[a]);
+                    ASTNode *src = items_arr[idx[a]];
+                    ASTNode *w = build_object_wrapper_pooled(src);
+                    te_list_append(result, w ? w : build_item_from_value(src));
                 }
-                free(items_arr); free(keys); free(skeys);
+                for (int a = 0; a < n; a++) if (skeys[a]) free(skeys[a]);
+                free(items_arr); free(keys); free(skeys); free(idx);
                 add_or_update_variable("__ret__", result);
                 return;
             }
+            if (strcmp(fname, "distinctBy") == 0) {
+                /* Like distinct but keys come from a lambda. int64 fast-path via
+                 * fast_eval (open-addressing hash); else string-keyed hash. */
+                ASTNode *result = create_list_node(NULL);
+                ASTNode *item = list->left;
+                if (fl.spec != SPEC_NONE && (fl.spec == SPEC_ATTR || fl.spec == SPEC_MOD_K || fl.spec == SPEC_IDENT)) {
+                    size_t icap = 64, icount = 0;
+                    long long *ikeys = (long long*)calloc(icap, sizeof(long long));
+                    unsigned char *iused = (unsigned char*)calloc(icap, 1);
+                    int ok = 1;
+                    while (item) {
+                        double v; int vint;
+                        if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
+                        long long key = (long long)v;
+                        uint64_t x = (uint64_t)key;
+                        x ^= x >> 33; x *= 0xff51afd7ed558ccdULL;
+                        x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL; x ^= x >> 33;
+                        size_t mask = icap - 1;
+                        size_t i_h = (size_t)x & mask;
+                        while (iused[i_h] && ikeys[i_h] != key) i_h = (i_h + 1) & mask;
+                        if (!iused[i_h]) {
+                            iused[i_h] = 1; ikeys[i_h] = key; icount++;
+                            ASTNode *w = build_object_wrapper_pooled(item);
+                            te_list_append(result, w ? w : build_item_from_value(item));
+                            if (icount * 2 >= icap) {
+                                size_t nc = icap * 2;
+                                long long *nk = (long long*)calloc(nc, sizeof(long long));
+                                unsigned char *nu = (unsigned char*)calloc(nc, 1);
+                                size_t nm = nc - 1;
+                                for (size_t k = 0; k < icap; k++) if (iused[k]) {
+                                    uint64_t x2 = (uint64_t)ikeys[k];
+                                    x2 ^= x2 >> 33; x2 *= 0xff51afd7ed558ccdULL;
+                                    x2 ^= x2 >> 33; x2 *= 0xc4ceb9fe1a85ec53ULL; x2 ^= x2 >> 33;
+                                    size_t j = (size_t)x2 & nm;
+                                    while (nu[j]) j = (j + 1) & nm;
+                                    nu[j] = 1; nk[j] = ikeys[k];
+                                }
+                                free(ikeys); free(iused); ikeys = nk; iused = nu; icap = nc;
+                            }
+                        }
+                        item = item->next;
+                    }
+                    free(ikeys); free(iused);
+                    if (ok) { add_or_update_variable("__ret__", result); return; }
+                    /* fallback */
+                    result = create_list_node(NULL);
+                    item = list->left;
+                }
+                {
+                    size_t scap = 64, scount = 0;
+                    char **skeys = (char**)calloc(scap, sizeof(char*));
+                    while (item) {
+                        ASTNode *kr = call_lambda(fn, item);
+                        char *key_str = kr ? get_node_string(kr) : strdup("");
+                        uint32_t h = 2166136261u;
+                        for (const unsigned char *p = (const unsigned char*)key_str; *p; p++) {
+                            h ^= *p; h *= 16777619u;
+                        }
+                        size_t mask = scap - 1;
+                        size_t i_h = (size_t)h & mask;
+                        while (skeys[i_h] && strcmp(skeys[i_h], key_str) != 0) i_h = (i_h + 1) & mask;
+                        if (skeys[i_h]) {
+                            free(key_str);
+                        } else {
+                            skeys[i_h] = key_str;
+                            scount++;
+                            ASTNode *w = build_object_wrapper_pooled(item);
+                            te_list_append(result, w ? w : build_item_from_value(item));
+                            if (scount * 2 >= scap) {
+                                size_t nc = scap * 2;
+                                char **ns = (char**)calloc(nc, sizeof(char*));
+                                size_t nm = nc - 1;
+                                for (size_t k = 0; k < scap; k++) if (skeys[k]) {
+                                    uint32_t h2 = 2166136261u;
+                                    for (const unsigned char *p = (const unsigned char*)skeys[k]; *p; p++) {
+                                        h2 ^= *p; h2 *= 16777619u;
+                                    }
+                                    size_t j = (size_t)h2 & nm;
+                                    while (ns[j]) j = (j + 1) & nm;
+                                    ns[j] = skeys[k];
+                                }
+                                free(skeys); skeys = ns; scap = nc;
+                            }
+                        }
+                        item = item->next;
+                    }
+                    for (size_t k = 0; k < scap; k++) if (skeys[k]) free(skeys[k]);
+                    free(skeys);
+                }
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+            if (strcmp(fname, "toMap") == 0) {
+                /* toMap(keyFn): builds OBJECT_LITERAL {key1: item1, key2: item2, ...}.
+                 * Last write wins on duplicate keys. Hash table dedupes keys in O(1). */
+                ASTNode *result = (ASTNode*)calloc(1, sizeof(ASTNode));
+                result->type = strdup("OBJECT_LITERAL");
+                ASTNode *tail = NULL;
+                size_t hcap = 64, hcount = 0;
+                char    **hk = (char**)calloc(hcap, sizeof(char*));
+                ASTNode **hv = (ASTNode**)calloc(hcap, sizeof(ASTNode*));
+                ASTNode *item = list->left;
+                while (item) {
+                    ASTNode *kr = call_lambda(fn, item);
+                    char *key_str = kr ? get_node_string(kr) : strdup("");
+                    uint32_t h = 2166136261u;
+                    for (const unsigned char *p = (const unsigned char*)key_str; *p; p++) {
+                        h ^= *p; h *= 16777619u;
+                    }
+                    size_t mask = hcap - 1;
+                    size_t i_h = (size_t)h & mask;
+                    while (hk[i_h] && strcmp(hk[i_h], key_str) != 0) i_h = (i_h + 1) & mask;
+                    ASTNode *val = build_object_wrapper_pooled(item);
+                    if (!val) val = build_item_from_value(item);
+                    if (hk[i_h]) {
+                        ASTNode *pair = hv[i_h];
+                        if (pair->left) free_ast(pair->left);
+                        pair->left = val;
+                        free(key_str);
+                    } else {
+                        hk[i_h] = key_str;
+                        ASTNode *pair = create_kv_pair_node(key_str, val);
+                        /* MAP pairs are linked via ->right (see resolve_to_map /
+                         * te_map_get_hash which iterate cur = cur->right). */
+                        if (!result->left) result->left = pair;
+                        else tail->right = pair;
+                        tail = pair;
+                        hv[i_h] = pair;
+                        hcount++;
+                        if (hcount * 2 >= hcap) {
+                            size_t nc = hcap * 2;
+                            char    **nhk = (char**)calloc(nc, sizeof(char*));
+                            ASTNode **nhv = (ASTNode**)calloc(nc, sizeof(ASTNode*));
+                            size_t nm = nc - 1;
+                            for (size_t k = 0; k < hcap; k++) if (hk[k]) {
+                                uint32_t h2 = 2166136261u;
+                                for (const unsigned char *p = (const unsigned char*)hk[k]; *p; p++) {
+                                    h2 ^= *p; h2 *= 16777619u;
+                                }
+                                size_t j = (size_t)h2 & nm;
+                                while (nhk[j]) j = (j + 1) & nm;
+                                nhk[j] = hk[k]; nhv[j] = hv[k];
+                            }
+                            free(hk); free(hv); hk = nhk; hv = nhv; hcap = nc;
+                        }
+                    }
+                    item = item->next;
+                }
+                for (size_t k = 0; k < hcap; k++) if (hk[k]) free(hk[k]);
+                free(hk); free(hv);
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+        }
+
+        /* ===== v0.0.12 #8 Lazy iterator promotion: xs.lazy() → LAZY_ITER ===== */
+        if (list && node->id && strcmp(node->id, "lazy") == 0) {
+            ASTNode *lz = (ASTNode*)calloc(1, sizeof(ASTNode));
+            lz->type = strdup("LAZY_ITER");
+            lz->left = list;   /* source LIST (shared ref) */
+            lz->right = NULL;  /* empty op chain */
+            add_or_update_variable("__ret__", lz);
+            return;
         }
 
         /* ===== v0.0.11 LINQ: numeric / no-arg methods on LIST ===== */
@@ -8735,7 +9963,8 @@ static void interpret_call_method(ASTNode *node) {
                 strcmp(node->id, "skip") == 0 ||
                 strcmp(node->id, "distinct") == 0 ||
                 strcmp(node->id, "toList") == 0 ||
-                strcmp(node->id, "concat") == 0)) {
+                strcmp(node->id, "concat") == 0 ||
+                strcmp(node->id, "zip") == 0)) {
             const char *fname = node->id;
             if (strcmp(fname, "sum") == 0) {
                 double acc = 0.0; int is_int = 1;
@@ -8827,30 +10056,82 @@ static void interpret_call_method(ASTNode *node) {
                 return;
             }
             if (strcmp(fname, "distinct") == 0) {
+                /* Hash-based dedupe. Two parallel tables (int and string) so
+                 * mixed lists are handled correctly (numeric == numeric only,
+                 * string == string only — matches the previous O(n^2) impl). */
                 ASTNode *result = create_list_node(NULL);
+                size_t icap = 64, scap = 64;
+                size_t icount = 0, scount = 0;
+                long long *ikeys = (long long*)calloc(icap, sizeof(long long));
+                unsigned char *iused = (unsigned char*)calloc(icap, 1);
+                char **skeys = (char**)calloc(scap, sizeof(char*));
                 ASTNode *it = list->left;
                 while (it) {
-                    /* Linear probe — O(n^2). Fine for typical LINQ usage. */
-                    ASTNode *cur = result->left;
-                    int dup = 0;
-                    char *cur_str = NULL;
                     int is_str = (it->type && strcmp(it->type, "STRING") == 0);
-                    double cur_n = 0.0;
-                    if (is_str) cur_str = it->str_value ? it->str_value : "";
-                    else cur_n = it->str_value ? atof(it->str_value) : (double)it->value;
-                    while (cur) {
-                        int cur_is_str = (cur->type && strcmp(cur->type, "STRING") == 0);
-                        if (is_str && cur_is_str) {
-                            if (strcmp(cur->str_value ? cur->str_value : "", cur_str) == 0) { dup = 1; break; }
-                        } else if (!is_str && !cur_is_str) {
-                            double v = cur->str_value ? atof(cur->str_value) : (double)cur->value;
-                            if (v == cur_n) { dup = 1; break; }
+                    int dup = 0;
+                    if (is_str) {
+                        const char *s = it->str_value ? it->str_value : "";
+                        uint32_t h = 2166136261u;
+                        for (const unsigned char *p = (const unsigned char*)s; *p; p++) {
+                            h ^= *p; h *= 16777619u;
                         }
-                        cur = cur->next;
+                        size_t mask = scap - 1;
+                        size_t i_h = (size_t)h & mask;
+                        while (skeys[i_h] && strcmp(skeys[i_h], s) != 0) i_h = (i_h + 1) & mask;
+                        if (skeys[i_h]) dup = 1;
+                        else {
+                            skeys[i_h] = strdup(s);
+                            scount++;
+                            if (scount * 2 >= scap) {
+                                size_t nc = scap * 2;
+                                char **ns = (char**)calloc(nc, sizeof(char*));
+                                size_t nm = nc - 1;
+                                for (size_t k = 0; k < scap; k++) if (skeys[k]) {
+                                    uint32_t h2 = 2166136261u;
+                                    for (const unsigned char *p = (const unsigned char*)skeys[k]; *p; p++) {
+                                        h2 ^= *p; h2 *= 16777619u;
+                                    }
+                                    size_t j = (size_t)h2 & nm;
+                                    while (ns[j]) j = (j + 1) & nm;
+                                    ns[j] = skeys[k];
+                                }
+                                free(skeys); skeys = ns; scap = nc;
+                            }
+                        }
+                    } else {
+                        long long key = it->str_value ? (long long)atof(it->str_value) : (long long)it->value;
+                        /* hash for int64 */
+                        uint64_t x = (uint64_t)key;
+                        x ^= x >> 33; x *= 0xff51afd7ed558ccdULL;
+                        x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL; x ^= x >> 33;
+                        size_t mask = icap - 1;
+                        size_t i_h = (size_t)x & mask;
+                        while (iused[i_h] && ikeys[i_h] != key) i_h = (i_h + 1) & mask;
+                        if (iused[i_h]) dup = 1;
+                        else {
+                            iused[i_h] = 1; ikeys[i_h] = key; icount++;
+                            if (icount * 2 >= icap) {
+                                size_t nc = icap * 2;
+                                long long *nk = (long long*)calloc(nc, sizeof(long long));
+                                unsigned char *nu = (unsigned char*)calloc(nc, 1);
+                                size_t nm = nc - 1;
+                                for (size_t k = 0; k < icap; k++) if (iused[k]) {
+                                    uint64_t x2 = (uint64_t)ikeys[k];
+                                    x2 ^= x2 >> 33; x2 *= 0xff51afd7ed558ccdULL;
+                                    x2 ^= x2 >> 33; x2 *= 0xc4ceb9fe1a85ec53ULL; x2 ^= x2 >> 33;
+                                    size_t j = (size_t)x2 & nm;
+                                    while (nu[j]) j = (j + 1) & nm;
+                                    nu[j] = 1; nk[j] = ikeys[k];
+                                }
+                                free(ikeys); free(iused); ikeys = nk; iused = nu; icap = nc;
+                            }
+                        }
                     }
                     if (!dup) te_list_append(result, build_item_from_value(it));
                     it = it->next;
                 }
+                for (size_t k = 0; k < scap; k++) if (skeys[k]) free(skeys[k]);
+                free(skeys); free(ikeys); free(iused);
                 add_or_update_variable("__ret__", result);
                 return;
             }
@@ -8880,6 +10161,42 @@ static void interpret_call_method(ASTNode *node) {
                 if (other_list) {
                     ASTNode *oi = other_list->left;
                     while (oi) { te_list_append(result, build_item_from_value(oi)); oi = oi->next; }
+                }
+                add_or_update_variable("__ret__", result);
+                return;
+            }
+            if (strcmp(fname, "zip") == 0) {
+                /* zip(other): pair items by index. Returns LIST of OBJECT_LITERAL {left, right}.
+                 * Length = min(len(this), len(other)). KV_PAIR: id=key, left=value,
+                 * right=next-pair-in-map chain (per map convention). */
+                ASTNode *result = create_list_node(NULL);
+                ASTNode *arg = node->right;
+                ASTNode *other_list = NULL;
+                if (arg) {
+                    if (arg->type && strcmp(arg->type, "LIST") == 0) other_list = arg;
+                    else if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+                        Variable *ov = find_variable(arg->id);
+                        if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "LIST") == 0) {
+                            other_list = (ASTNode*)(intptr_t)ov->value.object_value;
+                        }
+                    }
+                }
+                if (!other_list) {
+                    add_or_update_variable("__ret__", result);
+                    return;
+                }
+                ASTNode *a = list->left;
+                ASTNode *b = other_list->left;
+                while (a && b) {
+                    ASTNode *lit = (ASTNode*)calloc(1, sizeof(ASTNode));
+                    lit->type = strdup("OBJECT_LITERAL");
+                    ASTNode *p1 = create_kv_pair_node("left",  build_item_from_value(a));
+                    ASTNode *p2 = create_kv_pair_node("right", build_item_from_value(b));
+                    lit->left = p1;
+                    p1->right = p2;
+                    te_list_append(result, lit);
+                    a = a->next;
+                    b = b->next;
                 }
                 add_or_update_variable("__ret__", result);
                 return;
@@ -13086,6 +14403,46 @@ static void interpret_println(ASTNode *node) {
                     }
                     dbg_printf("Error: attribute '%s' not found in indexed object.\n", a->id);
                     return;
+                }
+            }
+            /* m["k"].attr — MAP-indexed object attr access (toMap result). */
+            ASTNode *map2 = resolve_to_map(o->left);
+            if (map2 && o->right) {
+                const char *key2 = NULL;
+                if (nk_of(o->right) == NK_STRING) key2 = o->right->str_value;
+                else if (nk_of(o->right) == NK_IDENTIFIER || nk_of(o->right) == NK_ID) {
+                    Variable *kv = find_variable(o->right->id);
+                    if (kv && kv->vtype == VAL_STRING) key2 = kv->value.string_value;
+                }
+                if (key2) {
+                    ASTNode *pair = map_find_pair(map2, key2);
+                    ASTNode *val  = pair ? pair->left : NULL;
+                    ObjectNode *iobj = NULL;
+                    if (val && val->type && strcmp(val->type, "OBJECT") == 0) {
+                        if (val->extra) iobj = (ObjectNode*)val->extra;
+                        else iobj = (ObjectNode*)(intptr_t)val->value;
+                    }
+                    if (iobj && iobj->class) {
+                        for (int i = 0; i < iobj->class->attr_count; i++) {
+                            if (strcmp(iobj->class->attributes[i].id, a->id) == 0) {
+                                Variable *attr2 = &iobj->attributes[i];
+                                if (attr2->vtype == VAL_STRING) {
+                                    dbg_printf("%s\n", attr2->value.string_value);
+                                    append_to_stdout(attr2->value.string_value);
+                                    append_to_stdout("\n");
+                                } else if (attr2->vtype == VAL_FLOAT) {
+                                    dbg_printf("%f\n", attr2->value.float_value);
+                                } else {
+                                    dbg_printf("%d\n", attr2->value.int_value);
+                                    char tmpx[32]; snprintf(tmpx, 32, "%d\n", attr2->value.int_value);
+                                    append_to_stdout(tmpx);
+                                }
+                                return;
+                            }
+                        }
+                        dbg_printf("Error: attribute '%s' not found in mapped object.\n", a->id);
+                        return;
+                    }
                 }
             }
             dbg_printf("Error: cannot resolve indexed expression for attribute access.\n");

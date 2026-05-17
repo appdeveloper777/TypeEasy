@@ -1,0 +1,27 @@
+// LINQ distinct / distinctBy — quitar duplicados
+
+let nums = [1, 2, 2, 3, 3, 3, 4, 1, 5];
+
+let unicos = nums.distinct();
+println("unicos=" + unicos.join(","));   // 1,2,3,4,5
+
+class Persona {
+  nombre : string;
+  ciudad : string;
+  __constructor(_n : string, _c : string) {
+    this.nombre = _n;
+    this.ciudad = _c;
+  }
+}
+
+let gente = [
+  new Persona("Ana",   "Lima"),
+  new Persona("Beto",  "Cusco"),
+  new Persona("Carla", "Lima"),
+  new Persona("Dani",  "Cusco"),
+  new Persona("Eli",   "Arequipa")
+];
+
+// distinctBy: una persona por ciudad
+let porCiudad = gente.distinctBy(fn(p) => p.ciudad);
+println("ciudades.unicas=" + porCiudad.length);   // 3

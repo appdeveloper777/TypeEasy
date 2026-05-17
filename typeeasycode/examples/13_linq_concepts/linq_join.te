@@ -1,0 +1,12 @@
+// LINQ join — concatenar elementos con separador (terminal de strings)
+
+let palabras = ["hola", "mundo", "TypeEasy"];
+
+println("default=" + palabras.join(","));         // hola,mundo,TypeEasy
+println("pipe="    + palabras.join(" | "));       // hola | mundo | TypeEasy
+
+let nums = [1, 2, 3, 4, 5];
+println("nums="    + nums.join("-"));             // 1-2-3-4-5
+
+// Combinar con select (inline en println por sintaxis de cadenas)
+println("etiquetas=" + nums.select(fn(n) => "n" + n).join(","));

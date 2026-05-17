@@ -1,0 +1,36 @@
+// Stress 1M para operadores LINQ aún SIN fast-path:
+//   find/firstWhere, lastWhere, takeWhile, skipWhile, orderBy, orderByDescending,
+//   groupBy.
+//
+//   time docker compose run --rm typeeasy examples/12_linq_csv_10M/bench_linq_1M_pending.te
+
+class Producto {
+  nombre : string;
+  precio : int;
+}
+
+let productos = from "productos_1000000.csv", Producto;
+println("filas=" + productos.length);
+
+let f1 = productos.firstWhere(fn(p) => p.precio > 999);
+println("firstWhere>999=" + f1.precio);
+
+let l1 = productos.lastWhere(fn(p) => p.precio < 2);
+println("lastWhere<2=" + l1.precio);
+
+let tw = productos.takeWhile(fn(p) => p.precio < 500);
+println("takeWhile<500.length=" + tw.length);
+
+let sw = productos.skipWhile(fn(p) => p.precio < 500);
+println("skipWhile<500.length=" + sw.length);
+
+let ob = productos.orderBy(fn(p) => p.precio);
+println("orderBy[0].precio=" + ob[0].precio);
+
+let obd = productos.orderByDescending(fn(p) => p.precio);
+println("orderByDesc[0].precio=" + obd[0].precio);
+
+let gb = productos.groupBy(fn(p) => p.precio % 10);
+println("groupBy.keys=" + gb.length);
+
+println("OK");
