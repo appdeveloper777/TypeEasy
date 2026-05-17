@@ -1,0 +1,17 @@
+// LINQ fusion — el intérprete detecta where→select/count/first/sum
+// y los ejecuta en una sola pasada (sin materializar la intermedia).
+
+let nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+// where + select (fusionado)
+println("pares*10=" + nums.where(fn(n) => n % 2 == 0).select(fn(n) => n * 10).join(","));
+// 20,40,60,80,100
+
+// where + count (equivalente directo: countWhere)
+println("countPares=" + nums.countWhere(fn(n) => n % 2 == 0));         // 5
+
+// where + first (fusionado, corto-circuito)
+println("primerPar="  + nums.where(fn(n) => n % 2 == 0).first());      // 2
+
+// where + sum (fusionado)
+println("sumPares="   + nums.where(fn(n) => n % 2 == 0).sum());        // 30

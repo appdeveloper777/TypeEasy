@@ -1,0 +1,25 @@
+// LINQ toMap / toDictionary — indexar lista por clave
+
+class Producto {
+  cat : string;
+  nombre : string;
+  precio : int;
+  __constructor(_c : string, _n : string, _p : int) {
+    this.cat = _c;
+    this.nombre = _n;
+    this.precio = _p;
+  }
+}
+
+let productos = [
+  new Producto("A", "manzana", 15),
+  new Producto("B", "pera",    25),
+  new Producto("C", "uva",     30)
+];
+
+// toMap(keySelector) — el valor es el objeto completo
+let byCat = productos.toMap(fn(p) => p.cat);
+
+println("A.precio=" + byCat["A"].precio);  // 15
+println("B.nombre=" + byCat["B"].nombre);  // pera
+println("C.precio=" + byCat["C"].precio);  // 30

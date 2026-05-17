@@ -1,0 +1,24 @@
+// LINQ lazy — iteradores diferidos (no materializan intermedias)
+// xs.lazy() crea un pipeline; ops intermedias: where, select, take, skip
+// Terminales: toList, count, sum, first, forEach, reduce, any, every
+
+let nums = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9];
+
+// Pipeline completo en una pasada
+println("r1=" + nums.lazy().where(fn(n) => n > 3).select(fn(n) => n * 10).toList().join(","));
+
+// Corto-circuito con take
+println("r2=" + nums.lazy().where(fn(n) => n > 2).take(4).sum());      // 3+4+5+9 = 21
+
+// Skip + first
+println("r3=" + nums.lazy().skip(5).first());                          // 9
+
+// Conteo lazy
+println("r4=" + nums.lazy().where(fn(n) => n % 2 == 1).count());
+
+// Cuantificadores con corto-circuito
+println("r5=" + nums.lazy().any(fn(n) => n > 8));
+println("r6=" + nums.lazy().every(fn(n) => n > 0));
+
+// reduce sobre pipeline lazy
+println("r7=" + nums.lazy().reduce(0, fn(a, x) => a + x));             // 77

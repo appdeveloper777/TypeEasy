@@ -1,0 +1,28 @@
+// LINQ orderBy / orderByDescending — ordenar por clave proyectada
+
+class Producto {
+  nombre : string;
+  precio : int;
+  __constructor(_n : string, _p : int) {
+    this.nombre = _n;
+    this.precio = _p;
+  }
+}
+
+let productos = [
+  new Producto("manzana", 10),
+  new Producto("pera",    15),
+  new Producto("uva",      8),
+  new Producto("mango",   20)
+];
+
+let asc  = productos.orderBy(fn(p) => p.precio);
+let desc = productos.orderByDescending(fn(p) => p.precio);
+
+let a_first  = asc.first();
+let a_last   = asc.last();
+let d_first  = desc.first();
+
+println("asc.first="  + a_first.nombre);   // uva (8)
+println("asc.last="   + a_last.nombre);    // mango (20)
+println("desc.first=" + d_first.nombre);   // mango (20)

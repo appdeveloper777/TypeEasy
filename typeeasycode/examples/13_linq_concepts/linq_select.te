@@ -1,0 +1,10 @@
+// LINQ select — proyectar cada elemento a otro valor
+// (alias: map)
+
+let nums = [1, 2, 3, 4, 5];
+
+let cuadrados = nums.select(fn(n) => n * n);
+let etiquetas = nums.select(fn(n) => "x" + n);
+
+println("cuadrados=" + cuadrados.join(","));
+println("etiquetas=" + etiquetas.join("|"));

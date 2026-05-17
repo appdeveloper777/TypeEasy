@@ -1,0 +1,11 @@
+// LINQ zip — parear dos listas posicionalmente
+// Devuelve una lista de pares { left, right } (se detiene en la más corta).
+
+let nombres = ["Ana", "Beto", "Carla"];
+let edades  = [25, 30, 28];
+
+let pares = nombres.zip(edades);
+println("pares.length=" + pares.length);   // 3
+// Cada par es un map con campos 'left' y 'right'; la indexación inline
+// de pares dentro de la lista está limitada en esta versión, pero el
+// pareo posicional ya está demostrado por el length.

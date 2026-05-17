@@ -1,0 +1,12 @@
+class Producto { nombre: string; precio: int; }
+let xs = from "/code/examples/12_linq_csv_10M/productos_1000000.csv", Producto;
+println("got=" + xs.length);
+let small10k = xs.takeWhile(fn(p) => p.precio < 11);
+println("small.length=" + small10k.length);
+let ob = small10k.orderBy(fn(p) => p.precio);
+println("ob[0]=" + ob[0].precio);
+let ob2 = small10k.orderByDescending(fn(p) => p.precio);
+println("ob2[0]=" + ob2[0].precio);
+let gb = small10k.groupBy(fn(p) => p.precio % 10);
+println("gb.length=" + gb.length);
+println("OK");

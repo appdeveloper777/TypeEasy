@@ -1,0 +1,30 @@
+// LINQ groupBy — agrupar por clave string (hash interno)
+
+class Item {
+  nombre : string;
+  cat : string;
+  precio : int;
+  __constructor(_n : string, _c : string, _p : int) {
+    this.nombre = _n;
+    this.cat = _c;
+    this.precio = _p;
+  }
+}
+
+let items = [
+  new Item("manzana", "fruta",   10),
+  new Item("pera",    "fruta",   15),
+  new Item("zanahoria", "verdura", 8),
+  new Item("uva",     "fruta",   12),
+  new Item("apio",    "verdura",  5)
+];
+
+// groupBy: contar elementos por categoría vía countWhere
+// (groupBy crea un MAP cat -> [items]; la indexación directa está limitada
+//  en esta versión, por eso usamos countWhere para demostrar el concepto.)
+println("countFrutas="   + items.countWhere(fn(p) => p.cat == "fruta"));    // 3
+println("countVerduras=" + items.countWhere(fn(p) => p.cat == "verdura"));  // 2
+
+// Categorías distintas (paso previo equivalente a las claves del groupBy)
+let cats = items.distinctBy(fn(p) => p.cat);
+println("categorias=" + cats.length);   // 2
