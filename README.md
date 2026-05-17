@@ -28,7 +28,8 @@ TypeEasy es un intérprete / framework experimental escrito principalmente en C 
 ✔️ **Crear endpoints REST** como FastAPI pero con sintaxis TypeEasy <br>
 ✔️ **Crear scripts** para integraciones y automatizaciones
 
-![image](https://github.com/user-attachments/assets/d4617ae8-71f0-4270-9e70-ad00bd6694ab)
+<img width="1910" height="932" alt="image" src="https://github.com/user-attachments/assets/6abbb4f1-9066-44e1-8da6-dfd804cd7d1a" />
+
 
 ---
 
@@ -89,6 +90,65 @@ El CLI detecta automáticamente el binario nativo instalado (Windows installer, 
 
 📖 **Detalles completos, flags, modos `--dev`/`--prod`, instalación nativa y producción con systemd/nginx**:
 👉 https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.0.10
+
+---
+
+
+## 🔌 Crear APIs REST
+
+TypeEasy te permite crear endpoints REST con clases, tipado fuerte y sintaxis simple.
+
+### 🚀 Tu Primer Endpoint
+
+Crea `typeeasycode/apis/proveedores_endpoint.te`:
+
+```ts
+class OrdenDeCompra {
+    proveedor: string; 
+    fecha: string;
+
+    __constructor(_proveedor: string, _fecha: string) {
+        this.proveedor = _proveedor;
+        this.fecha = _fecha;
+    }   
+}
+
+endpoint {
+    [HttpGet("/api/proveedores")]
+    GetProveedores() {
+        let mi_orden = new OrdenDeCompra("Suministros Industriales S.A.", "2025-09-06");
+        return json(mi_orden);
+    }
+}
+```
+
+Levanta el servidor y prueba:
+
+```bash
+docker compose up -d --build api
+curl http://localhost:8080/api/proveedores
+```
+
+**Respuesta:**
+```json
+{
+    "proveedor": "Suministros Industriales S.A.",
+    "fecha": "2025-09-06"
+}
+```
+
+### 📖 Guía Completa de Endpoints
+
+**[→ Ver Guía: Cómo Crear Endpoints con TypeEasy](docs/CREAR_ENDPOINTS.md)**
+
+La guía incluye:
+- ✅ Métodos HTTP (GET, POST, PUT, DELETE)
+- ✅ Clases y tipado fuerte
+- ✅ Parámetros de ruta y query
+- ✅ Request body y validación
+- ✅ Respuestas JSON y XML
+- ✅ Integración con MySQL/PostgreSQL
+- ✅ Ejemplos completos de CRUD
 
 ---
 
@@ -229,64 +289,6 @@ docker compose up -d
 - ✅ Despliegue en producción con Nginx
 - ✅ Solución de problemas
 - ✅ Personalización del chatbot
-
----
-
-## 🔌 Crear APIs REST
-
-TypeEasy te permite crear endpoints REST con clases, tipado fuerte y sintaxis simple.
-
-### 🚀 Tu Primer Endpoint
-
-Crea `typeeasycode/apis/proveedores_endpoint.te`:
-
-```ts
-class OrdenDeCompra {
-    proveedor: string; 
-    fecha: string;
-
-    __constructor(_proveedor: string, _fecha: string) {
-        this.proveedor = _proveedor;
-        this.fecha = _fecha;
-    }   
-}
-
-endpoint {
-    [HttpGet("/api/proveedores")]
-    GetProveedores() {
-        let mi_orden = new OrdenDeCompra("Suministros Industriales S.A.", "2025-09-06");
-        return json(mi_orden);
-    }
-}
-```
-
-Levanta el servidor y prueba:
-
-```bash
-docker compose up -d --build api
-curl http://localhost:8080/api/proveedores
-```
-
-**Respuesta:**
-```json
-{
-    "proveedor": "Suministros Industriales S.A.",
-    "fecha": "2025-09-06"
-}
-```
-
-### 📖 Guía Completa de Endpoints
-
-**[→ Ver Guía: Cómo Crear Endpoints con TypeEasy](docs/CREAR_ENDPOINTS.md)**
-
-La guía incluye:
-- ✅ Métodos HTTP (GET, POST, PUT, DELETE)
-- ✅ Clases y tipado fuerte
-- ✅ Parámetros de ruta y query
-- ✅ Request body y validación
-- ✅ Respuestas JSON y XML
-- ✅ Integración con MySQL/PostgreSQL
-- ✅ Ejemplos completos de CRUD
 
 ---
 
