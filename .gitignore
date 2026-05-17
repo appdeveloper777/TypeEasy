@@ -8,6 +8,16 @@ src/parser.output
 typeeasy
 !cli/typeeasy
 
+# Object files y artefactos de build C/C++
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.dll
+*.dylib
+.debug/
+
 # WAHA Sessions (datos privados de WhatsApp)
 waha_sessions/
 
