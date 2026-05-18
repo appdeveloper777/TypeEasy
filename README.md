@@ -25,7 +25,7 @@ TypeEasy es un intérprete / framework experimental escrito principalmente en C 
 
 ✔️ **Crear tu propia sintaxis** adaptada perfectamente a tu dominio o equipo <br>
 ✔️ **Hacer "bridge"** sin esfuerzo con otros lenguajes potentes como Java, Rust y C# <br>
-✔️ **Crear endpoints REST** como FastAPI pero con sintaxis TypeEasy <br>
+✔️ **Crear endpoints REST** como FastAPI pero con sintaxis TypeEasy(C# y TypeScript familiar) <br>
 ✔️ **Crear scripts** para integraciones y automatizaciones
 
 <img width="1910" height="932" alt="image" src="https://github.com/user-attachments/assets/6abbb4f1-9066-44e1-8da6-dfd804cd7d1a" />
