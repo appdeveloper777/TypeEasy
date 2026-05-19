@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/appdeveloper777/TypeEasy?style=social)](https://github.com/appdeveloper777/TypeEasy/stargazers)
 
-**Un intérprete / framework experimental para crear lenguajes, scripts y bridges con servicios externos**
+**Un intérprete / framework experimental para crear lenguajes, scripts y bridges con servicios externos / API Endpoint maker**
 
 [🚀 Inicio Rápido](#-inicio-rápido) • [📖 Chatbot WhatsApp](#-chatbot-whatsapp-con-gemini-ai) • [🔌 APIs REST](#-crear-apis-rest) • [⭐ Apoyar](#-apoya-el-proyecto)
 
@@ -25,7 +25,7 @@ TypeEasy es un intérprete / framework experimental escrito principalmente en C 
 
 ✔️ **Crear tu propia sintaxis** adaptada perfectamente a tu dominio o equipo <br>
 ✔️ **Hacer "bridge"** sin esfuerzo con otros lenguajes potentes como Java, Rust y C# <br>
-✔️ **Crear endpoints REST** como FastAPI pero con sintaxis TypeEasy <br>
+✔️ **Crear endpoints REST** como FastAPI pero con sintaxis TypeEasy(C# y TypeScript familiar) <br>
 ✔️ **Crear scripts** para integraciones y automatizaciones
 
 <img width="1910" height="932" alt="image" src="https://github.com/user-attachments/assets/6abbb4f1-9066-44e1-8da6-dfd804cd7d1a" />
