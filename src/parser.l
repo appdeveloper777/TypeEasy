@@ -115,6 +115,7 @@
 "train"      { yylval.sval = strdup(yytext); return TRAIN; }
 "predict"    { yylval.sval = strdup(yytext); return PREDICT; }
 "from"       { yylval.sval = strdup(yytext); return FROM; }
+"as"         { yylval.sval = strdup(yytext); return AS; }
 "layer"      { yylval.sval = strdup(yytext); return LAYER; }
 "plot"                   { return PLOT; }       
 

@@ -209,6 +209,7 @@ void te_runtime_reset_flags(void);
 /* --- PROTOTIPOS DE TU "MOTOR" (PUROS) --- */
 
 ASTNode* from_csv_to_list(const char* filename, ClassNode* cls);
+ASTNode* from_csv_to_dataframe(const char* filename, ClassNode* cls);
 
 ASTNode *create_list_node(ASTNode *items);
 ASTNode *append_to_list(ASTNode *list, ASTNode *item);
@@ -246,6 +247,10 @@ void add_method_to_class(ClassNode *class,
                              ASTNode *body,
                              char *return_type);
 ObjectNode *create_object(ClassNode *class);
+/* Bulk arena allocation of N ObjectNodes (DataFrame.toList fast path).
+ * Returns a pointer to N contiguous ObjectNodes; objects are arena-owned
+ * and must NOT be passed to free_object(). Caller fills value fields. */
+ObjectNode *create_objects_bulk(ClassNode *cls, int N);
 void call_method(ObjectNode *obj, char *method);
 ClassNode *find_class(char *name);
 ASTNode *create_int_node(int value);

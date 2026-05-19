@@ -10,6 +10,11 @@
 // Un `return json({...})` con object literal inline NO se serializa todavia
 // (limitacion del intérprete): asigna a variable primero.
 
+class User {
+    name : string;
+    age  : int;
+}
+
 endpoint {
     [HttpGet("/")]
     home() {
@@ -23,8 +28,8 @@ endpoint {
 
     [HttpGet("/users/{id}")]
     get_user() {
-        // El parametro {id} se obtiene con http_param("id").
-        let id = http_param("id");
+        // El parametro {id} se obtiene con request_param("id").
+        let id = request_param("id");
         let body = concat("{\"id\":\"", id, "\",\"name\":\"Demo\"}");
         return json(body);
     }
@@ -34,6 +39,15 @@ endpoint {
         let body = request_body();
         let ct   = request_header("Content-Type");
         let resp = concat("{\"received\":\"", body, "\",\"contentType\":\"", ct, "\"}");
+        return json(resp);
+    }
+
+    // v0.0.13: model binding — el cuerpo JSON se mapea a la clase User.
+    //   curl -X POST -H 'Content-Type: application/json' \
+    //        -d '{"name":"Ana","age":30}' http://localhost:9000/api/users
+    [HttpPost("/api/users")]
+    crearUsuario(u : User) {
+        let resp = concat("{\"name\":\"", u.name, "\",\"age\":", u.age, "}");
         return json(resp);
     }
 }

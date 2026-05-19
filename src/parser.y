@@ -26,6 +26,7 @@
 
 %token <sval> INT STRING FLOAT FLOAT_LITERAL LAYER LSBRACKET RSBRACKET CACHE
 %token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA CONCAT JSON XML HTTPGET HTTPPOST HTTPPUT HTTPDELETE HTTPPATCH
+%token AS
 %token       VAR ASSIGN PRINT PRINTLN FOR FOREACH LPAREN RPAREN SEMICOLON CONCAT FPRINT FPRINTLN 
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
 %token       CLASS CONSTRUCTOR THIS NEW LET COLON COMMA DOT RETURN
@@ -546,6 +547,16 @@ func_call_expr SEMICOLON { $$ = $1; }
     { ClassNode* cls = find_class($7);
       if (!cls) { printf("Clase '%s' no encontrada.\n", $7); $$ = NULL; }
       else { ASTNode* list = from_csv_to_list($5, cls); $$ = create_var_decl_node($2, list); } }
+  | LET IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER AS IDENTIFIER SEMICOLON
+    { ClassNode* cls = find_class($7);
+      if (!cls) { printf("Clase '%s' no encontrada.\n", $7); $$ = NULL; }
+      else if (strcmp($9, "dataframe") != 0) { printf("Modificador desconocido tras 'as': '%s' (esperado 'dataframe').\n", $9); $$ = NULL; }
+      else { ASTNode* list = from_csv_to_dataframe($5, cls); ASTNode* d = create_var_decl_node($2, list); d->value = 1; $$ = d; } }
+  | VAR IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER AS IDENTIFIER SEMICOLON
+    { ClassNode* cls = find_class($7);
+      if (!cls) { printf("Clase '%s' no encontrada.\n", $7); $$ = NULL; }
+      else if (strcmp($9, "dataframe") != 0) { printf("Modificador desconocido tras 'as': '%s' (esperado 'dataframe').\n", $9); $$ = NULL; }
+      else { ASTNode* list = from_csv_to_dataframe($5, cls); $$ = create_var_decl_node($2, list); } }
 ; 
 
 func_call_expr:

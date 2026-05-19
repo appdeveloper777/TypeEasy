@@ -9192,8 +9192,37 @@ static int lazy_terminal(ASTNode *lazy_node, ASTNode *node) {
     return 0;
 }
 
+/* Forward decls para Fase 1-3 DataFrame analytics (definidas tras la sección
+ * DataFrame, ~L13200). Necesarias porque interpret_call_method las usa. */
+typedef struct DataFrame DataFrame;
+static DataFrame *te_list_df(ASTNode *list);
+static int te_df_dispatch_method(DataFrame *df, ASTNode *node);
+
 static void interpret_call_method(ASTNode *node) {
     ASTNode *objNode = node->left;
+
+    /* ===== v0.0.11-pre: DataFrame analytics fast-path =====
+     * Si el receptor es un LIST con DataFrame columnar adjunto, intentamos
+     * despachar a sum/min/max/count/group_sum/print directamente sobre las
+     * columnas (SIMD AVX2 + pthread parallel). Si el método no aplica,
+     * caemos al dispatch estándar. */
+    {
+        ASTNode *recv_list = NULL;
+        if (objNode && objNode->type) {
+            if (strcmp(objNode->type, "LIST") == 0) {
+                recv_list = objNode;
+            } else if (strcmp(objNode->type, "ID") == 0 || strcmp(objNode->type, "IDENTIFIER") == 0) {
+                Variable *lv = find_variable(objNode->id);
+                if (lv && lv->type && strcmp(lv->type, "LIST") == 0)
+                    recv_list = (ASTNode*)(intptr_t)lv->value.object_value;
+            }
+        }
+        DataFrame *df_recv = te_list_df(recv_list);
+        if (df_recv) {
+            if (te_df_dispatch_method(df_recv, node)) return;
+            /* fallthrough si el método no es analítico */
+        }
+    }
 
     /* ===== v0.0.12 #5 Fusion peephole: where(p).{select|map|first|find|firstWhere|sum} =====
      * Detect `xs.where(p).OUTER(...)` where xs is an ID resolving to a LIST.
@@ -12401,6 +12430,55 @@ static ASTNode *ast_pool_alloc(void) {
     return n;
 }
 
+/* ---------- Bulk ObjectNode allocator (arena) ----------
+ * Para DataFrame.toList() en datasets grandes (12M+ filas), `create_object()`
+ * hace ~5 mallocs/objeto: ObjectNode struct, attributes array, strdup(id) y
+ * strdup(type) por atributo, y strdup("") por atributo string. A 12M filas
+ * eso son ~60M+ mallocs → ~3 min sólo en allocator.
+ *
+ * Esta variante asigna N objetos en bloques contiguos desde csv_arena_alloc
+ * (mismo lifetime: nunca se libera individualmente, vive hasta exit del
+ * proceso). Los strings `id` y `type` se comparten con `cls->attributes[a]`
+ * (los ClassNode viven hasta exit, no se liberan en el flujo normal).
+ *
+ * IMPORTANTE: los objetos resultantes NO deben pasarse a `free_object()` ni
+ * tener sus `attributes[i].id/type` liberados — pertenecen al arena. El
+ * caller (toList) los embebe en una lista de larga vida, así que está bien.
+ *
+ * Los `value` fields se dejan SIN inicializar (vtype se setea desde el tipo
+ * declarado, pero el value lo llena el caller inmediatamente).
+ */
+ObjectNode *create_objects_bulk(ClassNode *cls, int N) {
+    if (!cls || N <= 0) return NULL;
+    int nattr = cls->attr_count;
+    ObjectNode *objs = (ObjectNode*)csv_arena_alloc((size_t)N * sizeof(ObjectNode));
+    Variable *vars = (Variable*)csv_arena_alloc((size_t)N * (size_t)nattr * sizeof(Variable));
+    for (int i = 0; i < N; i++) {
+        objs[i].class = cls;
+        objs[i].attributes = vars + (size_t)i * (size_t)nattr;
+        objs[i].owning_list = NULL;
+        Variable *va = objs[i].attributes;
+        for (int a = 0; a < nattr; a++) {
+            /* Comparte punteros con la clase — NO strdup. */
+            va[a].id = cls->attributes[a].id;
+            va[a].type = cls->attributes[a].type;
+            va[a].is_const = 0;
+            const char *t = cls->attributes[a].type;
+            if (t && strcmp(t, "string") == 0) {
+                va[a].vtype = VAL_STRING;
+                va[a].value.string_value = NULL; /* caller fills */
+            } else if (t && strcmp(t, "float") == 0) {
+                va[a].vtype = VAL_FLOAT;
+                va[a].value.float_value = 0.0;
+            } else {
+                va[a].vtype = VAL_INT;
+                va[a].value.int_value = 0;
+            }
+        }
+    }
+    return objs;
+}
+
 /* ---------- pread-based CSV file loader ----------
  * Reemplaza mmap para evitar page-fault overhead en Docker overlay FS / WSL2-9P.
  *
@@ -12444,6 +12522,12 @@ static char *csv_read_all(FILE *fp, size_t *out_len);
 
 static char *csv_read_file(const char *filename, size_t *out_len, int *out_is_mmap) {
     if (out_is_mmap) *out_is_mmap = 0;
+    /* Override por env: TE_CSV_IO=mmap|pread fuerza el path. Útil para A/B
+     * benchmarks en Docker Desktop (WSL2 overlay puede ser más lento via
+     * mmap que via parallel pread). Default: auto-detect. */
+    const char *io_force = getenv("TE_CSV_IO");
+    int force_pread = (io_force && (!strcmp(io_force, "pread") || !strcmp(io_force, "PREAD")));
+    int force_mmap  = (io_force && (!strcmp(io_force, "mmap")  || !strcmp(io_force, "MMAP")));
     /* Auto-detect: usar mmap en ext4/overlayfs (rápido, zero-copy),
      * pread paralelo en V9FS/FUSE (evita page-faults a través de 9P).
      * V9FS_MAGIC = 0x01021997 (WSL2 bind-mount desde Windows).      */
@@ -12452,12 +12536,19 @@ static char *csv_read_file(const char *filename, size_t *out_len, int *out_is_mm
     int on_v9fs = 0;
     if (statfs(filename, &sfs) == 0 && (long)sfs.f_type == 0x01021997L)
         on_v9fs = 1;
-    if (!on_v9fs) {
+    if ((!on_v9fs && !force_pread) || force_mmap) {
         /* ext4 / overlayfs: mmap MAP_PRIVATE (zero-copy, demand paging). */
         char *m = csv_mmap_file(filename, out_len);
         if (m && out_is_mmap) *out_is_mmap = 1;
         return m;
     }
+#else
+    if (force_mmap) {
+        char *m = csv_mmap_file(filename, out_len);
+        if (m && out_is_mmap) *out_is_mmap = 1;
+        return m;
+    }
+    (void)force_pread;
 #endif
     /* V9FS o fallback: pread paralelo (4 threads, evita page-faults VFS). */
     int fd = open(filename, O_RDONLY);
@@ -12901,7 +12992,7 @@ typedef struct DataFrame {
     int row_count;
     int col_count;       /* = nattr */
     int *col_kinds;      /* 0=int, 1=string */
-    void **col_data;     /* col_data[a] points to int* or char** of length row_count */
+    void **col_data;     /* col_data[a] points to int64_t* (kind=0) or char** (kind=1), length row_count */
     char **col_names;    /* aliases to interned/arena names */
     ClassNode *cls;
 } DataFrame;
@@ -13016,7 +13107,7 @@ static void csv_do_phase_b(CSVColWorkerArgs *a) {
                         v = v * 10 + (long)d; q++;
                     }
                     if (neg) v = -v;
-                    ((int*)gcols[aa])[global_row] = (int)v;
+                    ((int64_t*)gcols[aa])[global_row] = (int64_t)v;
                 } else {
                     /* String: guardamos el puntero sin null-terminar.
                      * Válido en el buffer mmap'd (lifetime de proceso). */
@@ -13057,7 +13148,7 @@ static void csv_do_phase_b(CSVColWorkerArgs *a) {
                         char *endp = NULL;
                         v = strtol(raw, &endp, 10);
                     } else if (neg) v = -v;
-                    ((int*)gcols[aa])[global_row] = (int)v;
+                    ((int64_t*)gcols[aa])[global_row] = (int64_t)v;
                 } else {
                     ((char**)gcols[aa])[global_row] = (char*)raw;
                 }
@@ -13163,6 +13254,621 @@ void te_csv_pool_init(int n) {
 void te_csv_pool_init(int n) { (void)n; }
 #endif /* TE_HAS_PTHREAD */
 
+/* ============================================================
+ * DataFrame analytics (Fases 1-3, v0.0.11-pre):
+ *   - Fase 1: group_sum columnar nativo (hash table open-addressing)
+ *   - Fase 2: SIMD AVX2 sum/min/max sobre columnas int
+ *   - Fase 3: pthread parallel reductions (worker pool ad-hoc)
+ *
+ * Wrapper LIST DataFrame-backed: TEListIdx con cap = TE_DF_SENTINEL
+ * y items = (ASTNode**)(void*)DataFrame*. Helper te_list_df() extrae.
+ * ============================================================ */
+#define TE_DF_SENTINEL (-0x0DF0DF)
+
+static inline DataFrame *te_list_df(ASTNode *list) {
+    if (!list || !list->type || strcmp(list->type, "LIST") != 0) return NULL;
+    TEListIdx *ix = (TEListIdx*)list->extra;
+    if (!ix || ix->cap != TE_DF_SENTINEL) return NULL;
+    return (DataFrame*)(void*)ix->items;
+}
+
+static ASTNode *te_df_wrap(DataFrame *df) {
+    if (!df) return NULL;
+    ASTNode *out = (ASTNode*)calloc(1, sizeof(ASTNode));
+    out->type = strdup("LIST");
+    out->left = NULL;
+    out->value = 1;
+    TEListIdx *ix = (TEListIdx*)calloc(1, sizeof(TEListIdx));
+    ix->len = df->row_count;
+    ix->cap = TE_DF_SENTINEL;
+    ix->items = (ASTNode**)(void*)df;
+    out->extra = (struct ASTNode*)ix;
+    return out;
+}
+
+static int df_col_index(const DataFrame *df, const char *name) {
+    if (!df || !name) return -1;
+    for (int i = 0; i < df->col_count; i++)
+        if (df->col_names[i] && strcmp(df->col_names[i], name) == 0) return i;
+    return -1;
+}
+
+/* ---- Fase 2/4: SIMD AVX2 reductions sobre int64 columns ---- */
+static long long df_sum_i64_scalar(const int64_t *a, size_t n) {
+    long long s = 0;
+    for (size_t i = 0; i < n; i++) s += (long long)a[i];
+    return s;
+}
+static long long df_min_i64_scalar(const int64_t *a, size_t n) {
+    long long m = (long long)a[0];
+    for (size_t i = 1; i < n; i++) if ((long long)a[i] < m) m = (long long)a[i];
+    return m;
+}
+static long long df_max_i64_scalar(const int64_t *a, size_t n) {
+    long long m = (long long)a[0];
+    for (size_t i = 1; i < n; i++) if ((long long)a[i] > m) m = (long long)a[i];
+    return m;
+}
+
+#if defined(__AVX2__)
+/* 4 lanes int64 por vector. Sum: _mm256_add_epi64 directo (sin extender). */
+static long long df_sum_i64_avx2(const int64_t *a, size_t n) {
+    __m256i acc0 = _mm256_setzero_si256();
+    __m256i acc1 = _mm256_setzero_si256();
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256i v0 = _mm256_loadu_si256((const __m256i*)(a + i));
+        __m256i v1 = _mm256_loadu_si256((const __m256i*)(a + i + 4));
+        acc0 = _mm256_add_epi64(acc0, v0);
+        acc1 = _mm256_add_epi64(acc1, v1);
+    }
+    __m256i acc = _mm256_add_epi64(acc0, acc1);
+    long long buf[4];
+    _mm256_storeu_si256((__m256i*)buf, acc);
+    long long s = buf[0] + buf[1] + buf[2] + buf[3];
+    for (; i < n; i++) s += (long long)a[i];
+    return s;
+}
+/* AVX2 no tiene _mm256_min/max_epi64. Emulamos con cmpgt+blendv. */
+static inline __m256i te_mm256_min_epi64(__m256i a, __m256i b) {
+    __m256i cmp = _mm256_cmpgt_epi64(a, b);          /* a > b -> all 1s */
+    return _mm256_blendv_epi8(a, b, cmp);            /* pick b if a>b */
+}
+static inline __m256i te_mm256_max_epi64(__m256i a, __m256i b) {
+    __m256i cmp = _mm256_cmpgt_epi64(a, b);
+    return _mm256_blendv_epi8(b, a, cmp);            /* pick a if a>b */
+}
+static long long df_min_i64_avx2(const int64_t *a, size_t n) {
+    if (n == 0) return 0;
+    if (n < 4) return df_min_i64_scalar(a, n);
+    __m256i acc = _mm256_loadu_si256((const __m256i*)a);
+    size_t i = 4;
+    for (; i + 4 <= n; i += 4) {
+        __m256i v = _mm256_loadu_si256((const __m256i*)(a + i));
+        acc = te_mm256_min_epi64(acc, v);
+    }
+    long long buf[4];
+    _mm256_storeu_si256((__m256i*)buf, acc);
+    long long m = buf[0];
+    for (int k = 1; k < 4; k++) if (buf[k] < m) m = buf[k];
+    for (; i < n; i++) if ((long long)a[i] < m) m = (long long)a[i];
+    return m;
+}
+static long long df_max_i64_avx2(const int64_t *a, size_t n) {
+    if (n == 0) return 0;
+    if (n < 4) return df_max_i64_scalar(a, n);
+    __m256i acc = _mm256_loadu_si256((const __m256i*)a);
+    size_t i = 4;
+    for (; i + 4 <= n; i += 4) {
+        __m256i v = _mm256_loadu_si256((const __m256i*)(a + i));
+        acc = te_mm256_max_epi64(acc, v);
+    }
+    long long buf[4];
+    _mm256_storeu_si256((__m256i*)buf, acc);
+    long long m = buf[0];
+    for (int k = 1; k < 4; k++) if (buf[k] > m) m = buf[k];
+    for (; i < n; i++) if ((long long)a[i] > m) m = (long long)a[i];
+    return m;
+}
+#endif /* __AVX2__ */
+
+/* ---- Fase 3: pthread parallel reductions ----
+ * Particiona [0,n) en N chunks. Cada worker hace una reducción AVX2 sobre su
+ * chunk. Main thread combina parciales. Solo activado si n >= TE_RED_PAR_MIN. */
+#define TE_RED_PAR_MIN (1u << 17)   /* 131072 elementos: por debajo, serial */
+#define TE_RED_PAR_MAX_THR 8
+
+#if TE_HAS_PTHREAD
+typedef struct DfRedArg {
+    const int64_t *a;
+    size_t lo, hi;
+    int op;          /* 0=sum 1=min 2=max */
+    long long partial_sum;
+    long long partial_minmax;
+} DfRedArg;
+
+static void *df_red_worker(void *p) {
+    DfRedArg *r = (DfRedArg*)p;
+    size_t n = r->hi - r->lo;
+    const int64_t *base = r->a + r->lo;
+    if (r->op == 0) {
+#if defined(__AVX2__)
+        r->partial_sum = df_sum_i64_avx2(base, n);
+#else
+        r->partial_sum = df_sum_i64_scalar(base, n);
+#endif
+    } else if (r->op == 1) {
+#if defined(__AVX2__)
+        r->partial_minmax = df_min_i64_avx2(base, n);
+#else
+        r->partial_minmax = df_min_i64_scalar(base, n);
+#endif
+    } else {
+#if defined(__AVX2__)
+        r->partial_minmax = df_max_i64_avx2(base, n);
+#else
+        r->partial_minmax = df_max_i64_scalar(base, n);
+#endif
+    }
+    return NULL;
+}
+#endif
+
+static long long df_reduce_i64(const int64_t *a, size_t n, int op) {
+    if (n == 0) return 0;
+#if TE_HAS_PTHREAD
+    if (n >= TE_RED_PAR_MIN) {
+        int nthr = (int)te_nprocs_online();
+        if (nthr < 2) nthr = 2;
+        if (nthr > TE_RED_PAR_MAX_THR) nthr = TE_RED_PAR_MAX_THR;
+        int max_by_work = (int)(n / 65536u);
+        if (max_by_work < 1) max_by_work = 1;
+        if (nthr > max_by_work) nthr = max_by_work;
+        if (nthr >= 2) {
+            pthread_t tids[TE_RED_PAR_MAX_THR];
+            DfRedArg args[TE_RED_PAR_MAX_THR];
+            size_t chunk = n / (size_t)nthr;
+            for (int i = 0; i < nthr; i++) {
+                args[i].a = a;
+                args[i].lo = (size_t)i * chunk;
+                args[i].hi = (i == nthr - 1) ? n : (size_t)(i + 1) * chunk;
+                args[i].op = op;
+                args[i].partial_sum = 0;
+                args[i].partial_minmax = 0;
+                pthread_create(&tids[i], NULL, df_red_worker, &args[i]);
+            }
+            for (int i = 0; i < nthr; i++) pthread_join(tids[i], NULL);
+            if (op == 0) {
+                long long s = 0;
+                for (int i = 0; i < nthr; i++) s += args[i].partial_sum;
+                return s;
+            } else if (op == 1) {
+                long long m = args[0].partial_minmax;
+                for (int i = 1; i < nthr; i++) if (args[i].partial_minmax < m) m = args[i].partial_minmax;
+                return m;
+            } else {
+                long long m = args[0].partial_minmax;
+                for (int i = 1; i < nthr; i++) if (args[i].partial_minmax > m) m = args[i].partial_minmax;
+                return m;
+            }
+        }
+    }
+#endif
+    if (op == 0) {
+#if defined(__AVX2__)
+        return df_sum_i64_avx2(a, n);
+#else
+        return df_sum_i64_scalar(a, n);
+#endif
+    } else if (op == 1) {
+#if defined(__AVX2__)
+        return df_min_i64_avx2(a, n);
+#else
+        return df_min_i64_scalar(a, n);
+#endif
+    } else {
+#if defined(__AVX2__)
+        return df_max_i64_avx2(a, n);
+#else
+        return df_max_i64_scalar(a, n);
+#endif
+    }
+}
+
+/* ---- Fase 1+4: group_sum columnar (int64) ----
+ * Agrupa por columna string `kc`, suma columna int64 `vc`.
+ * Devuelve DataFrame con 3 cols: [<key>:string, sum:int64, count:int64].
+ * Las strings de la key alias-an a las de src (lifetime de proceso, arena CSV). */
+/* Hash rápido para keys cortas: mezcla los primeros bytes con multiply-xor.
+ * Para keys > 16 bytes cae a FNV-1a tradicional (te_str_hash). */
+static inline uint64_t te_short_key_hash(const char *s) {
+    uint64_t h0 = 0xcbf29ce484222325ULL;
+    /* Lee hasta 16 bytes, mezclando en bloques de 8. */
+    size_t i = 0;
+    uint64_t lo = 0, hi = 0;
+    while (i < 16 && s[i]) {
+        if (i < 8) lo |= ((uint64_t)(unsigned char)s[i]) << (i * 8);
+        else       hi |= ((uint64_t)(unsigned char)s[i]) << ((i - 8) * 8);
+        i++;
+    }
+    if (i == 16 && s[16]) return te_str_hash(s); /* fallback para >16 bytes */
+    /* Mezcla tipo MurmurHash3 finalizer */
+    uint64_t h = h0 ^ lo ^ (hi * 0xff51afd7ed558ccdULL) ^ ((uint64_t)i << 56);
+    h ^= h >> 33; h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
+    return h;
+}
+
+/* Partial open-addressing hash for parallel group_sum.
+ * Cada hilo construye su propia tabla pequeña sobre un slice de las keys,
+ * luego un hilo principal hace merge en la tabla global. Para low-cardinality
+ * (10-100 groups) cada thread-local table queda casi vacía y la merge es trivial. */
+typedef struct { uint64_t h; const char *k; long long sum; long long count; int used; } GsSlot;
+
+typedef struct {
+    char **keys;
+    const int64_t *vals;
+    int start, end;
+    GsSlot *slots;
+    size_t cap;
+    size_t mask;
+    int n_groups;
+} GsWorkerArg;
+
+static void *df_group_sum_worker(void *p) {
+    GsWorkerArg *a = (GsWorkerArg*)p;
+    GsSlot *slots = a->slots;
+    size_t mask = a->mask;
+    char **keys = a->keys;
+    const int64_t *vals = a->vals;
+    int n_groups = 0;
+    for (int i = a->start; i < a->end; i++) {
+        const char *k = keys[i] ? keys[i] : "";
+        uint64_t h = te_short_key_hash(k);
+        size_t idx = (size_t)h & mask;
+        for (;;) {
+            if (!slots[idx].used) {
+                slots[idx].used = 1;
+                slots[idx].h = h;
+                slots[idx].k = k;
+                slots[idx].sum = (long long)vals[i];
+                slots[idx].count = 1;
+                n_groups++;
+                break;
+            }
+            if (slots[idx].h == h && strcmp(slots[idx].k, k) == 0) {
+                slots[idx].sum += (long long)vals[i];
+                slots[idx].count++;
+                break;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+    a->n_groups = n_groups;
+    return NULL;
+}
+
+static DataFrame *df_group_sum(const DataFrame *src, int kc, int vc) {
+    int n = src->row_count;
+    char **keys = (char**)src->col_data[kc];
+    const int64_t *vals = (const int64_t*)src->col_data[vc];
+
+    /* Decisión paralela vs serial: paralelo cuando n >= 50K y hay pthreads. */
+#if TE_HAS_PTHREAD
+    long ncpu = te_nprocs_online();
+    int nthr = (int)ncpu;
+    const char *thr_env = getenv("TE_CSV_THREADS");
+    if (thr_env) { int v = atoi(thr_env); if (v > 0) nthr = v; }
+    if (nthr > 16) nthr = 16;
+    if (nthr < 1) nthr = 1;
+    int do_parallel = (n >= 50000 && nthr >= 2);
+#else
+    int do_parallel = 0;
+    int nthr = 1;
+#endif
+
+    GsSlot *gslots = NULL;
+    size_t gcap = 0, gmask = 0;
+    int n_groups = 0;
+
+    if (do_parallel) {
+#if TE_HAS_PTHREAD
+        /* Per-thread hash cap: pequeño para low-cardinality (10-1000 groups
+         * típico). Estrategia: cap inicial 512 slots; si el thread llena >50%
+         * podríamos resize, pero para los casos comunes de GROUP BY (pocas
+         * categorías) 512 slots × 8 threads ≈ 160KB total → cabe en L2.
+         * NOTA: si la cardinalidad real explota (>200 groups), la inserción
+         * se degrada por probing largo; ese caso debería caer a serial. */
+        size_t slice_cap = 512;
+        size_t slice_mask = slice_cap - 1;
+
+        GsWorkerArg *args = (GsWorkerArg*)calloc((size_t)nthr, sizeof(GsWorkerArg));
+        pthread_t *tids = (pthread_t*)malloc((size_t)nthr * sizeof(pthread_t));
+        GsSlot *all_slots = (GsSlot*)calloc((size_t)nthr * slice_cap, sizeof(GsSlot));
+        int chunk = (n + nthr - 1) / nthr;
+        for (int t = 0; t < nthr; t++) {
+            args[t].keys = keys;
+            args[t].vals = vals;
+            args[t].start = t * chunk;
+            args[t].end = (t == nthr - 1) ? n : (t + 1) * chunk;
+            args[t].slots = all_slots + (size_t)t * slice_cap;
+            args[t].cap = slice_cap;
+            args[t].mask = slice_mask;
+            args[t].n_groups = 0;
+            pthread_create(&tids[t], NULL, df_group_sum_worker, &args[t]);
+        }
+        for (int t = 0; t < nthr; t++) pthread_join(tids[t], NULL);
+
+        /* Merge: global cap = next_pow2(suma_groups * 4). */
+        int sum_groups = 0;
+        for (int t = 0; t < nthr; t++) sum_groups += args[t].n_groups;
+        gcap = 16;
+        while (gcap < (size_t)sum_groups * 4 && gcap < (1u << 24)) gcap <<= 1;
+        gmask = gcap - 1;
+        gslots = (GsSlot*)calloc(gcap, sizeof(GsSlot));
+        for (int t = 0; t < nthr; t++) {
+            GsSlot *ts = args[t].slots;
+            for (size_t i = 0; i < slice_cap; i++) {
+                if (!ts[i].used) continue;
+                size_t idx = (size_t)ts[i].h & gmask;
+                for (;;) {
+                    if (!gslots[idx].used) {
+                        gslots[idx] = ts[i];
+                        n_groups++;
+                        break;
+                    }
+                    if (gslots[idx].h == ts[i].h && strcmp(gslots[idx].k, ts[i].k) == 0) {
+                        gslots[idx].sum += ts[i].sum;
+                        gslots[idx].count += ts[i].count;
+                        break;
+                    }
+                    idx = (idx + 1) & gmask;
+                }
+            }
+        }
+        free(all_slots); free(args); free(tids);
+#endif
+    } else {
+        /* Serial: tabla global directa. */
+        gcap = 16;
+        while (gcap < (size_t)n * 2 && gcap < (1u << 28)) gcap <<= 1;
+        gmask = gcap - 1;
+        gslots = (GsSlot*)calloc(gcap, sizeof(GsSlot));
+        if (!gslots) return NULL;
+        for (int i = 0; i < n; i++) {
+            const char *k = keys[i] ? keys[i] : "";
+            uint64_t h = te_short_key_hash(k);
+            size_t idx = (size_t)h & gmask;
+            for (;;) {
+                if (!gslots[idx].used) {
+                    gslots[idx].used = 1;
+                    gslots[idx].h = h;
+                    gslots[idx].k = k;
+                    gslots[idx].sum = (long long)vals[i];
+                    gslots[idx].count = 1;
+                    n_groups++;
+                    break;
+                }
+                if (gslots[idx].h == h && strcmp(gslots[idx].k, k) == 0) {
+                    gslots[idx].sum += (long long)vals[i];
+                    gslots[idx].count++;
+                    break;
+                }
+                idx = (idx + 1) & gmask;
+            }
+        }
+    }
+
+    DataFrame *out = (DataFrame*)calloc(1, sizeof(DataFrame));
+    out->row_count = n_groups;
+    out->col_count = 3;
+    out->col_kinds = (int*)malloc(3 * sizeof(int));
+    out->col_kinds[0] = 1; out->col_kinds[1] = 0; out->col_kinds[2] = 0;
+    out->col_data = (void**)calloc(3, sizeof(void*));
+    out->col_data[0] = malloc((size_t)n_groups * sizeof(char*));
+    out->col_data[1] = malloc((size_t)n_groups * sizeof(int64_t));
+    out->col_data[2] = malloc((size_t)n_groups * sizeof(int64_t));
+    out->col_names = (char**)malloc(3 * sizeof(char*));
+    out->col_names[0] = strdup(src->col_names[kc]);
+    out->col_names[1] = strdup("sum");
+    out->col_names[2] = strdup("count");
+    out->cls = NULL;
+
+    char **ok = (char**)out->col_data[0];
+    int64_t *os = (int64_t*)out->col_data[1];
+    int64_t *oc = (int64_t*)out->col_data[2];
+    int j = 0;
+    for (size_t i = 0; i < gcap; i++) {
+        if (gslots[i].used) {
+            ok[j] = (char*)gslots[i].k;
+            os[j] = (int64_t)gslots[i].sum;
+            oc[j] = (int64_t)gslots[i].count;
+            j++;
+        }
+    }
+    free(gslots);
+    return out;
+}
+
+/* Despacha métodos sobre wrappers DataFrame: count/sum/min/max/group_sum/print.
+ * Devuelve 1 si manejó la llamada (resultado en __ret__), 0 si no. */
+static int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
+    if (!df || !node || !node->id) return 0;
+    const char *m = node->id;
+    ASTNode *arg1 = node->right;
+    ASTNode *arg2 = arg1 ? arg1->right : NULL;
+    const char *s1 = (arg1 && arg1->str_value) ? arg1->str_value : NULL;
+    const char *s2 = (arg2 && arg2->str_value) ? arg2->str_value : NULL;
+
+    if (strcmp(m, "count") == 0 && !arg1) {
+        add_or_update_variable("__ret__",
+            create_ast_leaf_number("INT", df->row_count, NULL, NULL));
+        return 1;
+    }
+    if (s1 && (strcmp(m, "sum") == 0 || strcmp(m, "min") == 0 || strcmp(m, "max") == 0)) {
+        int ci = df_col_index(df, s1);
+        if (ci < 0 || df->col_kinds[ci] != 0) return 0; /* fallback */
+        const int64_t *col = (const int64_t*)df->col_data[ci];
+        size_t n = (size_t)df->row_count;
+        int op = (m[0] == 's') ? 0 : (m[1] == 'i' ? 1 : 2);
+        long long t0 = 0;
+        if (getenv("TE_CSV_TIMING")) {
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            t0 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        }
+        long long r = df_reduce_i64(col, n, op);
+        if (getenv("TE_CSV_TIMING")) {
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            long long t1 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            fprintf(stderr, "[DF-OP] %s(%s) %lldus n=%zu\n", m, s1, (t1 - t0) / 1000, n);
+        }
+        /* TE INT es i32; si el resultado overflowea, devolvemos FLOAT
+         * (double exacto hasta 2^53 ~ 9e15). Igual semántica que sumBy de OO mode. */
+        if (r >= INT_MIN && r <= INT_MAX) {
+            add_or_update_variable("__ret__",
+                create_ast_leaf_number("INT", (int)r, NULL, NULL));
+        } else {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%lld", r);
+            add_or_update_variable("__ret__",
+                create_ast_leaf_number("FLOAT", 0, buf, NULL));
+        }
+        return 1;
+    }
+    if (strcmp(m, "group_sum") == 0 && s1 && s2) {
+        int kc = df_col_index(df, s1);
+        int vc = df_col_index(df, s2);
+        if (kc < 0 || vc < 0) return 0;
+        if (df->col_kinds[kc] != 1 || df->col_kinds[vc] != 0) return 0;
+        long long t0 = 0;
+        if (getenv("TE_CSV_TIMING")) {
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            t0 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        }
+        DataFrame *res = df_group_sum(df, kc, vc);
+        if (getenv("TE_CSV_TIMING")) {
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            long long t1 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            fprintf(stderr, "[DF-OP] group_sum(%s,%s) %lldus n=%d groups=%d\n",
+                    s1, s2, (t1 - t0) / 1000, df->row_count, res ? res->row_count : 0);
+        }
+        if (!res) return 0;
+        add_or_update_variable("__ret__", te_df_wrap(res));
+        return 1;
+    }
+    if (strcmp(m, "show") == 0 && !arg1) {
+        /* Dump simple: header + hasta 20 filas */
+        for (int c = 0; c < df->col_count; c++) {
+            if (c) printf("\t");
+            printf("%s", df->col_names[c] ? df->col_names[c] : "?");
+        }
+        printf("\n");
+        int limit = df->row_count < 20 ? df->row_count : 20;
+        for (int i = 0; i < limit; i++) {
+            for (int c = 0; c < df->col_count; c++) {
+                if (c) printf("\t");
+                if (df->col_kinds[c] == 0) {
+                    printf("%lld", (long long)((int64_t*)df->col_data[c])[i]);
+                } else {
+                    const char *s = ((char**)df->col_data[c])[i];
+                    printf("%s", s ? s : "");
+                }
+            }
+            printf("\n");
+        }
+        if (df->row_count > limit) printf("... (%d more rows)\n", df->row_count - limit);
+        add_or_update_variable("__ret__", create_ast_leaf_number("INT", df->row_count, NULL, NULL));
+        return 1;
+    }
+    if ((strcmp(m, "toList") == 0 || strcmp(m, "toArray") == 0) && !arg1) {
+        /* Materialize the columnar DataFrame into a real LIST of ObjectNodes.
+         * O(N) single-pass: build attrs from cols, chain via ->next, populate
+         * TEListIdx in one go (avoids O(N^2) of repeated append_to_list). */
+        ClassNode *cls = df->cls;
+        if (!cls) return 0;
+        int nattr = cls->attr_count;
+        int N = df->row_count;
+        long long t0 = 0;
+        if (getenv("TE_CSV_TIMING")) {
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            t0 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        }
+        /* Resolve attr_idx -> col_idx mapping by name. -1 if no match. */
+        int *attr_to_col = (int*)malloc((size_t)nattr * sizeof(int));
+        if (!attr_to_col) return 0;
+        for (int a = 0; a < nattr; a++) {
+            attr_to_col[a] = -1;
+            const char *aname = cls->attributes[a].id;
+            if (!aname) continue;
+            for (int c = 0; c < df->col_count; c++) {
+                if (df->col_names[c] && strcmp(df->col_names[c], aname) == 0) {
+                    attr_to_col[a] = c; break;
+                }
+            }
+        }
+        /* Build LIST root + TEListIdx in one pass. */
+        ASTNode *list = (ASTNode*)calloc(1, sizeof(ASTNode));
+        list->type = strdup("LIST");
+        TEListIdx *ix = (TEListIdx*)calloc(1, sizeof(TEListIdx));
+        int cap = N < 8 ? 8 : N;
+        ix->items = (ASTNode**)calloc((size_t)cap, sizeof(ASTNode*));
+        ix->cap = cap;
+        ix->len = N;
+        list->extra = (struct ASTNode*)ix;
+        ASTNode *prev = NULL;
+        /* Bulk-allocate N ObjectNodes from arena (single mega-alloc instead
+         * of 5+ mallocs per row). ASTNode wrappers come from ast_pool_alloc
+         * (block allocator). Per-row mallocs drop from ~9 to ~2 (strdup
+         * "OBJECT" + strdup string value). */
+        ObjectNode *objs = create_objects_bulk(cls, N);
+        for (int i = 0; i < N; i++) {
+            ObjectNode *obj = &objs[i];
+            for (int a = 0; a < nattr; a++) {
+                int ci = attr_to_col[a];
+                if (ci < 0) continue;
+                Variable *v = &obj->attributes[a];
+                if (df->col_kinds[ci] == 0) {
+                    int64_t iv = ((int64_t*)df->col_data[ci])[i];
+                    if (v->vtype == VAL_INT) {
+                        v->value.int_value = (int)iv;
+                    } else if (v->vtype == VAL_FLOAT) {
+                        v->value.float_value = (double)iv;
+                    } else { /* string fallback */
+                        char buf[32]; snprintf(buf, sizeof(buf), "%lld", (long long)iv);
+                        /* v->value.string_value is NULL from bulk alloc, no free needed. */
+                        v->value.string_value = strdup(buf);
+                    }
+                } else {
+                    const char *s = ((const char**)df->col_data[ci])[i];
+                    if (v->vtype == VAL_STRING) {
+                        /* v->value.string_value is NULL from bulk alloc, no free needed. */
+                        v->value.string_value = strdup(s ? s : "");
+                    }
+                }
+            }
+            /* ASTNode wrapper from pool (no malloc); type still strdup'd
+             * (arena unsafe per ast_pool_alloc comment). */
+            ASTNode *on = ast_pool_alloc();
+            on->type = strdup("OBJECT");
+            on->value = (int)(intptr_t)obj;
+            on->extra = (struct ASTNode*)obj;
+            ix->items[i] = on;
+            if (prev) prev->next = on; else list->left = on;
+            prev = on;
+        }
+        free(attr_to_col);
+        if (getenv("TE_CSV_TIMING")) {
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            long long t1 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            fprintf(stderr, "[DF-OP] toList %lldus n=%d\n", (t1 - t0) / 1000, N);
+        }
+        add_or_update_variable("__ret__", list);
+        return 1;
+    }
+    return 0;
+}
+
 /* Construye un DataFrame.
  *
  * Algoritmo: Phase A (spinwait, no futex) → prefix-sum → Phase B directo.
@@ -13266,7 +13972,7 @@ static DataFrame *csv_build_dataframe(char *src, size_t len, size_t pos,
         for (int a = 0; a < nattr; a++) {
             df->col_kinds[a] = attr_kind[a];
             df->col_names[a] = cls->attributes[a].id;
-            size_t slot = (attr_kind[a] == 0) ? sizeof(int) : sizeof(char*);
+            size_t slot = (attr_kind[a] == 0) ? sizeof(int64_t) : sizeof(char*);
             df->col_data[a] = malloc((size_t)total_rows * slot);
         }
 
@@ -13343,7 +14049,7 @@ static DataFrame *csv_build_dataframe(char *src, size_t len, size_t pos,
             for (int a = 0; a < nattr; a++) {
                 df->col_kinds[a] = attr_kind[a];
                 df->col_names[a] = cls->attributes[a].id;
-                size_t slot = (attr_kind[a] == 0) ? sizeof(int) : sizeof(char*);
+                size_t slot = (attr_kind[a] == 0) ? sizeof(int64_t) : sizeof(char*);
                 df->col_data[a] = malloc((size_t)total_rows * slot);
             }
             for (int w = 0; w < n_workers; w++)
@@ -13391,7 +14097,7 @@ static DataFrame *csv_build_dataframe(char *src, size_t len, size_t pos,
         for (int a = 0; a < nattr; a++) {
             df->col_kinds[a] = attr_kind[a];
             df->col_names[a] = cls->attributes[a].id;
-            size_t slot = (attr_kind[a] == 0) ? sizeof(int) : sizeof(char*);
+            size_t slot = (attr_kind[a] == 0) ? sizeof(int64_t) : sizeof(char*);
             df->col_data[a] = malloc((size_t)total_rows * slot);
         }
         args[0].row_offset = 0;
@@ -13608,14 +14314,27 @@ static void *csv_parse_worker(void *p) {
 }
 #endif
 
+/* Thread-local override: forzar modo columnar (DataFrame) por call site.
+ * Activado por la sintaxis `from "x.csv", Clase as dataframe;` vía wrapper
+ * from_csv_to_dataframe(). Tiene precedencia sobre la var de entorno. */
+static __thread int t_csv_force_df = 0;
+
+ASTNode* from_csv_to_dataframe(const char* filename, ClassNode* cls) {
+    t_csv_force_df = 1;
+    ASTNode *r = from_csv_to_list(filename, cls);
+    t_csv_force_df = 0;
+    return r;
+}
+
 ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
     /* Profiling opcional via env TE_CSV_TIMING=1 */
     const char *te_timing = getenv("TE_CSV_TIMING");
-    /* Modo columnar opcional via env TE_CSV_DATAFRAME=1.
+    /* Modo columnar: env TE_CSV_DATAFRAME=1 (global) o sintaxis
+     * `from ..., Clase as dataframe;` (per-call vía t_csv_force_df).
      * Skip ObjectNode/Variable/wrapper creation entirely: parsea directo a
      * column buffers tipo Arrow. df.length funciona; iter/index NO. */
     const char *te_df_env = getenv("TE_CSV_DATAFRAME");
-    int want_columnar = te_df_env && atoi(te_df_env) > 0;
+    int want_columnar = t_csv_force_df || (te_df_env && atoi(te_df_env) > 0);
     struct timespec ts0, ts_after_mmap, ts_after_header, ts_before_parse, ts_after_parse, ts_end;
     if (te_timing) clock_gettime(CLOCK_MONOTONIC, &ts0);
 
@@ -13793,18 +14512,10 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
             free(col_to_attr); free(attr_kind); free(attr_nullable);
             free(shared_attr_id_arena); free(shared_attr_type_arena);
             /* Wrapper LIST con TEListIdx pre-set para que .length sea O(1)
-             * sin crear ASTNodes hijos. left=NULL → iter no soportada. */
-            ASTNode *listNode = (ASTNode*)calloc(1, sizeof(ASTNode));
-            listNode->type = strdup("LIST");
-            listNode->left = NULL;
-            listNode->value = 1; /* PREINIT FLAG */
-            TEListIdx *ix = (TEListIdx*)calloc(1, sizeof(TEListIdx));
-            ix->len = df->row_count;
-            ix->cap = 0;
-            ix->items = NULL; /* sin items materializados */
-            listNode->extra = (struct ASTNode*)ix;
-            /* DataFrame se "leakea" (lifetime de proceso, modo script). */
-            (void)df;
+             * sin crear ASTNodes hijos. left=NULL → iter no soportada.
+             * v0.0.11-pre: stashea DataFrame* en ix->items con sentinel cap
+             * para habilitar métodos analíticos (sum/min/max/group_sum). */
+            ASTNode *listNode = te_df_wrap(df);
             if (te_timing) {
                 clock_gettime(CLOCK_MONOTONIC, &ts_end);
                 long us_mmap   = (ts_after_mmap.tv_sec   - ts0.tv_sec)*1000000L + (ts_after_mmap.tv_nsec   - ts0.tv_nsec)/1000L;
