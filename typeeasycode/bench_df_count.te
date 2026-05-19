@@ -1,0 +1,13 @@
+class Producto {
+  cat : string;
+  precio : int;
+  stock : int;
+}
+let df = from "productos_cat_1M.csv", Producto;
+println("filas=" + df.length);
+// Probar sum sobre col string (debe NO matchear y caer al path normal -> 0)
+let smallSum = df.sum("precio");
+println("sumPrecio=" + smallSum);
+// Probar count
+let c = df.count();
+println("count=" + c);

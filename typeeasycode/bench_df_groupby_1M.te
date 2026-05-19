@@ -1,0 +1,28 @@
+// Bench: DataFrame columnar group_sum (Fase 1-3, v0.0.11-pre)
+// Schema: cat,precio,stock — 1M filas, 10 categorías
+// Requiere: TE_CSV_DATAFRAME=1
+
+class Producto {
+  cat : string;
+  precio : int;
+  stock : int;
+}
+
+let df = from "productos_cat_1M.csv", Producto;
+println("filas=" + df.length);
+
+// Reducciones SIMD AVX2 + pthread parallel
+let s = df.sum("precio");
+let mn = df.min("precio");
+let mx = df.max("precio");
+println("sumPrecio=" + s);
+println("minPrecio=" + mn);
+println("maxPrecio=" + mx);
+
+// Group-by hash columnar
+let g = df.group_sum("cat", "precio");
+println("groups=" + g.length);
+let gSum = g.sum("sum");
+let gCount = g.sum("count");
+println("groupSumTotal=" + gSum);
+println("groupRowsTotal=" + gCount);

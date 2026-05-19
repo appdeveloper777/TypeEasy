@@ -1,0 +1,8 @@
+class Producto {
+  nombre : string;
+  precio : int;
+}
+let productos = from "productos_12M.csv", Producto;
+println("filas=" + productos.length);
+println("sumBy.precio=" + productos.sum("precio"));
+println("OK");

@@ -1,0 +1,10 @@
+class Producto {
+  cat : string;
+  precio : int;
+  stock : int;
+}
+let df = from "productos_cat_1M.csv", Producto;
+println("filas=" + df.length);
+let g = df.group_sum("cat", "precio");
+println("after group_sum");
+println("groups=" + g.length);

@@ -1,0 +1,17 @@
+class Producto {
+  nombre : string;
+  precio : int;
+}
+
+// SIN env var TE_CSV_DATAFRAME: la sintaxis "as dataframe" fuerza modo columnar
+let productos = from "productos_12M.csv", Producto as dataframe;
+println("filas df = " + productos.length);
+println("sum precio = " + productos.sum("precio"));
+
+let lista = productos.toList();
+println("filas list = " + lista.length);
+let p0 = lista[0];
+println("primer: " + p0.nombre + "," + p0.precio);
+p0.precio = 99999;
+println("editado: " + lista[0].precio);
+println("OK");

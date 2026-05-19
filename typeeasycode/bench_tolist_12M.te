@@ -1,0 +1,13 @@
+class Producto {
+  nombre : string;
+  precio : int;
+}
+let productos = from "productos_12M.csv", Producto;
+println("filas df=" + productos.length);
+let lista = productos.toList();
+println("filas list=" + lista.length);
+let p0 = lista[0];
+println("primer: " + p0.nombre + "," + p0.precio);
+p0.precio = 99999;
+println("editado: " + lista[0].precio);
+println("OK");
