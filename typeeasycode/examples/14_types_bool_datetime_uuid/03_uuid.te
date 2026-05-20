@@ -1,0 +1,21 @@
+// ============================================================
+// uuid — RFC 4122 v4 generation + validation
+// ============================================================
+
+uuid id = uuid_v4();
+println(id);                     // p.ej. 5f3a...-...-4...-...-...
+
+println(uuid_valid(id));         // -> 1
+println(uuid_valid("not-a-uuid")); // -> 0
+
+// Útil como primary key en un record
+// Nota: las llamadas a builtins dentro de un map literal se deben
+// evaluar primero en una variable local.
+uuid     pk     = uuid_v4();
+datetime creado = now();
+let registro = {
+    "id":     pk,
+    "creado": creado,
+    "activo": true
+};
+println(json_stringify(registro));

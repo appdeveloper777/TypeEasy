@@ -36,6 +36,8 @@
 %token       EXTENDS
 %token       VOID DYNAMIC
 %token       NULLTOK QMARK
+%token       TRUETOK FALSETOK
+%token <sval> BOOLTYPE DATETIMETYPE UUIDTYPE
 %token       TRY CATCH FINALLY THROW
 %token       PLUS_ASSIGN MINUS_ASSIGN STAR_ASSIGN SLASH_ASSIGN INCREMENT DECREMENT
 %token       WHILE BREAK CONTINUE
@@ -310,9 +312,15 @@ attribute_decl:
     IDENTIFIER COLON INT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "int"); } else { printf("Error: No hay clase definida para el atributo '%s'.\n", $1); } }
   | IDENTIFIER COLON STRING SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "string"); } else { printf("Error: No hay clase definida para el atributo '%s'.\n", $1); } }
   | IDENTIFIER COLON FLOAT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "float"); } else { printf("Error: No hay clase definida para el atributo '%s'.\n", $1); } }
+  | IDENTIFIER COLON BOOLTYPE SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "bool"); } }
+  | IDENTIFIER COLON DATETIMETYPE SEMICOLON { if (last_class) { add_attribute_to_class(last_class, $1, "datetime"); } }
+  | IDENTIFIER COLON UUIDTYPE SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "uuid"); } }
   | IDENTIFIER COLON INT QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "int?"); } }
   | IDENTIFIER COLON STRING QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "string?"); } }
   | IDENTIFIER COLON FLOAT QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "float?"); } }
+  | IDENTIFIER COLON BOOLTYPE QMARK SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "bool?"); } }
+  | IDENTIFIER COLON DATETIMETYPE QMARK SEMICOLON { if (last_class) { add_attribute_to_class(last_class, $1, "datetime?"); } }
+  | IDENTIFIER COLON UUIDTYPE QMARK SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "uuid?"); } }
   ;
 
 constructor_decl:
@@ -326,6 +334,9 @@ parameter_decl:
   | STRING IDENTIFIER          { $$ = create_parameter_node($2, $1); }
   | IDENTIFIER COLON FLOAT     { $$ = create_parameter_node($1, $3); }
   | FLOAT IDENTIFIER           { $$ = create_parameter_node($2, $1); }
+  | IDENTIFIER COLON BOOLTYPE     { $$ = create_parameter_node($1, $3); }
+  | IDENTIFIER COLON DATETIMETYPE { $$ = create_parameter_node($1, $3); }
+  | IDENTIFIER COLON UUIDTYPE     { $$ = create_parameter_node($1, $3); }
   ;
 
 parameter_list:
@@ -342,10 +353,16 @@ method_return_type:
   | FLOAT    { $$ = strdup("float"); }
   | VOID     { $$ = strdup("void"); }
   | DYNAMIC  { $$ = strdup("dynamic"); }
+  | BOOLTYPE     { $$ = strdup("bool"); }
+  | DATETIMETYPE { $$ = strdup("datetime"); }
+  | UUIDTYPE     { $$ = strdup("uuid"); }
   | INT QMARK      { $$ = strdup("int?"); }
   | STRING QMARK   { $$ = strdup("string?"); }
   | FLOAT QMARK    { $$ = strdup("float?"); }
   | DYNAMIC QMARK  { $$ = strdup("dynamic?"); }
+  | BOOLTYPE QMARK     { $$ = strdup("bool?"); }
+  | DATETIMETYPE QMARK { $$ = strdup("datetime?"); }
+  | UUIDTYPE QMARK     { $$ = strdup("uuid?"); }
   | IDENTIFIER QMARK { char *t = malloc(strlen($1)+2); sprintf(t,"%s?",$1); free($1); $$ = t; }
   ;
 
@@ -393,6 +410,8 @@ expression:
   | STRING_LITERAL       { $$ = create_ast_leaf("STRING", 0, $1, NULL); }
   | STRING_INTERP        { $$ = create_ast_leaf("STRING_INTERP", 0, $1, NULL); }
   | NULLTOK       { $$ = create_ast_leaf("NULL", 0, NULL, NULL); }
+  | TRUETOK       { ASTNode *n = create_ast_leaf("BOOL", 1, NULL, NULL); n->line = yylineno; $$ = n; }
+  | FALSETOK      { ASTNode *n = create_ast_leaf("BOOL", 0, NULL, NULL); n->line = yylineno; $$ = n; }
   | CONCAT LPAREN expression_list RPAREN       { $$ = create_function_call_node("concat", $3); } /* ARREGLADO: printf eliminado */
   | expression PLUS expression       { $$ = create_ast_node("ADD", $1, $3); }
   | expression MINUS expression       { $$ = create_ast_node("SUB", $1, $3); }
@@ -451,6 +470,9 @@ var_decl:
 
   | LET IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* d = create_var_decl_node($2, $4); d->value = 1; /* let = immutable */ $$ = d; }
   | STRING IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("STRING"); $$ = decl; }
+  | BOOLTYPE IDENTIFIER ASSIGN expression SEMICOLON     { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("BOOL"); $$ = decl; }
+  | DATETIMETYPE IDENTIFIER ASSIGN expression SEMICOLON { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("DATETIME"); $$ = decl; }
+  | UUIDTYPE IDENTIFIER ASSIGN expression SEMICOLON     { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("UUID"); $$ = decl; }
   | VAR IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
   | CONST INT IDENTIFIER ASSIGN expression SEMICOLON { ASTNode* decl = create_var_decl_node($3, $5); decl->value = 1; /* Marcar como const */ decl->str_value = strdup("INT"); $$ = decl; }
   | CONST IDENTIFIER ASSIGN expression SEMICOLON { ASTNode* decl = create_var_decl_node($2, $4); decl->value = 1; /* Marcar como const */ $$ = decl; }

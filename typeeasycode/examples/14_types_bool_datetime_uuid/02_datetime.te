@@ -1,0 +1,29 @@
+// ============================================================
+// datetime — ISO-8601 UTC strings + epoch helpers
+// ============================================================
+
+// Hora actual en formato ISO-8601 UTC ("YYYY-MM-DDTHH:MM:SSZ")
+datetime ahora = now();
+println(ahora);
+
+// Epoch en segundos (int)
+let segs = now_epoch();
+println(segs);
+
+// Parsear ISO -> epoch
+let epoch = date_parse("2026-05-19T12:00:00Z");
+println(epoch);
+
+// Formatear epoch con un format string (strftime)
+let fecha_legible = date_format(epoch, "%Y-%m-%d %H:%M");
+println(fecha_legible);   // -> 2026-05-19 12:00
+
+// Aritmética de fechas: sumar/restar
+datetime manana    = date_add(ahora, "days", 1);
+datetime hace_1h   = date_add(ahora, "hours", -1);
+println(manana);
+println(hace_1h);
+
+// Diferencia entre dos fechas
+let dias = date_diff(manana, ahora, "days");
+println(dias);   // -> 1

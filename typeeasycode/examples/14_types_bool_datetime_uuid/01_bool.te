@@ -1,0 +1,18 @@
+// ============================================================
+// bool — true/false literals + JSON serialization
+// ============================================================
+
+bool activo  = true;
+bool baneado = false;
+
+println(activo);    // -> true
+println(baneado);   // -> false
+
+// JSON emite "true"/"false" (no 0/1)
+println(json_stringify(activo));   // -> true
+println(json_stringify(baneado));  // -> false
+
+// Combinable con maps
+let usuario = { "id": 1, "nombre": "Ana", "activo": activo };
+println(json_stringify(usuario));
+// -> {"id":1,"nombre":"Ana","activo":true}

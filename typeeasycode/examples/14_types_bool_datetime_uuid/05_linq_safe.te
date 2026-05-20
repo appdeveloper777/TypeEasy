@@ -1,0 +1,47 @@
+// LINQ con tipos nuevos — versión segura (sin builtins dentro del lambda)
+// Workaround: precomputar epoch / validez ANTES y filtrar por valor crudo.
+
+println("=== BOOL ===");
+let flags   = [true, false, true, true, false];
+let cnt_on  = flags.countWhere(fn(b) => b == true);
+let cnt_off = flags.countWhere(fn(b) => b == false);
+let any_on  = flags.any(fn(b) => b == true);
+let all_on  = flags.all(fn(b) => b == true);
+println("cnt_on="  + cnt_on);    // 3
+println("cnt_off=" + cnt_off);   // 2
+println("any_on="  + any_on);    // 1
+println("all_on="  + all_on);    // 0
+
+println("=== DATETIME (precomputado) ===");
+datetime t0 = now();
+datetime t1 = date_add(t0, "days",  1);
+datetime t2 = date_add(t0, "days", -1);
+datetime t3 = date_add(t0, "days",  7);
+
+// Materializar epochs ANTES
+let base_ep = date_parse(t0);
+let e0 = date_parse(t0);
+let e1 = date_parse(t1);
+let e2 = date_parse(t2);
+let e3 = date_parse(t3);
+let epochs = [e0, e1, e2, e3];
+
+let futuras = epochs.where(fn(e) => e > base_ep);
+let past    = epochs.countWhere(fn(e) => e < base_ep);
+println("futuras.len=" + futuras.length()); // 2
+println("past="        + past);             // 1
+
+println("=== UUID (precomputado) ===");
+let id1 = uuid_v4();
+let id2 = uuid_v4();
+let id3 = uuid_v4();
+let v1 = uuid_valid(id1);
+let v2 = uuid_valid("not-a-uuid");
+let v3 = uuid_valid(id2);
+let v4 = uuid_valid("");
+let v5 = uuid_valid(id3);
+let validez = [v1, v2, v3, v4, v5];
+let validos = validez.countWhere(fn(v) => v == 1);
+let invalidos = validez.countWhere(fn(v) => v == 0);
+println("validos="   + validos);   // 3
+println("invalidos=" + invalidos); // 2

@@ -1,0 +1,19 @@
+// Diag: ver qué devuelve date_parse adentro vs afuera del lambda.
+datetime t0 = now();
+datetime t1 = date_add(t0, "days", 1);
+let fechas = [t0, t1];
+
+println("--- afuera ---");
+println("ep(t0)=" + date_parse(t0));
+println("ep(t1)=" + date_parse(t1));
+
+println("--- adentro (select) ---");
+let eps = fechas.select(fn(d) => date_parse(d));
+println("eps[0]=" + eps[0]);
+println("eps[1]=" + eps[1]);
+
+println("--- comparacion adentro ---");
+let base = date_parse(t0);
+println("base=" + base);
+let fut = fechas.where(fn(d) => date_parse(d) > base);
+println("fut.len=" + fut.length());

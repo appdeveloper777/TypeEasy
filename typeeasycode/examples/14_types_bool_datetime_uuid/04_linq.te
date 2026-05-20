@@ -1,0 +1,52 @@
+// LINQ con tipos bool / datetime / uuid
+// Verifica where / select / countWhere / any / all sobre los 3 tipos nuevos.
+
+// ===== bool =====
+let flags = [true, false, true, true, false];
+let activos    = flags.where(fn(b) => b == true);
+let cnt_on     = flags.countWhere(fn(b) => b == true);
+let cnt_off    = flags.countWhere(fn(b) => b == false);
+let any_on     = flags.any(fn(b) => b == true);
+let all_on     = flags.all(fn(b) => b == true);
+println("bool.activos.len=" + activos.length());
+println("bool.cnt_on="  + cnt_on);
+println("bool.cnt_off=" + cnt_off);
+println("bool.any_on="  + any_on);
+println("bool.all_on="  + all_on);
+
+// ===== datetime =====
+datetime t0 = now();
+datetime t1 = date_add(t0, "days",  1);
+datetime t2 = date_add(t0, "days", -1);
+datetime t3 = date_add(t0, "days",  7);
+let fechas = [t0, t1, t2, t3];
+
+// proyectar a epoch y filtrar > epoch(t0)
+let epochs   = fechas.select(fn(d) => date_parse(d));
+let base_ep  = date_parse(t0);
+let futuras  = fechas.where(fn(d) => date_parse(d) > base_ep);
+let cnt_past = fechas.countWhere(fn(d) => date_parse(d) < base_ep);
+
+println("dt.epochs.len="  + epochs.length());
+println("dt.futuras.len=" + futuras.length());
+println("dt.cnt_past="    + cnt_past);
+
+// ===== uuid =====
+let ids = [uuid_v4(), uuid_v4(), "not-a-uuid", uuid_v4(), ""];
+let validos = ids.where(fn(u) => uuid_valid(u) == 1);
+let cnt_inv = ids.countWhere(fn(u) => uuid_valid(u) == 0);
+let any_bad = ids.any(fn(u) => uuid_valid(u) == 0);
+
+println("uuid.validos.len=" + validos.length());
+println("uuid.cnt_inv="     + cnt_inv);
+println("uuid.any_bad="     + any_bad);
+
+// ===== combinado: select a OBJECT con los 3 tipos =====
+let registros = [
+  { "id": uuid_v4(), "fecha": now(), "activo": true  },
+  { "id": uuid_v4(), "fecha": now(), "activo": false },
+  { "id": uuid_v4(), "fecha": now(), "activo": true  }
+];
+let solo_activos = registros.where(fn(r) => r.activo == true);
+println("reg.solo_activos.len=" + solo_activos.length());
+println("reg[0].json=" + json_stringify(registros[0]));

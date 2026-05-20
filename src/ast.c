@@ -1937,6 +1937,9 @@ NodeKind nk_from_str(const char *t) {
             if (!strcmp(t, "BIT_OR"))  return NK_BIT_OR;
             if (!strcmp(t, "BIT_XOR")) return NK_BIT_XOR;
             if (!strcmp(t, "BIT_NOT")) return NK_BIT_NOT;
+            /* BOOL literal: store as numeric (value=0|1). Special-cased in
+             * print/JSON to emit "true"/"false" instead of "0"/"1". */
+            if (!strcmp(t, "BOOL")) return NK_NUMBER;
             break;
         case 'C':
             if (!strcmp(t, "CALL_FUNC")) return NK_CALL_FUNC;
@@ -2501,6 +2504,23 @@ int is_string_type(ASTNode *node) {
         /* Caso 1: o es IDENTIFIER (var de tipo OBJECT). */
         if (o->id) {
             Variable *v = find_variable(o->id);
+            /* v1.0.0: skip the ObjectNode cast if var is MAP/OBJECT_LITERAL —
+             * value.object_value is actually an ASTNode*, and reading
+             * obj->class on it crashes. For maps, check KV value type. */
+            if (v && v->type && (strcmp(v->type, "MAP") == 0 ||
+                                 strcmp(v->type, "OBJECT_LITERAL") == 0)) {
+                ASTNode *map = (ASTNode*)(intptr_t)v->value.object_value;
+                if (map && a->id) {
+                    ASTNode *pair = map_find_pair(map, a->id);
+                    if (pair && pair->left && pair->left->type) {
+                        const char *t = pair->left->type;
+                        if (strcmp(t, "STRING") == 0 ||
+                            strcmp(t, "DATETIME") == 0 ||
+                            strcmp(t, "UUID") == 0) return 1;
+                    }
+                }
+                return 0;
+            }
             if (v && v->vtype == VAL_OBJECT) {
                 obj = v->value.object_value;
                 if (!obj) {
@@ -6222,6 +6242,35 @@ double evaluate_expression(ASTNode *node) {
             return 0;
         }
 
+        /* v1.0.0: variable is a MAP (e.g. lambda param bound to an
+         * OBJECT_LITERAL list item). Treat `r.activo` as `r["activo"]`.
+         * Without this branch the code casts value.object_value (ASTNode*)
+         * to ObjectNode* and segfaults. */
+        if (v->type && (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0)) {
+            ASTNode *map = (ASTNode*)(intptr_t)v->value.object_value;
+            if (map && attr && attr->id) {
+                ASTNode *pair = map_find_pair(map, attr->id);
+                if (!pair) return 0;
+                ASTNode *val = pair->left;
+                if (!val || !val->type) return 0;
+                if (strcmp(val->type, "BOOL") == 0) return (double)val->value;
+                if (strcmp(val->type, "NUMBER") == 0 || strcmp(val->type, "INT") == 0) return (double)val->value;
+                if (strcmp(val->type, "FLOAT") == 0) return val->str_value ? atof(val->str_value) : 0;
+                if (strcmp(val->type, "NULL") == 0) return 0;
+                if (strcmp(val->type, "STRING") == 0 || strcmp(val->type, "DATETIME") == 0 ||
+                    strcmp(val->type, "UUID") == 0) {
+                    const char *s = val->str_value;
+                    if (!s || !*s) return 0;
+                    char *endp = NULL; double d = strtod(s, &endp);
+                    if (endp && endp != s && *endp == '\0') return d;
+                    return 1.0;
+                }
+                /* CALL_FUNC/CALL_METHOD or expression — evaluate */
+                return evaluate_expression(val);
+            }
+            return 0;
+        }
+
         ObjectNode *obj = v->value.object_value;
         if (!obj) {
             ASTNode *wrapper = (ASTNode*)(intptr_t)v->value.object_value;
@@ -6317,6 +6366,31 @@ double evaluate_expression(ASTNode *node) {
             return 0;
         }
         return evaluate_expression(item);
+    }
+
+    /* v1.0.0: CALL_FUNC / CALL_METHOD inside an expression context.
+     * Previously these fell through to `default` returning 0, which broke
+     * `builtin(x) OP y` inside LINQ lambdas and `{"k": builtin()}` in map
+     * literals. interpret_call_* sets __ret__; we read it back here. */
+    case NK_CALL_FUNC:
+    case NK_CALL_METHOD: {
+        if (k == NK_CALL_FUNC) interpret_call_func(node);
+        else                   interpret_call_method(node);
+        Variable *r = find_variable("__ret__");
+        if (!r) return 0;
+        if (r->vtype == VAL_INT)    return (double)r->value.int_value;
+        if (r->vtype == VAL_FLOAT)  return r->value.float_value;
+        if (r->vtype == VAL_STRING) {
+            const char *s = r->value.string_value;
+            if (!s || !*s) return 0;
+            /* numeric-looking string -> parse; otherwise non-zero presence */
+            char *endp = NULL;
+            double d = strtod(s, &endp);
+            if (endp && endp != s && *endp == '\0') return d;
+            return 1.0; /* truthy non-numeric string */
+        }
+        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) return 0;
+        return 0;
     }
 
     default:
@@ -7114,18 +7188,57 @@ static ASTNode* te_resolve_arg(ASTNode *arg, const char **out_type) {
             return tmp;
         }
         if (v->vtype == VAL_INT) {
-            ASTNode *tmp = create_ast_leaf_number("INT", v->value.int_value, NULL, NULL);
-            if (out_type) *out_type = "INT";
+            /* Preserve BOOL tag so json_stringify(bool_var) emits true/false. */
+            int is_bool = (v->type && strcmp(v->type, "BOOL") == 0);
+            ASTNode *tmp = create_ast_leaf_number(is_bool ? "BOOL" : "INT",
+                                                  v->value.int_value, NULL, NULL);
+            if (out_type) *out_type = is_bool ? "BOOL" : "INT";
             return tmp;
         }
         return NULL;
     }
     if (arg->type) {
         if (strcmp(arg->type,"MAP")==0)  { if (out_type) *out_type = "MAP";  return arg; }
+        if (strcmp(arg->type,"OBJECT_LITERAL")==0) { if (out_type) *out_type = "MAP"; return arg; }
         if (strcmp(arg->type,"LIST")==0) { if (out_type) *out_type = "LIST"; return arg; }
         if (strcmp(arg->type,"STRING")==0){ if (out_type) *out_type = "STRING"; return arg; }
         if (strcmp(arg->type,"INT")==0 || strcmp(arg->type,"NUMBER")==0) { if (out_type) *out_type = "INT"; return arg; }
         if (strcmp(arg->type,"FLOAT")==0){ if (out_type) *out_type = "FLOAT"; return arg; }
+        /* v1.0.0: registros[0] (ACCESS_EXPR) — resolve to underlying item.
+         * Without this, json_stringify(registros[0]) sees raw ACCESS_EXPR
+         * and emits "null". */
+        if (strcmp(arg->type,"ACCESS_EXPR")==0) {
+            ASTNode *list = resolve_to_list(arg->left);
+            if (list && arg->right) {
+                int idx = (int)evaluate_expression(arg->right);
+                int len = list_length(list);
+                if (idx >= 0 && idx < len) {
+                    ASTNode *item = list_get_item(list, idx);
+                    if (item && item->type) {
+                        if (strcmp(item->type, "OBJECT_LITERAL") == 0 ||
+                            strcmp(item->type, "MAP") == 0) {
+                            if (out_type) *out_type = "MAP";
+                        } else if (strcmp(item->type, "LIST") == 0) {
+                            if (out_type) *out_type = "LIST";
+                        }
+                        return item;
+                    }
+                }
+            }
+            ASTNode *map = resolve_to_map(arg->left);
+            if (map && arg->right) {
+                const char *key = NULL;
+                if (arg->right->type && strcmp(arg->right->type, "STRING") == 0) key = arg->right->str_value;
+                else if (arg->right->id) {
+                    Variable *kv = find_variable(arg->right->id);
+                    if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+                }
+                if (key) {
+                    ASTNode *pair = map_find_pair(map, key);
+                    if (pair) return pair->left;
+                }
+            }
+        }
     }
     return arg;
 }
@@ -7168,6 +7281,25 @@ static void te_json_emit_str(TeBuf *b, const char *s) {
 static void te_json_emit_node(TeBuf *b, ASTNode *n) {
     if (!n) { tebuf_puts(b, "null"); return; }
     if (!n->type) { tebuf_puts(b, "null"); return; }
+    /* v1.0.0: evaluate embedded CALL_FUNC/CALL_METHOD (e.g. map literal
+     * values like `{"id": uuid_v4()}` stored raw in KV_PAIR->left). */
+    if (strcmp(n->type, "CALL_FUNC") == 0 || strcmp(n->type, "CALL_METHOD") == 0) {
+        if (strcmp(n->type, "CALL_FUNC") == 0) interpret_call_func(n);
+        else                                    interpret_call_method(n);
+        Variable *r = find_variable("__ret__");
+        if (!r) { tebuf_puts(b, "null"); return; }
+        if (r->vtype == VAL_STRING) { te_json_emit_str(b, r->value.string_value ? r->value.string_value : ""); return; }
+        if (r->vtype == VAL_INT) {
+            if (r->type && strcmp(r->type, "BOOL") == 0) { tebuf_puts(b, r->value.int_value ? "true" : "false"); return; }
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", r->value.int_value); tebuf_puts(b, tmp); return;
+        }
+        if (r->vtype == VAL_FLOAT) { char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", r->value.float_value); tebuf_puts(b, tmp); return; }
+        tebuf_puts(b, "null"); return;
+    }
+    if (strcmp(n->type, "BOOL") == 0) {
+        tebuf_puts(b, n->value ? "true" : "false");
+        return;
+    }
     if (strcmp(n->type, "STRING") == 0) {
         te_json_emit_str(b, n->str_value ? n->str_value : "");
         return;
@@ -7212,6 +7344,11 @@ static void te_json_emit_node(TeBuf *b, ASTNode *n) {
     if (strcmp(n->type, "IDENTIFIER") == 0 && n->id) {
         Variable *v = find_variable(n->id);
         if (v) {
+            if (v->type && strcmp(v->type, "BOOL") == 0) {
+                tebuf_puts(b, v->value.int_value ? "true" : "false");
+                return;
+            }
+            if (v->type && strcmp(v->type, "NULL") == 0) { tebuf_puts(b, "null"); return; }
             if (v->vtype == VAL_STRING) { te_json_emit_str(b, v->value.string_value ? v->value.string_value : ""); return; }
             if (v->vtype == VAL_INT)    { char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", v->value.int_value); tebuf_puts(b, tmp); return; }
             if (v->vtype == VAL_FLOAT)  { char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", v->value.float_value); tebuf_puts(b, tmp); return; }
@@ -8113,6 +8250,209 @@ static int adapt_env_required(ASTNode *node, ASTNode *args) {
     return 1;
 }
 
+/* ============================================================
+ * v1.0.0 — datetime + uuid builtins
+ *
+ * datetime is stored as ISO-8601 string ("YYYY-MM-DDTHH:MM:SSZ", UTC).
+ * uuid is stored as canonical lower-case string
+ * ("xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx", v4 variant 10).
+ *
+ * All adapters set __ret__ via add_or_update_variable, matching the
+ * existing adapter pattern (adapt_env, adapt_env_required).
+ * ============================================================ */
+
+/* Cross-platform UTC mktime. timegm is GNU; Windows MSVC/MinGW uses _mkgmtime. */
+#if defined(_WIN32)
+  #define TE_TIMEGM(tm_ptr) _mkgmtime(tm_ptr)
+#else
+  #define TE_TIMEGM(tm_ptr) timegm(tm_ptr)
+#endif
+
+static void te_format_iso_utc(time_t t, char *out, size_t out_sz) {
+    struct tm g;
+#if defined(_WIN32)
+    gmtime_s(&g, &t);
+#else
+    gmtime_r(&t, &g);
+#endif
+    strftime(out, out_sz, "%Y-%m-%dT%H:%M:%SZ", &g);
+}
+
+/* Parse ISO-8601 "YYYY-MM-DDTHH:MM:SSZ" (or with space instead of T, and
+ * with optional trailing Z) into time_t (UTC). Returns 0 on success. */
+static int te_parse_iso_utc(const char *s, time_t *out) {
+    if (!s || !*s || !out) return -1;
+    int Y, M, D, h = 0, mi = 0, se = 0;
+    char sep = 'T';
+    int n = sscanf(s, "%d-%d-%d%c%d:%d:%d", &Y, &M, &D, &sep, &h, &mi, &se);
+    if (n < 3) return -1;
+    struct tm tmv; memset(&tmv, 0, sizeof(tmv));
+    tmv.tm_year = Y - 1900;
+    tmv.tm_mon  = M - 1;
+    tmv.tm_mday = D;
+    tmv.tm_hour = h;
+    tmv.tm_min  = mi;
+    tmv.tm_sec  = se;
+    time_t t = TE_TIMEGM(&tmv);
+    if (t == (time_t)-1) return -1;
+    *out = t;
+    return 0;
+}
+
+/* now() -> string (ISO-8601 UTC) */
+static int adapt_now(ASTNode *node, ASTNode *args) {
+    (void)node; (void)args;
+    char buf[32];
+    te_format_iso_utc(time(NULL), buf, sizeof(buf));
+    add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, buf, NULL));
+    return 1;
+}
+
+/* now_epoch() -> int (seconds since 1970-01-01 UTC) */
+static int adapt_now_epoch(ASTNode *node, ASTNode *args) {
+    (void)node; (void)args;
+    add_or_update_variable("__ret__",
+        create_ast_leaf_number("INT", (int)time(NULL), NULL, NULL));
+    return 1;
+}
+
+/* date_parse("YYYY-MM-DDTHH:MM:SSZ") -> int (epoch seconds, 0 on error) */
+static int adapt_date_parse(ASTNode *node, ASTNode *args) {
+    (void)node;
+    /* NOTE: do NOT call evaluate_native_args here — it permanently mutates
+     * IDENTIFIER nodes into STRING/NUMBER leafs, which breaks reuse inside
+     * LINQ lambdas (every iteration would read the first item's value).
+     * get_node_string() resolves identifiers safely on each call. */
+    char *s = args ? get_node_string(args) : NULL;
+    time_t t = 0;
+    int rc = te_parse_iso_utc(s, &t);
+    if (s) free(s);
+    add_or_update_variable("__ret__",
+        create_ast_leaf_number("INT", rc == 0 ? (int)t : 0, NULL, NULL));
+    return 1;
+}
+
+/* date_format(epoch_int [, fmt_str]) -> string. Default fmt = ISO-8601 UTC. */
+static int adapt_date_format(ASTNode *node, ASTNode *args) {
+    (void)node;
+    /* NOTE: evaluate_native_args mutates AST permanently — skip it. */
+    time_t t = (time_t)(args ? (int)evaluate_expression(args) : 0);
+    ASTNode *a1 = args ? args->right : NULL;
+    char *fmt = a1 ? get_node_string(a1) : NULL;
+    struct tm g;
+#if defined(_WIN32)
+    gmtime_s(&g, &t);
+#else
+    gmtime_r(&t, &g);
+#endif
+    char buf[128];
+    strftime(buf, sizeof(buf), (fmt && *fmt) ? fmt : "%Y-%m-%dT%H:%M:%SZ", &g);
+    if (fmt) free(fmt);
+    add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, buf, NULL));
+    return 1;
+}
+
+/* date_add(iso_string, unit, n) -> string. unit in {seconds,minutes,hours,days}. */
+static int adapt_date_add(ASTNode *node, ASTNode *args) {
+    (void)node;
+    /* NOTE: evaluate_native_args mutates AST permanently — skip it. */
+    char *s = args ? get_node_string(args) : NULL;
+    ASTNode *a1 = args ? args->right : NULL;
+    char *unit = a1 ? get_node_string(a1) : NULL;
+    ASTNode *a2 = a1 ? a1->right : NULL;
+    long long n = a2 ? (long long)evaluate_expression(a2) : 0;
+    time_t t = 0;
+    int rc = te_parse_iso_utc(s, &t);
+    if (rc != 0) {
+        if (s) free(s); if (unit) free(unit);
+        add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, "", NULL));
+        return 1;
+    }
+    long long mult = 1;
+    if (unit) {
+        if (!strcmp(unit, "seconds") || !strcmp(unit, "second")) mult = 1;
+        else if (!strcmp(unit, "minutes") || !strcmp(unit, "minute")) mult = 60;
+        else if (!strcmp(unit, "hours") || !strcmp(unit, "hour")) mult = 3600;
+        else if (!strcmp(unit, "days") || !strcmp(unit, "day")) mult = 86400;
+    }
+    t += (time_t)(n * mult);
+    char buf[32];
+    te_format_iso_utc(t, buf, sizeof(buf));
+    if (s) free(s); if (unit) free(unit);
+    add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, buf, NULL));
+    return 1;
+}
+
+/* date_diff(iso_a, iso_b, unit) -> int (a - b in unit; 0 on parse error). */
+static int adapt_date_diff(ASTNode *node, ASTNode *args) {
+    (void)node;
+    /* NOTE: evaluate_native_args mutates AST permanently — skip it. */
+    char *sa = args ? get_node_string(args) : NULL;
+    ASTNode *a1 = args ? args->right : NULL;
+    char *sb = a1 ? get_node_string(a1) : NULL;
+    ASTNode *a2 = a1 ? a1->right : NULL;
+    char *unit = a2 ? get_node_string(a2) : NULL;
+    time_t ta = 0, tb = 0;
+    int ra = te_parse_iso_utc(sa, &ta);
+    int rb = te_parse_iso_utc(sb, &tb);
+    long long diff = 0;
+    if (ra == 0 && rb == 0) {
+        diff = (long long)ta - (long long)tb;
+        long long div = 1;
+        if (unit) {
+            if (!strcmp(unit, "minutes") || !strcmp(unit, "minute")) div = 60;
+            else if (!strcmp(unit, "hours") || !strcmp(unit, "hour")) div = 3600;
+            else if (!strcmp(unit, "days") || !strcmp(unit, "day")) div = 86400;
+        }
+        diff /= div;
+    }
+    if (sa) free(sa); if (sb) free(sb); if (unit) free(unit);
+    add_or_update_variable("__ret__",
+        create_ast_leaf_number("INT", (int)diff, NULL, NULL));
+    return 1;
+}
+
+/* uuid_v4() -> string (RFC 4122 v4, random). Uses rand(); seeded lazily. */
+static int adapt_uuid_v4(ASTNode *node, ASTNode *args) {
+    (void)node; (void)args;
+    static int seeded = 0;
+    if (!seeded) {
+        srand((unsigned)(time(NULL) ^ (uintptr_t)&seeded));
+        seeded = 1;
+    }
+    unsigned char b[16];
+    for (int i = 0; i < 16; i++) b[i] = (unsigned char)(rand() & 0xFF);
+    b[6] = (unsigned char)((b[6] & 0x0F) | 0x40); /* version 4 */
+    b[8] = (unsigned char)((b[8] & 0x3F) | 0x80); /* variant 10 */
+    char out[37];
+    snprintf(out, sizeof(out),
+        "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        b[0],b[1],b[2],b[3], b[4],b[5], b[6],b[7], b[8],b[9],
+        b[10],b[11],b[12],b[13],b[14],b[15]);
+    add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, out, NULL));
+    return 1;
+}
+
+/* uuid_valid("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") -> int (1/0). */
+static int adapt_uuid_valid(ASTNode *node, ASTNode *args) {
+    (void)node;
+    /* NOTE: evaluate_native_args mutates AST permanently — skip it. */
+    char *s = args ? get_node_string(args) : NULL;
+    int ok = 0;
+    if (s && strlen(s) == 36) {
+        ok = 1;
+        for (int i = 0; i < 36 && ok; i++) {
+            char c = s[i];
+            if (i == 8 || i == 13 || i == 18 || i == 23) { if (c != '-') ok = 0; }
+            else { if (!((c>='0'&&c<='9')||(c>='a'&&c<='f')||(c>='A'&&c<='F'))) ok = 0; }
+        }
+    }
+    if (s) free(s);
+    add_or_update_variable("__ret__",
+        create_ast_leaf_number("INT", ok, NULL, NULL));
+    return 1;
+}
+
 /* Called once by te_builtins_ensure_loaded(). Idempotent — overwrites are OK.
  * Add new core builtins here as one-liners. */
 void te_register_ast_builtins(void) {
@@ -8129,6 +8469,15 @@ void te_register_ast_builtins(void) {
     te_builtin_register("env",               adapt_env);
     te_builtin_register("env_required",      adapt_env_required);
     te_builtin_register("debug_log",         adapt_debug_log);
+    /* datetime + uuid (v1.0.0) */
+    te_builtin_register("now",               adapt_now);
+    te_builtin_register("now_epoch",         adapt_now_epoch);
+    te_builtin_register("date_parse",        adapt_date_parse);
+    te_builtin_register("date_format",       adapt_date_format);
+    te_builtin_register("date_add",          adapt_date_add);
+    te_builtin_register("date_diff",         adapt_date_diff);
+    te_builtin_register("uuid_v4",           adapt_uuid_v4);
+    te_builtin_register("uuid_valid",        adapt_uuid_valid);
     /* Other builtins (json, xml, request_*, response_*, len, range,
      * read_file, http_get, etc.) still served by the legacy if-chains
      * in call_native_function / te_builtin_dispatch. They can be migrated
@@ -10001,6 +10350,7 @@ static void interpret_call_method(ASTNode *node) {
                     item = list->left;
                 }
                 while (item) {
+                    ASTNode *next_item = item->next; /* v1.0.0: save before append; build_item_from_value may share OBJECT_LITERAL/MAP/LIST and te_list_append clobbers ->next */
                     ASTNode *r = call_lambda(fn, item);
                     int truthy = 0;
                     if (r) {
@@ -10016,7 +10366,7 @@ static void interpret_call_method(ASTNode *node) {
                         ASTNode *copy = build_item_from_value(item);
                         te_list_append(result, copy);
                     }
-                    item = item->next;
+                    item = next_item;
                 }
                 add_or_update_variable("__ret__", result);
                 return;
@@ -14714,7 +15064,16 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
     if (declared_type != NULL && effective_value_type_str != NULL) {
         if (strcmp(declared_type, effective_value_type_str) != 0) {
             int allow_int_to_float = (strcmp(declared_type, "FLOAT") == 0 && strcmp(effective_value_type_str, "INT") == 0);
-            if (!allow_int_to_float) {
+            /* v1.0.0: DATETIME and UUID are storage-aliased to STRING. */
+            int allow_string_alias = (strcmp(effective_value_type_str, "STRING") == 0 &&
+                                       (strcmp(declared_type, "DATETIME") == 0 ||
+                                        strcmp(declared_type, "UUID") == 0));
+            /* BOOL accepts BOOL literals, INT 0/1, and other BOOL exprs. */
+            int allow_bool_alias = (strcmp(declared_type, "BOOL") == 0 &&
+                                     (strcmp(effective_value_type_str, "INT") == 0 ||
+                                      strcmp(effective_value_type_str, "BOOL") == 0 ||
+                                      strcmp(effective_value_type_str, "NUMBER") == 0));
+            if (!allow_int_to_float && !allow_string_alias && !allow_bool_alias) {
                 /* Fase 2: lanzar como excepción capturable en lugar de abortar */
                 char buf[256];
                 snprintf(buf, sizeof(buf),
@@ -15118,8 +15477,31 @@ ASTNode* call_lambda(ASTNode *lambda, ASTNode *argsList) {
             /* Construir un ASTNode "valor concreto" para este param */
             ASTNode *valNode = NULL;
             if (cur_arg) {
-                /* Resolver el arg a su valor actual */
-                if (cur_arg->type && (strcmp(cur_arg->type, "OBJECT") == 0 ||
+                /* v1.0.0: list items can be CALL_FUNC/CALL_METHOD (e.g.
+                 * `[uuid_v4(), uuid_v4(), ...]` was materialized without
+                 * eager evaluation). Dispatch the call and bind from
+                 * __ret__ so lambdas see the actual produced value. */
+                if (cur_arg->type && (strcmp(cur_arg->type, "CALL_FUNC") == 0 ||
+                                      strcmp(cur_arg->type, "CALL_METHOD") == 0)) {
+                    if (strcmp(cur_arg->type, "CALL_FUNC") == 0) interpret_call_func(cur_arg);
+                    else                                          interpret_call_method(cur_arg);
+                    Variable *rr = find_variable("__ret__");
+                    if (rr && rr->vtype == VAL_STRING) {
+                        const char *tt = (rr->type && (strcmp(rr->type, "DATETIME") == 0 ||
+                                                       strcmp(rr->type, "UUID") == 0))
+                                         ? rr->type : "STRING";
+                        valNode = create_ast_leaf((char*)tt, 0,
+                            rr->value.string_value ? rr->value.string_value : "", NULL);
+                    } else if (rr && rr->vtype == VAL_INT) {
+                        const char *tt = (rr->type && strcmp(rr->type, "BOOL") == 0) ? "BOOL" : "NUMBER";
+                        valNode = create_ast_leaf_number((char*)tt, rr->value.int_value, NULL, NULL);
+                    } else if (rr && rr->vtype == VAL_FLOAT) {
+                        char buf[64]; snprintf(buf, sizeof(buf), "%g", rr->value.float_value);
+                        valNode = create_ast_leaf("FLOAT", 0, buf, NULL);
+                    } else {
+                        valNode = create_ast_leaf("NULL", 0, NULL, NULL);
+                    }
+                } else if (cur_arg->type && (strcmp(cur_arg->type, "OBJECT") == 0 ||
                                       strcmp(cur_arg->type, "STRING") == 0 ||
                                       strcmp(cur_arg->type, "NUMBER") == 0 ||
                                       strcmp(cur_arg->type, "INT") == 0 ||
@@ -15233,6 +15615,41 @@ ASTNode* call_lambda(ASTNode *lambda, ASTNode *argsList) {
     if (body->type && (strcmp(body->type, "MAP") == 0 ||
                        strcmp(body->type, "OBJECT_LITERAL") == 0)) {
         return body;
+    }
+    /* v1.0.0: lambda body is a CALL_FUNC/CALL_METHOD. Dispatch the call,
+     * read __ret__, and return a typed leaf (preserves STRING vs NUMBER —
+     * needed for builtins like uuid_v4()/now() (STRING) and date_parse()
+     * (INT) used inside LINQ where/select). Without this, generic
+     * evaluate_expression collapses everything to a double and string
+     * results come back as empty. */
+    if (body->type && (strcmp(body->type, "CALL_FUNC") == 0 ||
+                       strcmp(body->type, "CALL_METHOD") == 0)) {
+        if (strcmp(body->type, "CALL_FUNC") == 0) interpret_call_func(body);
+        else                                       interpret_call_method(body);
+        Variable *r = find_variable("__ret__");
+        if (!r) return create_ast_leaf("NULL", 0, NULL, NULL);
+        if (r->vtype == VAL_STRING) {
+            const char *s = r->value.string_value ? r->value.string_value : "";
+            const char *t = (r->type && (strcmp(r->type, "DATETIME") == 0 ||
+                                         strcmp(r->type, "UUID") == 0))
+                            ? r->type : "STRING";
+            return create_ast_leaf((char*)t, 0, (char*)s, NULL);
+        }
+        if (r->vtype == VAL_INT) {
+            const char *t = (r->type && strcmp(r->type, "BOOL") == 0) ? "BOOL" : "NUMBER";
+            return create_ast_leaf_number((char*)t, r->value.int_value, NULL, NULL);
+        }
+        if (r->vtype == VAL_FLOAT) {
+            char buf[64]; snprintf(buf, sizeof(buf), "%g", r->value.float_value);
+            return create_ast_leaf("FLOAT", 0, buf, NULL);
+        }
+        if (r->vtype == VAL_OBJECT && r->type) {
+            if (strcmp(r->type, "LIST") == 0 || strcmp(r->type, "MAP") == 0)
+                return (ASTNode*)(intptr_t)r->value.object_value;
+            if (strcmp(r->type, "NULL") == 0)
+                return create_ast_leaf("NULL", 0, NULL, NULL);
+        }
+        return create_ast_leaf("NULL", 0, NULL, NULL);
     }
     /* Si la expresión produce un OBJECT/LIST/MAP, evaluate_expression no lo refleja.
      * Detectar referencias a IDENTIFIER que apunten a OBJECT/LIST/MAP. */
@@ -15529,9 +15946,19 @@ static void interpret_print(ASTNode *node) {
         append_to_stdout("null");
         return;
     }
+    if (arg->type && strcmp(arg->type, "BOOL") == 0) {
+        const char *s = arg->value ? "true" : "false";
+        dbg_printf("%s", s);
+        append_to_stdout(s);
+        return;
+    }
     if (arg->type && strcmp(arg->type, "IDENTIFIER") == 0) {
         Variable *_v = find_variable(arg->id);
         if (_v && _v->type && strcmp(_v->type, "NULL") == 0) { dbg_printf("null"); append_to_stdout("null"); return; }
+        if (_v && _v->type && strcmp(_v->type, "BOOL") == 0) {
+            const char *s = _v->value.int_value ? "true" : "false";
+            dbg_printf("%s", s); append_to_stdout(s); return;
+        }
     }
     if (arg->type && strcmp(arg->type, "STRING") == 0) {
         dbg_printf("%s", arg->str_value);
@@ -15856,9 +16283,19 @@ static void interpret_println(ASTNode *node) {
         append_to_stdout("null\n");
         return;
     }
+    if (arg->type && strcmp(arg->type, "BOOL") == 0) {
+        const char *s = arg->value ? "true" : "false";
+        dbg_printf("%s\n", s);
+        append_to_stdout(s); append_to_stdout("\n");
+        return;
+    }
     if (arg->type && strcmp(arg->type, "IDENTIFIER") == 0) {
         Variable *_v = find_variable(arg->id);
         if (_v && _v->type && strcmp(_v->type, "NULL") == 0) { dbg_printf("null\n"); append_to_stdout("null\n"); return; }
+        if (_v && _v->type && strcmp(_v->type, "BOOL") == 0) {
+            const char *s = _v->value.int_value ? "true" : "false";
+            dbg_printf("%s\n", s); append_to_stdout(s); append_to_stdout("\n"); return;
+        }
     }
     if (arg->type && strcmp(arg->type, "STRING") == 0) {
         dbg_printf("%s\n", arg->str_value);

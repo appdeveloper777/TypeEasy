@@ -169,6 +169,11 @@
 "void"                  { return VOID; }
 "dynamic"               { return DYNAMIC; }
 "null"                  { return NULLTOK; }
+"true"                  { return TRUETOK; }
+"false"                 { return FALSETOK; }
+"bool"                  { yylval.sval = strdup(yytext); return BOOLTYPE; }
+"datetime"              { yylval.sval = strdup(yytext); return DATETIMETYPE; }
+"uuid"                  { yylval.sval = strdup(yytext); return UUIDTYPE; }
 "try"                   { return TRY; }
 "catch"                 { return CATCH; }
 "finally"               { return FINALLY; }
