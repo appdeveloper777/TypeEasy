@@ -1,0 +1,5 @@
+// expect: 255 10 1000000
+let hex = 0xFF;
+let bin = 0b1010;
+let sep = 1_000_000;
+print(hex); print(" "); print(bin); print(" "); println(sep);

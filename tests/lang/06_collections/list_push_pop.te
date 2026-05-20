@@ -1,0 +1,6 @@
+// expect: 4 3
+var xs = [10, 20, 30];
+xs.push(40);
+print(xs.length); print(" ");
+xs.pop();
+println(xs.length);

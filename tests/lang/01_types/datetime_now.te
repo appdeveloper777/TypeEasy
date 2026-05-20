@@ -1,0 +1,4 @@
+// expect-contains: -
+// expect-contains: T
+let t = now();
+println(t);

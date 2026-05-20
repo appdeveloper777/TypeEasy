@@ -1,0 +1,2 @@
+// expect: 5
+println(Math.abs(-5));

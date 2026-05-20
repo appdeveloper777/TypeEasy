@@ -1,0 +1,4 @@
+// uuid_v4() returns an RFC4122 string; assert it contains the canonical separators.
+// expect-contains: -
+let id = uuid_v4();
+println(id);

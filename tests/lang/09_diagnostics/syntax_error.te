@@ -1,0 +1,2 @@
+// xfail: syntax error must be reported with non-zero exit
+let !@# = 1;

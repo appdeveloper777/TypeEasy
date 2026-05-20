@@ -1,0 +1,11 @@
+// expect: woof
+class Animal {
+    sound : string;
+    __constructor(s : string) { this.sound = s; }
+    speak() : string { return this.sound; }
+}
+class Dog extends Animal {
+    __constructor(s : string) { this.sound = s; }
+}
+let d = new Dog("woof");
+println(d.speak());

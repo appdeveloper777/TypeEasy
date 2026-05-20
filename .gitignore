@@ -41,3 +41,17 @@ node_modules/
 # Docker volumes
 volumes/
 nul
+
+# VS Code extension package artifacts (regenerate with `vsce package`)
+*.vsix
+
+# Generated dumps / debug artifacts under src/ (do NOT commit)
+src/parser.output.txt
+src/plot_data.txt
+src/revisit_dump.out
+src/symtab_dump.out
+src/*.out
+
+# Test runner outputs
+tests/.report/
+test_output.txt

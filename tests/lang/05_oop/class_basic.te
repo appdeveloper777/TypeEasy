@@ -1,0 +1,11 @@
+// expect: 42 Ana
+class Person {
+    age : int;
+    name : string;
+    __constructor(a : int, n : string) {
+        this.age = a;
+        this.name = n;
+    }
+}
+let p = new Person(42, "Ana");
+print(p.age); print(" "); println(p.name);

@@ -1,0 +1,66 @@
+name: lang-tests
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'src/**'
+      - 'tests/lang/**'
+      - 'tools/te-test/**'
+      - '.github/workflows/lang-tests.yml'
+      - 'src/Dockerfile'
+      - 'docker-compose.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/lang/**'
+      - 'tools/te-test/**'
+      - '.github/workflows/lang-tests.yml'
+      - 'src/Dockerfile'
+      - 'docker-compose.yml'
+  workflow_dispatch:
+
+jobs:
+  lang-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build TypeEasy interpreter image
+        run: |
+          docker compose build typeeasy
+          docker images typeeasy-typeeasy:latest --format '{{.Repository}}:{{.Tag}}  {{.Size}}'
+
+      - name: Run language test suite
+        run: |
+          python tools/te-test/run_tests.py tests/lang \
+            --docker \
+            --docker-image typeeasy-typeeasy:latest \
+            --junit tests/.report/junit-lang.xml \
+            --verbose
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-lang
+          path: tests/.report/junit-lang.xml
+          if-no-files-found: warn
+
+      - name: Publish test results
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: TypeEasy lang tests
+          path: tests/.report/junit-lang.xml
+          reporter: java-junit
+          fail-on-error: false

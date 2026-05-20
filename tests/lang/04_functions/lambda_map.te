@@ -1,0 +1,6 @@
+// expect: 2 4 6
+let nums = [1, 2, 3];
+let doubled = nums.map(fn(x) => x * 2);
+print(doubled[0]); print(" ");
+print(doubled[1]); print(" ");
+println(doubled[2]);

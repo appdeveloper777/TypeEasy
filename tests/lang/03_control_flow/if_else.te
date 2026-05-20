@@ -1,0 +1,3 @@
+// expect: big
+var x = 10;
+if (x > 5) { println("big"); } else { println("small"); }

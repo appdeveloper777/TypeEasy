@@ -1,0 +1,4 @@
+// expect: 7 hi
+let n = 7;
+let s = "hi";
+print(n); print(" "); println(s);

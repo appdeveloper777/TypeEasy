@@ -1,0 +1,11 @@
+// `for (let i in lst)` introduces a fresh scope; we use indexed iteration to
+// mutate the outer accumulator deterministically across platforms.
+// expect: 6
+var s = 0;
+var lst = [1, 2, 3];
+var i = 0;
+while (i < lst.length) {
+    s = s + lst[i];
+    i = i + 1;
+}
+println(s);

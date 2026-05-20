@@ -1,0 +1,6 @@
+// expect: caught
+try {
+    throw "boom";
+} catch (e) {
+    println("caught");
+}

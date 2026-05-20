@@ -1,0 +1,4 @@
+// expect: 3
+var x = 1;
+x = x + 2;
+println(x);

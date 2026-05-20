@@ -1,0 +1,4 @@
+// Float values print with the interpreter's default %f formatting (6 decimals).
+// expect: 3.141600
+const PI = 3.1416;
+println(PI);
