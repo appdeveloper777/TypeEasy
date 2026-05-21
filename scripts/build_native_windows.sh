@@ -76,7 +76,7 @@ flex -o lex.yy.c parser.l
 echo "=== Compilando módulos del motor ==="
 gcc $CFLAGS_NATIVE -fno-semantic-interposition -c \
     ast.c bytecode.c mysql_bridge.c orm_bridge.c typeeasy_api.c typeeasy_api_server.c \
-    wasm_backend.c debugger.c db_params.c te_builtins.c te_http.c te_json.c db_stubs_win.c
+    wasm_backend.c debugger.c db_params.c te_builtins.c te_http.c te_json.c te_bytecode.c db_stubs_win.c
 gcc $CFLAGS_NATIVE -c parser.tab.c lex.yy.c strvars.c typeeasy_main.c
 gcc $CFLAGS_NATIVE -c ../api_server/civetweb.c -o civetweb.o
 
@@ -84,7 +84,7 @@ echo "=== Linkando typeeasy.exe ==="
 gcc -O2 -o typeeasy.exe \
     typeeasy_main.o parser.tab.o lex.yy.o \
     ast.o bytecode.o mysql_bridge.o orm_bridge.o typeeasy_api.o typeeasy_api_server.o wasm_backend.o debugger.o \
-    db_params.o te_builtins.o te_http.o te_json.o db_stubs_win.o \
+    db_params.o te_builtins.o te_http.o te_json.o te_bytecode.o db_stubs_win.o \
     civetweb.o \
     strvars.o \
     ${MYSQL_LIB} -lm -lws2_32 -lpthread -lssl -lcrypto
