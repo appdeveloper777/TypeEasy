@@ -1,0 +1,12 @@
+// expect: 3
+// LINQ .countWhere(): rows with precio > 12 => Paneton(25), Cafe(15), Cake(30) = 3.
+
+class Producto {
+    nombre    : string;
+    precio    : int;
+    categoria : string;
+}
+
+let productos = from "tests/lang/10_linq_csv/productos.csv", Producto;
+let n = productos.countWhere(fn(p) => p.precio > 12);
+println(n);

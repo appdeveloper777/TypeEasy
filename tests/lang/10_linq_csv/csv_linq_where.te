@@ -1,0 +1,12 @@
+// expect: 4
+// LINQ .where() + lambda: count items in 'dulce' category.
+
+class Producto {
+    nombre    : string;
+    precio    : int;
+    categoria : string;
+}
+
+let productos = from "tests/lang/10_linq_csv/productos.csv", Producto;
+let dulces = productos.where(fn(p) => p.categoria == "dulce");
+println(dulces.length);

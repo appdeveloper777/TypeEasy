@@ -1,0 +1,13 @@
+// expect: 112
+// LINQ .sumBy(): total price across all rows.
+// (10+25+8+15+5+12+7+30 = 112)
+
+class Producto {
+    nombre    : string;
+    precio    : int;
+    categoria : string;
+}
+
+let productos = from "tests/lang/10_linq_csv/productos.csv", Producto;
+let total = productos.sumBy(fn(p) => p.precio);
+println(total);

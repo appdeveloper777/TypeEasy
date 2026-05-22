@@ -1,0 +1,11 @@
+// expect: 8
+// Loads CSV into a list of Producto and prints the row count.
+
+class Producto {
+    nombre    : string;
+    precio    : int;
+    categoria : string;
+}
+
+let productos = from "tests/lang/10_linq_csv/productos.csv", Producto;
+println(productos.length);

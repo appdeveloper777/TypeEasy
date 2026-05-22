@@ -1,0 +1,13 @@
+// expect: Galleta
+// LINQ .orderBy() + first(): cheapest product is Galleta (5).
+
+class Producto {
+    nombre    : string;
+    precio    : int;
+    categoria : string;
+}
+
+let productos = from "tests/lang/10_linq_csv/productos.csv", Producto;
+let sorted = productos.orderBy(fn(p) => p.precio);
+let cheapest = sorted.first();
+println(cheapest.nombre);
