@@ -213,6 +213,9 @@ ASTNode* from_csv_to_dataframe(const char* filename, ClassNode* cls);
 
 ASTNode *create_list_node(ASTNode *items);
 ASTNode *append_to_list(ASTNode *list, ASTNode *item);
+/* Internal helpers exposed for module extraction (te_linq, etc.). */
+void te_list_append(ASTNode *list, ASTNode *item);
+ASTNode *build_item_from_value(ASTNode *value);
 ASTNode *create_list_function_call_node(ASTNode *list, const char *funcName, ASTNode *lambda);
 ASTNode *create_object_node(ObjectNode *obj);
 ASTNode *create_lambda_node(const char *argName, ASTNode *body);
