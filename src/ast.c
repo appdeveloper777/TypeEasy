@@ -157,24 +157,20 @@ static void interpret_call_func(ASTNode *node);
 
 // Helper: Recursively evaluate arguments for native calls
 void evaluate_native_args(ASTNode *arg) {
-    ASTNode *curr = arg;
-    int idx = 0;
-    while (curr) {
-        if (curr->type && (strcmp(curr->type, "IDENTIFIER") == 0 || strcmp(curr->type, "ID") == 0)) {
-            Variable *v = find_variable(curr->id);
-            if (v) {
-                if (v->vtype == VAL_STRING) {
-                    curr->type = strdup("STRING");
-                    curr->str_value = strdup(v->value.string_value);
-                } else if (v->vtype == VAL_INT) {
-                    curr->type = strdup("NUMBER");
-                    curr->value = v->value.int_value;
-                }
-            }
-        }
-        curr = curr->right;
-        idx++;
-    }
+    /* BUG FIX (mayo 2026): este helper antes mutaba el nodo AST en sitio,
+     * cambiando IDENTIFIER → STRING/NUMBER y guardando el valor resuelto en
+     * curr->str_value / curr->value. Eso "horneaba" el valor del primer
+     * request en el AST compartido, de forma que en --api mode (donde el
+     * mismo árbol se re-ejecuta por cada request) un `let b = request_body();
+     * concat(..., b, ...)` quedaba congelado al valor del primer POST aunque
+     * b se redeclaraba correctamente en cada llamada.
+     *
+     * Los consumidores (native_concat → get_node_string, native_json, etc.)
+     * ya resuelven IDENTIFIER de forma fresca leyendo find_variable() en
+     * cada invocación, por lo que la pre-resolución mutante es innecesaria.
+     * Dejamos la función como no-op para no romper la ABI y mantener el
+     * sitio de llamada en call_native_function. */
+    (void)arg;
 }
 
 // Global buffer for capturing println output
