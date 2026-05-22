@@ -26,6 +26,7 @@
 #include "te_math.h"
 #include "te_string.h"
 #include "te_list.h"
+#include "te_map.h"
 
 #ifdef TE_HAVE_OPENMP
 #  include <omp.h>
@@ -446,7 +447,7 @@ ASTNode* list_get_item(ASTNode *list, int idx);
 int list_length(ASTNode *list);
 ASTNode* resolve_to_list(ASTNode *node);
 ASTNode* resolve_to_map(ASTNode *node);
-static int map_length(ASTNode *map);
+int map_length(ASTNode *map);
 ASTNode* map_find_pair(ASTNode *map, const char *key);
 static void interpret_call_method(ASTNode *node);
 
@@ -2670,7 +2671,7 @@ void te_list_append(ASTNode *list, ASTNode *item) {
         (void)te_list_get_idx(list);
     }
 }
-static void te_invalidate_map_cache(ASTNode *root) {
+void te_invalidate_map_cache(ASTNode *root) {
     if (!root || !root->extra) return;
     te_map_hash_free((TEMapHash*)root->extra);
     root->extra = NULL;
@@ -2790,7 +2791,7 @@ ASTNode* resolve_to_map(ASTNode *node) {
     return NULL;
 }
 
-static int map_length(ASTNode *map) {
+int map_length(ASTNode *map) {
     if (!map) return 0;
     /* Ola 14: O(1) via side-cache hash. */
     TEMapHash *h = te_map_get_hash(map);
@@ -6256,83 +6257,11 @@ static void interpret_call_method(ASTNode *node) {
         if (te_list_method_dispatch(node, list)) return;
     }
 
-    /* Fase 1c: métodos built-in en MAP: keys, values, has, remove */
+    /* Fase 1c + Ola 13: métodos built-in en MAP (keys/values/has/remove/size/length/clear).
+     * Dispatched in te_map.c (Nivel B paso 2.d). */
     if (v && v->type && strcmp(v->type, "MAP") == 0) {
         ASTNode *map = (ASTNode*)(intptr_t)v->value.object_value;
-        if (map && node->id && strcmp(node->id, "keys") == 0) {
-            ASTNode *list = create_list_node(NULL);
-            ASTNode *cur = map->left;
-            while (cur) {
-                ASTNode *item = (ASTNode*)calloc(1, sizeof(ASTNode));
-                memset(item, 0, sizeof(ASTNode));
-                item->type = strdup("STRING");
-                item->str_value = strdup(cur->id ? cur->id : "");
-                if (!list->left) list->left = item;
-                else { ASTNode *t = list->left; while (t->next) t = t->next; t->next = item; }
-                cur = cur->right;
-            }
-            add_or_update_variable("__ret__", list);
-            return;
-        }
-        if (map && node->id && strcmp(node->id, "values") == 0) {
-            ASTNode *list = create_list_node(NULL);
-            ASTNode *cur = map->left;
-            while (cur) {
-                ASTNode *src = cur->left;
-                ASTNode *item = build_item_from_value(src);
-                if (!list->left) list->left = item;
-                else { ASTNode *t = list->left; while (t->next) t = t->next; t->next = item; }
-                cur = cur->right;
-            }
-            add_or_update_variable("__ret__", list);
-            return;
-        }
-        if (map && node->id && strcmp(node->id, "has") == 0) {
-            const char *key = NULL;
-            ASTNode *arg = node->right;
-            if (arg && arg->type && strcmp(arg->type, "STRING") == 0) key = arg->str_value;
-            else if (arg && (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0)) {
-                Variable *kv = find_variable(arg->id);
-                if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
-            }
-            int found = (key && map_find_pair(map, key)) ? 1 : 0;
-            ASTNode *r = (ASTNode*)calloc(1, sizeof(ASTNode));
-            memset(r, 0, sizeof(ASTNode));
-            r->type = strdup("NUMBER"); r->value = found;
-            add_or_update_variable("__ret__", r);
-            return;
-        }
-        if (map && node->id && strcmp(node->id, "remove") == 0) {
-            const char *key = NULL;
-            ASTNode *arg = node->right;
-            if (arg && arg->type && strcmp(arg->type, "STRING") == 0) key = arg->str_value;
-            else if (arg && (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0)) {
-                Variable *kv = find_variable(arg->id);
-                if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
-            }
-            if (!key) return;
-            ASTNode *prev = NULL, *cur = map->left;
-            while (cur) {
-                if (cur->id && strcmp(cur->id, key) == 0) {
-                    if (prev) prev->right = cur->right; else map->left = cur->right;
-                    te_invalidate_map_cache(map);  /* Ola 14 */
-                    return;
-                }
-                prev = cur; cur = cur->right;
-            }
-            return;
-        }
-        /* ---- Ola 13: map size/length, clear ---- */
-        if (map && node->id && (strcmp(node->id, "size") == 0 || strcmp(node->id, "length") == 0)) {
-            int n = map_length(map);  /* uses cache */
-            add_or_update_variable("__ret__", create_ast_leaf_number("INT", n, NULL, NULL));
-            return;
-        }
-        if (map && node->id && strcmp(node->id, "clear") == 0) {
-            map->left = NULL;  /* leak: deliberate; lifetime tied to AST. */
-            te_invalidate_map_cache(map);  /* Ola 14 */
-            return;
-        }
+        if (te_map_method_dispatch(node, map)) return;
     }
     
     if (!v || v->vtype != VAL_OBJECT) {
