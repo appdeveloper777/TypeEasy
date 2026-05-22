@@ -205,3 +205,296 @@ int lazy_terminal(ASTNode *lazy_node, ASTNode *node) {
     if (is_every)   { add_or_update_variable("__ret__", create_ast_leaf_number("INT", every_match, NULL, NULL)); return 1; }
     return 0;
 }
+
+/* ============================================================================
+ * Nivel B paso 2.e: dispatchers de alto nivel para interpret_call_method.
+ * ============================================================================ */
+
+/* ast.c helpers used here. find_variable is in ast.h. */
+
+int te_linq_lazy_method_dispatch(ASTNode *node, Variable *v) {
+    if (!v || !v->type || strcmp(v->type, "LAZY_ITER") != 0 || !node || !node->id) return 0;
+    ASTNode *lz = (ASTNode*)(intptr_t)v->value.object_value;
+    const char *m = node->id;
+    /* Intermediate: where/filter/select/map (lambda) */
+    if (strcmp(m, "where") == 0 || strcmp(m, "filter") == 0 ||
+        strcmp(m, "select") == 0 || strcmp(m, "map") == 0) {
+        ASTNode *lam = lazy_resolve_lambda_arg(node->right);
+        if (lam) {
+            add_or_update_variable("__ret__", lazy_extend(lz, NULL, m, lam, 0));
+            return 1;
+        }
+    }
+    /* Intermediate: take/skip (int arg) */
+    if (strcmp(m, "take") == 0 || strcmp(m, "skip") == 0) {
+        int n = node->right ? (int)evaluate_expression(node->right) : 0;
+        add_or_update_variable("__ret__", lazy_extend(lz, NULL, m, NULL, n));
+        return 1;
+    }
+    /* Terminal: toList/toArray/count/sum/first/forEach/reduce/any/every */
+    if (lazy_terminal(lz, node)) return 1;
+    /* Unknown method on LAZY_ITER — caller may fall through. */
+    return 0;
+}
+
+int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
+    if (!list || !node || !node->id) return 0;
+    const char *fname = node->id;
+
+    /* ===== v0.0.12 #8 Lazy iterator promotion: xs.lazy() -> LAZY_ITER ===== */
+    if (strcmp(fname, "lazy") == 0) {
+        ASTNode *lz = (ASTNode*)calloc(1, sizeof(ASTNode));
+        lz->type = strdup("LAZY_ITER");
+        lz->left = list;   /* source LIST (shared ref) */
+        lz->right = NULL;  /* empty op chain */
+        add_or_update_variable("__ret__", lz);
+        return 1;
+    }
+
+    /* ===== v0.0.11 LINQ: numeric / no-arg methods on LIST ===== */
+    if (!(strcmp(fname, "sum") == 0 ||
+          strcmp(fname, "avg") == 0 ||
+          strcmp(fname, "average") == 0 ||
+          strcmp(fname, "minVal") == 0 ||
+          strcmp(fname, "maxVal") == 0 ||
+          strcmp(fname, "first") == 0 ||
+          strcmp(fname, "last") == 0 ||
+          strcmp(fname, "take") == 0 ||
+          strcmp(fname, "skip") == 0 ||
+          strcmp(fname, "distinct") == 0 ||
+          strcmp(fname, "toList") == 0 ||
+          strcmp(fname, "concat") == 0 ||
+          strcmp(fname, "zip") == 0)) {
+        return 0;
+    }
+
+    if (strcmp(fname, "sum") == 0) {
+        double acc = 0.0; int is_int = 1;
+        ASTNode *it = list->left;
+        while (it) {
+            double v = it->str_value ? atof(it->str_value) : (double)it->value;
+            if (v != (double)(long long)v) is_int = 0;
+            acc += v;
+            it = it->next;
+        }
+        if (is_int && acc == (double)(long long)acc) {
+            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)acc, NULL, NULL));
+        } else {
+            char buf[64]; snprintf(buf, sizeof(buf), "%g", acc);
+            add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+        }
+        return 1;
+    }
+    if (strcmp(fname, "avg") == 0 || strcmp(fname, "average") == 0) {
+        double acc = 0.0; int cnt = 0;
+        ASTNode *it = list->left;
+        while (it) {
+            acc += it->str_value ? atof(it->str_value) : (double)it->value;
+            cnt++; it = it->next;
+        }
+        double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
+        char buf[64]; snprintf(buf, sizeof(buf), "%g", res);
+        add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+        return 1;
+    }
+    if (strcmp(fname, "minVal") == 0 || strcmp(fname, "maxVal") == 0) {
+        int want_max = (strcmp(fname, "maxVal") == 0);
+        ASTNode *it = list->left;
+        if (!it) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return 1; }
+        int is_str = (it->type && strcmp(it->type, "STRING") == 0);
+        double best_n = 0.0; char *best_s = NULL;
+        if (is_str) best_s = it->str_value ? it->str_value : "";
+        else best_n = it->str_value ? atof(it->str_value) : (double)it->value;
+        ASTNode *best_node = it;
+        it = it->next;
+        while (it) {
+            if (is_str) {
+                const char *cs = it->str_value ? it->str_value : "";
+                int c = strcmp(cs, best_s);
+                if (want_max ? (c > 0) : (c < 0)) { best_s = (char*)cs; best_node = it; }
+            } else {
+                double v = it->str_value ? atof(it->str_value) : (double)it->value;
+                if (want_max ? (v > best_n) : (v < best_n)) { best_n = v; best_node = it; }
+            }
+            it = it->next;
+        }
+        add_or_update_variable("__ret__", build_item_from_value(best_node));
+        return 1;
+    }
+    if (strcmp(fname, "first") == 0) {
+        if (list->left) add_or_update_variable("__ret__", build_item_from_value(list->left));
+        else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+        return 1;
+    }
+    if (strcmp(fname, "last") == 0) {
+        ASTNode *cur = list->left;
+        if (!cur) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return 1; }
+        while (cur->next) cur = cur->next;
+        add_or_update_variable("__ret__", build_item_from_value(cur));
+        return 1;
+    }
+    if (strcmp(fname, "take") == 0) {
+        int n = node->right ? (int)evaluate_expression(node->right) : 0;
+        ASTNode *result = create_list_node(NULL);
+        ASTNode *it = list->left;
+        int i = 0;
+        while (it && i < n) {
+            te_list_append(result, build_item_from_value(it));
+            it = it->next; i++;
+        }
+        add_or_update_variable("__ret__", result);
+        return 1;
+    }
+    if (strcmp(fname, "skip") == 0) {
+        int n = node->right ? (int)evaluate_expression(node->right) : 0;
+        ASTNode *result = create_list_node(NULL);
+        ASTNode *it = list->left;
+        int i = 0;
+        while (it) {
+            if (i >= n) te_list_append(result, build_item_from_value(it));
+            it = it->next; i++;
+        }
+        add_or_update_variable("__ret__", result);
+        return 1;
+    }
+    if (strcmp(fname, "distinct") == 0) {
+        /* Hash-based dedupe with parallel int/string tables. */
+        ASTNode *result = create_list_node(NULL);
+        size_t icap = 64, scap = 64;
+        size_t icount = 0, scount = 0;
+        long long *ikeys = (long long*)calloc(icap, sizeof(long long));
+        unsigned char *iused = (unsigned char*)calloc(icap, 1);
+        char **skeys = (char**)calloc(scap, sizeof(char*));
+        ASTNode *it = list->left;
+        while (it) {
+            int is_str = (it->type && strcmp(it->type, "STRING") == 0);
+            int dup = 0;
+            if (is_str) {
+                const char *s = it->str_value ? it->str_value : "";
+                uint32_t h = 2166136261u;
+                for (const unsigned char *p = (const unsigned char*)s; *p; p++) {
+                    h ^= *p; h *= 16777619u;
+                }
+                size_t mask = scap - 1;
+                size_t i_h = (size_t)h & mask;
+                while (skeys[i_h] && strcmp(skeys[i_h], s) != 0) i_h = (i_h + 1) & mask;
+                if (skeys[i_h]) dup = 1;
+                else {
+                    skeys[i_h] = strdup(s);
+                    scount++;
+                    if (scount * 2 >= scap) {
+                        size_t nc = scap * 2;
+                        char **ns = (char**)calloc(nc, sizeof(char*));
+                        size_t nm = nc - 1;
+                        for (size_t k = 0; k < scap; k++) if (skeys[k]) {
+                            uint32_t h2 = 2166136261u;
+                            for (const unsigned char *p = (const unsigned char*)skeys[k]; *p; p++) {
+                                h2 ^= *p; h2 *= 16777619u;
+                            }
+                            size_t j = (size_t)h2 & nm;
+                            while (ns[j]) j = (j + 1) & nm;
+                            ns[j] = skeys[k];
+                        }
+                        free(skeys); skeys = ns; scap = nc;
+                    }
+                }
+            } else {
+                long long key = it->str_value ? (long long)atof(it->str_value) : (long long)it->value;
+                uint64_t x = (uint64_t)key;
+                x ^= x >> 33; x *= 0xff51afd7ed558ccdULL;
+                x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL; x ^= x >> 33;
+                size_t mask = icap - 1;
+                size_t i_h = (size_t)x & mask;
+                while (iused[i_h] && ikeys[i_h] != key) i_h = (i_h + 1) & mask;
+                if (iused[i_h]) dup = 1;
+                else {
+                    iused[i_h] = 1; ikeys[i_h] = key; icount++;
+                    if (icount * 2 >= icap) {
+                        size_t nc = icap * 2;
+                        long long *nk = (long long*)calloc(nc, sizeof(long long));
+                        unsigned char *nu = (unsigned char*)calloc(nc, 1);
+                        size_t nm = nc - 1;
+                        for (size_t k = 0; k < icap; k++) if (iused[k]) {
+                            uint64_t x2 = (uint64_t)ikeys[k];
+                            x2 ^= x2 >> 33; x2 *= 0xff51afd7ed558ccdULL;
+                            x2 ^= x2 >> 33; x2 *= 0xc4ceb9fe1a85ec53ULL; x2 ^= x2 >> 33;
+                            size_t j = (size_t)x2 & nm;
+                            while (nu[j]) j = (j + 1) & nm;
+                            nu[j] = 1; nk[j] = ikeys[k];
+                        }
+                        free(ikeys); free(iused); ikeys = nk; iused = nu; icap = nc;
+                    }
+                }
+            }
+            if (!dup) te_list_append(result, build_item_from_value(it));
+            it = it->next;
+        }
+        for (size_t k = 0; k < scap; k++) if (skeys[k]) free(skeys[k]);
+        free(skeys); free(ikeys); free(iused);
+        add_or_update_variable("__ret__", result);
+        return 1;
+    }
+    if (strcmp(fname, "toList") == 0) {
+        ASTNode *result = create_list_node(NULL);
+        ASTNode *it = list->left;
+        while (it) { te_list_append(result, build_item_from_value(it)); it = it->next; }
+        add_or_update_variable("__ret__", result);
+        return 1;
+    }
+    if (strcmp(fname, "concat") == 0) {
+        ASTNode *result = create_list_node(NULL);
+        ASTNode *it = list->left;
+        while (it) { te_list_append(result, build_item_from_value(it)); it = it->next; }
+        ASTNode *arg = node->right;
+        ASTNode *other_list = NULL;
+        if (arg) {
+            if (arg->type && strcmp(arg->type, "LIST") == 0) other_list = arg;
+            else if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+                Variable *ov = find_variable(arg->id);
+                if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "LIST") == 0) {
+                    other_list = (ASTNode*)(intptr_t)ov->value.object_value;
+                }
+            }
+        }
+        if (other_list) {
+            ASTNode *oi = other_list->left;
+            while (oi) { te_list_append(result, build_item_from_value(oi)); oi = oi->next; }
+        }
+        add_or_update_variable("__ret__", result);
+        return 1;
+    }
+    if (strcmp(fname, "zip") == 0) {
+        ASTNode *result = create_list_node(NULL);
+        ASTNode *arg = node->right;
+        ASTNode *other_list = NULL;
+        if (arg) {
+            if (arg->type && strcmp(arg->type, "LIST") == 0) other_list = arg;
+            else if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+                Variable *ov = find_variable(arg->id);
+                if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "LIST") == 0) {
+                    other_list = (ASTNode*)(intptr_t)ov->value.object_value;
+                }
+            }
+        }
+        if (!other_list) {
+            add_or_update_variable("__ret__", result);
+            return 1;
+        }
+        ASTNode *a = list->left;
+        ASTNode *b = other_list->left;
+        while (a && b) {
+            ASTNode *lit = (ASTNode*)calloc(1, sizeof(ASTNode));
+            lit->type = strdup("OBJECT_LITERAL");
+            ASTNode *p1 = create_kv_pair_node("left",  build_item_from_value(a));
+            ASTNode *p2 = create_kv_pair_node("right", build_item_from_value(b));
+            lit->left = p1;
+            p1->right = p2;
+            te_list_append(result, lit);
+            a = a->next;
+            b = b->next;
+        }
+        add_or_update_variable("__ret__", result);
+        return 1;
+    }
+    return 0;
+}

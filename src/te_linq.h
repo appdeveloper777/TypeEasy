@@ -41,6 +41,19 @@ ASTNode *lazy_resolve_lambda_arg(ASTNode *arg);
  * t_name in `node->id` is not a recognised terminal (caller falls through). */
 int lazy_terminal(ASTNode *lazy_node, ASTNode *node);
 
+/* High-level dispatcher used by interpret_call_method (ast.c) when the
+ * receiver `v` is a LAZY_ITER. Handles intermediate (where/filter/select/
+ * map/take/skip) + terminal (toList/.../every) methods. Returns 1 if the
+ * receiver was a LAZY_ITER and the method was dispatched, 0 otherwise. */
+int te_linq_lazy_method_dispatch(ASTNode *node, Variable *v);
+
+/* High-level dispatcher used by interpret_call_method (ast.c) when the
+ * receiver is a LIST. Handles the .lazy() promotion and the numeric/no-arg
+ * LINQ methods (sum/avg/average/minVal/maxVal/first/last/take/skip/distinct/
+ * toList/concat/zip). Returns 1 if handled, 0 otherwise (caller falls
+ * through to remaining LIST handlers like push/pop/etc.). */
+int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list);
+
 #ifdef __cplusplus
 }
 #endif
