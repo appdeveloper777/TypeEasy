@@ -45,6 +45,11 @@ int csv_attr_is_nullable(const char *t);
 /* AST node block pool (zero-initialised slots, never freed individually). */
 ASTNode *ast_pool_alloc(void);
 
+/* Pool-allocated wrapper for an OBJECT value. Used by LINQ fast-paths
+ * (orderBy/groupBy/toMap) that materialize wrappers per call. Returns NULL
+ * when the value isn't a plain OBJECT (caller falls back to build_item_from_value). */
+ASTNode *build_object_wrapper_pooled(ASTNode *value);
+
 /* DataFrame analytics fast-path consumed by interpret_call_method. */
 DataFrame *te_list_df(ASTNode *list);
 int te_df_dispatch_method(DataFrame *df, ASTNode *node);
