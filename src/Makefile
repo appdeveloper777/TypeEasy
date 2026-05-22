@@ -12,7 +12,7 @@ MAIN_AGENT_OBJ = $(MAIN_AGENT_C:.c=.o)
 BISON_FILE = parser.y
 FLEX_FILE = parser.l
 # Archivos del motor incluyendo la nueva API embebida
-MOTOR_C_FILES = ast.c bytecode.c mysql_bridge.c postgres_bridge.c sqlserver_bridge.c db_params.c orm_bridge.c typeeasy_api.c typeeasy_api_server.c wasm_backend.c debugger.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c
+MOTOR_C_FILES = ast.c bytecode.c mysql_bridge.c postgres_bridge.c sqlserver_bridge.c db_params.c orm_bridge.c typeeasy_api.c typeeasy_api_server.c wasm_backend.c debugger.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c te_colcache.c
 MOTOR_OBJS = $(MOTOR_C_FILES:.c=.o)
 
 BISON_C = parser.tab.c
