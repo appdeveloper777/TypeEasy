@@ -1,0 +1,10 @@
+class Producto {
+  nombre : string;
+  precio : int;
+}
+let productos = from "productos_10000000.csv", Producto;
+println("filas=" + productos.length);
+println("sumBy.precio=" + productos.sumBy(fn(p) => p.precio));
+println("countWhere>500=" + productos.countWhere(fn(p) => p.precio > 500));
+println("countWhere<100=" + productos.countWhere(fn(p) => p.precio < 100));
+println("countWhere==2=" + productos.countWhere(fn(p) => p.precio == 2));

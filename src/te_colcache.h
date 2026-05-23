@@ -24,8 +24,13 @@
 extern "C" {
 #endif
 
-/* OpenMP threshold below which we don't parallelize column scans. */
-#define TE_OMP_MIN_N 10000
+/* OpenMP threshold below which we don't parallelize column scans.
+ * Empirically, pure aggregates over int64/double columns are memory-bound:
+ * a single core saturates ~10GB/s, so 10M int64 (80MB) finishes in ~8ms
+ * while 8-thread fork/join + barrier overhead is ~5–20ms on typical Linux.
+ * Raising the threshold avoids slowdowns on small/medium datasets without
+ * hurting truly large workloads. */
+#define TE_OMP_MIN_N 50000000
 
 int te_openmp_enabled(void);
 int te_fastpath_enabled(void);
