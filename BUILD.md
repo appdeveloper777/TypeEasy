@@ -167,6 +167,36 @@ Si necesitas personalizar el proceso de compilación, puedes modificar el `Makef
 - `CFLAGS`: Flags de compilación para C
 - `CXXFLAGS`: Flags de compilación para C++
 
+### Flags requeridas para la ruta columnar SIMD (CSV/DataFrame)
+
+A partir de v0.0.14 las primitivas `te_simd_cmp_i64` y `te_simd_cmp_f64`
+(usadas por `where`/`countWhere` sobre columnas `int` y `float` en el
+path `TE_CSV_COLUMNAR=1`) requieren AVX2. La build oficial Docker
+(`src/Dockerfile`) ya las añade:
+
+```
+-O3 -fopenmp -DTE_HAVE_OPENMP -mavx2 -mbmi -lgomp
+```
+
+Variables de entorno relevantes en runtime:
+
+| Variable | Default | Efecto |
+|---|---|---|
+| `TE_CSV_DATAFRAME` | `0` | Activa wrapper DataFrame (lista lazy) sobre CSV. |
+| `TE_CSV_COLUMNAR`  | auto | Path columnar (buffers contiguos por columna). |
+| `TE_CSV_THREADS`   | `1` | Workers paralelos para parseo de chunks. |
+| `TE_OMP_MIN_N`     | `50000000` | Umbral de filas para activar OMP en colcache. |
+| `TE_CSV_TIMING`    | `0` | Imprime `[csv-timing]` con desgloses por fase. |
+
+### Tipos de columna soportados por `from "...csv", Class`
+
+| Tipo en la clase | Path columnar | SIMD `where` |
+|---|---|---|
+| `int` / `int?` | sí | sí (AVX2 i64) |
+| `string` / `string?` | sí | no (igualdad escalar) |
+| `float` / `float?` / `double` / `double?` | sí (v0.0.14+) | sí (AVX2 f64) |
+| otros | fallback a path ObjectNode legacy | no |
+
 ## Backend WebAssembly
 
 TypeEasy incluye un backend inicial para generar WebAssembly Text Format (`.wat`) sin modificar el flujo normal del interprete.

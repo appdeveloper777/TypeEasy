@@ -2247,3 +2247,60 @@ TypeEasy v0.0.10 es **competitivo en workloads I/O + materialización de
 objetos masivos**, gracias a que `from "..csv", Class` es una primitiva
 nativa. El despacho de `__constructor` agrega ~25-35% pero deja al
 intérprete aún 5× sobre CPython en este escenario.
+
+
+---
+
+## v0.0.14-dev — polish #6a/#6b: float CSV columnar + SIMD AVX2 f64 (2026-05-23)
+
+Hasta v0.0.14 las columnas declaradas `float` / `double` en `from "..csv", Class`
+caían al path "string/other" del parser columnar: se almacenaban como punteros
+a string y todas las comparaciones numéricas pasaban por `strtod` por fila.
+Esto era correcto pero ~2× más lento que enteros y los predicados de `where`
+no podían usar SIMD.
+
+### Cambios
+
+1. **Parser columnar (`src/te_csv.c`)**
+   - Nuevo `csv_attr_is_float()` que reconoce `float` / `float?` / `FLOAT`
+     / `double` / `double?` / `Double`.
+   - Enum interno extendido: `K_INT=0, K_STRING=1, K_OTHER=2, K_FLOAT=3`.
+   - `row_template[a].vtype = K_FLOAT ? VAL_FLOAT : ...` para que `obj.x`
+     respete el tipo en runtime.
+   - 3 sitios escritores (pure_col, ObjectNode legacy, build_cols colcache)
+     hacen `strtod(raw, &endp)` y guardan en `gcol_f[a][r]` (`double *`).
+   - `TeColCache.flt_cols[]` alocado por columna `K_FLOAT`; pure-columnar
+     **no** se deshabilita por floats (workaround d0655a2 revertido).
+
+2. **SIMD AVX2 f64 (`src/te_colcache.c`)**
+   - Nueva `te_simd_cmp_f64(col, n, spec, k, mask)` con `_mm256_cmp_pd`
+     y predicados ordered non-signaling
+     (`_CMP_EQ_OQ` / `_NEQ_OQ` / `_GT_OQ` / `_LT_OQ` / `_GE_OQ` / `_LE_OQ`).
+   - `te_colcache_eval_pred` rama `kind==1` ahora reusa el mismo patrón
+     OMP + SIMD que `kind==0` (int64). Procesa 4 doubles por iteración
+     con `_mm256_movemask_pd`; cola escalar al final.
+
+### Validación
+
+| Carga | Filas | Wall (Docker spin incluido) | parse | colcache attach | Resultado |
+|---|---:|---:|---:|---:|---:|
+| `g_small_float.csv` (1k filas) | 1 000 | ~2.7 s | 0 us | direct-write | `cnt=488` ✓ |
+| `productos_float_5M.csv` (5M filas) | 5 000 000 | ~3.0 s | **186 ms** | **0 us** | `cnt=2 499 562` ✓ |
+
+`colcache attach=0us` confirma que los workers escriben directo a
+`flt_cols[]` (no hay copia post-parse).
+
+Regresión: **60 PASS / 0 FAIL / 3 XFAIL** (verde).
+
+### Limitaciones conocidas (a futuro)
+
+- `groupBy(x => x.precio)` con clave float aún cae al slow-path string
+  (truncamiento `(long long)v`). El fast-path numérico solo soporta int.
+- `te_orm_attr_kind` (MySQL ORM) sigue mapeando float a "other" → strtod
+  por fila en lugar de batch columnar. No es prioridad porque ORM no
+  procesa millones de filas float en producción aún.
+- `te_colcache_sum` y `te_colcache_avg` rama float siguen escalares
+  (sin `_mm256_add_pd`). Predicados ya vectorizados; agregados pendientes.
+- Parser **int** sigue siendo escalar (atoi inline). En 5M filas representa
+  ~100ms de los 186ms de parse — SIMD int parser sería el próximo gran
+  pulimiento si se requiere.
