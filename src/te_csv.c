@@ -2493,9 +2493,12 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
          *  5) Al join, attach TeColCache prebuilt (sin recorrer la lista). */
         const char *eco_pre = getenv("TE_COLCACHE");
         int want_colcache = (!eco_pre || eco_pre[0] != '0');
-        /* v0.0.14: TE_CSV_COLUMNAR=1 → skip wrappers (items[] NO alocado). */
-        static int pure_columnar = -1;
-        if (pure_columnar < 0) pure_columnar = getenv("TE_CSV_COLUMNAR") ? 1 : 0;
+        /* v0.0.14: TE_CSV_COLUMNAR=1 → skip wrappers (items[] NO alocado).
+         * Per-call override (g_te_csv_columnar_next) wins over env. Consumed
+         * and reset to -1 below so it only affects this single load. */
+        int pure_columnar;
+        if (g_te_csv_columnar_next >= 0) { pure_columnar = g_te_csv_columnar_next; g_te_csv_columnar_next = -1; }
+        else pure_columnar = getenv("TE_CSV_COLUMNAR") ? 1 : 0;
         int prep_ok = want_colcache;
         TeColCache *gcache = NULL;
         int total_n = 0;
@@ -2633,8 +2636,9 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         /* Serial fallback: 1 chunk = todo. Path direct-write opcional. */
         const char *eco_pre = getenv("TE_COLCACHE");
         int want_colcache = (!eco_pre || eco_pre[0] != '0');
-        static int pure_columnar = -1;
-        if (pure_columnar < 0) pure_columnar = getenv("TE_CSV_COLUMNAR") ? 1 : 0;
+        int pure_columnar;
+        if (g_te_csv_columnar_next >= 0) { pure_columnar = g_te_csv_columnar_next; g_te_csv_columnar_next = -1; }
+        else pure_columnar = getenv("TE_CSV_COLUMNAR") ? 1 : 0;
         CSVWorkerArgs sa;
         memset(&sa, 0, sizeof(sa));
         sa.chunk_start = pos;
@@ -2759,4 +2763,175 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
     }
     free(worker_args);
     return listNode;
+}
+
+/* =====================================================================
+ * v0.0.14: Lazy CSV-load registry + auto-detect of COLUMNAR-safe usage.
+ *
+ * The parser defers each `let|var X = from "f.csv", Cls;` load to here
+ * via te_csv_lazy_register(). After yyparse() finishes, parse_file()
+ * calls te_csv_lazy_resolve_all(root), which:
+ *   - For each pending load, scans the AST for usages of var name.
+ *   - If every usage is a "safe" pattern (LINQ aggregate on the list
+ *     itself, with no element access / iteration / mutation), sets
+ *     g_te_csv_columnar_next=1 → pure-columnar load (no wrappers).
+ *   - Otherwise sets g_te_csv_columnar_next=0 → legacy load.
+ *   - Invokes from_csv_to_list and patches var_decl->left.
+ *
+ * This eliminates the need for the TE_CSV_COLUMNAR=1 env var in the
+ * common analytics case (sumBy / countWhere / .length etc.) while
+ * preserving correctness for `for x in list`, `list[i]`, `.first()`,
+ * etc., which still need wrappers.
+ * ===================================================================== */
+
+int g_te_csv_columnar_next = -1;
+
+typedef struct CsvLazyEntry {
+    ASTNode *var_decl;
+    char *filename;
+    char *class_name;
+} CsvLazyEntry;
+
+static CsvLazyEntry *g_lazy = NULL;
+static int g_lazy_n = 0;
+static int g_lazy_cap = 0;
+
+void te_csv_lazy_register(ASTNode *var_decl, const char *filename, const char *class_name) {
+    if (!var_decl || !filename || !class_name) return;
+    if (g_lazy_n >= g_lazy_cap) {
+        int nc = g_lazy_cap ? g_lazy_cap * 2 : 8;
+        CsvLazyEntry *nb = (CsvLazyEntry*)realloc(g_lazy, (size_t)nc * sizeof(CsvLazyEntry));
+        if (!nb) return;
+        g_lazy = nb;
+        g_lazy_cap = nc;
+    }
+    g_lazy[g_lazy_n].var_decl = var_decl;
+    g_lazy[g_lazy_n].filename = strdup(filename);
+    g_lazy[g_lazy_n].class_name = strdup(class_name);
+    g_lazy_n++;
+}
+
+/* Safe LINQ methods on a CSV-loaded list that work in pure-columnar mode
+ * (read directly from col_cache, never deref items[]). Keep in sync with
+ * te_linq_ops.c columnar fast-paths. */
+static int csv_lazy_method_is_safe(const char *m) {
+    if (!m) return 0;
+    static const char *SAFE[] = {
+        "sumBy", "countWhere", "avgBy", "minBy", "maxBy", "groupBy",
+        "sum", "count", "avg", "min", "max", "length",
+        NULL
+    };
+    for (int i = 0; SAFE[i]; i++) if (strcmp(m, SAFE[i]) == 0) return 1;
+    return 0;
+}
+
+/* Attributes on the list itself that are safe in columnar mode. */
+static int csv_lazy_attr_is_safe(const char *a) {
+    if (!a) return 0;
+    return strcmp(a, "length") == 0 || strcmp(a, "count") == 0 || strcmp(a, "size") == 0;
+}
+
+/* Walk `node` (with `parent`), classify any IDENTIFIER/ID referring to
+ * `var_name`. Sets *unsafe = 1 on first unsafe usage. */
+static void csv_lazy_scan(ASTNode *node, ASTNode *parent, const char *var_name, int *unsafe) {
+    if (!node || *unsafe) return;
+    static int depth = 0;
+    if (++depth > 100000) { depth--; *unsafe = 1; return; }  /* safety net */
+
+    if (node->type && (strcmp(node->type, "IDENTIFIER") == 0 || strcmp(node->type, "ID") == 0)
+        && node->id && strcmp(node->id, var_name) == 0) {
+        /* This is a reference to our CSV list. Inspect parent context. */
+        int safe = 0;
+        if (parent && parent->type) {
+            if (strcmp(parent->type, "CALL_METHOD") == 0 && parent->left == node) {
+                /* receiver of a method call: e.g. list.sumBy(...) */
+                if (csv_lazy_method_is_safe(parent->id)) safe = 1;
+            } else if (strcmp(parent->type, "ACCESS_ATTR") == 0 && parent->left == node) {
+                /* receiver of attribute access: list.length — attr name lives
+                 * in parent->right (an ID leaf), not in parent->id. */
+                if (parent->right && parent->right->id
+                    && csv_lazy_attr_is_safe(parent->right->id)) safe = 1;
+            } else if (strcmp(parent->type, "VAR_DECL") == 0 && parent->left == node) {
+                /* The init link from var_decl to itself — ignore. Shouldn't
+                 * happen via traversal since we placed the IDENTIFIER inside
+                 * an expression, but stay defensive. */
+                safe = 1;
+            }
+        }
+        if (!safe) { *unsafe = 1; return; }
+        /* When safe, do NOT recurse into the parent — but since we're
+         * already inside it from the caller, just continue normally. */
+    }
+
+    /* Recurse into children. Standard ASTNode child links.
+     * NOTE: `extra` is overloaded — for OBJECT/LIST/MAP it holds non-ASTNode
+     * pointers (ObjectNode*, list index, map hash) and dereferencing those as
+     * ASTNode would segfault. Skip extra for those types. */
+    csv_lazy_scan(node->left,  node, var_name, unsafe);
+    csv_lazy_scan(node->right, node, var_name, unsafe);
+    csv_lazy_scan(node->next,  node, var_name, unsafe);
+    if (node->extra && node->type) {
+        const char *t = node->type;
+        int skip_extra = (strcmp(t, "OBJECT") == 0 || strcmp(t, "LIST") == 0
+                       || strcmp(t, "MAP") == 0 || strcmp(t, "THIS") == 0
+                       || strcmp(t, "DATAFRAME") == 0);
+        if (!skip_extra) csv_lazy_scan(node->extra, node, var_name, unsafe);
+    }
+    depth--;
+}
+
+void te_csv_lazy_resolve_all(ASTNode *root) {
+    if (g_lazy_n == 0) return;
+    int debug = getenv("TE_CSV_AUTO_DEBUG") ? 1 : 0;
+
+    for (int i = 0; i < g_lazy_n; i++) {
+        CsvLazyEntry *e = &g_lazy[i];
+        ASTNode *vd = e->var_decl;
+        const char *vname = (vd && vd->id) ? vd->id : NULL;
+        ClassNode *cls = find_class(e->class_name);
+
+        if (!vname || !cls) {
+            if (!cls) fprintf(stderr, "Clase '%s' no encontrada.\n", e->class_name);
+            free(e->filename); free(e->class_name);
+            continue;
+        }
+
+        /* Scan AST for unsafe usages of `vname`. */
+        int unsafe = 0;
+        csv_lazy_scan(root, NULL, vname, &unsafe);
+
+        /* Manual env override still wins if set. */
+        const char *force_env = getenv("TE_CSV_COLUMNAR");
+        if (force_env && force_env[0] == '1') {
+            g_te_csv_columnar_next = 1;
+            if (debug) fprintf(stderr, "[CSV-AUTO] %s: forced COLUMNAR via env\n", vname);
+        } else if (force_env && force_env[0] == '0') {
+            g_te_csv_columnar_next = 0;
+            if (debug) fprintf(stderr, "[CSV-AUTO] %s: forced legacy via env\n", vname);
+        } else {
+            g_te_csv_columnar_next = unsafe ? 0 : 1;
+            if (debug) fprintf(stderr, "[CSV-AUTO] %s: %s (unsafe_usage=%d)\n",
+                vname, unsafe ? "legacy" : "COLUMNAR", unsafe);
+        }
+
+        ASTNode *list = from_csv_to_list(e->filename, cls);
+        if (vd) {
+            /* Free placeholder (small empty LIST node) and install real list. */
+            ASTNode *placeholder = vd->left;
+            vd->left = list;
+            if (placeholder && placeholder != list) {
+                /* Placeholder created with create_ast_node — safe to free its
+                 * shallow type/id strings. Do NOT call free_ast on it (no
+                 * children). */
+                if (placeholder->type) free(placeholder->type);
+                if (placeholder->id) free(placeholder->id);
+                free(placeholder);
+            }
+        }
+
+        g_te_csv_columnar_next = -1;
+        free(e->filename);
+        free(e->class_name);
+    }
+    g_lazy_n = 0;
 }

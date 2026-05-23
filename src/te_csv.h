@@ -54,6 +54,28 @@ ASTNode *build_object_wrapper_pooled(ASTNode *value);
 DataFrame *te_list_df(ASTNode *list);
 int te_df_dispatch_method(DataFrame *df, ASTNode *node);
 
+/* v0.0.14: Per-call override for columnar mode in from_csv_to_list.
+ *   -1 = unset (fall through to env TE_CSV_COLUMNAR)
+ *    0 = force legacy (allocate wrappers)
+ *    1 = force pure-columnar (skip wrappers)
+ * Consumed (and reset to -1) by the next from_csv_to_list invocation. */
+extern int g_te_csv_columnar_next;
+
+/* v0.0.14: Lazy CSV-load registry.
+ * Used by the parser to defer eager loads until the full AST is built, then
+ * decide per-variable whether COLUMNAR is safe (all uses are LINQ aggregates
+ * with no element access / iteration / mutation).
+ *
+ * Flow:
+ *   1) Parser action creates a placeholder LIST node, stores it as
+ *      var_decl->left, then calls te_csv_lazy_register(var_decl, file, cls).
+ *   2) parse_file() calls te_csv_lazy_resolve_all(root) after yyparse().
+ *   3) Resolver scans root for usages of var_decl->id, classifies them,
+ *      sets g_te_csv_columnar_next accordingly, invokes from_csv_to_list
+ *      and replaces var_decl->left with the real loaded list. */
+void te_csv_lazy_register(ASTNode *var_decl, const char *filename, const char *class_name);
+void te_csv_lazy_resolve_all(ASTNode *root);
+
 #ifdef __cplusplus
 }
 #endif
