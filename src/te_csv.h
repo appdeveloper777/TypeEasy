@@ -61,6 +61,13 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node);
  * Consumed (and reset to -1) by the next from_csv_to_list invocation. */
 extern int g_te_csv_columnar_next;
 
+/* v0.0.14 polish #8: directorio del script .te en ejecución, seteado por
+ * typeeasy_main antes de parsear. Si está definido, `from "x.csv"` se
+ * resuelve primero relativo a este directorio; si no existe, fallback al
+ * cwd (compatibilidad). NULL = solo cwd (legacy). */
+extern const char *g_te_script_dir;
+void te_set_script_dir_from_path(const char *script_path);
+
 /* v0.0.14: Lazy CSV-load registry.
  * Used by the parser to defer eager loads until the full AST is built, then
  * decide per-variable whether COLUMNAR is safe (all uses are LINQ aggregates

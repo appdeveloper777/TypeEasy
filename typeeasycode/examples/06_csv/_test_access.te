@@ -7,7 +7,7 @@ class Producto {
   }
 }
 
-let productos = from "productos.csv", Producto;
+let productos = from "../../productos.csv", Producto;
 for (let p in productos) {
     println(p.precio);
     break;

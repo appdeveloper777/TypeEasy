@@ -11,7 +11,7 @@ class Producto {
   stock : int;
 }
 
-let productos = from "productos_cat_1M.csv", Producto;
+let productos = from "../../productos_cat_1M.csv", Producto;
 println("filas=" + productos.length);
 
 println("cat=A count=" + productos.countWhere(fn(p) => p.cat == "A") + " sumPrecio=" + productos.where(fn(p) => p.cat == "A").sumBy(fn(p) => p.precio));

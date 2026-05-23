@@ -8,6 +8,6 @@ class Producto {
     categoria : string;
 }
 
-let productos = from "tests/lang/10_linq_csv/productos.csv", Producto;
+let productos = from "productos.csv", Producto;
 let total = productos.sumBy(fn(p) => p.precio);
 println(total);

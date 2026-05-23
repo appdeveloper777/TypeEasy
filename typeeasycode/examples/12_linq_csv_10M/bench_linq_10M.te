@@ -11,7 +11,7 @@ class Producto {
   precio : int;
 }
 
-let productos = from "productos_10000000.csv", Producto;
+let productos = from "../../productos_10000000.csv", Producto;
 println("filas=" + productos.length);
 
 // --- agregaciones puras (sin materializar) ---

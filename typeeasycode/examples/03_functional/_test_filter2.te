@@ -3,6 +3,6 @@ class Producto {
   precio : int;
   __constructor(nombre : string, precio : int) { this.nombre = nombre; this.precio = precio; }
 }
-let productos = from "productos.csv", Producto;
+let productos = from "../../productos.csv", Producto;
 let p0 = filter(productos, x => x.precio == 2);
 println(p0.length);

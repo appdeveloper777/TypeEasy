@@ -322,6 +322,63 @@ static void *csv_pread_io_worker(void *p) {
 static char *csv_mmap_file(const char *filename, size_t *out_len);
 static char *csv_read_all(FILE *fp, size_t *out_len);
 
+/* v0.0.14 polish #8: resolución de paths CSV relativos al script .te.
+ * Seteado por typeeasy_main.c antes de parsear. */
+const char *g_te_script_dir = NULL;
+
+void te_set_script_dir_from_path(const char *script_path) {
+    if (!script_path) { g_te_script_dir = NULL; return; }
+    /* Encontrar último separador '/' o '\\'. */
+    const char *slash = NULL;
+    for (const char *p = script_path; *p; p++) {
+        if (*p == '/' || *p == '\\') slash = p;
+    }
+    if (!slash) { g_te_script_dir = NULL; return; }
+    size_t n = (size_t)(slash - script_path);
+    char *dir = (char*)malloc(n + 1);
+    if (!dir) { g_te_script_dir = NULL; return; }
+    memcpy(dir, script_path, n);
+    dir[n] = '\0';
+    g_te_script_dir = dir; /* leak-on-exit ok (script mode) */
+}
+
+/* Resuelve `filename` a un path utilizable.
+ * 1) Si existe tal cual (cwd o absoluto) → devuelve strdup del original.
+ * 2) Si NO existe y es relativo y g_te_script_dir está seteado, intenta
+ *    "<g_te_script_dir>/<filename>". Si existe, devuelve ese path.
+ * 3) Caso contrario devuelve strdup del original (deja que el caller falle).
+ * El caller debe free() el resultado. */
+static int csv_path_exists(const char *p) {
+    struct stat st;
+    return (stat(p, &st) == 0 && S_ISREG(st.st_mode));
+}
+static int csv_path_is_absolute(const char *p) {
+    if (!p || !*p) return 0;
+    if (p[0] == '/' || p[0] == '\\') return 1;
+#if defined(_WIN32)
+    if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) &&
+        p[1] == ':' && (p[2] == '/' || p[2] == '\\')) return 1;
+#endif
+    return 0;
+}
+static char *csv_resolve_path(const char *filename) {
+    if (!filename) return NULL;
+    if (csv_path_exists(filename)) return strdup(filename);
+    if (csv_path_is_absolute(filename)) return strdup(filename);
+    if (g_te_script_dir && *g_te_script_dir) {
+        size_t a = strlen(g_te_script_dir), b = strlen(filename);
+        char *joined = (char*)malloc(a + 1 + b + 1);
+        if (joined) {
+            memcpy(joined, g_te_script_dir, a);
+            joined[a] = '/';
+            memcpy(joined + a + 1, filename, b + 1);
+            if (csv_path_exists(joined)) return joined;
+            free(joined);
+        }
+    }
+    return strdup(filename);
+}
+
 static char *csv_read_file(const char *filename, size_t *out_len, int *out_is_mmap) {
     if (out_is_mmap) *out_is_mmap = 0;
     /* Override por env: TE_CSV_IO=mmap|pread fuerza el path. Útil para A/B
@@ -2402,11 +2459,14 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
     /* Usar pread en lugar de mmap para evitar page-fault overhead en Docker
      * overlay FS / WSL2 9P. Ver comentario en csv_read_file(). */
     int src_is_mmap = 0;
-    char *src = csv_read_file(filename, &len, &src_is_mmap);
+    char *resolved = csv_resolve_path(filename);
+    char *src = csv_read_file(resolved ? resolved : filename, &len, &src_is_mmap);
     if (!src) {
         fprintf(stderr, "IOError: no se pudo abrir/mapear el archivo CSV '%s'.\n", filename);
+        if (resolved) free(resolved);
         exit(1);
     }
+    if (resolved) free(resolved);
     if (te_timing) clock_gettime(CLOCK_MONOTONIC, &ts_after_mmap);
 
     size_t pos = 0;

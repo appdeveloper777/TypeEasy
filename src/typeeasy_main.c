@@ -10,6 +10,7 @@
 /* --- Prototipos de las funciones en tu "Motor" --- */
 ASTNode* parse_file(FILE* file);
 extern int g_debug_mode; // Para acceder a la variable global de parser.y
+extern void te_set_script_dir_from_path(const char *script_path);
 /* --- Fin Prototipos --- */
 
 static int convert_wat_to_wasm(const char *wat_path, const char *wasm_path) {
@@ -517,6 +518,12 @@ int main(int argc, char *argv[]) {
 
     if (repl_mode) return run_repl();
     if (test_mode) return run_test_runner(test_dir);
+
+    // 1b. v0.0.14 polish #8: setear script dir para que `from "x.csv"`
+    //     resuelva relativo al .te además del cwd. Cubre syntax-check,
+    //     symbols y modo normal.
+    te_set_script_dir_from_path(script_path);
+
     if (syntax_check_mode) return run_syntax_check(script_path);
     if (symbols_mode) return run_symbols(script_path);
 

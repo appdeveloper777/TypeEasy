@@ -8,5 +8,5 @@ class Producto {
     categoria : string;
 }
 
-let productos = from "tests/lang/10_linq_csv/productos.csv", Producto;
+let productos = from "productos.csv", Producto;
 println(productos.where(fn(p) => p.categoria == "dulce").sumBy(fn(p) => p.precio));

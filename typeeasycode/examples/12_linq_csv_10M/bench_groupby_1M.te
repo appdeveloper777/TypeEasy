@@ -6,7 +6,7 @@ class Producto {
   stock : int;
 }
 
-let productos = from "productos_cat_1M.csv", Producto;
+let productos = from "../../productos_cat_1M.csv", Producto;
 println("filas=" + productos.length);
 
 // 1) sum total + count por categoría (10 grupos)
