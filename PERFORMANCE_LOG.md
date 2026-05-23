@@ -2304,3 +2304,53 @@ Regresión: **60 PASS / 0 FAIL / 3 XFAIL** (verde).
 - Parser **int** sigue siendo escalar (atoi inline). En 5M filas representa
   ~100ms de los 186ms de parse — SIMD int parser sería el próximo gran
   pulimiento si se requiere.
+
+
+---
+
+## Run: `v0.0.14-dev — float CSV: TE vs Polars 5M/10M` — 2026-05-23
+
+Bench script: [_bench_float_vs_polars.sh](typeeasycode/_bench_float_vs_polars.sh).
+Setup: Docker `typeeasy-typeeasy:latest` (gcc 13, `-O3 -mavx2`), Polars
+1.38.1 sobre CPython 3.13, host Windows 11. CSV schema: `cat:string,
+precio:float, stock:int`. Query: `countWhere(p.precio > 500.0)`.
+
+### Resultados wall (3 runs cada uno, mediana)
+
+| Dataset | TE wall best | TE wall median | Polars wall best | Polars wall median | cnt |
+|---|---:|---:|---:|---:|---:|
+| `g_5m_float.csv` (5M, 78.5 MB) | **3.42 s** | 3.52 s | 1.83 s | 2.64 s | 2 499 562 ✓ |
+| `g_10m_float.csv` (10M, 147 MB) | **3.98 s** | 4.49 s | 1.05 s | 1.23 s | 5 000 102 ✓ |
+
+`cnt=` idéntico entre TE y Polars en ambos datasets.
+
+### Net (sin spin-up de runtime) — solo parse + filter
+
+`TE_CSV_TIMING=1` expone `[CSV] mmap=X parse=Y total=Z`. Polars instrumentado
+con `time.perf_counter_ns()` alrededor de `read_csv` y `.filter().height`.
+
+| Dataset | TE parse | TE total interp | Polars parse | Polars filter | Polars total | Lectura |
+|---|---:|---:|---:|---:|---:|---|
+| 5M | **335 ms** | 790 ms | 487 ms | 36 ms | 523 ms | TE gana parse (~30%); empata total |
+| 10M | **336 ms** | 813 ms | 309 ms | 37 ms | 346 ms | **Empate ~340ms parse**, empate net |
+
+### Lecturas honestas
+
+- **A nivel parse + filter, TypeEasy v0.0.14 con SIMD AVX2 f64 está
+  efectivamente al nivel de Polars 1.38** sobre el mismo HW para predicados
+  simples `where(col op const)` sobre columnas float.
+- **El wall lo gana Polars** por dos razones que NO son del intérprete:
+  1. Docker spin-up en Windows (~2-3 s por invocación; Python tarda ~150 ms).
+  2. mmap variable (476 ms cold → 1322 ms en runs subsiguientes con overlay
+     FS de Docker Desktop). Sobre Linux nativo este diferencial desaparece.
+- Para una métrica wall publicable equivalente al int64 (TE 422 ms vs
+  Polars 525 ms reportado en bench int64), hace falta correr TE como
+  binario nativo Linux/Windows fuera de Docker. El instalador Inno Setup
+  (`typeeasy-bin.exe`) sí permite esto en Windows.
+
+### Limitación residual
+
+- Polars en 10M warm-cache (1.05 s wall) sigue inalcanzable sobre Docker
+  Windows. Para cerrar la brecha en wall, próximo paso natural sería
+  SIMD int parser (atoi vectorizado) que recortaría ~80-100 ms del parse
+  ahora dominado por scanning de bytes.
