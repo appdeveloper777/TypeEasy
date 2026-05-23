@@ -165,6 +165,13 @@ typedef struct TeColCache {
     int        n_children;
     int        cap_children;
     struct TeColCache *parent; /* NULL if root (CSV-load cache) */
+    /* v0.0.14 pulimiento #5 (LINQ pipeline fusion): vista LAZY de un parent
+     * sin compactaci\u00f3n f\u00edsica. lazy_mask es un buffer de bytes de tama\u00f1o
+     * parent->n_rows; n_rows = popcount(lazy_mask). int_cols/flt_cols/
+     * str_cols/items son TODOS NULL hasta materializaci\u00f3n.
+     * Aggregates (sum/count/length) operan directo sobre parent + mask.
+     * Eval_pred fuerza materializaci\u00f3n (poblar *_cols filtrando parent). */
+    char      *lazy_mask;      /* owned; NULL si no es vista lazy */
 } TeColCache;
 
 /* Attribute index lookup helper (also used by ast.c). */
@@ -181,6 +188,15 @@ void       te_colcache_invalidate(ASTNode *list_head);
 TeColCache *te_colcache_build_from_mask(TeColCache *parent, const char *mask,
                                         ASTNode *result_list_head,
                                         ASTNode **selected_items, int new_n);
+/* v0.0.14 pulimiento #5: vista LAZY (sin compactaci\u00f3n) — el caller cede
+ * ownership del buffer mask. result_list_head->col_cache queda apuntando a
+ * la vista; aggregates redirigen a parent + mask. */
+TeColCache *te_colcache_attach_lazy(TeColCache *parent, char *mask,
+                                    ASTNode *result_list_head, int new_n);
+/* Materializa una vista lazy in-place: puebla *_cols filtrando parent por
+ * lazy_mask, libera lazy_mask. items[] NO se crea (no se necesita para
+ * aggregates). No-op si la vista no es lazy. */
+void        te_colcache_materialize(TeColCache *view);
 int        te_colcache_eval_pred(TeColCache *c, int attr_idx,
                                  const FastLambda *fl, char *mask);
 int        te_colcache_sum(TeColCache *c, int attr_idx, const char *mask,

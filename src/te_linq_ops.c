@@ -116,7 +116,10 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 ASTNode *item = list->left;
                 /* v0.0.13 (perf) COLUMNAR FAST PATH: list has col_cache and
                  * predicate matches a typed column. Skips per-item pointer
-                 * chase entirely. Uses AVX2 + OpenMP inside helper. */
+                 * chase entirely. Uses AVX2 + OpenMP inside helper.
+                 * v0.0.14 pulimiento #5: vista LAZY — sin compactación
+                 * física ni wrappers. Aggregates posteriores (sumBy, count,
+                 * length) redirigen a parent+mask. Fusion implícita. */
                 if (fl.spec != SPEC_NONE && fl.attr_name && list->col_cache) {
                     TeColCache *cc = (TeColCache*)list->col_cache;
                     int aidx = te_class_attr_idx(cc->cls, fl.attr_name);
@@ -124,22 +127,14 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         int n = cc->n_rows;
                         char *mask = (char*)malloc((size_t)n);
                         if (te_colcache_eval_pred(cc, aidx, &fl, mask)) {
-                            /* Build result list AND collect pointers to the new
-                             * items so we can attach a derived columnar cache. */
+                            /* Conteo de matches (popcount) y attach lazy. */
                             int new_n = 0;
-                            ASTNode **sel = (ASTNode**)malloc((size_t)n * sizeof(ASTNode*));
-                            for (int k = 0; k < n; k++) {
-                                if (mask[k]) {
-                                    ASTNode *ni = build_item_from_value(cc->items[k]);
-                                    te_list_append(result, ni);
-                                    sel[new_n++] = ni;
-                                }
-                            }
-                            if (new_n > 0) {
-                                te_colcache_build_from_mask(cc, mask, result, sel, new_n);
-                            }
-                            free(sel);
-                            free(mask);
+                            for (int k = 0; k < n; k++) if (mask[k]) new_n++;
+                            /* PREINIT flag: skip clone+ctor en declare_variable
+                             * (igual que listas CSV puras). */
+                            result->value = 1;
+                            te_colcache_attach_lazy(cc, mask, result, new_n);
+                            /* mask ownership pasó a la vista — NO free. */
                             add_or_update_variable("__ret__", result);
                             return 1;
                         }

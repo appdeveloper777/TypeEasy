@@ -292,6 +292,60 @@ TeColCache *te_colcache_build_from_mask(TeColCache *parent, const char *mask,
     return c;
 }
 
+/* v0.0.14 pulimiento #5: vista LAZY sin compactaci\u00f3n f\u00edsica.
+ * Toma ownership del buffer `mask` (de tama\u00f1o parent->n_rows). */
+TeColCache *te_colcache_attach_lazy(TeColCache *parent, char *mask,
+                                    ASTNode *result_list_head, int new_n) {
+    if (!parent || !mask || new_n < 0) { if (mask) free(mask); return NULL; }
+    TeColCache *c = (TeColCache*)calloc(1, sizeof(TeColCache));
+    c->cls = parent->cls;
+    c->n_rows = new_n;
+    c->nattr = parent->nattr;
+    c->kinds = (int*)malloc((size_t)c->nattr * sizeof(int));
+    memcpy(c->kinds, parent->kinds, (size_t)c->nattr * sizeof(int));
+    /* *_cols + items todos NULL — vista pura. */
+    c->int_cols = (int64_t**)calloc(c->nattr, sizeof(int64_t*));
+    c->flt_cols = (double**)calloc(c->nattr, sizeof(double*));
+    c->str_cols = (const char***)calloc(c->nattr, sizeof(const char**));
+    c->items = NULL;
+    c->lazy_mask = mask;
+    c->owner = result_list_head;
+    if (result_list_head) result_list_head->col_cache = c;
+    te_colcache_add_child(parent, c);
+    return c;
+}
+
+/* v0.0.14 pulimiento #5: materializa una vista lazy poblando *_cols desde
+ * parent->*_cols filtrando por lazy_mask. Libera lazy_mask. items[] NO se
+ * crea (los aggregates no lo necesitan; iteraci\u00f3n OO sobre vistas lazy no
+ * est\u00e1 soportada, igual que para CSV columnar puro). */
+void te_colcache_materialize(TeColCache *view) {
+    if (!view || !view->lazy_mask || !view->parent) return;
+    TeColCache *parent = view->parent;
+    char *mask = view->lazy_mask;
+    int new_n = view->n_rows;
+    for (int k = 0; k < view->nattr; k++) {
+        if (view->kinds[k] == 0 && parent->int_cols[k]) {
+            view->int_cols[k] = (int64_t*)malloc((size_t)new_n * sizeof(int64_t));
+            int w = 0;
+            const int64_t *src = parent->int_cols[k];
+            for (int r = 0; r < parent->n_rows; r++) if (mask[r]) view->int_cols[k][w++] = src[r];
+        } else if (view->kinds[k] == 1 && parent->flt_cols[k]) {
+            view->flt_cols[k] = (double*)malloc((size_t)new_n * sizeof(double));
+            int w = 0;
+            const double *src = parent->flt_cols[k];
+            for (int r = 0; r < parent->n_rows; r++) if (mask[r]) view->flt_cols[k][w++] = src[r];
+        } else if (view->kinds[k] == 2 && parent->str_cols[k]) {
+            view->str_cols[k] = (const char**)malloc((size_t)new_n * sizeof(const char*));
+            int w = 0;
+            const char **src = parent->str_cols[k];
+            for (int r = 0; r < parent->n_rows; r++) if (mask[r]) view->str_cols[k][w++] = src[r];
+        }
+    }
+    free(view->lazy_mask);
+    view->lazy_mask = NULL;
+}
+
 int te_class_attr_idx(ClassNode *cls, const char *name) {
     if (!cls || !name) return -1;
     for (int i = 0; i < cls->attr_count; i++) {
@@ -434,6 +488,10 @@ LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out) {
 
 int te_colcache_eval_pred(TeColCache *c, int attr_idx, const FastLambda *fl, char *mask) {
     if (!c || attr_idx < 0 || attr_idx >= c->nattr || !fl) return 0;
+    /* v0.0.14 pulimiento #5: si es vista LAZY, materializar primero. La
+     * alternativa (proyectar parent→view por cada eval) costaría más que
+     * compactar una vez. */
+    if (c->lazy_mask) te_colcache_materialize(c);
     int n = c->n_rows;
     int kind = c->kinds[attr_idx];
     int spec = (int)fl->spec;
@@ -561,6 +619,11 @@ int te_colcache_eval_pred(TeColCache *c, int attr_idx, const FastLambda *fl, cha
 int te_colcache_sum(TeColCache *c, int attr_idx, const char *mask,
                     long long *out_i, double *out_d, int *out_is_int) {
     if (!c || attr_idx < 0 || attr_idx >= c->nattr) return 0;
+    /* v0.0.14 pulimiento #5: vista LAZY → redirigir a parent + lazy_mask. */
+    if (c->lazy_mask && c->parent && !mask) {
+        return te_colcache_sum(c->parent, attr_idx, c->lazy_mask,
+                               out_i, out_d, out_is_int);
+    }
     int n = c->n_rows;
     int kind = c->kinds[attr_idx];
     if (kind == 0) {
@@ -606,6 +669,8 @@ int te_colcache_sum(TeColCache *c, int attr_idx, const char *mask,
 
 long long te_colcache_count(TeColCache *c, const char *mask) {
     if (!c) return 0;
+    /* v0.0.14 pulimiento #5: vista LAZY → conteo gratis si no hay mask extra. */
+    if (c->lazy_mask && !mask) return c->n_rows;
     int n = c->n_rows;
     if (!mask) return n;
     long long total = 0;
