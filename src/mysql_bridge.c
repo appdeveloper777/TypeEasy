@@ -192,7 +192,8 @@ ASTNode* mysql_query_to_objects_fast(int conn_id, const char* query, ClassNode* 
         row_template[a].id       = shared_id[a];
         row_template[a].type     = shared_type[a];
         row_template[a].is_const = 0;
-        row_template[a].vtype    = (attr_kind[a] == 0) ? VAL_INT : VAL_STRING;
+        row_template[a].vtype    = (attr_kind[a] == 0) ? VAL_INT :
+                                   (attr_kind[a] == 3) ? VAL_FLOAT : VAL_STRING;
     }
     size_t row_template_bytes = (size_t)nattr * sizeof(Variable);
 
@@ -240,6 +241,11 @@ ASTNode* mysql_query_to_objects_fast(int conn_id, const char* query, ClassNode* 
                 }
                 if (neg) v = -v;
                 obj->attributes[a].value.int_value = (int)v;
+            } else if (attr_kind[a] == 3) {
+                /* FLOAT/DOUBLE: strtod. raw es NUL-terminated por MySQL C API. */
+                char *endp = NULL;
+                double dv = strtod(raw, &endp);
+                obj->attributes[a].value.float_value = (endp == raw) ? 0.0 : dv;
             } else {
                 /* STRING/OTHER: dup en arena con length conocido (sin strlen). */
                 obj->attributes[a].value.string_value = te_orm_arena_dup(raw, (size_t)rl);

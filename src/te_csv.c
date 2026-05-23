@@ -761,9 +761,13 @@ const char *te_orm_wrapper_obj_type(void) {
     if (!g_csv_wrapper_obj_type) g_csv_wrapper_obj_type = csv_arena_strdup("OBJECT");
     return g_csv_wrapper_obj_type;
 }
+/* ORM kind enum (mysql_bridge.c consumer): 0=int, 1=string, 2=other, 3=float.
+ * v0.0.14: la rama float se agrega para que el ORM MySQL pueda materializar
+ * columnas DECIMAL/FLOAT/DOUBLE como `double` en lugar de string. */
 int te_orm_attr_kind(const char *t) {
     if (csv_attr_is_int(t)) return 0;
     if (csv_attr_is_string(t)) return 1;
+    if (csv_attr_is_float(t)) return 3;
     return 2;
 }
 int te_orm_attr_is_nullable(const char *t) { return csv_attr_is_nullable(t); }
