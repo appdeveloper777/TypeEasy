@@ -2525,6 +2525,21 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         int pure_columnar;
         if (g_te_csv_columnar_next >= 0) { pure_columnar = g_te_csv_columnar_next; g_te_csv_columnar_next = -1; }
         else pure_columnar = getenv("TE_CSV_COLUMNAR") ? 1 : 0;
+        /* v0.0.14 fix: el parser CSV NO escribe columnas float (K_OTHER=2).
+         * Si la clase tiene floats, desactivar pure_columnar para conservar
+         * items[] como fallback — eval_pred devolverá 0 para esos columnas
+         * (kind=3) y el caller usará el path por wrappers. */
+        {
+            int has_float = 0;
+            for (int k = 0; k < nattr; k++) {
+                const char *t = cls->attributes[k].type;
+                if (t && (!strcmp(t,"float") || !strcmp(t,"FLOAT") ||
+                          !strcmp(t,"double") || !strcmp(t,"Double"))) {
+                    has_float = 1; break;
+                }
+            }
+            if (has_float) pure_columnar = 0;
+        }
         int prep_ok = want_colcache;
         TeColCache *gcache = NULL;
         int total_n = 0;
@@ -2590,6 +2605,10 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
                                  !strcmp(t,"Double")) kind = 1;
                         else if (!strcmp(t,"string") || !strcmp(t,"STRING") || !strcmp(t,"String")) kind = 2;
                     }
+                    /* v0.0.14 fix: float (kind==1) no soportado por el
+                     * parser CSV — marcar como UNKNOWN (3) para que eval_pred
+                     * devuelva 0 y el caller use fallback con items[]. */
+                    if (kind == 1) kind = 3;
                     gcache->kinds[k] = kind;
                     if (kind == 0) {
                         gcache->int_cols[k] = (int64_t*)malloc((size_t)total_n * sizeof(int64_t));
@@ -2665,6 +2684,19 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         int pure_columnar;
         if (g_te_csv_columnar_next >= 0) { pure_columnar = g_te_csv_columnar_next; g_te_csv_columnar_next = -1; }
         else pure_columnar = getenv("TE_CSV_COLUMNAR") ? 1 : 0;
+        /* v0.0.14 fix: ver nota en path paralelo — desactivar pure_columnar si
+         * la clase declara columnas float (no soportadas por el parser). */
+        {
+            int has_float = 0;
+            for (int k = 0; k < nattr; k++) {
+                const char *t = cls->attributes[k].type;
+                if (t && (!strcmp(t,"float") || !strcmp(t,"FLOAT") ||
+                          !strcmp(t,"double") || !strcmp(t,"Double"))) {
+                    has_float = 1; break;
+                }
+            }
+            if (has_float) pure_columnar = 0;
+        }
         CSVWorkerArgs sa;
         memset(&sa, 0, sizeof(sa));
         sa.chunk_start = pos;
@@ -2699,6 +2731,8 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
                                  !strcmp(t,"Double")) kind = 1;
                         else if (!strcmp(t,"string") || !strcmp(t,"STRING") || !strcmp(t,"String")) kind = 2;
                     }
+                    /* v0.0.14 fix: ver path paralelo — float no soportado. */
+                    if (kind == 1) kind = 3;
                     gcache->kinds[k] = kind;
                     if (kind == 0) {
                         gcache->int_cols[k] = (int64_t*)malloc((size_t)total_n * sizeof(int64_t));
