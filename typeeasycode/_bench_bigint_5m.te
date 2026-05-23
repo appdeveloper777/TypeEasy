@@ -1,0 +1,13 @@
+class Producto {
+  nombre : string;
+  id_grande : int;
+
+  __constructor(nombre : string, id_grande : int) {
+    this.nombre = nombre;
+    this.id_grande = id_grande;
+  }
+}
+
+let productos = from "bigint_5m.csv", Producto;
+int cantidad = productos.length;
+println(cantidad);

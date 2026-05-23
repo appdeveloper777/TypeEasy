@@ -2354,3 +2354,59 @@ con `time.perf_counter_ns()` alrededor de `read_csv` y `.filter().height`.
   Windows. Para cerrar la brecha en wall, próximo paso natural sería
   SIMD int parser (atoi vectorizado) que recortaría ~80-100 ms del parse
   ahora dominado por scanning de bytes.
+
+## v0.0.14-dev — polish #7: SIMD int parser (Lemire 8-digit) (2026-05-23)
+
+### Cambio
+
+Se reemplazaron los dos sitios del scalar `atoi` branchless de
+`csv_parse_chunk` por una llamada a `csv_fast_parse_i64()`, helper estático
+inline que aplica el truco de Daniel Lemire para parsear 8 dígitos por
+iteración usando SSSE3:
+
+```c
+maddubs(mul_1_10, digits) → 4 i16 = [10d0+d1, 10d2+d3, 10d4+d5, 10d6+d7]
+madd_epi16(t1, mul_1_100) → 2 i32 = [1000d0+...+d3, 1000d4+...+d7]
+val8 = lo*10000 + hi
+v = v*1e8 + val8
+```
+
+- Fall-through automático a la cola scalar (mismo branchless original) para
+  los 0-7 dígitos restantes; o full-scalar si el campo tiene <8 dígitos.
+- Seguro contra overrun: short-circuit `p[0] && p[1] && ... && p[7]`
+  garantiza no leer pasado NUL; el load de 16 bytes opera sobre buffer
+  stack-padded vía `memcpy(buf, p, 8)`.
+- Fallback final a `strtol` para casos exóticos (whitespace, base no-10).
+
+### Validación de correctitud
+
+| Caso | Resultado |
+| --- | --- |
+| Regression suite (`_regression.sh`) | PASS=60 FAIL=0 XFAIL=3 SKIP=0 |
+| 5M filas × 12 dígitos (`bigint_5m.csv`, IDs 100000000000..) | parse OK, `length=5000000` |
+| 10M filas × 1-7 dígitos (`productos_10000000.csv`) | parse OK, `length=10000000` |
+
+### Medición (i7-14700, Docker Desktop / Windows, runs en frío × 3)
+
+| Bench | Wall median |
+| --- | --- |
+| 5M filas, IDs 12-dígitos (SIMD path activo en 100% de filas) | 715 ms |
+| 10M filas, ints 1-7 dígitos (SIMD path inactivo, mantiene scalar) | 1.05 s |
+
+El path SIMD sólo se activa cuando el campo tiene ≥8 chars consecutivos
+no-NUL; en CSVs con ints cortos (1-7 dígitos típicos en `precio`, contadores,
+flags) cae directo al scalar tail sin overhead añadido (la condición del
+while corta antes de cualquier load SIMD).
+
+### Limitación honesta
+
+- El bench Polars vs TE de polish #6b ya mostraba **TE empatando a Polars en
+  parse neto** (~340 ms en 10M float). Sobre datasets con ints cortos (el
+  caso común en `productos.csv`), polish #7 **no mueve la aguja** porque la
+  ruta SIMD nunca se activa. Su valor real está en datasets con IDs grandes
+  (epoch_ms, account numbers, hashes truncados a int64), donde el factor
+  acerca el parse a ~4 ciclos/8-dígitos en lugar de ~10 ciclos.
+- El cuello de botella del wall en Docker Windows sigue siendo el spin-up
+  del contenedor (~700 ms cold), no el parsing. Para acercarse al wall de
+  Polars sobre datasets pequeños/medianos, la única ruta efectiva es correr
+  TE como binario nativo (instalador Inno Setup ya disponible).

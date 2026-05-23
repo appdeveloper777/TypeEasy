@@ -1993,6 +1993,80 @@ typedef struct CSVWorkerArgs {
     ASTNode  **gitems;          /* puntero a items[] global (escribimos gitems[row_offset+i]) */
 } CSVWorkerArgs;
 
+/* ---------- v0.0.14 polish #7: SIMD int parser -------------------------
+ * Variable-width signed int → long. Devuelve 1 si toda la cadena se
+ * consumió como int válido, 0 en cualquier otro caso (vacío, signo sin
+ * dígitos, dígito inválido o trailing garbage).
+ *
+ * Hot path (SSSE3, disponible en cualquier x86-64 moderno): procesa 8
+ * dígitos por iteración usando el truco de Daniel Lemire
+ *  https://lemire.me/blog/2018/10/03/quickly-parsing-eight-digits/
+ * El loop es seguro contra overrun porque verifica p[0..7] != '\0' antes
+ * de leer (short-circuit && garantiza que se detiene en el NUL).
+ *
+ * Para fields cortos (<8 dígitos) cae directo al scalar tail sin overhead.
+ * Para fields largos (10+ dígitos típicos en IDs), procesa 8 dígitos en
+ * ~4 ciclos vs ~10 ciclos del scalar branchless original. */
+static inline int csv_fast_parse_i64(const char *raw, long *out) {
+    const char *p = raw;
+    int neg = 0;
+    if (*p == '-') { neg = 1; p++; }
+    else if (*p == '+') { p++; }
+    if (*p == '\0') return 0;
+
+    const char *digits_start = p;
+    uint64_t v = 0;
+
+#if defined(__SSSE3__) || TE_HAS_AVX2
+    /* Lemire-style 8-digit chunks. Short-circuit && es seguro: en cuanto
+     * encontramos NUL no leemos más; en cuanto encontramos no-dígito el
+     * bad-mask de pcmpgt aborta y caemos al scalar tail. */
+    const __m128i ascii0   = _mm_set1_epi8('0');
+    const __m128i nine     = _mm_set1_epi8(9);
+    const __m128i mul_1_10 = _mm_setr_epi8(10,1,10,1,10,1,10,1, 0,0,0,0,0,0,0,0);
+    const __m128i mul_1_100= _mm_setr_epi16(100,1,100,1, 0,0,0,0);
+    while (p[0] && p[1] && p[2] && p[3] && p[4] && p[5] && p[6] && p[7]) {
+        /* Copia los 8 bytes a stack-padded buffer: evita cualquier riesgo
+         * de cruzar página al hacer el load de 16 bytes. */
+        char buf[16] = {0};
+        memcpy(buf, p, 8);
+        __m128i chunk  = _mm_loadu_si128((const __m128i*)buf);
+        __m128i digits = _mm_sub_epi8(chunk, ascii0);
+        /* bad si digit > 9 o digit < 0 (i.e. char < '0'). _mm_cmpgt_epi8
+         * trata como signed. */
+        __m128i bad = _mm_or_si128(
+            _mm_cmpgt_epi8(digits, nine),
+            _mm_cmpgt_epi8(_mm_setzero_si128(), digits));
+        unsigned m = (unsigned)_mm_movemask_epi8(bad) & 0xFFu;
+        if (m) break; /* no son 8 dígitos contiguos */
+
+        /* maddubs: pares (10*d_even + 1*d_odd) → 4 i16 */
+        __m128i t1 = _mm_maddubs_epi16(mul_1_10, digits);
+        /* madd:   pares (100*high + 1*low)     → 2 i32 */
+        __m128i t2 = _mm_madd_epi16(t1, mul_1_100);
+        /* lo = primeros 4 dígitos (d0d1d2d3) como int; hi = últimos 4 */
+        uint32_t lo = (uint32_t)_mm_cvtsi128_si32(t2);
+        uint32_t hi = (uint32_t)_mm_extract_epi32(t2, 1);
+        uint32_t val8 = lo * 10000u + hi;
+        v = v * 100000000ULL + val8;
+        p += 8;
+    }
+#endif
+
+    /* Scalar tail: 0-7 dígitos restantes, o full-scalar si SSSE3 no
+     * disponible. Mismo branchless del path original. */
+    while (*p) {
+        unsigned d = (unsigned)(*p - '0');
+        if (d > 9u) return 0;
+        v = v * 10 + d;
+        p++;
+    }
+    if (p == digits_start) return 0; /* sólo signo, sin dígitos */
+
+    *out = neg ? -(long)v : (long)v;
+    return 1;
+}
+
 /* Parsea un rango. Usa thread-local arena/pool. Devuelve sub-lista vía
  * out->first / out->last.
  *
@@ -2094,28 +2168,14 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                                     row_idx, header[c]);
                             exit(1);
                         }
-                    } else {
-                        const char *p = raw;
-                        int neg = 0;
-                        if (*p == '-') { neg = 1; p++; }
-                        else if (*p == '+') { p++; }
-                        int ok = (*p != '\0');
-                        while (*p) {
-                            unsigned d = (unsigned)(*p - '0');
-                            if (d > 9u) { ok = 0; break; }
-                            v = v * 10 + (long)d;
-                            p++;
-                        }
-                        if (!ok) {
-                            char *endp = NULL;
-                            v = strtol(raw, &endp, 10);
-                            if (endp == raw || (endp && *endp != '\0')) {
-                                fprintf(stderr, "CSVError: fila %d, columna '%s': '%s' no es int.\n",
-                                        row_idx, header[c], raw);
-                                exit(1);
-                            }
-                        } else if (neg) {
-                            v = -v;
+                    } else if (!csv_fast_parse_i64(raw, &v)) {
+                        /* v0.0.14 polish #7: SIMD parser falló → fallback strtol */
+                        char *endp = NULL;
+                        v = strtol(raw, &endp, 10);
+                        if (endp == raw || (endp && *endp != '\0')) {
+                            fprintf(stderr, "CSVError: fila %d, columna '%s': '%s' no es int.\n",
+                                    row_idx, header[c], raw);
+                            exit(1);
                         }
                     }
                     if (out->gcol_i && out->gcol_i[a])
@@ -2185,22 +2245,10 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                         exit(1);
                     }
                 } else {
-                    /* Fast int parser: hot path 100% dígitos ASCII (con signo opcional).
-                     * strtol pesa por locale + setear errno + skip whitespace + base detect.
-                     * Fallback a strtol si encontramos algo raro. */
-                    const char *p = raw;
-                    int neg = 0;
-                    if (*p == '-') { neg = 1; p++; }
-                    else if (*p == '+') { p++; }
+                    /* v0.0.14 polish #7: SIMD-accelerated int parser (Lemire 8-digit
+                     * chunks). Fallback a strtol si encontramos algo raro. */
                     long v = 0;
-                    int ok = (*p != '\0');
-                    while (*p) {
-                        unsigned d = (unsigned)(*p - '0');
-                        if (d > 9u) { ok = 0; break; }
-                        v = v * 10 + (long)d;
-                        p++;
-                    }
-                    if (!ok) {
+                    if (!csv_fast_parse_i64(raw, &v)) {
                         char *endp = NULL;
                         v = strtol(raw, &endp, 10);
                         if (endp == raw || (endp && *endp != '\0')) {
@@ -2209,8 +2257,6 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                                 row_idx, header[c], raw);
                             exit(1);
                         }
-                    } else if (neg) {
-                        v = -v;
                     }
                     obj->attributes[a].value.int_value = (int)v;
                 }
