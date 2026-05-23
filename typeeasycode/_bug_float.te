@@ -1,0 +1,5 @@
+class Producto { cat : string; precio : float; stock : int; }
+let df = from "/tmp/g.csv", Producto as dataframe;
+println("filas=" + df.length);
+let cnt = df.countWhere(fn(p) => p.precio > 500.0);
+println("cnt=" + cnt);
