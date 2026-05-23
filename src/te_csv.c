@@ -1312,20 +1312,47 @@ typedef struct {
     char **keys;
     const int64_t *vals;
     int start, end;
+    /* v0.0.14 pulimiento #7: tabla per-thread con resize din\u00e1mico
+     * (antes era ventana fija de 512 slots → degradaba con >256 groups
+     * por probing largo). Ahora cada thread crece su propia tabla y
+     * la libera al final. */
     GsSlot *slots;
-    size_t cap;
-    size_t mask;
+    size_t cap;      /* potencia de 2 */
+    size_t mask;     /* cap - 1 */
     int n_groups;
 } GsWorkerArg;
 
+/* Resize x2 + rehash. Llamado cuando n_groups * 2 > cap (load > 50%). */
+static void gs_grow(GsWorkerArg *a) {
+    size_t new_cap = a->cap * 2;
+    size_t new_mask = new_cap - 1;
+    GsSlot *new_slots = (GsSlot*)calloc(new_cap, sizeof(GsSlot));
+    if (!new_slots) return;  /* OOM: dejar tabla actual; se degradar\u00e1 pero no crash */
+    for (size_t i = 0; i < a->cap; i++) {
+        if (!a->slots[i].used) continue;
+        size_t idx = (size_t)a->slots[i].h & new_mask;
+        while (new_slots[idx].used) idx = (idx + 1) & new_mask;
+        new_slots[idx] = a->slots[i];
+    }
+    free(a->slots);
+    a->slots = new_slots;
+    a->cap = new_cap;
+    a->mask = new_mask;
+}
+
 static void *df_group_sum_worker(void *p) {
     GsWorkerArg *a = (GsWorkerArg*)p;
-    GsSlot *slots = a->slots;
-    size_t mask = a->mask;
     char **keys = a->keys;
     const int64_t *vals = a->vals;
-    int n_groups = 0;
+    int n_groups = a->n_groups;
     for (int i = a->start; i < a->end; i++) {
+        /* Check load BEFORE insert para garantizar slot libre. */
+        if ((size_t)(n_groups + 1) * 2 > a->cap) {
+            a->n_groups = n_groups;
+            gs_grow(a);
+        }
+        GsSlot *slots = a->slots;
+        size_t mask = a->mask;
         const char *k = keys[i] ? keys[i] : "";
         uint64_t h = te_short_key_hash(k);
         size_t idx = (size_t)h & mask;
@@ -1376,27 +1403,25 @@ static DataFrame *df_group_sum(const DataFrame *src, int kc, int vc) {
 
     if (do_parallel) {
 #if TE_HAS_PTHREAD
-        /* Per-thread hash cap: pequeño para low-cardinality (10-1000 groups
-         * típico). Estrategia: cap inicial 512 slots; si el thread llena >50%
-         * podríamos resize, pero para los casos comunes de GROUP BY (pocas
-         * categorías) 512 slots × 8 threads ≈ 160KB total → cabe en L2.
-         * NOTA: si la cardinalidad real explota (>200 groups), la inserción
-         * se degrada por probing largo; ese caso debería caer a serial. */
-        size_t slice_cap = 512;
-        size_t slice_mask = slice_cap - 1;
+        /* v0.0.14 pulimiento #7: tabla per-thread independiente con resize
+         * din\u00e1mico. Cap inicial 1024 (load <50% para hasta 512 groups);
+         * crece x2 cuando se llena. Para low-card (10 groups, 8 threads)
+         * total = 8 \u00d7 1024 \u00d7 32B = 256KB (cabe c\u00f3modo en L2). Para
+         * high-card (50K groups) la tabla crece autom\u00e1ticamente a ~128K
+         * slots por thread → 32MB total, igual viable. */
+        size_t init_cap = 1024;
 
         GsWorkerArg *args = (GsWorkerArg*)calloc((size_t)nthr, sizeof(GsWorkerArg));
         pthread_t *tids = (pthread_t*)malloc((size_t)nthr * sizeof(pthread_t));
-        GsSlot *all_slots = (GsSlot*)calloc((size_t)nthr * slice_cap, sizeof(GsSlot));
         int chunk = (n + nthr - 1) / nthr;
         for (int t = 0; t < nthr; t++) {
             args[t].keys = keys;
             args[t].vals = vals;
             args[t].start = t * chunk;
             args[t].end = (t == nthr - 1) ? n : (t + 1) * chunk;
-            args[t].slots = all_slots + (size_t)t * slice_cap;
-            args[t].cap = slice_cap;
-            args[t].mask = slice_mask;
+            args[t].slots = (GsSlot*)calloc(init_cap, sizeof(GsSlot));
+            args[t].cap = init_cap;
+            args[t].mask = init_cap - 1;
             args[t].n_groups = 0;
             pthread_create(&tids[t], NULL, df_group_sum_worker, &args[t]);
         }
@@ -1411,7 +1436,7 @@ static DataFrame *df_group_sum(const DataFrame *src, int kc, int vc) {
         gslots = (GsSlot*)calloc(gcap, sizeof(GsSlot));
         for (int t = 0; t < nthr; t++) {
             GsSlot *ts = args[t].slots;
-            for (size_t i = 0; i < slice_cap; i++) {
+            for (size_t i = 0; i < args[t].cap; i++) {
                 if (!ts[i].used) continue;
                 size_t idx = (size_t)ts[i].h & gmask;
                 for (;;) {
@@ -1428,8 +1453,9 @@ static DataFrame *df_group_sum(const DataFrame *src, int kc, int vc) {
                     idx = (idx + 1) & gmask;
                 }
             }
+            free(args[t].slots);
         }
-        free(all_slots); free(args); free(tids);
+        free(args); free(tids);
 #endif
     } else {
         /* Serial: tabla global directa. */
