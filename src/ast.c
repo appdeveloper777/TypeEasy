@@ -2753,6 +2753,12 @@ ASTNode* list_get_item(ASTNode *list, int idx) {
 
 int list_length(ASTNode *list) {
     if (!list || !list->type || strcmp(list->type, "LIST") != 0) return 0;
+    /* v0.0.14: columnar puro — col_cache es la fuente de verdad cuando
+     * la lista no tiene wrappers (TE_CSV_COLUMNAR=1). */
+    if (!list->left && list->col_cache) {
+        TeColCache *cc = (TeColCache*)list->col_cache;
+        return cc->n_rows;
+    }
     /* Ola 14: O(1) via side-cache index. */
     TEListIdx *ix = te_list_get_idx(list);
     if (ix) return ix->len;

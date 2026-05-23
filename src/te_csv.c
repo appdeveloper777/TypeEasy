@@ -7,6 +7,7 @@
 
 #include "te_csv.h"
 #include "ast.h"
+#include "te_colcache.h"
 
 #include <ctype.h>
 #include <fcntl.h>
@@ -92,6 +93,7 @@ extern void add_or_update_variable(char *id, ASTNode *value);
 extern ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
 extern ObjectNode *create_object(ClassNode *class);
 extern void te_colcache_build(ASTNode *list_head, ClassNode *cls);
+extern void te_colcache_attach_prebuilt(ASTNode *list_head, struct TeColCache *c);
 
 /* Small FNV-1a duplicate (te_str_hash in ast.c is file-static). */
 static uint64_t te_str_hash(const char *s) {
@@ -1942,12 +1944,30 @@ typedef struct CSVWorkerArgs {
     ASTNode *last;
     CSVChunk *arena_head;
     ASTNodePool *pool_head;
+    /* v0.0.13 (perf): escritura DIRECTA al colcache global durante el
+     * parseo. Se pre-cuenta filas por chunk (csv_count_newlines, AVX2),
+     * se hace prefix-sum → row_offset, y se asignan punteros gcol_X a
+     * los arrays globales. Workers escriben a gcol_i[k][row_offset + i]
+     * sin malloc por-worker ni memcpy posterior. */
+    int       row_offset;       /* prefix-sum offset en arrays globales */
+    int       wrow_count;       /* filas efectivamente parseadas */
+    int64_t **gcol_i;           /* [nattr] punteros a arrays globales (NULL si no aplica) */
+    double  **gcol_f;           /* [nattr] */
+    const char ***gcol_s;       /* [nattr] */
+    ASTNode  **gitems;          /* puntero a items[] global (escribimos gitems[row_offset+i]) */
 } CSVWorkerArgs;
 
-/* Parsea un rango. Usa thread-local arena/pool. Devuelve sub-lista. */
+/* Parsea un rango. Usa thread-local arena/pool. Devuelve sub-lista vía
+ * out->first / out->last.
+ *
+ * v0.0.13 (perf): si out->gcol_i / out->gcol_f / out->gcol_s / out->gitems
+ * apuntan a arrays globales (pre-asignados tras el pre-count de filas),
+ * escribimos directamente al colcache global en gcol_X[k][row_offset+i],
+ * eliminando el segundo recorrido de te_colcache_build (~650 ms en 10M
+ * filas) sin malloc por-worker ni memcpy posterior. */
 static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                              size_t start, size_t end, int is_first,
-                             ASTNode **out_first, ASTNode **out_last) {
+                             CSVWorkerArgs *out) {
     int header_n = cfg->header_n;
     int nattr = cfg->nattr;
     const int *attr_kind = cfg->attr_kind;
@@ -1958,6 +1978,16 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
     char *null_type = cfg->null_type;
     char *shared_class_name = cfg->shared_class_name;
     char **header = cfg->header_for_errors;
+    (void)shared_attr_id;
+    (void)shared_attr_type;
+
+    /* v0.0.14 (perf): two modes for direct-write:
+     *   - build_cols + gitems != NULL → write to colcache cols AND wrappers (legacy)
+     *   - build_cols + gitems == NULL → pure columnar (skip wrappers entirely)
+     * Detect pure_col via gcol_i/gcol_s present but gitems absent. */
+    int build_cols = (out && (out->gcol_i != NULL || out->gcol_s != NULL));
+    int row_offset = out ? out->row_offset : 0;
+    int has_items = (out && out->gitems != NULL);
 
     size_t pos = start;
     if (!is_first) {
@@ -1978,6 +2008,26 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
     ASTNode *first = NULL, *last = NULL;
     int row_idx = 0;
 
+    /* PROFILE: TE_CSV_SCAN_ONLY=1 → solo invoca el scanner y descarta el resto.
+     * Mide costo puro del byte scanner (csv_next_record_zerocopy) sin
+     * ObjectNode/Variable[]/ast_pool/colcache writes. */
+    static int scan_only = -1;
+    if (scan_only < 0) scan_only = getenv("TE_CSV_SCAN_ONLY") ? 1 : 0;
+
+    /* v0.0.14 (perf, OPT-IN): TE_CSV_COLUMNAR=1 → modo columnar puro.
+     * Activado cuando build_cols=1 Y has_items=0 (el caller decidió no
+     * construir el array de wrappers — desde from_csv_to_list cuando
+     * detecta el env). En este modo:
+     * - SKIP allocación de ObjectNode + Variable[] + memcpy template
+     * - SKIP escrituras a obj->attributes
+     * - SKIP ast_pool_alloc (10M wrappers) + linked list (~640MB writes)
+     * - SKIP loop de validación
+     * - Parsea cada campo y escribe DIRECTO al colcache global (gcol_i/gcol_s)
+     * COSTO: iteración OO (`for p in productos { p.precio }`) falla porque
+     * no hay wrappers. list.length viene del col_cache->n_rows. Para CSV
+     * grandes usados como dataframes esto es aceptable. */
+    int pure_col = (build_cols && !has_items);
+
     while (pos < end) {
         size_t row_begin = pos;
         int rn = csv_next_record_zerocopy(src, total_len, &pos, rec_fields, header_n);
@@ -1987,9 +2037,73 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
         row_idx++;
 
         if (rn == 1 && rec_fields[0][0] == '\0') continue;
+        if (scan_only) continue;
 
         char **rec = rec_fields;
 
+        if (pure_col) {
+            /* ===== FAST PATH COLUMNAR PURO (sin wrappers) ===== */
+            int r = row_offset + out->wrow_count;
+            int upto = rn < header_n ? rn : header_n;
+            for (int c = 0; c < upto; c++) {
+                int a = col_to_attr[c];
+                if (a < 0) continue;
+                const char *raw = rec[c];
+
+                if (attr_kind[a] == 0 /*INT*/) {
+                    long v = 0;
+                    if (raw[0] == '\0') {
+                        if (!attr_nullable[a]) {
+                            fprintf(stderr, "CSVError: fila %d, columna '%s' (int) está vacía.\n",
+                                    row_idx, header[c]);
+                            exit(1);
+                        }
+                    } else {
+                        const char *p = raw;
+                        int neg = 0;
+                        if (*p == '-') { neg = 1; p++; }
+                        else if (*p == '+') { p++; }
+                        int ok = (*p != '\0');
+                        while (*p) {
+                            unsigned d = (unsigned)(*p - '0');
+                            if (d > 9u) { ok = 0; break; }
+                            v = v * 10 + (long)d;
+                            p++;
+                        }
+                        if (!ok) {
+                            char *endp = NULL;
+                            v = strtol(raw, &endp, 10);
+                            if (endp == raw || (endp && *endp != '\0')) {
+                                fprintf(stderr, "CSVError: fila %d, columna '%s': '%s' no es int.\n",
+                                        row_idx, header[c], raw);
+                                exit(1);
+                            }
+                        } else if (neg) {
+                            v = -v;
+                        }
+                    }
+                    if (out->gcol_i && out->gcol_i[a])
+                        out->gcol_i[a][r] = (int64_t)v;
+                } else if (attr_kind[a] == 1 /*STRING*/) {
+                    if (raw[0] == '\0' && !attr_nullable[a]) {
+                        fprintf(stderr, "CSVError: fila %d: atributo '%s' (no nullable) sin valor.\n",
+                                row_idx, cfg->cls->attributes[a].id);
+                        exit(1);
+                    }
+                    if (out->gcol_s && out->gcol_s[a])
+                        out->gcol_s[a][r] = (raw[0] == '\0') ? NULL : (char*)raw;
+                } else {
+                    if (out->gcol_s && out->gcol_s[a])
+                        out->gcol_s[a][r] = (char*)raw;
+                }
+            }
+            /* NO wrapper, NO linked list, NO gitems write. list.length
+             * vendrá de col_cache->n_rows vía list_length(). */
+            out->wrow_count++;
+            continue;
+        }
+
+        /* ===== PATH LEGACY (compat: ObjectNode + attrs) ===== */
         ObjectNode *obj = (ObjectNode*)csv_arena_alloc(sizeof(ObjectNode));
         obj->class = cfg->cls;
         obj->attributes = (Variable*)csv_arena_alloc(nattr * sizeof(Variable));
@@ -2092,11 +2206,29 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
 
         if (!first) { first = last = item; }
         else        { last->next = item; last = item; }
+
+        /* v0.0.13 (perf): escritura DIRECTA al colcache global. Los arrays
+         * están pre-asignados (tras pre-count de filas), y row_offset es
+         * el prefix-sum del worker. Sin malloc ni memcpy: la única copia
+         * es esta escritura, que es write-combining-friendly. */
+        if (build_cols) {
+            int r = row_offset + out->wrow_count;
+            for (int a = 0; a < nattr; a++) {
+                if (attr_kind[a] == 0 /*INT*/) {
+                    if (out->gcol_i && out->gcol_i[a])
+                        out->gcol_i[a][r] = (int64_t)obj->attributes[a].value.int_value;
+                } else if (attr_kind[a] == 1 /*STRING*/) {
+                    if (out->gcol_s && out->gcol_s[a])
+                        out->gcol_s[a][r] = obj->attributes[a].value.string_value;
+                }
+            }
+            out->gitems[r] = item;
+            out->wrow_count++;
+        }
     }
 
     free(rec_fields);
-    *out_first = first;
-    *out_last  = last;
+    if (out) { out->first = first; out->last = last; }
 }
 
 #if TE_HAS_PTHREAD
@@ -2106,8 +2238,7 @@ static void *csv_parse_worker(void *p) {
     t_csv_arena = NULL;
     t_ast_pool = NULL;
     csv_parse_chunk(a->cfg, a->src, a->total_len,
-                    a->chunk_start, a->chunk_end, a->is_first,
-                    &a->first, &a->last);
+                    a->chunk_start, a->chunk_end, a->is_first, a);
     a->arena_head = t_csv_arena;
     a->pool_head  = t_ast_pool;
     return NULL;
@@ -2247,6 +2378,12 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
 
     ASTNode *first = NULL, *last = NULL;
 
+    /* v0.0.13 (perf): args[] retenidos hasta después de construir el
+     * colcache global (necesitamos los wcol_X y witems por-worker). */
+    CSVWorkerArgs *worker_args = NULL;
+    int worker_args_n = 0;
+    TeColCache *worker_gcache = NULL;
+
     if (te_timing) clock_gettime(CLOCK_MONOTONIC, &ts_after_header);
     if (te_timing) clock_gettime(CLOCK_MONOTONIC, &ts_before_parse);
 
@@ -2343,6 +2480,29 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         size_t data_len = len - data_start;
         size_t chunk = data_len / N;
 
+        /* v0.0.13 (perf): camino de escritura DIRECTA al colcache global.
+         *  1) Pre-contar filas por chunk (csv_count_newlines, AVX2). El
+         *     conteo expandido cubre cada worker hasta el siguiente '\n'
+         *     ≥ chunk_end, igualando exactamente lo que csv_parse_chunk
+         *     procesará tras ajustar bordes. Cualquier mismatch → desactivar
+         *     y caer al pase legacy te_colcache_build.
+         *  2) Prefix-sum → row_offset por worker, total_n global.
+         *  3) Allocar arrays globales del colcache UNA sola vez (int_cols /
+         *     str_cols / items) sin malloc por-worker.
+         *  4) Spawnear workers con gcol_X apuntando a globales + row_offset.
+         *  5) Al join, attach TeColCache prebuilt (sin recorrer la lista). */
+        const char *eco_pre = getenv("TE_COLCACHE");
+        int want_colcache = (!eco_pre || eco_pre[0] != '0');
+        /* v0.0.14: TE_CSV_COLUMNAR=1 → skip wrappers (items[] NO alocado). */
+        static int pure_columnar = -1;
+        if (pure_columnar < 0) pure_columnar = getenv("TE_CSV_COLUMNAR") ? 1 : 0;
+        int prep_ok = want_colcache;
+        TeColCache *gcache = NULL;
+        int total_n = 0;
+        int64_t **gcol_i = NULL;
+        const char ***gcol_s = NULL;
+        ASTNode **gitems = NULL;
+
         for (int i = 0; i < N; i++) {
             args[i].cfg = &cfg;
             args[i].src = src;
@@ -2350,6 +2510,77 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
             args[i].chunk_start = data_start + (size_t)i * chunk;
             args[i].chunk_end   = (i == N - 1) ? len : (data_start + (size_t)(i + 1) * chunk);
             args[i].is_first    = (i == 0);
+        }
+
+        if (prep_ok) {
+            int offset = 0;
+            for (int i = 0; i < N; i++) {
+                size_t adj_start = args[i].chunk_start;
+                if (!args[i].is_first && adj_start > 0 && src[adj_start-1] != '\n') {
+                    while (adj_start < len && src[adj_start] != '\n') adj_start++;
+                    if (adj_start < len) adj_start++;
+                }
+                size_t end_inclusive = args[i].chunk_end;
+                if (i < N - 1) {
+                    if (end_inclusive > 0 && end_inclusive < len && src[end_inclusive-1] != '\n') {
+                        while (end_inclusive < len && src[end_inclusive] != '\n') end_inclusive++;
+                        if (end_inclusive < len) end_inclusive++;
+                    }
+                }
+                int rc = (adj_start < end_inclusive)
+                       ? (int)csv_count_newlines(src, adj_start, end_inclusive)
+                       : 0;
+                args[i].row_offset = offset;
+                args[i].wrow_count = 0; /* worker incrementa */
+                offset += rc;
+            }
+            total_n = offset;
+            if (total_n > 0) {
+                gcache = (TeColCache*)calloc(1, sizeof(TeColCache));
+                gcache->cls = cls;
+                gcache->n_rows = total_n;
+                gcache->nattr = nattr;
+                gcache->kinds = (int*)calloc(nattr, sizeof(int));
+                gcache->int_cols = (int64_t**)calloc(nattr, sizeof(int64_t*));
+                gcache->flt_cols = (double**)calloc(nattr, sizeof(double*));
+                gcache->str_cols = (const char***)calloc(nattr, sizeof(const char**));
+                /* pure_columnar: NO alocar items — ahorro 80MB writes en 10M filas. */
+                gcache->items = pure_columnar
+                    ? NULL
+                    : (ASTNode**)malloc((size_t)total_n * sizeof(ASTNode*));
+                gcol_i = (int64_t**)calloc(nattr, sizeof(int64_t*));
+                gcol_s = (const char***)calloc(nattr, sizeof(const char**));
+                gitems = gcache->items;  /* NULL si pure_columnar */
+                for (int k = 0; k < nattr; k++) {
+                    const char *t = cls->attributes[k].type;
+                    int kind = 3;
+                    if (t) {
+                        if (!strcmp(t,"int") || !strcmp(t,"INT") || !strcmp(t,"long") ||
+                            !strcmp(t,"Integer") || !strcmp(t,"bool") || !strcmp(t,"BOOL")) kind = 0;
+                        else if (!strcmp(t,"float") || !strcmp(t,"FLOAT") || !strcmp(t,"double") ||
+                                 !strcmp(t,"Double")) kind = 1;
+                        else if (!strcmp(t,"string") || !strcmp(t,"STRING") || !strcmp(t,"String")) kind = 2;
+                    }
+                    gcache->kinds[k] = kind;
+                    if (kind == 0) {
+                        gcache->int_cols[k] = (int64_t*)malloc((size_t)total_n * sizeof(int64_t));
+                        gcol_i[k] = gcache->int_cols[k];
+                    } else if (kind == 2) {
+                        gcache->str_cols[k] = (const char**)malloc((size_t)total_n * sizeof(const char*));
+                        gcol_s[k] = gcache->str_cols[k];
+                    }
+                }
+                for (int i = 0; i < N; i++) {
+                    args[i].gcol_i = gcol_i;
+                    args[i].gcol_s = gcol_s;
+                    args[i].gitems = gitems;
+                }
+            } else {
+                prep_ok = 0;
+            }
+        }
+
+        for (int i = 0; i < N; i++) {
             pthread_create(&tids[i], NULL, csv_parse_worker, &args[i]);
         }
         for (int i = 0; i < N; i++) pthread_join(tids[i], NULL);
@@ -2363,19 +2594,112 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
                 else        { last->next = args[i].first; last = args[i].last; }
             }
         }
+
+        /* Verificar que el pre-count coincidió con lo realmente parseado. Si
+         * algún worker parseó más/menos, abortamos el direct-write y caemos
+         * al pase legacy te_colcache_build (seguridad ante chunks con
+         * comportamiento de borde inesperado). */
+        if (prep_ok && gcache) {
+            int actual_total = 0;
+            int mismatch = 0;
+            for (int i = 0; i < N; i++) {
+                actual_total += args[i].wrow_count;
+                /* Cada worker debió producir exactamente (offset_siguiente - offset_actual) filas */
+                int expected = (i + 1 < N) ? (args[i+1].row_offset - args[i].row_offset)
+                                           : (total_n - args[i].row_offset);
+                if (args[i].wrow_count != expected) mismatch = 1;
+            }
+            if (mismatch || actual_total != total_n) {
+                /* Limpiar el colcache direct-write y dejar que te_colcache_build
+                 * haga el pase clásico. */
+                for (int k = 0; k < nattr; k++) {
+                    if (gcache->int_cols[k]) free(gcache->int_cols[k]);
+                    if (gcache->str_cols[k]) free(gcache->str_cols[k]);
+                }
+                free(gcache->int_cols); free(gcache->flt_cols); free(gcache->str_cols);
+                free(gcache->kinds); free(gcache->items); free(gcache);
+                gcache = NULL;
+            }
+        }
+        free(gcol_i); free(gcol_s);
+
+        worker_args = args;
+        worker_args_n = N;
+        worker_gcache = gcache;
         free(tids);
-        free(args);
     } else
 #endif
     {
-        /* Serial fallback: 1 chunk = todo. */
-        ASTNode *f = NULL, *l = NULL;
-        csv_parse_chunk(&cfg, src, len, pos, len, /*is_first=*/1, &f, &l);
-        first = f; last = l;
-        /* Linkar el pool del thread principal a keepalive. Aunque vivirá hasta
-         * exit de todos modos, mantener el invariante simplifica razonar. */
+        /* Serial fallback: 1 chunk = todo. Path direct-write opcional. */
+        const char *eco_pre = getenv("TE_COLCACHE");
+        int want_colcache = (!eco_pre || eco_pre[0] != '0');
+        static int pure_columnar = -1;
+        if (pure_columnar < 0) pure_columnar = getenv("TE_CSV_COLUMNAR") ? 1 : 0;
+        CSVWorkerArgs sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.chunk_start = pos;
+        sa.chunk_end = len;
+        sa.is_first = 1;
+        TeColCache *gcache = NULL;
+        int64_t **gcol_i = NULL;
+        const char ***gcol_s = NULL;
+        if (want_colcache) {
+            int total_n = (pos < len) ? (int)csv_count_newlines(src, pos, len) : 0;
+            /* No '\n' final → +1 para fila terminada por EOF */
+            if (total_n > 0 && src[len-1] != '\n') total_n++;
+            if (total_n > 0) {
+                gcache = (TeColCache*)calloc(1, sizeof(TeColCache));
+                gcache->cls = cls;
+                gcache->n_rows = total_n;
+                gcache->nattr = nattr;
+                gcache->kinds = (int*)calloc(nattr, sizeof(int));
+                gcache->int_cols = (int64_t**)calloc(nattr, sizeof(int64_t*));
+                gcache->flt_cols = (double**)calloc(nattr, sizeof(double*));
+                gcache->str_cols = (const char***)calloc(nattr, sizeof(const char**));
+                gcache->items = (ASTNode**)malloc((size_t)total_n * sizeof(ASTNode*));
+                gcol_i = (int64_t**)calloc(nattr, sizeof(int64_t*));
+                gcol_s = (const char***)calloc(nattr, sizeof(const char**));
+                for (int k = 0; k < nattr; k++) {
+                    const char *t = cls->attributes[k].type;
+                    int kind = 3;
+                    if (t) {
+                        if (!strcmp(t,"int") || !strcmp(t,"INT") || !strcmp(t,"long") ||
+                            !strcmp(t,"Integer") || !strcmp(t,"bool") || !strcmp(t,"BOOL")) kind = 0;
+                        else if (!strcmp(t,"float") || !strcmp(t,"FLOAT") || !strcmp(t,"double") ||
+                                 !strcmp(t,"Double")) kind = 1;
+                        else if (!strcmp(t,"string") || !strcmp(t,"STRING") || !strcmp(t,"String")) kind = 2;
+                    }
+                    gcache->kinds[k] = kind;
+                    if (kind == 0) {
+                        gcache->int_cols[k] = (int64_t*)malloc((size_t)total_n * sizeof(int64_t));
+                        gcol_i[k] = gcache->int_cols[k];
+                    } else if (kind == 2) {
+                        gcache->str_cols[k] = (const char**)malloc((size_t)total_n * sizeof(const char*));
+                        gcol_s[k] = gcache->str_cols[k];
+                    }
+                }
+                sa.gcol_i = gcol_i;
+                sa.gcol_s = gcol_s;
+                sa.gitems = gcache->items;  /* NULL si pure_columnar */
+                sa.row_offset = 0;
+            }
+        }
+        csv_parse_chunk(&cfg, src, len, pos, len, /*is_first=*/1, &sa);
+        first = sa.first; last = sa.last;
         ast_pool_keepalive_link(t_ast_pool);
         t_ast_pool = NULL;
+        if (gcache && sa.wrow_count != gcache->n_rows) {
+            /* Mismatch: descartar y dejar que te_colcache_build haga el pase. */
+            for (int k = 0; k < nattr; k++) {
+                if (gcache->int_cols[k]) free(gcache->int_cols[k]);
+                if (gcache->str_cols[k]) free(gcache->str_cols[k]);
+            }
+            free(gcache->int_cols); free(gcache->flt_cols); free(gcache->str_cols);
+            free(gcache->kinds); free(gcache->items); free(gcache);
+            gcache = NULL;
+        }
+        free(gcol_i); free(gcol_s);
+        worker_gcache = gcache;
     }
 
     if (te_timing) clock_gettime(CLOCK_MONOTONIC, &ts_after_parse);
@@ -2407,20 +2731,32 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         fprintf(stderr, "[CSV] mmap=%ldus header=%ldus parse=%ldus tail=%ldus total=%ldus\n",
                 us_mmap, us_header, us_parse, us_end, us_total);
     }
-    /* v0.0.13 (perf): build columnar cache for hot LINQ paths.
-     * Opt-out via TE_COLCACHE=0. */
+    /* v0.0.13 (perf): si el path direct-write tuvo éxito, attachamos el
+     * colcache prebuilt (cero recorrido extra). Si falló por mismatch o
+     * TE_COLCACHE=0, opcionalmente caemos al pase legacy te_colcache_build. */
     {
         const char *eco = getenv("TE_COLCACHE");
         if (!eco || eco[0] != '0') {
             struct timespec tcc0, tcc1;
             if (te_timing) clock_gettime(CLOCK_MONOTONIC, &tcc0);
-            te_colcache_build(listNode, cls);
-            if (te_timing) {
-                clock_gettime(CLOCK_MONOTONIC, &tcc1);
-                long us = (tcc1.tv_sec - tcc0.tv_sec)*1000000L + (tcc1.tv_nsec - tcc0.tv_nsec)/1000L;
-                fprintf(stderr, "[CSV] colcache_build=%ldus\n", us);
+            if (worker_gcache) {
+                te_colcache_attach_prebuilt(listNode, worker_gcache);
+                if (te_timing) {
+                    clock_gettime(CLOCK_MONOTONIC, &tcc1);
+                    long us = (tcc1.tv_sec - tcc0.tv_sec)*1000000L + (tcc1.tv_nsec - tcc0.tv_nsec)/1000L;
+                    fprintf(stderr, "[CSV] colcache_attach=%ldus n=%d (direct-write)\n",
+                            us, worker_gcache->n_rows);
+                }
+            } else {
+                te_colcache_build(listNode, cls);
+                if (te_timing) {
+                    clock_gettime(CLOCK_MONOTONIC, &tcc1);
+                    long us = (tcc1.tv_sec - tcc0.tv_sec)*1000000L + (tcc1.tv_nsec - tcc0.tv_nsec)/1000L;
+                    fprintf(stderr, "[CSV] colcache_build=%ldus (legacy fallback)\n", us);
+                }
             }
         }
     }
+    free(worker_args);
     return listNode;
 }

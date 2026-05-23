@@ -131,9 +131,16 @@ void te_colcache_build(ASTNode *list_head, ClassNode *cls) {
         else if (c->kinds[k] == 2) c->str_cols[k] = (const char**)malloc((size_t)n * sizeof(const char*));
     }
 
+    /* v0.0.13 (perf): two-pass build. Pass 1 (serial, fast): walk linked
+     * list ONCE to populate items[] and validate row classes. Pass 2
+     * (parallel OpenMP): fill column buffers from items[] using random
+     * access (each iteration independent).
+     *
+     * Before this change, the single-pass walk dominated CSV-load time
+     * (~650ms for 10M rows). Now Pass 2 scales near-linearly with cores
+     * (target ~100ms on 8 cores). */
     int i = 0;
     for (ASTNode *it = list_head->left; it; it = it->next, i++) {
-        c->items[i] = it;
         if (!it->type || strcmp(it->type, "OBJECT") != 0 || !it->extra) {
             te_colcache_free(c);
             return;
@@ -143,42 +150,107 @@ void te_colcache_build(ASTNode *list_head, ClassNode *cls) {
             te_colcache_free(c);
             return;
         }
+        c->items[i] = it;
         obj->owning_list = (void*)list_head;
-        for (int k = 0; k < nattr; k++) {
-            Variable *a = &obj->attributes[k];
-            switch (c->kinds[k]) {
-                case 0: {
-                    int64_t v = 0;
-                    if (a->vtype == VAL_INT) v = (int64_t)a->value.int_value;
-                    else if (a->vtype == VAL_FLOAT) v = (int64_t)a->value.float_value;
-                    else if (a->vtype == VAL_STRING && a->value.string_value) {
-                        char *end = NULL; long long ll = strtoll(a->value.string_value, &end, 10);
-                        if (end != a->value.string_value) v = (int64_t)ll;
+    }
+#ifdef TE_HAVE_OPENMP
+    if (te_openmp_enabled() && n >= TE_OMP_MIN_N) {
+        #pragma omp parallel for schedule(static)
+        for (int j = 0; j < n; j++) {
+            ObjectNode *obj = (ObjectNode*)c->items[j]->extra;
+            for (int k = 0; k < nattr; k++) {
+                Variable *a = &obj->attributes[k];
+                switch (c->kinds[k]) {
+                    case 0: {
+                        int64_t v = 0;
+                        if (a->vtype == VAL_INT) v = (int64_t)a->value.int_value;
+                        else if (a->vtype == VAL_FLOAT) v = (int64_t)a->value.float_value;
+                        else if (a->vtype == VAL_STRING && a->value.string_value) {
+                            char *end = NULL; long long ll = strtoll(a->value.string_value, &end, 10);
+                            if (end != a->value.string_value) v = (int64_t)ll;
+                        }
+                        c->int_cols[k][j] = v;
+                        break;
                     }
-                    c->int_cols[k][i] = v;
-                    break;
-                }
-                case 1: {
-                    double v = 0.0;
-                    if (a->vtype == VAL_FLOAT) v = a->value.float_value;
-                    else if (a->vtype == VAL_INT) v = (double)a->value.int_value;
-                    else if (a->vtype == VAL_STRING && a->value.string_value) {
-                        char *end = NULL; double d = strtod(a->value.string_value, &end);
-                        if (end != a->value.string_value) v = d;
+                    case 1: {
+                        double v = 0.0;
+                        if (a->vtype == VAL_FLOAT) v = a->value.float_value;
+                        else if (a->vtype == VAL_INT) v = (double)a->value.int_value;
+                        else if (a->vtype == VAL_STRING && a->value.string_value) {
+                            char *end = NULL; double d = strtod(a->value.string_value, &end);
+                            if (end != a->value.string_value) v = d;
+                        }
+                        c->flt_cols[k][j] = v;
+                        break;
                     }
-                    c->flt_cols[k][i] = v;
-                    break;
+                    case 2: {
+                        c->str_cols[k][j] = (a->vtype == VAL_STRING) ? a->value.string_value : NULL;
+                        break;
+                    }
+                    default: break;
                 }
-                case 2: {
-                    c->str_cols[k][i] = (a->vtype == VAL_STRING) ? a->value.string_value : NULL;
-                    break;
+            }
+        }
+    } else
+#endif
+    {
+        for (int j = 0; j < n; j++) {
+            ObjectNode *obj = (ObjectNode*)c->items[j]->extra;
+            for (int k = 0; k < nattr; k++) {
+                Variable *a = &obj->attributes[k];
+                switch (c->kinds[k]) {
+                    case 0: {
+                        int64_t v = 0;
+                        if (a->vtype == VAL_INT) v = (int64_t)a->value.int_value;
+                        else if (a->vtype == VAL_FLOAT) v = (int64_t)a->value.float_value;
+                        else if (a->vtype == VAL_STRING && a->value.string_value) {
+                            char *end = NULL; long long ll = strtoll(a->value.string_value, &end, 10);
+                            if (end != a->value.string_value) v = (int64_t)ll;
+                        }
+                        c->int_cols[k][j] = v;
+                        break;
+                    }
+                    case 1: {
+                        double v = 0.0;
+                        if (a->vtype == VAL_FLOAT) v = a->value.float_value;
+                        else if (a->vtype == VAL_INT) v = (double)a->value.int_value;
+                        else if (a->vtype == VAL_STRING && a->value.string_value) {
+                            char *end = NULL; double d = strtod(a->value.string_value, &end);
+                            if (end != a->value.string_value) v = d;
+                        }
+                        c->flt_cols[k][j] = v;
+                        break;
+                    }
+                    case 2: {
+                        c->str_cols[k][j] = (a->vtype == VAL_STRING) ? a->value.string_value : NULL;
+                        break;
+                    }
+                    default: break;
                 }
-                default: break;
             }
         }
     }
     list_head->col_cache = c;
     c->owner = list_head;
+}
+
+void te_colcache_attach_prebuilt(ASTNode *list_head, TeColCache *c) {
+    if (!list_head || !c) return;
+    if (list_head->col_cache) {
+        te_colcache_free((TeColCache*)list_head->col_cache);
+        list_head->col_cache = NULL;
+    }
+    c->owner = list_head;
+    c->parent = NULL;
+    c->children = NULL;
+    c->n_children = 0;
+    c->cap_children = 0;
+    list_head->col_cache = c;
+    /* NOTA: NO seteamos obj->owning_list aquí. Caches prebuilt provienen
+     * de cargas CSV de sólo-lectura; pagar el walk de 10M objects (~230ms)
+     * para soportar mutación post-load que casi nunca ocurre es mal trade.
+     * Si en el futuro se permite mutar tras carga, hacer el setup en la
+     * primera mutación o gatear por flag. */
 }
 
 TeColCache *te_colcache_build_from_mask(TeColCache *parent, const char *mask,

@@ -167,6 +167,11 @@ int te_class_attr_idx(ClassNode *cls, const char *name);
 
 /* Public colcache API. */
 void       te_colcache_build(ASTNode *list_head, ClassNode *cls);
+/* v0.0.13 (perf): adjuntar un TeColCache YA construido (p.ej. por te_csv.c
+ * durante el parseo) sin tener que recorrer la lista de objetos. Asume
+ * c->cls/n_rows/nattr/kinds/*_cols/items ya poblados. Inicializa owner y
+ * children y cuelga `c` del listNode. */
+void       te_colcache_attach_prebuilt(ASTNode *list_head, TeColCache *c);
 void       te_colcache_invalidate(ASTNode *list_head);
 TeColCache *te_colcache_build_from_mask(TeColCache *parent, const char *mask,
                                         ASTNode *result_list_head,
