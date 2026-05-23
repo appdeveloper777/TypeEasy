@@ -728,34 +728,42 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
             }
             if (strcmp(fname, "groupBy") == 0) {
                 /* Returns LIST of OBJECT_LITERAL {key, items: LIST}.
-                 * Fast-path (numeric int key): linear probe over int64 keys;
-                 * for low-cardinality keys (typical: groupBy day, status, bucket)
-                 * this is ~50× faster than per-item call_lambda + strcmp.
-                 * Slow path is the original string-keyed implementation. */
+                 * Fast-path (numeric key, int o float): linear probe sobre
+                 * `double` keys con `==` (bit-exact para int hasta 2^53 y
+                 * para floats producidos por la misma expresión).
+                 * v0.0.14: la rama int original (`long long`) truncaba 1.5
+                 * y 1.7 al mismo bucket. Ahora se usa `double` siempre. */
                 ASTNode *result = create_list_node(NULL);
                 ASTNode *item = list->left;
                 if (fl.spec != SPEC_NONE && (fl.spec == SPEC_ATTR || fl.spec == SPEC_MOD_K || fl.spec == SPEC_IDENT)) {
                     int cap = 16, nkeys = 0;
-                    long long *bk = (long long*)malloc(cap * sizeof(long long));
+                    double   *bk = (double*)malloc(cap * sizeof(double));
                     ASTNode **bg = (ASTNode**)malloc(cap * sizeof(ASTNode*));
                     int ok = 1;
                     while (item) {
                         double v; int vint;
                         if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
-                        long long key = (long long)v;
                         int idx_g = -1;
-                        for (int g = 0; g < nkeys; g++) if (bk[g] == key) { idx_g = g; break; }
+                        for (int g = 0; g < nkeys; g++) if (bk[g] == v) { idx_g = g; break; }
                         ASTNode *group_items;
                         if (idx_g < 0) {
                             if (nkeys == cap) {
                                 cap *= 2;
-                                bk = (long long*)realloc(bk, cap * sizeof(long long));
+                                bk = (double*)realloc(bk, cap * sizeof(double));
                                 bg = (ASTNode**)realloc(bg, cap * sizeof(ASTNode*));
                             }
-                            bk[nkeys] = key;
+                            bk[nkeys] = v;
                             ASTNode *grp = (ASTNode*)calloc(1, sizeof(ASTNode));
                             grp->type = strdup("OBJECT_LITERAL");
-                            char kbuf[32]; snprintf(kbuf, sizeof(kbuf), "%lld", key);
+                            /* Formato de key: enteros como "%lld" para
+                             * compatibilidad con el comportamiento previo
+                             * (groupBy int → key "3"); floats como "%g". */
+                            char kbuf[32];
+                            if (v == (double)(long long)v && v > -9.0e15 && v < 9.0e15) {
+                                snprintf(kbuf, sizeof(kbuf), "%lld", (long long)v);
+                            } else {
+                                snprintf(kbuf, sizeof(kbuf), "%g", v);
+                            }
                             ASTNode *kv_key = create_kv_pair_node("key", create_ast_leaf("STRING", 0, kbuf, NULL));
                             group_items = create_list_node(NULL);
                             ASTNode *kv_items = create_kv_pair_node("items", group_items);

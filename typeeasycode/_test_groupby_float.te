@@ -1,0 +1,15 @@
+// Test groupBy con keys float. Antes (long long)v truncaba 1.5/1.7 al mismo
+// bucket. Ahora la rama numérica fast-path usa double + comparación ==.
+let xs = [1.5, 1.7, 1.5, 2.0, 1.7, 2.0, 1.5];
+let g = xs.groupBy(fn(p) => p);
+println("groups=" + g.length);
+for (let grp in g) {
+    println("key=" + grp.key + " items=" + grp.items.length);
+}
+
+let ns = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3];
+let gi = ns.groupBy(fn(n) => n % 3);
+println("intgroups=" + gi.length);
+for (let grp in gi) {
+    println("intkey=" + grp.key + " items=" + grp.items.length);
+}
