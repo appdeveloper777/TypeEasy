@@ -734,6 +734,12 @@ int csv_attr_is_int(const char *t) {
 int csv_attr_is_string(const char *t) {
     return t && (!strcmp(t, "string") || !strcmp(t, "string?"));
 }
+/* v0.0.14 polish #6a: float column support en path columnar. */
+int csv_attr_is_float(const char *t) {
+    return t && (!strcmp(t, "float")  || !strcmp(t, "float?")  ||
+                 !strcmp(t, "FLOAT")  || !strcmp(t, "double") ||
+                 !strcmp(t, "double?")|| !strcmp(t, "Double"));
+}
 int csv_attr_is_nullable(const char *t) {
     if (!t) return 0;
     size_t L = strlen(t);
@@ -2011,7 +2017,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
      *   - build_cols + gitems != NULL → write to colcache cols AND wrappers (legacy)
      *   - build_cols + gitems == NULL → pure columnar (skip wrappers entirely)
      * Detect pure_col via gcol_i/gcol_s present but gitems absent. */
-    int build_cols = (out && (out->gcol_i != NULL || out->gcol_s != NULL));
+    int build_cols = (out && (out->gcol_i != NULL || out->gcol_s != NULL || out->gcol_f != NULL));
     int row_offset = out ? out->row_offset : 0;
     int has_items = (out && out->gitems != NULL);
 
@@ -2118,6 +2124,26 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                     }
                     if (out->gcol_s && out->gcol_s[a])
                         out->gcol_s[a][r] = (raw[0] == '\0') ? NULL : (char*)raw;
+                } else if (attr_kind[a] == 3 /*FLOAT*/) {
+                    /* v0.0.14 polish #6a: K_FLOAT writer (pure_col) */
+                    double v = 0.0;
+                    if (raw[0] == '\0') {
+                        if (!attr_nullable[a]) {
+                            fprintf(stderr, "CSVError: fila %d, columna '%s' (float) está vacía.\n",
+                                    row_idx, header[c]);
+                            exit(1);
+                        }
+                    } else {
+                        char *endp = NULL;
+                        v = strtod(raw, &endp);
+                        if (endp == raw) {
+                            fprintf(stderr, "CSVError: fila %d, columna '%s': '%s' no es float.\n",
+                                    row_idx, header[c], raw);
+                            exit(1);
+                        }
+                    }
+                    if (out->gcol_f && out->gcol_f[a])
+                        out->gcol_f[a][r] = v;
                 } else {
                     if (out->gcol_s && out->gcol_s[a])
                         out->gcol_s[a][r] = (char*)raw;
@@ -2196,6 +2222,29 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                      * código hace free(viejo), crash. Aceptable para CSV read-only. */
                     obj->attributes[a].value.string_value = (char*)raw;
                 }
+            } else if (attr_kind[a] == 3 /*FLOAT*/) {
+                /* v0.0.14 polish #6a: K_FLOAT writer (legacy ObjectNode path). */
+                if (raw[0] == '\0') {
+                    if (attr_nullable[a]) {
+                        obj->attributes[a].type = null_type;
+                        obj->attributes[a].value.float_value = 0.0;
+                    } else {
+                        fprintf(stderr,
+                            "CSVError: fila %d, columna '%s' (float) está vacía.\n",
+                            row_idx, header[c]);
+                        exit(1);
+                    }
+                } else {
+                    char *endp = NULL;
+                    double v = strtod(raw, &endp);
+                    if (endp == raw) {
+                        fprintf(stderr,
+                            "CSVError: fila %d, columna '%s': '%s' no es float.\n",
+                            row_idx, header[c], raw);
+                        exit(1);
+                    }
+                    obj->attributes[a].value.float_value = v;
+                }
             } else {
                 obj->attributes[a].vtype = VAL_STRING;
                 obj->attributes[a].value.string_value = (char*)raw;
@@ -2246,6 +2295,10 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                 } else if (attr_kind[a] == 1 /*STRING*/) {
                     if (out->gcol_s && out->gcol_s[a])
                         out->gcol_s[a][r] = obj->attributes[a].value.string_value;
+                } else if (attr_kind[a] == 3 /*FLOAT*/) {
+                    /* v0.0.14 polish #6a: K_FLOAT writer (build_cols colcache). */
+                    if (out->gcol_f && out->gcol_f[a])
+                        out->gcol_f[a][r] = obj->attributes[a].value.float_value;
                 }
             }
             out->gitems[r] = item;
@@ -2322,14 +2375,16 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
 
     int nattr = cls->attr_count;
 
-    /* Pre-classify each attribute slot. */
-    enum { K_INT = 0, K_STRING = 1, K_OTHER = 2 };
+    /* Pre-classify each attribute slot. v0.0.14 polish #6a: K_FLOAT añadido
+     * para soportar columnas float/double en el path columnar. */
+    enum { K_INT = 0, K_STRING = 1, K_OTHER = 2, K_FLOAT = 3 };
     int *attr_kind = (int*)malloc(nattr * sizeof(int));
     int *attr_nullable = (int*)malloc(nattr * sizeof(int));
     for (int a = 0; a < nattr; a++) {
         const char *t = cls->attributes[a].type;
-        attr_kind[a] = csv_attr_is_int(t) ? K_INT
+        attr_kind[a] = csv_attr_is_int(t)    ? K_INT
                      : csv_attr_is_string(t) ? K_STRING
+                     : csv_attr_is_float(t)  ? K_FLOAT
                      : K_OTHER;
         attr_nullable[a] = csv_attr_is_nullable(t);
     }
@@ -2380,7 +2435,9 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         row_template[a].id = shared_attr_id_arena[a];
         row_template[a].type = shared_attr_type_arena[a];
         row_template[a].is_const = 0;
-        row_template[a].vtype = (attr_kind[a] == 0 /*INT*/) ? VAL_INT : VAL_STRING;
+        row_template[a].vtype = (attr_kind[a] == 0 /*INT*/) ? VAL_INT
+                              : (attr_kind[a] == 3 /*FLOAT*/) ? VAL_FLOAT
+                              : VAL_STRING;
         /* value bytes ya en cero por memset; suficiente para int=0 y string_value=NULL. */
     }
 
@@ -2525,25 +2582,13 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         int pure_columnar;
         if (g_te_csv_columnar_next >= 0) { pure_columnar = g_te_csv_columnar_next; g_te_csv_columnar_next = -1; }
         else pure_columnar = getenv("TE_CSV_COLUMNAR") ? 1 : 0;
-        /* v0.0.14 fix: el parser CSV NO escribe columnas float (K_OTHER=2).
-         * Si la clase tiene floats, desactivar pure_columnar para conservar
-         * items[] como fallback — eval_pred devolverá 0 para esos columnas
-         * (kind=3) y el caller usará el path por wrappers. */
-        {
-            int has_float = 0;
-            for (int k = 0; k < nattr; k++) {
-                const char *t = cls->attributes[k].type;
-                if (t && (!strcmp(t,"float") || !strcmp(t,"FLOAT") ||
-                          !strcmp(t,"double") || !strcmp(t,"Double"))) {
-                    has_float = 1; break;
-                }
-            }
-            if (has_float) pure_columnar = 0;
-        }
+        /* v0.0.14 polish #6a: parser CSV ahora soporta columnas float via
+         * gcol_f (K_FLOAT=3 en el parser, kind=1 en TeColCache). */
         int prep_ok = want_colcache;
         TeColCache *gcache = NULL;
         int total_n = 0;
         int64_t **gcol_i = NULL;
+        double  **gcol_f = NULL;
         const char ***gcol_s = NULL;
         ASTNode **gitems = NULL;
 
@@ -2593,6 +2638,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
                     ? NULL
                     : (ASTNode**)malloc((size_t)total_n * sizeof(ASTNode*));
                 gcol_i = (int64_t**)calloc(nattr, sizeof(int64_t*));
+                gcol_f = (double**)calloc(nattr, sizeof(double*));
                 gcol_s = (const char***)calloc(nattr, sizeof(const char**));
                 gitems = gcache->items;  /* NULL si pure_columnar */
                 for (int k = 0; k < nattr; k++) {
@@ -2605,14 +2651,14 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
                                  !strcmp(t,"Double")) kind = 1;
                         else if (!strcmp(t,"string") || !strcmp(t,"STRING") || !strcmp(t,"String")) kind = 2;
                     }
-                    /* v0.0.14 fix: float (kind==1) no soportado por el
-                     * parser CSV — marcar como UNKNOWN (3) para que eval_pred
-                     * devuelva 0 y el caller use fallback con items[]. */
-                    if (kind == 1) kind = 3;
                     gcache->kinds[k] = kind;
                     if (kind == 0) {
                         gcache->int_cols[k] = (int64_t*)malloc((size_t)total_n * sizeof(int64_t));
                         gcol_i[k] = gcache->int_cols[k];
+                    } else if (kind == 1) {
+                        /* v0.0.14 polish #6a: float column. */
+                        gcache->flt_cols[k] = (double*)malloc((size_t)total_n * sizeof(double));
+                        gcol_f[k] = gcache->flt_cols[k];
                     } else if (kind == 2) {
                         gcache->str_cols[k] = (const char**)malloc((size_t)total_n * sizeof(const char*));
                         gcol_s[k] = gcache->str_cols[k];
@@ -2620,6 +2666,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
                 }
                 for (int i = 0; i < N; i++) {
                     args[i].gcol_i = gcol_i;
+                    args[i].gcol_f = gcol_f;
                     args[i].gcol_s = gcol_s;
                     args[i].gitems = gitems;
                 }
@@ -2662,6 +2709,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
                  * haga el pase clásico. */
                 for (int k = 0; k < nattr; k++) {
                     if (gcache->int_cols[k]) free(gcache->int_cols[k]);
+                    if (gcache->flt_cols[k]) free(gcache->flt_cols[k]);
                     if (gcache->str_cols[k]) free(gcache->str_cols[k]);
                 }
                 free(gcache->int_cols); free(gcache->flt_cols); free(gcache->str_cols);
@@ -2669,7 +2717,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
                 gcache = NULL;
             }
         }
-        free(gcol_i); free(gcol_s);
+        free(gcol_i); free(gcol_f); free(gcol_s);
 
         worker_args = args;
         worker_args_n = N;
@@ -2684,19 +2732,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         int pure_columnar;
         if (g_te_csv_columnar_next >= 0) { pure_columnar = g_te_csv_columnar_next; g_te_csv_columnar_next = -1; }
         else pure_columnar = getenv("TE_CSV_COLUMNAR") ? 1 : 0;
-        /* v0.0.14 fix: ver nota en path paralelo — desactivar pure_columnar si
-         * la clase declara columnas float (no soportadas por el parser). */
-        {
-            int has_float = 0;
-            for (int k = 0; k < nattr; k++) {
-                const char *t = cls->attributes[k].type;
-                if (t && (!strcmp(t,"float") || !strcmp(t,"FLOAT") ||
-                          !strcmp(t,"double") || !strcmp(t,"Double"))) {
-                    has_float = 1; break;
-                }
-            }
-            if (has_float) pure_columnar = 0;
-        }
+        /* v0.0.14 polish #6a: float columns soportadas via gcol_f. */
         CSVWorkerArgs sa;
         memset(&sa, 0, sizeof(sa));
         sa.chunk_start = pos;
@@ -2704,6 +2740,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         sa.is_first = 1;
         TeColCache *gcache = NULL;
         int64_t **gcol_i = NULL;
+        double  **gcol_f = NULL;
         const char ***gcol_s = NULL;
         if (want_colcache) {
             int total_n = (pos < len) ? (int)csv_count_newlines(src, pos, len) : 0;
@@ -2720,6 +2757,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
                 gcache->str_cols = (const char***)calloc(nattr, sizeof(const char**));
                 gcache->items = (ASTNode**)malloc((size_t)total_n * sizeof(ASTNode*));
                 gcol_i = (int64_t**)calloc(nattr, sizeof(int64_t*));
+                gcol_f = (double**)calloc(nattr, sizeof(double*));
                 gcol_s = (const char***)calloc(nattr, sizeof(const char**));
                 for (int k = 0; k < nattr; k++) {
                     const char *t = cls->attributes[k].type;
@@ -2731,18 +2769,21 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
                                  !strcmp(t,"Double")) kind = 1;
                         else if (!strcmp(t,"string") || !strcmp(t,"STRING") || !strcmp(t,"String")) kind = 2;
                     }
-                    /* v0.0.14 fix: ver path paralelo — float no soportado. */
-                    if (kind == 1) kind = 3;
                     gcache->kinds[k] = kind;
                     if (kind == 0) {
                         gcache->int_cols[k] = (int64_t*)malloc((size_t)total_n * sizeof(int64_t));
                         gcol_i[k] = gcache->int_cols[k];
+                    } else if (kind == 1) {
+                        /* v0.0.14 polish #6a: float column. */
+                        gcache->flt_cols[k] = (double*)malloc((size_t)total_n * sizeof(double));
+                        gcol_f[k] = gcache->flt_cols[k];
                     } else if (kind == 2) {
                         gcache->str_cols[k] = (const char**)malloc((size_t)total_n * sizeof(const char*));
                         gcol_s[k] = gcache->str_cols[k];
                     }
                 }
                 sa.gcol_i = gcol_i;
+                sa.gcol_f = gcol_f;
                 sa.gcol_s = gcol_s;
                 sa.gitems = gcache->items;  /* NULL si pure_columnar */
                 sa.row_offset = 0;
@@ -2756,13 +2797,14 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
             /* Mismatch: descartar y dejar que te_colcache_build haga el pase. */
             for (int k = 0; k < nattr; k++) {
                 if (gcache->int_cols[k]) free(gcache->int_cols[k]);
+                if (gcache->flt_cols[k]) free(gcache->flt_cols[k]);
                 if (gcache->str_cols[k]) free(gcache->str_cols[k]);
             }
             free(gcache->int_cols); free(gcache->flt_cols); free(gcache->str_cols);
             free(gcache->kinds); free(gcache->items); free(gcache);
             gcache = NULL;
         }
-        free(gcol_i); free(gcol_s);
+        free(gcol_i); free(gcol_f); free(gcol_s);
         worker_gcache = gcache;
     }
 

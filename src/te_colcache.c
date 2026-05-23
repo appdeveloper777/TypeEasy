@@ -389,6 +389,40 @@ static inline void te_simd_cmp_i64(const int64_t *col, int n, int spec, int64_t 
         mask[i] = (char)b;
     }
 }
+
+/* v0.0.14 polish #6b: AVX2 doubles via _mm256_cmp_pd (4 doubles/cycle).
+ * Mismo contrato que te_simd_cmp_i64: spec ∈ {3=GT,4=LT,5=GE,6=LE,7=EQ,8=NE}.
+ * Usa predicados ordered non-signaling (_OQ) — NaN → false en todas las cmp. */
+static inline void te_simd_cmp_f64(const double *col, int n, int spec, double k, char *mask) {
+    int i = 0;
+    __m256d vk = _mm256_set1_pd(k);
+    for (; i + 4 <= n; i += 4) {
+        __m256d va = _mm256_loadu_pd(col + i);
+        __m256d cmp;
+        if      (spec == 7) cmp = _mm256_cmp_pd(va, vk, _CMP_EQ_OQ);
+        else if (spec == 8) cmp = _mm256_cmp_pd(va, vk, _CMP_NEQ_OQ);
+        else if (spec == 3) cmp = _mm256_cmp_pd(va, vk, _CMP_GT_OQ);
+        else if (spec == 4) cmp = _mm256_cmp_pd(va, vk, _CMP_LT_OQ);
+        else if (spec == 5) cmp = _mm256_cmp_pd(va, vk, _CMP_GE_OQ);
+        else if (spec == 6) cmp = _mm256_cmp_pd(va, vk, _CMP_LE_OQ);
+        else { for (int j=0;j<4;j++) mask[i+j]=0; continue; }
+        int mbits = _mm256_movemask_pd(cmp);
+        mask[i  ] = (char)((mbits >> 0) & 1);
+        mask[i+1] = (char)((mbits >> 1) & 1);
+        mask[i+2] = (char)((mbits >> 2) & 1);
+        mask[i+3] = (char)((mbits >> 3) & 1);
+    }
+    for (; i < n; i++) {
+        int b = 0;
+        if      (spec == 7) b = (col[i] == k);
+        else if (spec == 8) b = (col[i] != k);
+        else if (spec == 3) b = (col[i] >  k);
+        else if (spec == 4) b = (col[i] <  k);
+        else if (spec == 5) b = (col[i] >= k);
+        else if (spec == 6) b = (col[i] <= k);
+        mask[i] = (char)b;
+    }
+}
 #endif
 
 /* ============================================================================
@@ -582,22 +616,38 @@ int te_colcache_eval_pred(TeColCache *c, int attr_idx, const FastLambda *fl, cha
         double k = fl->k_is_float ? fl->k_d : (double)fl->k;
 #ifdef TE_HAVE_OPENMP
         if (te_openmp_enabled() && n >= TE_OMP_MIN_N) {
-            #pragma omp parallel for schedule(static)
-            for (int i = 0; i < n; i++) {
-                int b = 0;
-                switch (spec) {
-                    case SPEC_CMP_EQ: b = (col[i] == k); break;
-                    case SPEC_CMP_NE: b = (col[i] != k); break;
-                    case SPEC_CMP_GT: b = (col[i] >  k); break;
-                    case SPEC_CMP_LT: b = (col[i] <  k); break;
-                    case SPEC_CMP_GE: b = (col[i] >= k); break;
-                    case SPEC_CMP_LE: b = (col[i] <= k); break;
+            #pragma omp parallel
+            {
+                int nthr = omp_get_num_threads();
+                int tid  = omp_get_thread_num();
+                int chunk = (n + nthr - 1) / nthr;
+                int s = tid * chunk;
+                int e = s + chunk; if (e > n) e = n;
+                if (s < e) {
+#if defined(__AVX2__)
+                    te_simd_cmp_f64(col + s, e - s, spec, k, mask + s);
+#else
+                    for (int i = s; i < e; i++) {
+                        int b = 0;
+                        switch (spec) {
+                            case SPEC_CMP_EQ: b = (col[i] == k); break;
+                            case SPEC_CMP_NE: b = (col[i] != k); break;
+                            case SPEC_CMP_GT: b = (col[i] >  k); break;
+                            case SPEC_CMP_LT: b = (col[i] <  k); break;
+                            case SPEC_CMP_GE: b = (col[i] >= k); break;
+                            case SPEC_CMP_LE: b = (col[i] <= k); break;
+                        }
+                        mask[i] = (char)b;
+                    }
+#endif
                 }
-                mask[i] = (char)b;
             }
             return 1;
         }
 #endif
+#if defined(__AVX2__)
+        te_simd_cmp_f64(col, n, spec, k, mask);
+#else
         for (int i = 0; i < n; i++) {
             int b = 0;
             switch (spec) {
@@ -610,6 +660,7 @@ int te_colcache_eval_pred(TeColCache *c, int attr_idx, const FastLambda *fl, cha
             }
             mask[i] = (char)b;
         }
+#endif
         return 1;
     }
 
