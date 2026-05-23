@@ -1,0 +1,91 @@
+// ============================================================
+// LINQ + datetime — escenarios completos sobre fechas
+// Cubre: where, select, orderBy, orderByDescending, countWhere,
+//        any, all, first, last, distinctBy, take, skip y
+//        agregados (min / max / span) sobre epoch.
+//
+// Nota: trabajamos sobre arrays primitivos de `datetime` (strings ISO)
+// y de epoch (int). El soporte de LINQ sobre lists de class/map con
+// campos `datetime` está limitado en esta versión (ver 04_linq.te y
+// 05_linq_safe.te para el patrón "precomputar epoch").
+// ============================================================
+
+datetime base = now();
+
+// ---------- 1) Array de datetimes ----------
+let fechas = [
+  date_add(base, "days", -3),
+  date_add(base, "days", -1),
+  base,
+  date_add(base, "days",  1),
+  date_add(base, "days",  7),
+  date_add(base, "days", 30)
+];
+println("fechas.len=" + fechas.length());      // 6
+
+let base_ep = date_parse(base);
+let ventana = base_ep + 7 * 86400;
+
+// ---------- 2) where: futuras / pasadas ----------
+let futuros = fechas.where(fn(d) => date_parse(d) > base_ep);
+let pasados = fechas.where(fn(d) => date_parse(d) < base_ep);
+println("futuros.len=" + futuros.length());    // 3
+println("pasados.len=" + pasados.length());    // 2
+
+// ---------- 3) countWhere / any / all ----------
+let cnt_prox_semana = fechas.countWhere(
+  fn(d) => date_parse(d) > base_ep && date_parse(d) <= ventana
+);
+let hay_futuros = fechas.any(fn(d) => date_parse(d) > base_ep);
+let todos_pos   = fechas.all(fn(d) => date_parse(d) > 0);
+println("cnt_prox_semana=" + cnt_prox_semana); // 2  (d+1, d+7)
+println("hay_futuros="     + hay_futuros);     // 1
+println("todos_pos="       + todos_pos);       // 1
+
+// ---------- 4) select: proyectar a epoch y a string formateado ----------
+let epochs   = fechas.select(fn(d) => date_parse(d));
+let legibles = fechas.select(fn(d) => date_format(date_parse(d), "%Y-%m-%d"));
+println("epochs.len="   + epochs.length());    // 6
+println("legibles.len=" + legibles.length());  // 6
+
+// ---------- 5) orderBy / orderByDescending sobre epochs ----------
+let asc       = epochs.orderBy(fn(e) => e);
+let desc      = epochs.orderByDescending(fn(e) => e);
+let asc_first = asc.first();
+let desc_first = desc.first();
+let asc_ok    = asc.countWhere(fn(e) => e >= asc_first);     // 6
+let desc_ok   = desc.countWhere(fn(e) => e <= desc_first);   // 6
+println("asc_ok="  + asc_ok);                                 // 6
+println("desc_ok=" + desc_ok);                                // 6
+
+// ---------- 6) take / skip sobre epochs ordenados ----------
+let top3 = asc.take(3);
+let rest = asc.skip(3);
+let top3_last = top3.last();
+let top3_ok = top3.countWhere(fn(e) => e <= top3_last);
+println("top3.len=" + top3.length());          // 3
+println("rest.len=" + rest.length());          // 3
+println("top3_ok=" + top3_ok);                 // 3
+
+// ---------- 7) distinctBy sobre "día" formateado ----------
+let dias_str = fechas.select(fn(d) => date_format(date_parse(d), "%Y-%m-%d"));
+let dias_con_dup = [
+  dias_str.first(),
+  dias_str.first(),
+  dias_str.last()
+];
+let dias_uniq = dias_con_dup.distinctBy(fn(s) => s);
+println("dias_uniq.len=" + dias_uniq.length()); // 2
+
+// ---------- 8) agregados sobre epoch ----------
+let ep_min = asc.first();
+let ep_max = asc.last();
+let span_seg  = ep_max - ep_min;
+let span_dias = span_seg / 86400;
+println("span_dias=" + span_dias);             // 33  (-3 .. +30)
+
+// ---------- 9) min epoch (más antiguo) y max (más reciente) ----------
+println("min_epoch=" + ep_min);
+println("max_epoch=" + ep_max);
+let min_es_pasado = epochs.countWhere(fn(e) => e == ep_min);
+println("min_es_unico=" + min_es_pasado);                              // 1

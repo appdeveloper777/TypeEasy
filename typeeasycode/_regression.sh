@@ -83,7 +83,7 @@ for t in linq_aggregates linq_distinct linq_first_any_all linq_fusion linq_group
 done
 
 # 14_types_bool_datetime_uuid (v1.0.0)
-for t in 01_bool 02_datetime 03_uuid 04_linq 05_linq_safe; do
+for t in 01_bool 02_datetime 03_uuid 04_linq 05_linq_safe 06_linq_datetime; do
   run_test "examples/14_types_bool_datetime_uuid/${t}.te" ""
 done
 
