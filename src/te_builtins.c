@@ -143,10 +143,95 @@ int te_load_native_module(const char *name_or_path) {
 
 #else /* _WIN32 */
 
+#include <windows.h>
+
 int te_load_native_module(const char *name_or_path) {
-    (void)name_or_path;
-    fprintf(stderr, "[load_native] not supported on Windows host build\n");
-    return -1;
+    if (!name_or_path || !*name_or_path) return -1;
+
+    /* Resolve: absolute/relative path containing '/', '\\' or ending in .dll
+     * → use as-is. Bare name → try several candidate locations. */
+    const char *raw = name_or_path;
+    char buf[1024];
+    HMODULE h = NULL;
+
+    int looks_like_path = (strchr(raw, '/') || strchr(raw, '\\') ||
+                           strstr(raw, ".dll") || strstr(raw, ".DLL"));
+    if (looks_like_path) {
+        h = LoadLibraryA(raw);
+    } else {
+        const char *patterns[] = {
+            ".\\libte_%s.dll",
+            ".\\te_%s.dll",
+            "libte_%s.dll",
+            "te_%s.dll",
+            NULL
+        };
+        for (int i = 0; patterns[i] && !h; i++) {
+            snprintf(buf, sizeof(buf), patterns[i], raw);
+            h = LoadLibraryA(buf);
+        }
+        /* Next to the .exe (typical install layout: bin/typeeasy.exe + bin/libte_<name>.dll). */
+        if (!h) {
+            char exepath[1024];
+            DWORD n = GetModuleFileNameA(NULL, exepath, (DWORD)sizeof(exepath));
+            if (n > 0 && n < sizeof(exepath)) {
+                char *slash = strrchr(exepath, '\\');
+                if (slash) {
+                    *slash = '\0';
+                    snprintf(buf, sizeof(buf), "%s\\libte_%s.dll", exepath, raw);
+                    h = LoadLibraryA(buf);
+                    if (!h) {
+                        snprintf(buf, sizeof(buf), "%s\\..\\plugins\\libte_%s.dll", exepath, raw);
+                        h = LoadLibraryA(buf);
+                    }
+                }
+            }
+        }
+        /* User-scope package store: %USERPROFILE%\.te\packages\<name>\libte_<name>.dll */
+        if (!h) {
+            const char *up = getenv("USERPROFILE");
+            if (!up) up = getenv("HOME");
+            if (up) {
+                snprintf(buf, sizeof(buf), "%s\\.te\\packages\\%s\\libte_%s.dll", up, raw, raw);
+                h = LoadLibraryA(buf);
+            }
+        }
+        /* TE_PLUGIN_PATH override (semicolon-separated dirs). */
+        if (!h) {
+            const char *envp = getenv("TE_PLUGIN_PATH");
+            if (envp) {
+                char tmp[2048];
+                strncpy(tmp, envp, sizeof(tmp) - 1);
+                tmp[sizeof(tmp) - 1] = '\0';
+                char *ctx = NULL;
+                for (char *tok = strtok_s(tmp, ";", &ctx); tok && !h;
+                     tok = strtok_s(NULL, ";", &ctx)) {
+                    snprintf(buf, sizeof(buf), "%s\\libte_%s.dll", tok, raw);
+                    h = LoadLibraryA(buf);
+                }
+            }
+        }
+    }
+    if (!h) {
+        fprintf(stderr, "[load_native] LoadLibraryA failed for '%s' (err=%lu)\n",
+                name_or_path, (unsigned long)GetLastError());
+        return -2;
+    }
+    typedef void (*RegisterFn)(const TEHostAPI *);
+    RegisterFn reg = (RegisterFn)(void *)GetProcAddress(h, "te_module_register");
+    if (!reg) {
+        fprintf(stderr, "[load_native] missing symbol te_module_register in '%s'\n",
+                name_or_path);
+        FreeLibrary(h);
+        return -3;
+    }
+    /* Static storage so the pointer remains valid even if a plugin keeps
+     * a reference instead of copying the struct (see mongo plugin gotcha). */
+    static TEHostAPI host;
+    static int host_filled = 0;
+    if (!host_filled) { te_fill_host_api(&host); host_filled = 1; }
+    reg(&host);
+    return 0;
 }
 
 #endif

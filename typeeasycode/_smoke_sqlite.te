@@ -1,0 +1,26 @@
+load_native("sqlite");
+
+let db = sqlite_connect(":memory:");
+println("db slot: " + db);
+
+sqlite_exec(db, "CREATE TABLE jugadores (id INTEGER PRIMARY KEY AUTOINCREMENT, nick TEXT UNIQUE NOT NULL, oro INTEGER NOT NULL DEFAULT 100)");
+sqlite_exec(db, "INSERT INTO jugadores (nick) VALUES ('alice')");
+sqlite_exec(db, "INSERT INTO jugadores (nick) VALUES ('bob')");
+sqlite_exec(db, "INSERT INTO jugadores (nick, oro) VALUES ('charlie', 250)");
+
+println("last_id=" + sqlite_last_id(db));
+
+let rows = sqlite_query(db, "SELECT id, nick, oro FROM jugadores ORDER BY id", "json");
+println("json: " + rows);
+
+let xmlOut = sqlite_query(db, "SELECT nick, oro FROM jugadores WHERE oro >= 100 ORDER BY oro DESC", "xml");
+println("xml: " + xmlOut);
+
+let affected = sqlite_exec(db, "UPDATE jugadores SET oro = oro + 50 WHERE nick = 'alice'");
+println("updated rows=" + affected);
+
+let after = sqlite_query(db, "SELECT nick, oro FROM jugadores WHERE nick='alice'", "json");
+println("after: " + after);
+
+sqlite_close(db);
+println("OK");
