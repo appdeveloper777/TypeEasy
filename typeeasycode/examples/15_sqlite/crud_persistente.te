@@ -1,0 +1,22 @@
+// CRUD persistente en archivo: corre el script varias veces y vera que el contador sube.
+// Requiere libte_sqlite (ver plugins/sqlite/README.md).
+
+load_native("sqlite");
+
+let db = sqlite_connect("ejemplo_15.db");
+
+// Crea tabla si no existe (idempotente).
+sqlite_exec(db, "CREATE TABLE IF NOT EXISTS visitas (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario TEXT NOT NULL, ts TEXT NOT NULL DEFAULT (datetime('now')))");
+
+// Inserta una visita nueva.
+sqlite_exec(db, "INSERT INTO visitas (usuario) VALUES ('demo_user')");
+
+// Cuenta total y muestra las ultimas 5.
+let totalJson = sqlite_query(db, "SELECT COUNT(*) AS total FROM visitas", "json");
+println("total visitas: " + totalJson);
+
+let ultimas = sqlite_query(db, "SELECT id, usuario, ts FROM visitas ORDER BY id DESC LIMIT 5", "json");
+println("ultimas 5: " + ultimas);
+
+sqlite_close(db);
+println("OK");

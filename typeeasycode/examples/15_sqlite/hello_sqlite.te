@@ -1,0 +1,32 @@
+// Ejemplo minimo: conexion + CRUD basico sobre SQLite.
+// Requiere el plugin libte_sqlite (ver plugins/sqlite/README.md).
+//
+// Windows : copiar libte_sqlite.dll junto al .exe o agregar la ruta a TE_PLUGIN_PATH
+// Linux   : copiar libte_sqlite.so a /usr/local/lib o exportar TE_PLUGIN_PATH
+// Docker  : ya viene instalado en la imagen typeeasy si se hizo el build con el plugin.
+
+load_native("sqlite");
+
+// Base en memoria (no persiste). Usa "datos.db" para persistir en disco.
+let db = sqlite_connect(":memory:");
+println("conectado, slot=" + db);
+
+sqlite_exec(db, "CREATE TABLE productos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL, precio REAL NOT NULL, stock INTEGER NOT NULL DEFAULT 0)");
+
+sqlite_exec(db, "INSERT INTO productos (nombre, precio, stock) VALUES ('Pan', 1.50, 100)");
+sqlite_exec(db, "INSERT INTO productos (nombre, precio, stock) VALUES ('Leche', 2.20, 60)");
+sqlite_exec(db, "INSERT INTO productos (nombre, precio, stock) VALUES ('Cafe', 8.90, 25)");
+
+println("ultimo id insertado: " + sqlite_last_id(db));
+
+let listado = sqlite_query(db, "SELECT id, nombre, precio, stock FROM productos ORDER BY precio", "json");
+println("listado: " + listado);
+
+let affected = sqlite_exec(db, "UPDATE productos SET stock = stock - 5 WHERE nombre = 'Cafe'");
+println("filas actualizadas: " + affected);
+
+let caros = sqlite_query(db, "SELECT nombre, precio FROM productos WHERE precio > 2.0 ORDER BY precio DESC", "xml");
+println("caros (xml): " + caros);
+
+sqlite_close(db);
+println("OK");

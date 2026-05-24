@@ -14,6 +14,7 @@ Categorias organizadas por concepto. Cada carpeta tiene su propio README.
 | `08_bytecode/`   | Backend de bytecode VM                             |
 | `09_ml/`         | Dataset / model / train / predict / plot           |
 | `10_errors/`     | Manejo de errores graves                           |
+| `15_sqlite/`     | Plugin nativo SQLite (CRUD embebido)               |
 | `_scratch/`      | Tests de debug / temporales (no en regression)     |
 
 ## Como correr un test
