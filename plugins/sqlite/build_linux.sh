@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build libte_sqlite.dll for Windows (MSYS2 MINGW64).
+# Build libte_sqlite.so for Linux (no host libsqlite3 dependency).
 #
-# Statically links the SQLite amalgamation (sqlite3.c) so the produced DLL
-# has no runtime dependency on libsqlite3-0.dll. The Windows installer only
-# needs to ship libte_sqlite.dll itself.
+# Statically embeds the SQLite amalgamation (sqlite3.c) into the .so so the
+# produced library has no runtime dependency on libsqlite3.so. The .deb /
+# tarball can ship libte_sqlite.so standalone.
 #
 # Usage:
-#   bash plugins/sqlite/build_windows.sh
+#   bash plugins/sqlite/build_linux.sh
 #
 # Env overrides:
 #   SQLITE_VERSION   default "3530100" (3.53.1)
@@ -14,7 +14,6 @@
 #   AMALGAMATION_URL fully override the download URL
 set -euo pipefail
 
-export PATH="/c/msys64/mingw64/bin:$PATH"
 cd "$(dirname "$0")"
 
 SQLITE_VERSION="${SQLITE_VERSION:-3530100}"
@@ -26,17 +25,13 @@ AMALGAMATION_DIR="sqlite-amalgamation-${SQLITE_VERSION}"
 if [[ ! -f "$AMALGAMATION_DIR/sqlite3.c" ]]; then
     echo "[sqlite] downloading amalgamation: $AMALGAMATION_URL"
     rm -f "$AMALGAMATION_ZIP"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fL -o "$AMALGAMATION_ZIP" "$AMALGAMATION_URL"
-    else
-        powershell -NoProfile -Command "Invoke-WebRequest -Uri '$AMALGAMATION_URL' -OutFile '$AMALGAMATION_ZIP'"
-    fi
+    curl -fL -o "$AMALGAMATION_ZIP" "$AMALGAMATION_URL"
     unzip -o "$AMALGAMATION_ZIP" >/dev/null
     rm -f "$AMALGAMATION_ZIP"
 fi
 
-echo "[sqlite] compiling libte_sqlite.dll (static amalgamation)..."
-gcc -shared -O2 -Wall -Wno-unused-parameter \
+echo "[sqlite] compiling libte_sqlite.so (static amalgamation)..."
+gcc -shared -fPIC -O2 -Wall -Wno-unused-parameter \
     -I../../src \
     -I"$AMALGAMATION_DIR" \
     -DSQLITE_THREADSAFE=1 \
@@ -45,7 +40,7 @@ gcc -shared -O2 -Wall -Wno-unused-parameter \
     -DSQLITE_OMIT_LOAD_EXTENSION \
     sqlite_plugin.c \
     "$AMALGAMATION_DIR/sqlite3.c" \
-    -static-libgcc \
-    -o libte_sqlite.dll
+    -lpthread -ldl -lm \
+    -o libte_sqlite.so
 echo "[sqlite] done:"
-ls -la libte_sqlite.dll
+ls -la libte_sqlite.so

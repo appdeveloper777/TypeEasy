@@ -18,7 +18,7 @@ if [[ ! -f "$BIN_PATH" ]]; then
 fi
 
 rm -rf "$PKG_DIR"
-mkdir -p "$PKG_DIR/bin" "$PKG_DIR/examples" "$PKG_DIR/cli/templates"
+mkdir -p "$PKG_DIR/bin" "$PKG_DIR/examples" "$PKG_DIR/cli/templates" "$PKG_DIR/plugins/sqlite"
 
 # Binary is renamed to typeeasy-bin.exe so the smart .cmd wrapper takes
 # precedence on PATH (Windows PATHEXT default puts .EXE before .CMD).
@@ -103,6 +103,25 @@ fi
 
 echo "Contenido final de bin/:"
 ls -lh "$PKG_DIR/bin/"
+
+# Plugins nativos (load_native("sqlite") -> plugins/sqlite/libte_sqlite.dll).
+# Si no existe la DLL, intentamos construirla con la amalgamation (requiere MSYS2 gcc).
+SQLITE_DLL="$ROOT_DIR/plugins/sqlite/libte_sqlite.dll"
+if [[ ! -f "$SQLITE_DLL" ]]; then
+  if command -v gcc >/dev/null 2>&1; then
+    echo "Compilando plugin sqlite (amalgamation)..."
+    bash "$ROOT_DIR/plugins/sqlite/build_windows.sh" || \
+      echo "WARN: build del plugin sqlite falló; el paquete no incluirá libte_sqlite.dll" >&2
+  else
+    echo "WARN: gcc no encontrado, se omite plugin sqlite. Compila manualmente con plugins/sqlite/build_windows.sh" >&2
+  fi
+fi
+if [[ -f "$SQLITE_DLL" ]]; then
+  cp "$SQLITE_DLL" "$PKG_DIR/plugins/sqlite/libte_sqlite.dll"
+  cp "$ROOT_DIR/plugins/sqlite/README.md" "$PKG_DIR/plugins/sqlite/" 2>/dev/null || true
+  echo "Plugin sqlite incluido:"
+  ls -lh "$PKG_DIR/plugins/sqlite/"
+fi
 
 cat > "$PKG_DIR/README-WINDOWS.txt" <<EOF
 TypeEasy Windows Package v${VERSION}

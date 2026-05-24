@@ -24,7 +24,7 @@ fi
 
 # --- 1) Carpeta portable + tar.gz -------------------------------------------
 rm -rf "$PKG_DIR" "$TARBALL"
-mkdir -p "$PKG_DIR/bin" "$PKG_DIR/examples" "$PKG_DIR/cli/templates"
+mkdir -p "$PKG_DIR/bin" "$PKG_DIR/examples" "$PKG_DIR/cli/templates" "$PKG_DIR/plugins/sqlite"
 
 # Native interpreter (renombrado para no chocar con el bash CLI wrapper)
 cp "$BIN_PATH" "$PKG_DIR/bin/typeeasy-bin"
@@ -49,6 +49,25 @@ if [[ -f "$ROOT_DIR/typeeasycode/crear_const_variable.te" ]]; then
 fi
 if [[ -f "$ROOT_DIR/typeeasycode/endpoint.te" ]]; then
   cp "$ROOT_DIR/typeeasycode/endpoint.te" "$PKG_DIR/examples/"
+fi
+
+# Plugins nativos (load_native("sqlite") -> plugins/sqlite/libte_sqlite.so).
+# Si no existe el .so, intentamos construirlo con la amalgamation (requiere gcc).
+SQLITE_SO="$ROOT_DIR/plugins/sqlite/libte_sqlite.so"
+if [[ ! -f "$SQLITE_SO" ]]; then
+  if command -v gcc >/dev/null 2>&1; then
+    echo "Compilando plugin sqlite (amalgamation)..."
+    bash "$ROOT_DIR/plugins/sqlite/build_linux.sh" || \
+      echo "WARN: build del plugin sqlite falló; el paquete no incluirá libte_sqlite.so" >&2
+  else
+    echo "WARN: gcc no encontrado, se omite plugin sqlite. Compila manualmente con plugins/sqlite/build_linux.sh" >&2
+  fi
+fi
+if [[ -f "$SQLITE_SO" ]]; then
+  cp "$SQLITE_SO" "$PKG_DIR/plugins/sqlite/libte_sqlite.so"
+  cp "$ROOT_DIR/plugins/sqlite/README.md" "$PKG_DIR/plugins/sqlite/" 2>/dev/null || true
+  echo "Plugin sqlite incluido (tarball):"
+  ls -lh "$PKG_DIR/plugins/sqlite/"
 fi
 
 cat > "$PKG_DIR/README-LINUX.txt" <<EOF
@@ -101,9 +120,11 @@ echo "Tarball generado: $TARBALL"
 rm -rf "$DEB_DIR" "$DEB_FILE"
 mkdir -p "$DEB_DIR/DEBIAN" \
          "$DEB_DIR/usr/bin" \
+         "$DEB_DIR/usr/lib" \
          "$DEB_DIR/usr/share/typeeasy/examples" \
          "$DEB_DIR/usr/share/typeeasy/templates" \
          "$DEB_DIR/usr/share/typeeasy/nginx" \
+         "$DEB_DIR/usr/share/typeeasy/plugins/sqlite" \
          "$DEB_DIR/usr/share/doc/typeeasy" \
          "$DEB_DIR/lib/systemd/system" \
          "$DEB_DIR/etc/default"
@@ -148,6 +169,19 @@ for doc in README.md BUILD.md; do
     install -m 0644 "$ROOT_DIR/$doc" "$DEB_DIR/usr/share/doc/typeeasy/"
   fi
 done
+
+# Plugin sqlite (cargado por load_native("sqlite")):
+#   - Copia canónica: /usr/lib/libte_sqlite.so  (encontrada por el loader sin variables)
+#   - Réplica documental en: /usr/share/typeeasy/plugins/sqlite/
+if [[ -f "$SQLITE_SO" ]]; then
+  install -m 0644 "$SQLITE_SO" "$DEB_DIR/usr/lib/libte_sqlite.so"
+  install -m 0644 "$SQLITE_SO" "$DEB_DIR/usr/share/typeeasy/plugins/sqlite/libte_sqlite.so"
+  if [[ -f "$ROOT_DIR/plugins/sqlite/README.md" ]]; then
+    install -m 0644 "$ROOT_DIR/plugins/sqlite/README.md" \
+                    "$DEB_DIR/usr/share/typeeasy/plugins/sqlite/README.md"
+  fi
+  echo "Plugin sqlite incluido en .deb (usr/lib + usr/share/typeeasy/plugins/sqlite/)."
+fi
 
 # Tamano instalado en KB
 INSTALLED_SIZE=$(du -sk "$DEB_DIR" | cut -f1)

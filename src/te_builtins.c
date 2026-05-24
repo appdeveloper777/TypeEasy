@@ -14,6 +14,8 @@
 
 #ifndef _WIN32
 #include <dlfcn.h>
+#include <unistd.h>
+#include <sys/types.h>
 #endif
 
 /* ─── Hash table ──────────────────────────────────────────────────────── */
@@ -106,6 +108,7 @@ int te_load_native_module(const char *name_or_path) {
         const char *candidates[] = {
             "./libte_%s.so",
             "/usr/local/lib/libte_%s.so",
+            "/usr/lib/libte_%s.so",
             "/typeeasy/libte_%s.so",
             NULL
         };
@@ -113,11 +116,45 @@ int te_load_native_module(const char *name_or_path) {
             snprintf(buf, sizeof(buf), candidates[i], raw);
             h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
         }
+        /* Next to the binary: <exe_dir>/../plugins/<name>/libte_<name>.so and
+         * <exe_dir>/../plugins/libte_<name>.so (portable tarball / installer layout). */
+        if (!h) {
+            char exepath[1024];
+            ssize_t n = readlink("/proc/self/exe", exepath, sizeof(exepath) - 1);
+            if (n > 0) {
+                exepath[n] = '\0';
+                char *slash = strrchr(exepath, '/');
+                if (slash) {
+                    *slash = '\0';
+                    snprintf(buf, sizeof(buf), "%s/../plugins/%s/libte_%s.so", exepath, raw, raw);
+                    h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
+                    if (!h) {
+                        snprintf(buf, sizeof(buf), "%s/../plugins/libte_%s.so", exepath, raw);
+                        h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
+                    }
+                }
+            }
+        }
         if (!h) {
             const char *home = getenv("HOME");
             if (home) {
                 snprintf(buf, sizeof(buf), "%s/.te/packages/%s/libte_%s.so", home, raw, raw);
                 h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
+            }
+        }
+        /* TE_PLUGIN_PATH override (colon-separated dirs). */
+        if (!h) {
+            const char *envp = getenv("TE_PLUGIN_PATH");
+            if (envp) {
+                char tmp[2048];
+                strncpy(tmp, envp, sizeof(tmp) - 1);
+                tmp[sizeof(tmp) - 1] = '\0';
+                char *saveptr = NULL;
+                for (char *tok = strtok_r(tmp, ":", &saveptr); tok && !h;
+                     tok = strtok_r(NULL, ":", &saveptr)) {
+                    snprintf(buf, sizeof(buf), "%s/libte_%s.so", tok, raw);
+                    h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
+                }
             }
         }
     }
@@ -145,6 +182,18 @@ int te_load_native_module(const char *name_or_path) {
 
 #include <windows.h>
 
+/* Load a DLL whose dependencies live next to it. Resolves to a full path so
+ * LOAD_WITH_ALTERED_SEARCH_PATH can add that directory to the search list
+ * (Windows would otherwise only look in <exe_dir>, system32 and PATH). */
+static HMODULE te_load_dll_with_deps(const char *path) {
+    char full[1024];
+    DWORD n = GetFullPathNameA(path, (DWORD)sizeof(full), full, NULL);
+    if (n == 0 || n >= sizeof(full)) {
+        return LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    }
+    return LoadLibraryExA(full, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+}
+
 int te_load_native_module(const char *name_or_path) {
     if (!name_or_path || !*name_or_path) return -1;
 
@@ -157,7 +206,7 @@ int te_load_native_module(const char *name_or_path) {
     int looks_like_path = (strchr(raw, '/') || strchr(raw, '\\') ||
                            strstr(raw, ".dll") || strstr(raw, ".DLL"));
     if (looks_like_path) {
-        h = LoadLibraryA(raw);
+        h = te_load_dll_with_deps(raw);
     } else {
         const char *patterns[] = {
             ".\\libte_%s.dll",
@@ -168,9 +217,12 @@ int te_load_native_module(const char *name_or_path) {
         };
         for (int i = 0; patterns[i] && !h; i++) {
             snprintf(buf, sizeof(buf), patterns[i], raw);
-            h = LoadLibraryA(buf);
+            h = te_load_dll_with_deps(buf);
         }
-        /* Next to the .exe (typical install layout: bin/typeeasy.exe + bin/libte_<name>.dll). */
+        /* Next to the .exe (typical install layout:
+         *   bin/typeeasy-bin.exe + bin/libte_<name>.dll
+         *   bin/typeeasy-bin.exe + ../plugins/<name>/libte_<name>.dll
+         *   bin/typeeasy-bin.exe + ../plugins/libte_<name>.dll). */
         if (!h) {
             char exepath[1024];
             DWORD n = GetModuleFileNameA(NULL, exepath, (DWORD)sizeof(exepath));
@@ -179,10 +231,14 @@ int te_load_native_module(const char *name_or_path) {
                 if (slash) {
                     *slash = '\0';
                     snprintf(buf, sizeof(buf), "%s\\libte_%s.dll", exepath, raw);
-                    h = LoadLibraryA(buf);
+                    h = te_load_dll_with_deps(buf);
+                    if (!h) {
+                        snprintf(buf, sizeof(buf), "%s\\..\\plugins\\%s\\libte_%s.dll", exepath, raw, raw);
+                        h = te_load_dll_with_deps(buf);
+                    }
                     if (!h) {
                         snprintf(buf, sizeof(buf), "%s\\..\\plugins\\libte_%s.dll", exepath, raw);
-                        h = LoadLibraryA(buf);
+                        h = te_load_dll_with_deps(buf);
                     }
                 }
             }
@@ -193,7 +249,7 @@ int te_load_native_module(const char *name_or_path) {
             if (!up) up = getenv("HOME");
             if (up) {
                 snprintf(buf, sizeof(buf), "%s\\.te\\packages\\%s\\libte_%s.dll", up, raw, raw);
-                h = LoadLibraryA(buf);
+                h = te_load_dll_with_deps(buf);
             }
         }
         /* TE_PLUGIN_PATH override (semicolon-separated dirs). */
@@ -207,7 +263,7 @@ int te_load_native_module(const char *name_or_path) {
                 for (char *tok = strtok_s(tmp, ";", &ctx); tok && !h;
                      tok = strtok_s(NULL, ";", &ctx)) {
                     snprintf(buf, sizeof(buf), "%s\\libte_%s.dll", tok, raw);
-                    h = LoadLibraryA(buf);
+                    h = te_load_dll_with_deps(buf);
                 }
             }
         }
