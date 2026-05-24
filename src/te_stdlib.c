@@ -731,6 +731,22 @@ static int adapt_now_epoch(ASTNode *node, ASTNode *args) {
     return 1;
 }
 
+/* now_ms() -> int (milliseconds since first call, monotonic).
+ * Safe for benchmark deltas: fits in int32 for ~24 days of uptime. */
+static int adapt_now_ms(ASTNode *node, ASTNode *args) {
+    (void)node; (void)args;
+    static struct timespec t0 = {0, 0};
+    static int initialized = 0;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    if (!initialized) { t0 = ts; initialized = 1; }
+    long long ms = (long long)(ts.tv_sec - t0.tv_sec) * 1000LL
+                 + (long long)(ts.tv_nsec - t0.tv_nsec) / 1000000LL;
+    add_or_update_variable("__ret__",
+        create_ast_leaf_number("INT", (int)ms, NULL, NULL));
+    return 1;
+}
+
 /* date_parse("YYYY-MM-DDTHH:MM:SSZ") -> int (epoch seconds, 0 on error) */
 static int adapt_date_parse(ASTNode *node, ASTNode *args) {
     (void)node;
@@ -887,6 +903,7 @@ void te_register_ast_builtins(void) {
     /* datetime + uuid (v1.0.0) */
     te_builtin_register("now",               adapt_now);
     te_builtin_register("now_epoch",         adapt_now_epoch);
+    te_builtin_register("now_ms",            adapt_now_ms);
     te_builtin_register("date_parse",        adapt_date_parse);
     te_builtin_register("date_format",       adapt_date_format);
     te_builtin_register("date_add",          adapt_date_add);

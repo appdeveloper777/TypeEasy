@@ -9,13 +9,16 @@ class Producto {
 }
 
 let t0 = now_ms();
-
 let productos = from "productos_1000000.csv", Producto;
+let t1 = now_ms();
+println("from=" + (t1 - t0) + "ms");
+
 int cantidad = productos.length;
-println("filas=" + cantidad);
+let t2 = now_ms();
+println("length=" + cantidad + " (" + (t2 - t1) + "ms)");
 
 int suma = productos.sumBy(p => p.precio);
-println("sumBy.precio=" + suma);
+let t3 = now_ms();
+println("sumBy=" + suma + " (" + (t3 - t2) + "ms)");
 
-let t1 = now_ms();
-println("tiempo=" + (t1 - t0) + "ms");
+println("total=" + (t3 - t0) + "ms");

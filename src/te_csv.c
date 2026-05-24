@@ -1631,6 +1631,91 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
         }
         return 1;
     }
+    /* v0.0.13 (perf): LINQ aggregates on DataFrame wrapper.
+     * sumBy(x => x.attr) / avgBy / minBy / maxBy with trivial attr-projection
+     * lambda. In DataFrame mode there are no row ObjectNodes, so the generic
+     * LINQ iter would see an empty list and return 0. Detect SPEC_ATTR via
+     * fast_lambda_analyze and reduce the corresponding column directly. */
+    if (arg1 && arg1->type && strcmp(arg1->type, "LAMBDA") == 0 &&
+        (strcmp(m, "sumBy") == 0 || strcmp(m, "avgBy") == 0 ||
+         strcmp(m, "minBy") == 0 || strcmp(m, "maxBy") == 0)) {
+        FastLambda fl;
+        LambdaSpec sp = fast_lambda_analyze(arg1, &fl);
+        if (sp == SPEC_ATTR && fl.attr_name) {
+            int ci = df_col_index(df, fl.attr_name);
+            if (ci < 0) return 0;
+            int kind = df->col_kinds[ci];
+            if (kind != 0 /*int*/ && kind != 3 /*float*/) return 0;
+            size_t n = (size_t)df->row_count;
+            int is_avg = (m[0] == 'a');
+            int is_min = (m[0] == 'm' && m[1] == 'i');
+            int is_max = (m[0] == 'm' && m[1] == 'a');
+            int op = is_min ? 1 : is_max ? 2 : 0; /* 0=sum (also for avg) */
+            long long t0 = 0;
+            if (getenv("TE_CSV_TIMING")) {
+                struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+                t0 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            }
+            if (kind == 0) {
+                const int64_t *col = (const int64_t*)df->col_data[ci];
+                long long r = (n == 0) ? 0 : df_reduce_i64(col, n, op);
+                if (getenv("TE_CSV_TIMING")) {
+                    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+                    long long t1 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+                    fprintf(stderr, "[DF-OP] %s(.%s) %lldus n=%zu\n",
+                            m, fl.attr_name, (t1 - t0) / 1000, n);
+                }
+                if (is_avg) {
+                    if (n == 0) {
+                        add_or_update_variable("__ret__",
+                            create_ast_leaf_number("INT", 0, NULL, NULL));
+                    } else {
+                        double avg = (double)r / (double)n;
+                        char buf[40];
+                        snprintf(buf, sizeof(buf), "%.17g", avg);
+                        add_or_update_variable("__ret__",
+                            create_ast_leaf_number("FLOAT", 0, buf, NULL));
+                    }
+                } else if (r >= INT_MIN && r <= INT_MAX) {
+                    add_or_update_variable("__ret__",
+                        create_ast_leaf_number("INT", (int)r, NULL, NULL));
+                } else {
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "%lld", r);
+                    add_or_update_variable("__ret__",
+                        create_ast_leaf_number("FLOAT", 0, buf, NULL));
+                }
+                return 1;
+            } else { /* K_FLOAT */
+                const double *col = (const double*)df->col_data[ci];
+                double acc;
+                if (n == 0) acc = 0.0;
+                else if (is_min) {
+                    acc = col[0];
+                    for (size_t i = 1; i < n; i++) if (col[i] < acc) acc = col[i];
+                } else if (is_max) {
+                    acc = col[0];
+                    for (size_t i = 1; i < n; i++) if (col[i] > acc) acc = col[i];
+                } else {
+                    acc = 0.0;
+                    for (size_t i = 0; i < n; i++) acc += col[i];
+                    if (is_avg) acc /= (double)n;
+                }
+                if (getenv("TE_CSV_TIMING")) {
+                    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+                    long long t1 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+                    fprintf(stderr, "[DF-OP] %s(.%s) %lldus n=%zu (float)\n",
+                            m, fl.attr_name, (t1 - t0) / 1000, n);
+                }
+                char buf[40];
+                snprintf(buf, sizeof(buf), "%.17g", acc);
+                add_or_update_variable("__ret__",
+                    create_ast_leaf_number("FLOAT", 0, buf, NULL));
+                return 1;
+            }
+        }
+        return 0; /* lambda no simple → fallback (probable 0, conocido) */
+    }
     if (strcmp(m, "group_sum") == 0 && s1 && s2) {
         int kc = df_col_index(df, s1);
         int vc = df_col_index(df, s2);
