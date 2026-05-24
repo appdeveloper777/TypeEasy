@@ -3118,13 +3118,28 @@ typedef struct CsvLazyEntry {
     ASTNode *var_decl;
     char *filename;
     char *class_name;
+    int is_dataframe;
 } CsvLazyEntry;
+
+/* v1.0.0: heap descriptor stored on the placeholder->extra at parse-time;
+ * consumed at interpret-time by te_csv_runtime_load(). Keeps placeholder
+ * tagged via type="CSV_LOAD". */
+typedef struct CsvDeferred {
+    char *filename;
+    char *class_name;
+    int is_dataframe;
+    int columnar_decision; /* -1 unset, 0 legacy, 1 columnar */
+} CsvDeferred;
 
 static CsvLazyEntry *g_lazy = NULL;
 static int g_lazy_n = 0;
 static int g_lazy_cap = 0;
 
 void te_csv_lazy_register(ASTNode *var_decl, const char *filename, const char *class_name) {
+    te_csv_lazy_register_df(var_decl, filename, class_name, 0);
+}
+
+void te_csv_lazy_register_df(ASTNode *var_decl, const char *filename, const char *class_name, int is_dataframe) {
     if (!var_decl || !filename || !class_name) return;
     if (g_lazy_n >= g_lazy_cap) {
         int nc = g_lazy_cap ? g_lazy_cap * 2 : 8;
@@ -3136,6 +3151,7 @@ void te_csv_lazy_register(ASTNode *var_decl, const char *filename, const char *c
     g_lazy[g_lazy_n].var_decl = var_decl;
     g_lazy[g_lazy_n].filename = strdup(filename);
     g_lazy[g_lazy_n].class_name = strdup(class_name);
+    g_lazy[g_lazy_n].is_dataframe = is_dataframe;
     g_lazy_n++;
 }
 
@@ -3202,7 +3218,7 @@ static void csv_lazy_scan(ASTNode *node, ASTNode *parent, const char *var_name, 
         const char *t = node->type;
         int skip_extra = (strcmp(t, "OBJECT") == 0 || strcmp(t, "LIST") == 0
                        || strcmp(t, "MAP") == 0 || strcmp(t, "THIS") == 0
-                       || strcmp(t, "DATAFRAME") == 0);
+                       || strcmp(t, "DATAFRAME") == 0 || strcmp(t, "CSV_LOAD") == 0);
         if (!skip_extra) csv_lazy_scan(node->extra, node, var_name, unsafe);
     }
     depth--;
@@ -3224,42 +3240,87 @@ void te_csv_lazy_resolve_all(ASTNode *root) {
             continue;
         }
 
-        /* Scan AST for unsafe usages of `vname`. */
+        /* Scan AST for unsafe usages of `vname` (analysis only — no I/O). */
         int unsafe = 0;
         csv_lazy_scan(root, NULL, vname, &unsafe);
 
-        /* Manual env override still wins if set. */
+        int columnar_decision;
         const char *force_env = getenv("TE_CSV_COLUMNAR");
         if (force_env && force_env[0] == '1') {
-            g_te_csv_columnar_next = 1;
+            columnar_decision = 1;
             if (debug) fprintf(stderr, "[CSV-AUTO] %s: forced COLUMNAR via env\n", vname);
         } else if (force_env && force_env[0] == '0') {
-            g_te_csv_columnar_next = 0;
+            columnar_decision = 0;
             if (debug) fprintf(stderr, "[CSV-AUTO] %s: forced legacy via env\n", vname);
         } else {
-            g_te_csv_columnar_next = unsafe ? 0 : 1;
+            columnar_decision = unsafe ? 0 : 1;
             if (debug) fprintf(stderr, "[CSV-AUTO] %s: %s (unsafe_usage=%d)\n",
                 vname, unsafe ? "legacy" : "COLUMNAR", unsafe);
         }
 
-        ASTNode *list = from_csv_to_list(e->filename, cls);
-        if (vd) {
-            /* Free placeholder (small empty LIST node) and install real list. */
-            ASTNode *placeholder = vd->left;
-            vd->left = list;
-            if (placeholder && placeholder != list) {
-                /* Placeholder created with create_ast_node — safe to free its
-                 * shallow type/id strings. Do NOT call free_ast on it (no
-                 * children). */
+        /* `as dataframe` always implies pure columnar. */
+        if (e->is_dataframe) columnar_decision = 1;
+
+        /* v1.0.0: TAG the placeholder for runtime load. We change its
+         * type from "LIST" to "CSV_LOAD" and store the deferred descriptor
+         * in extra. The csv_lazy_scan already handles LIST extra as
+         * non-ASTNode; we add CSV_LOAD to that list via interpret-time
+         * trigger only — no AST traverser walks CSV_LOAD.extra. */
+        ASTNode *placeholder = vd ? vd->left : NULL;
+        if (placeholder) {
+            CsvDeferred *cd = (CsvDeferred*)calloc(1, sizeof(CsvDeferred));
+            if (cd) {
+                cd->filename = e->filename;     /* steal ownership */
+                cd->class_name = e->class_name; /* steal ownership */
+                cd->is_dataframe = e->is_dataframe;
+                cd->columnar_decision = columnar_decision;
                 if (placeholder->type) free(placeholder->type);
-                if (placeholder->id) free(placeholder->id);
-                free(placeholder);
+                placeholder->type = strdup("CSV_LOAD");
+                placeholder->extra = (struct ASTNode*)cd;
+                /* Do NOT free filename/class_name — descriptor owns them now. */
+                continue;
             }
         }
-
-        g_te_csv_columnar_next = -1;
+        /* Fallback path (alloc failure or no placeholder): free strings. */
         free(e->filename);
         free(e->class_name);
     }
     g_lazy_n = 0;
+}
+
+/* v1.0.0: runtime trigger. Called from interpret_var_decl when it sees a
+ * CSV_LOAD placeholder on var_decl->left. Performs the actual I/O now so
+ * that user `now_ms()` brackets around `from` statements measure correctly.
+ * Returns the loaded list ASTNode (caller should patch var_decl->left).
+ * The CSV_LOAD placeholder itself is consumed (freed). */
+ASTNode *te_csv_runtime_load(ASTNode *placeholder) {
+    if (!placeholder || !placeholder->type) return NULL;
+    if (strcmp(placeholder->type, "CSV_LOAD") != 0) return NULL;
+    CsvDeferred *cd = (CsvDeferred*)placeholder->extra;
+    if (!cd) return NULL;
+
+    ClassNode *cls = find_class(cd->class_name);
+    if (!cls) {
+        fprintf(stderr, "Clase '%s' no encontrada.\n", cd->class_name);
+        free(cd->filename); free(cd->class_name); free(cd);
+        placeholder->extra = NULL;
+        return NULL;
+    }
+
+    /* Apply per-call columnar decision; loader resets g_te_csv_columnar_next. */
+    g_te_csv_columnar_next = cd->columnar_decision;
+
+    ASTNode *loaded = cd->is_dataframe
+        ? from_csv_to_dataframe(cd->filename, cls)
+        : from_csv_to_list(cd->filename, cls);
+
+    g_te_csv_columnar_next = -1;
+
+    /* Free descriptor + tag (placeholder will be replaced by caller). */
+    free(cd->filename);
+    free(cd->class_name);
+    free(cd);
+    placeholder->extra = NULL;
+
+    return loaded;
 }

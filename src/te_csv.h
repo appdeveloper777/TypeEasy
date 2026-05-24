@@ -73,15 +73,25 @@ void te_set_script_dir_from_path(const char *script_path);
  * decide per-variable whether COLUMNAR is safe (all uses are LINQ aggregates
  * with no element access / iteration / mutation).
  *
- * Flow:
+ * v1.0.0: load is further deferred to *interpret-time* via the CSV_LOAD
+ * placeholder node, so `let t0=now_ms(); let xs=from "x.csv",T;` measures
+ * the actual I/O. Flow:
  *   1) Parser action creates a placeholder LIST node, stores it as
- *      var_decl->left, then calls te_csv_lazy_register(var_decl, file, cls).
- *   2) parse_file() calls te_csv_lazy_resolve_all(root) after yyparse().
- *   3) Resolver scans root for usages of var_decl->id, classifies them,
- *      sets g_te_csv_columnar_next accordingly, invokes from_csv_to_list
- *      and replaces var_decl->left with the real loaded list. */
+ *      var_decl->left, then calls te_csv_lazy_register*(var_decl, file, cls).
+ *   2) parse_file() calls te_csv_lazy_resolve_all(root) after yyparse() —
+ *      this only scans the AST for COLUMNAR-safe usage and TAGS the
+ *      placeholder (type becomes "CSV_LOAD", extra holds the deferred
+ *      load descriptor). NO I/O happens here.
+ *   3) interpret_var_decl() detects CSV_LOAD, calls te_csv_runtime_load()
+ *      to perform the actual from_csv_to_list/from_csv_to_dataframe(), and
+ *      patches var_decl->left with the real loaded list. */
 void te_csv_lazy_register(ASTNode *var_decl, const char *filename, const char *class_name);
+void te_csv_lazy_register_df(ASTNode *var_decl, const char *filename, const char *class_name, int is_dataframe);
 void te_csv_lazy_resolve_all(ASTNode *root);
+/* Runtime trigger: invoked from interpret_var_decl when it sees a CSV_LOAD
+ * placeholder. Performs the deferred I/O, returns the loaded list ASTNode*,
+ * and frees the deferred descriptor. Returns NULL on failure. */
+ASTNode *te_csv_runtime_load(ASTNode *placeholder);
 
 #ifdef __cplusplus
 }

@@ -5827,6 +5827,24 @@ static void interpret_var_decl(ASTNode *node) {
     ASTNode* value_node = node->left;
     Variable *evaluated_value_var = NULL;
 
+    /* v1.0.0: deferred CSV load trigger. Placeholder tagged at parse-time
+     * by te_csv_lazy_resolve_all(). Performing the I/O HERE (instead of in
+     * parse_file) makes user `let t0=now_ms(); let xs=from "x.csv",T;`
+     * brackets measure the actual load time. Zero overhead for non-CSV
+     * decls: one strcmp on value_node->type. */
+    if (value_node && value_node->type && strcmp(value_node->type, "CSV_LOAD") == 0) {
+        ASTNode *loaded = te_csv_runtime_load(value_node);
+        if (loaded) {
+            /* Free the small placeholder shell (its type/extra were freed
+             * inside te_csv_runtime_load). */
+            if (value_node->type) free(value_node->type);
+            if (value_node->id) free(value_node->id);
+            free(value_node);
+            node->left = loaded;
+            value_node = loaded;
+        }
+    }
+
     /* Fase 7: NULL_COALESCE — pick the right side at decl time */
     if (value_node && value_node->type && strcmp(value_node->type, "NULL_COALESCE") == 0) {
         ASTNode *l = value_node->left;

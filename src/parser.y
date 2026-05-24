@@ -568,25 +568,32 @@ func_call_expr SEMICOLON { $$ = $1; }
       else { /* v0.0.14: defer load; te_csv_lazy_resolve_all() will autodetect COLUMNAR. */
              ASTNode* placeholder = create_ast_node("LIST", NULL, NULL);
              ASTNode* d = create_var_decl_node($2, placeholder); d->value = 1; /* let = immutable */
-             te_csv_lazy_register(d, $5, $7);
+             te_csv_lazy_register_df(d, $5, $7, 0);
              $$ = d; } }
   | VAR IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER SEMICOLON
     { ClassNode* cls = find_class($7);
       if (!cls) { printf("Clase '%s' no encontrada.\n", $7); $$ = NULL; }
       else { ASTNode* placeholder = create_ast_node("LIST", NULL, NULL);
              ASTNode* d = create_var_decl_node($2, placeholder);
-             te_csv_lazy_register(d, $5, $7);
+             te_csv_lazy_register_df(d, $5, $7, 0);
              $$ = d; } }
   | LET IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER AS IDENTIFIER SEMICOLON
     { ClassNode* cls = find_class($7);
       if (!cls) { printf("Clase '%s' no encontrada.\n", $7); $$ = NULL; }
       else if (strcmp($9, "dataframe") != 0) { printf("Modificador desconocido tras 'as': '%s' (esperado 'dataframe').\n", $9); $$ = NULL; }
-      else { ASTNode* list = from_csv_to_dataframe($5, cls); ASTNode* d = create_var_decl_node($2, list); d->value = 1; $$ = d; } }
+      else { /* v1.0.0: defer load to runtime so now_ms() brackets measure I/O. */
+             ASTNode* placeholder = create_ast_node("LIST", NULL, NULL);
+             ASTNode* d = create_var_decl_node($2, placeholder); d->value = 1;
+             te_csv_lazy_register_df(d, $5, $7, 1);
+             $$ = d; } }
   | VAR IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER AS IDENTIFIER SEMICOLON
     { ClassNode* cls = find_class($7);
       if (!cls) { printf("Clase '%s' no encontrada.\n", $7); $$ = NULL; }
       else if (strcmp($9, "dataframe") != 0) { printf("Modificador desconocido tras 'as': '%s' (esperado 'dataframe').\n", $9); $$ = NULL; }
-      else { ASTNode* list = from_csv_to_dataframe($5, cls); $$ = create_var_decl_node($2, list); } }
+      else { ASTNode* placeholder = create_ast_node("LIST", NULL, NULL);
+             ASTNode* d = create_var_decl_node($2, placeholder);
+             te_csv_lazy_register_df(d, $5, $7, 1);
+             $$ = d; } }
 ; 
 
 func_call_expr:
