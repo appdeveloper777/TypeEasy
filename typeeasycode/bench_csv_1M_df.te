@@ -8,16 +8,15 @@ class Producto {
   }
 }
 
-// Equivalente al bench de Polars: mide lectura CSV + sumBy(precio).
-// Reporta read_csv, tiempo_sumBy y total (mismo formato que bench_csv_10M_polars.py).
+// Versión dataframe (path columnar puro, sin construir objetos por fila).
 let t0 = now_ms();
-let productos = from "productos_10000000.csv", Producto;
+let productos = from "productos_10000000.csv", Producto as dataframe;
 let t1 = now_ms();
 int cantidad = productos.length;
 println("filas=" + cantidad);
 
 let t2 = now_ms();
-float suma = productos.sumBy(p => p.precio);
+float suma = productos.sum("precio");
 let t3 = now_ms();
 println("sumBy.precio=" + suma);
 

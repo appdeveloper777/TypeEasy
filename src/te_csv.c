@@ -318,6 +318,8 @@ static void *csv_pread_io_worker(void *p) {
 }
 #endif
 
+static char *csv_read_file(const char *filename, size_t *out_len, int *out_is_mmap);
+
 /* Forward declare: definida más abajo (mmap-based loader). */
 static char *csv_mmap_file(const char *filename, size_t *out_len);
 static char *csv_read_all(FILE *fp, size_t *out_len);
@@ -381,12 +383,11 @@ static char *csv_resolve_path(const char *filename) {
 
 static char *csv_read_file(const char *filename, size_t *out_len, int *out_is_mmap) {
     if (out_is_mmap) *out_is_mmap = 0;
-    /* Override por env: TE_CSV_IO=mmap|pread fuerza el path. Útil para A/B
-     * benchmarks en Docker Desktop (WSL2 overlay puede ser más lento via
-     * mmap que via parallel pread). Default: auto-detect. */
+    /* Override por env: TE_CSV_IO=mmap|pread fuerza el path. Útil para
+     * A/B benchmarks en Docker Desktop. Default: auto-detect. */
     const char *io_force = getenv("TE_CSV_IO");
-    int force_pread = (io_force && (!strcmp(io_force, "pread") || !strcmp(io_force, "PREAD")));
-    int force_mmap  = (io_force && (!strcmp(io_force, "mmap")  || !strcmp(io_force, "MMAP")));
+    int force_pread   = (io_force && (!strcmp(io_force, "pread")   || !strcmp(io_force, "PREAD")));
+    int force_mmap    = (io_force && (!strcmp(io_force, "mmap")    || !strcmp(io_force, "MMAP")));
     /* Auto-detect: usar mmap en ext4/overlayfs (rápido, zero-copy),
      * pread paralelo en V9FS/FUSE (evita page-faults a través de 9P).
      * V9FS_MAGIC = 0x01021997 (WSL2 bind-mount desde Windows).      */
@@ -434,10 +435,14 @@ static char *csv_read_file(const char *filename, size_t *out_len, int *out_is_mm
 
 #if TE_HAS_PTHREAD
     /* Múltiples pread paralelos saturan el queue 9P de WSL2 → mayor throughput.
-     * 4 threads = sweet spot para bind-mount Windows→WSL2→Docker. */
+     * Cap 8 threads: re-medido may 2026 sobre Docker Desktop Windows, 8 da
+     * ~40% menos I/O latency vs 4 sin sobresaturar el canal 9P.
+     * Override con TE_CSV_IO_THREADS=N para A/B testing. */
     long ncpu = te_nprocs_online();
     int nio = (int)ncpu;
-    if (nio > 4) nio = 4;
+    if (nio > 8) nio = 8;
+    const char *io_th = getenv("TE_CSV_IO_THREADS");
+    if (io_th && io_th[0]) { int n = atoi(io_th); if (n >= 1 && n <= 32) nio = n; }
     if (nio < 1) nio = 1;
     if (size >= 256u * 1024u && nio >= 2) {
         size_t chunk = size / (size_t)nio;
@@ -2802,12 +2807,13 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
          *  5) Al join, attach TeColCache prebuilt (sin recorrer la lista). */
         const char *eco_pre = getenv("TE_COLCACHE");
         int want_colcache = (!eco_pre || eco_pre[0] != '0');
-        /* v0.0.14: TE_CSV_COLUMNAR=1 → skip wrappers (items[] NO alocado).
-         * Per-call override (g_te_csv_columnar_next) wins over env. Consumed
-         * and reset to -1 below so it only affects this single load. */
+        /* v0.0.14: pure_columnar default ON (skip items[] wrappers). Opt-out
+         * con TE_CSV_COLUMNAR=0. LINQ ops (sumBy/where/countWhere/orderBy)
+         * usan te_colcache_* fast-paths sin necesitar wrappers. Per-call
+         * override (g_te_csv_columnar_next) wins over env. */
         int pure_columnar;
         if (g_te_csv_columnar_next >= 0) { pure_columnar = g_te_csv_columnar_next; g_te_csv_columnar_next = -1; }
-        else pure_columnar = getenv("TE_CSV_COLUMNAR") ? 1 : 0;
+        else { const char *_ec = getenv("TE_CSV_COLUMNAR"); pure_columnar = (_ec && _ec[0]=='0') ? 0 : 1; }
         /* v0.0.14 polish #6a: parser CSV ahora soporta columnas float via
          * gcol_f (K_FLOAT=3 en el parser, kind=1 en TeColCache). */
         int prep_ok = want_colcache;
@@ -2957,7 +2963,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         int want_colcache = (!eco_pre || eco_pre[0] != '0');
         int pure_columnar;
         if (g_te_csv_columnar_next >= 0) { pure_columnar = g_te_csv_columnar_next; g_te_csv_columnar_next = -1; }
-        else pure_columnar = getenv("TE_CSV_COLUMNAR") ? 1 : 0;
+        else { const char *_ec = getenv("TE_CSV_COLUMNAR"); pure_columnar = (_ec && _ec[0]=='0') ? 0 : 1; }
         /* v0.0.14 polish #6a: float columns soportadas via gcol_f. */
         CSVWorkerArgs sa;
         memset(&sa, 0, sizeof(sa));
@@ -3163,6 +3169,8 @@ static int csv_lazy_method_is_safe(const char *m) {
     static const char *SAFE[] = {
         "sumBy", "countWhere", "avgBy", "minBy", "maxBy", "groupBy",
         "sum", "count", "avg", "min", "max", "length",
+        "where", "first", "firstOrDefault", "any", "all",
+        "orderBy", "orderByDescending", "take", "skip",
         NULL
     };
     for (int i = 0; SAFE[i]; i++) if (strcmp(m, SAFE[i]) == 0) return 1;
