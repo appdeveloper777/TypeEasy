@@ -81,7 +81,15 @@ cp -r "$REPO_DIR/cli/templates/." /usr/share/typeeasy/templates/
 
 # --- Install systemd unit ---
 echo "[install] Installing systemd unit ..."
-install -m 644 "$SCRIPT_DIR/typeeasy-api@.service" /etc/systemd/system/typeeasy-api@.service
+UNIT_PATH=/etc/systemd/system/typeeasy-api@.service
+if [[ -f "$UNIT_PATH" ]] && ! cmp -s "$SCRIPT_DIR/typeeasy-api@.service" "$UNIT_PATH"; then
+  BACKUP="${UNIT_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
+  echo "[install] WARNING: $UNIT_PATH ya existe y fue modificado."
+  echo "[install]          Guardando copia en $BACKUP antes de sobrescribir."
+  echo "[install]          Para cambios persistentes usa:  sudo systemctl edit typeeasy-api@<port>"
+  cp -a "$UNIT_PATH" "$BACKUP"
+fi
+install -m 644 "$SCRIPT_DIR/typeeasy-api@.service" "$UNIT_PATH"
 if [[ ! -f /etc/default/typeeasy-api ]]; then
   install -m 644 "$SCRIPT_DIR/typeeasy-api.default" /etc/default/typeeasy-api
   echo "[install] Created /etc/default/typeeasy-api (edit TYPEEASY_APIS_DIR there)"
@@ -123,5 +131,10 @@ PROXIMOS PASOS:
 PARA MULTIPLES INSTANCIAS (por puerto):
   sudo systemctl enable --now typeeasy-api@8081
   sudo systemctl enable --now typeeasy-api@8082
+
+PERSONALIZAR EL SERVICIO (User, WorkingDirectory, ProtectHome, etc):
+  sudo systemctl edit typeeasy-api@8080
+  # NO editar /etc/systemd/system/typeeasy-api@.service in-place:
+  # dpkg/install.sh lo sobrescriben en cada upgrade.
 
 EOF

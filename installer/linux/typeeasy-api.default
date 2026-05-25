@@ -2,9 +2,21 @@
 # Se aplica a TODAS las instancias salvo que exista
 # /etc/default/typeeasy-api@<port> que lo sobreescriba.
 
-# Directorio con los endpoints .te a servir (un solo proceso carga todos).
+# Directorio del proyecto TypeEasy a servir.
+# Debe contener un typeeasy.toml en la raiz (y opcionalmente apis/, public/, etc.).
+# `typeeasy serve --prod` se ejecuta con WorkingDirectory apuntando aqui.
 TYPEEASY_APIS_DIR=/opt/typeeasy/apis
 
 # Host donde bindear. Para que solo escuche local (recomendado si usas
 # nginx delante), dejar 127.0.0.1. Para exponer directo, usar 0.0.0.0.
 TYPEEASY_HOST=127.0.0.1
+
+# NOTA: User= y Group= NO se pueden setear via env var en systemd.
+# Para correr el servicio como otro usuario (ej. tu proyecto vive en
+# /home/fernando/...), crea un drop-in:
+#   sudo systemctl edit typeeasy-api@<port>
+# con:
+#   [Service]
+#   User=fernando
+#   Group=fernando
+#   ProtectHome=false

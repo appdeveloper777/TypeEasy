@@ -16,16 +16,30 @@ EnvironmentFile=-/etc/default/typeeasy-api
 EnvironmentFile=-/etc/default/typeeasy-api@%i
 Environment=TYPEEASY_APIS_DIR=/opt/typeeasy/apis
 Environment=TYPEEASY_HOST=127.0.0.1
-ExecStart=/usr/bin/typeeasy-server --api-dir ${TYPEEASY_APIS_DIR} --host ${TYPEEASY_HOST} --port %i
+# El binario instalado por el .deb es /usr/bin/typeeasy (wrapper Python que
+# dispatcha serve/new/gen/...). El antiguo /usr/bin/typeeasy-server NO existe
+# y provocaba status=203/EXEC en arranque.
+# `serve --prod` espera ejecutarse dentro de un proyecto TypeEasy
+# (con typeeasy.toml en la raíz), por eso WorkingDirectory apunta al
+# directorio del proyecto (configurable via TYPEEASY_APIS_DIR).
+WorkingDirectory=${TYPEEASY_APIS_DIR}
+ExecStart=/usr/bin/typeeasy serve --prod --host ${TYPEEASY_HOST} --port %i
 Restart=on-failure
 RestartSec=2
 User=www-data
 Group=www-data
+# Para correr como otro usuario o desde /home/<user>/proyecto:
+#   sudo systemctl edit typeeasy-api@<port>
+# y añadir un drop-in con User=, Group=, WorkingDirectory= y ProtectHome=false.
+# NO editar este archivo in-place: dpkg lo sobrescribe en cada upgrade del .deb.
+#
 # Endurecimiento basico
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
+# ProtectHome=true bloquearia proyectos ubicados en /home/<user>.
+# Si tu proyecto vive en /opt o /srv puedes reactivarlo via drop-in.
+#ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target
