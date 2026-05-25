@@ -1,0 +1,26 @@
+// Ejemplo con rutas parametrizadas y broadcast por sala.
+// Levantar:  typeeasy --api examples/16_websocket/ws_chat.te --port 8080
+// Conectar:  ws://localhost:8080/ws/room/general
+
+endpoint {
+
+    [HttpGet("/api/health")]
+    health() {
+        return json("{\"ok\":1,\"app\":\"ws_chat\"}");
+    }
+
+    [WebSocket("/ws/room/{name}")]
+    ws_room() {
+        let room = request_param("name");
+        let topic = concat("room:", room);
+
+        // Suscribe la conexion al canal de la sala.
+        ws_subscribe(topic);
+
+        // Reparte cada mensaje a todos los suscriptos de la sala.
+        let msg = request_body();
+        let payload = concat("{\"room\":\"", room, "\",\"msg\":\"", msg, "\"}");
+        ws_broadcast(topic, payload);
+    }
+
+}

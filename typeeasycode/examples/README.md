@@ -15,6 +15,7 @@ Categorias organizadas por concepto. Cada carpeta tiene su propio README.
 | `09_ml/`         | Dataset / model / train / predict / plot           |
 | `10_errors/`     | Manejo de errores graves                           |
 | `15_sqlite/`     | Plugin nativo SQLite (CRUD embebido)               |
+| `16_websocket/`  | Endpoints WebSocket nativos (`[WebSocket(...)]`)   |
 | `_scratch/`      | Tests de debug / temporales (no en regression)     |
 
 ## Como correr un test

@@ -1,0 +1,27 @@
+// Ejemplo minimo: endpoint WebSocket nativo.
+// Levantar:  typeeasy --api examples/16_websocket/ws_echo.te --port 8080
+// Conectar:  ws://localhost:8080/ws/echo
+
+endpoint {
+
+    [HttpGet("/api/health")]
+    health() {
+        return json("{\"ok\":1,\"app\":\"ws_echo\"}");
+    }
+
+    [WebSocket("/ws/echo")]
+    ws_echo() {
+        // Se invoca una vez por cada frame de texto recibido del cliente.
+        let msg = request_body();
+
+        // Une la conexion al canal "echo" (idempotente).
+        ws_subscribe("echo");
+
+        // Eco directo al emisor.
+        ws_send(concat("echo: ", msg));
+
+        // Reenvia el mensaje al resto de suscriptos al canal.
+        ws_broadcast("echo", msg);
+    }
+
+}
