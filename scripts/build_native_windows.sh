@@ -61,7 +61,7 @@ fi
 # te_csv parser multihilo, te_linq_ops SIMD) tenga el mismo perfil que el build
 # de Docker. Sin esto el binario nativo Windows queda en modo serial y pierde
 # ~40% en cargas LINQ sobre CSV grandes.
-CFLAGS_NATIVE="-O3 -fopenmp -DTE_HAVE_OPENMP -mavx2 -mbmi -Wall -I. -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 ${MYSQL_CFLAGS}"
+CFLAGS_NATIVE="-O3 -fopenmp -DTE_HAVE_OPENMP -mavx2 -mbmi -Wall -I. -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET ${MYSQL_CFLAGS}"
 
 # Compatibilidad con GCC 14+ (MSYS2 actual): el codigo asume C11/POSIX implicito,
 # pero GCC 14 promovio varios warnings a errores por defecto (C23). Los demotamos
@@ -90,13 +90,14 @@ gcc $CFLAGS_NATIVE -fno-semantic-interposition -c \
     wasm_backend.c debugger.c db_params.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c te_colcache.c te_stdlib.c te_linq.c te_linq_ops.c te_math.c te_string.c te_list.c te_map.c db_stubs_win.c
 gcc $CFLAGS_NATIVE -c parser.tab.c lex.yy.c strvars.c typeeasy_main.c
 gcc $CFLAGS_NATIVE -c ../api_server/civetweb.c -o civetweb.o
+gcc $CFLAGS_NATIVE -c ../api_server/te_websocket.c -o te_websocket.o
 
 echo "=== Linkando typeeasy.exe ==="
 gcc -O3 -fopenmp -o typeeasy.exe \
     typeeasy_main.o parser.tab.o lex.yy.o \
     ast.o bytecode.o mysql_bridge.o orm_bridge.o typeeasy_api.o typeeasy_api_server.o wasm_backend.o debugger.o \
     db_params.o te_builtins.o te_http.o te_json.o te_bytecode.o te_csv.o te_colcache.o te_stdlib.o te_linq.o te_linq_ops.o te_math.o te_string.o te_list.o te_map.o db_stubs_win.o \
-    civetweb.o \
+    civetweb.o te_websocket.o \
     strvars.o \
     ${MYSQL_LIB} -lm -lws2_32 -lpthread -lssl -lcrypto -lgomp
 
