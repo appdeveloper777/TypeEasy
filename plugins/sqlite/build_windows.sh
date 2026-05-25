@@ -15,6 +15,12 @@
 set -euo pipefail
 
 export PATH="/c/msys64/mingw64/bin:$PATH"
+# Asegurar TMP/TEMP escribibles para gcc en Windows (evita
+# "Cannot create temporary file in C:\Windows\").
+mkdir -p /c/temp 2>/dev/null || true
+export TMP="${TMP:-C:/temp}"
+export TEMP="${TEMP:-C:/temp}"
+export TMPDIR="${TMPDIR:-C:/temp}"
 cd "$(dirname "$0")"
 
 SQLITE_VERSION="${SQLITE_VERSION:-3530100}"

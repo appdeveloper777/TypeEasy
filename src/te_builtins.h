@@ -54,9 +54,28 @@ typedef struct TEHostAPI {
     char *(*arg_string)(ASTNode *arg);   /* malloc'd, caller frees */
     int   (*arg_int)(ASTNode *arg, int defv);
     double(*arg_float)(ASTNode *arg, double defv);
+
+    /* === ABI v2 — Dapper-style parametros para plugins DB ============
+     * `arg_map_head(arg, &owned)` devuelve la cabeza de una lista de
+     * KV_PAIR si `arg` es:
+     *   - un OBJECT_LITERAL inline `{ "k": v, ... }`         (owned=0)
+     *   - una variable de tipo MAP                            (owned=0)
+     *   - una instancia de clase (sus atributos como params)  (owned=1)
+     * Si owned=1, el plugin DEBE llamar `free_node(head)` cuando termine.
+     * Devuelve NULL si `arg` no aplica. `out_owned` puede ser NULL.
+     *
+     * Iteracion (en el plugin):
+     *   for (ASTNode *p = head; p; p = p->right) {
+     *       const char *key = p->id;       // "@id", "name", etc.
+     *       ASTNode    *val = p->left;     // pasalo a host->arg_int/string/float
+     *   }
+     *
+     * Disponible solo si abi_version >= 2. */
+    ASTNode* (*arg_map_head)(ASTNode *arg, int *out_owned);
+    void     (*free_node)(ASTNode *node);
 } TEHostAPI;
 
-#define TE_HOST_API_VERSION 1
+#define TE_HOST_API_VERSION 2
 
 /* Returns 0 on success, non-zero on error (file not found, missing
  * `te_module_register`, ABI mismatch). On error, sets __ret__ to 0;

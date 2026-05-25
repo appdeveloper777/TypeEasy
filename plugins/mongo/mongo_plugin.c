@@ -236,7 +236,7 @@ static int te_mongo_query(ASTNode *node, ASTNode *args) {
 
 void te_module_register(const TEHostAPI *host) {
     if (!host) return;
-    if (host->abi_version != TE_HOST_API_VERSION) {
+    if (host->abi_version < TE_HOST_API_VERSION) {
         fprintf(stderr, "[libte_mongo] ABI mismatch: host=%d plugin=%d\n",
                 host->abi_version, TE_HOST_API_VERSION);
         return;

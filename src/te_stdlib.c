@@ -18,6 +18,7 @@
 #include "te_buf.h"
 #include "te_http.h"
 #include "te_json.h"
+#include "db_params.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -937,6 +938,24 @@ static void   host_set_ret_float(double v) {
     free_ast(r);
 }
 
+/* ABI v2 — Dapper-style params para plugins DB.
+ * Reusa db_arg_as_map_head (mismo helper que usan los bridges core
+ * mysql/postgres/sqlserver). El plugin recibe el head crudo y lo
+ * camina via ast.h. Si `*owned == 1` el plugin debe llamar a
+ * host->free_node(head) cuando termine.
+ *
+ * IMPORTANTE: aquí recibimos `arg` (un único ASTNode) en lugar de la
+ * lista de args al estilo (args, idx). db_arg_as_map_head espera una
+ * lista — le pasamos `arg` directamente como si fuese una lista de un
+ * solo elemento e idx=0 (su iteración `for (i<idx) cur=cur->right` con
+ * idx=0 termina inmediatamente y devuelve el primer nodo). */
+static ASTNode *host_arg_map_head(ASTNode *arg, int *out_owned) {
+    return db_arg_as_map_head(arg, 0, out_owned);
+}
+static void host_free_node(ASTNode *n) {
+    if (n) free_ast(n);
+}
+
 void te_fill_host_api(TEHostAPI *out) {
     if (!out) return;
     memset(out, 0, sizeof(*out));
@@ -948,4 +967,7 @@ void te_fill_host_api(TEHostAPI *out) {
     out->arg_string       = host_arg_string_dup;
     out->arg_int          = host_arg_int;
     out->arg_float        = host_arg_float;
+    /* ABI v2 */
+    out->arg_map_head     = host_arg_map_head;
+    out->free_node        = host_free_node;
 }

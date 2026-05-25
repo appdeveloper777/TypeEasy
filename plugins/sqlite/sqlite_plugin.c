@@ -2,18 +2,32 @@
  * libte_sqlite — Plugin nativo de SQLite para TypeEasy.
  *
  * Builtins expuestos:
- *   sqlite_connect("path/to.db" | ":memory:")      -> int slot   (-1 en error)
- *   sqlite_exec(slot, "INSERT ... ; UPDATE ...")    -> int rows_affected (sum) o -1
- *   sqlite_query(slot, "SELECT ...", "json"|"xml") -> string en __ret__
- *   sqlite_last_id(slot)                            -> int last_insert_rowid
- *   sqlite_close(slot)                              -> int 0
+ *   sqlite_connect("path/to.db" | ":memory:")           -> int slot   (-1 en error)
+ *   sqlite_exec(slot, sql [, {params}])                 -> int rows_affected (-1 en err)
+ *   sqlite_query(slot, sql [, {params}] [, "json"|"xml"]) -> string en __ret__
+ *   sqlite_last_id(slot)                                -> int last_insert_rowid
+ *   sqlite_close(slot)                                  -> int 0
+ *
+ * Estilo Dapper (mismo que mysql_query / postgres_query):
+ *   let r = sqlite_query(db,
+ *       "SELECT * FROM users WHERE id=@id AND name=@name",
+ *       { "@id": 5, "@name": "foo" }, "json");
+ *   sqlite_exec(db,
+ *       "INSERT INTO users(name,email) VALUES(@n,@e)",
+ *       { "@n": "O'Reilly", "@e": "a@b" });
+ *
+ * Los placeholders usan la sintaxis nativa de sqlite3 (@name, :name, $name).
+ * Las claves del map pueden ir con o sin '@'. Internamente usamos
+ * sqlite3_bind_* (no interpolación textual) → inmune a inyección SQL.
+ *
+ * Requiere host con ABI >= 2 para usar params; el resto funciona en cualquier ABI.
  *
  * Uso desde un script .te:
  *   load_native("sqlite");
  *   let db = sqlite_connect("game.db");
  *   sqlite_exec(db, "CREATE TABLE IF NOT EXISTS t(id INTEGER PRIMARY KEY, name TEXT)");
- *   sqlite_exec(db, "INSERT INTO t(name) VALUES('alice')");
- *   let rows = sqlite_query(db, "SELECT id, name FROM t", "json");
+ *   sqlite_exec(db, "INSERT INTO t(name) VALUES(@n)", { "@n": "alice" });
+ *   let rows = sqlite_query(db, "SELECT * FROM t WHERE id>@min", { "@min": 0 }, "json");
  *   println(rows);
  *   sqlite_close(db);
  *
@@ -135,6 +149,130 @@ static void sb_put_xml_str(SB *b, const char *s) {
     }
 }
 
+/* ─── Dapper-style param binding (ABI v2) ──────────────────────────────
+ *
+ * Si el host expone arg_map_head (abi_version >= 2), aceptamos que un
+ * argumento sea:
+ *   - OBJECT_LITERAL inline:  { "@id": 5, "@name": "foo" }
+ *   - Variable MAP            (let p = { ... }; sqlite_query(db, sql, p))
+ *   - Instancia de clase      (sus atributos se exponen como @attr)
+ *
+ * Los placeholders en el SQL siguen la sintaxis nativa de sqlite3:
+ *   @nombre, :nombre, $nombre, ?NNN
+ * Internamente usamos sqlite3_bind_parameter_index(stmt, "@nombre") —
+ * sqlite3 distingue el prefijo, así que aceptamos claves del mapa con o
+ * sin '@' inicial: probamos primero la clave tal cual, luego con '@'
+ * prepended.
+ *
+ * No interpolamos texto — usamos sqlite3_bind_* directamente, que es
+ * inmune a inyección SQL y a quoting raro (`O'Reilly`).
+ */
+
+/* Detecta si el host expone la ABI v2 (arg_map_head no es NULL). */
+static int host_has_v2(void) {
+    return g_host.abi_version >= 2 && g_host.arg_map_head != NULL;
+}
+
+/* Devuelve 1 si `arg` resuelve a un mapa/objeto (params Dapper).
+ * Sólo mira el tipo para evitar materializar el head innecesariamente. */
+static int arg_looks_like_params(ASTNode *arg) {
+    if (!arg || !arg->type) return 0;
+    if (strcmp(arg->type, "OBJECT_LITERAL") == 0) return 1;
+    if (strcmp(arg->type, "MAP") == 0) return 1;
+    /* IDENTIFIER: sólo arg_map_head sabe si es MAP/OBJECT; lo dejamos
+     * pasar y db_arg_as_map_head devolverá NULL si no aplica. */
+    if (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0) return 1;
+    return 0;
+}
+
+/* Bindea un valor (ASTNode) a un parámetro por índice 1-based.
+ * Devuelve SQLITE_OK o un código de error. */
+static int bind_value(sqlite3_stmt *stmt, int idx, ASTNode *val) {
+    if (!val || !val->type) {
+        return sqlite3_bind_null(stmt, idx);
+    }
+    const char *t = val->type;
+    if (strcmp(t, "NULL") == 0) {
+        return sqlite3_bind_null(stmt, idx);
+    }
+    if (strcmp(t, "NUMBER") == 0 || strcmp(t, "INT") == 0) {
+        /* En ASTNode los enteros viven en `value`. */
+        return sqlite3_bind_int64(stmt, idx, (sqlite3_int64)val->value);
+    }
+    if (strcmp(t, "FLOAT") == 0 || strcmp(t, "DB_RAW") == 0) {
+        /* DB_RAW: float serializado a string por db_params (caso clase). */
+        double d = 0;
+        if (val->str_value && *val->str_value) d = atof(val->str_value);
+        else d = (double)val->value;
+        return sqlite3_bind_double(stmt, idx, d);
+    }
+    if (strcmp(t, "STRING") == 0) {
+        const char *s = val->str_value ? val->str_value : "";
+        return sqlite3_bind_text(stmt, idx, s, -1, SQLITE_TRANSIENT);
+    }
+    /* Para IDENTIFIER u otros, último recurso: pedir al host que lo
+     * resuelva como string. */
+    char *s = g_host.arg_string(val);
+    int rc = sqlite3_bind_text(stmt, idx, s ? s : "", -1, SQLITE_TRANSIENT);
+    if (s) free(s);
+    return rc;
+}
+
+/* Camina la lista de KV_PAIR y bindea cada par al stmt.
+ * Si el nombre del param es "@k", intenta primero "@k" en el SQL, luego
+ * ":k" / "$k" / "k". Si la clave del mapa viene sin "@", también prueba
+ * con "@" prepended. Imprime warning si un binding no matchea ningún
+ * placeholder (útil para detectar typos). Devuelve SQLITE_OK o el primer
+ * error encontrado. */
+static int bind_params_from_head(sqlite3_stmt *stmt, ASTNode *head) {
+    char nbuf[128];
+    for (ASTNode *p = head; p; p = p->right) {
+        const char *key = p->id ? p->id : "";
+        ASTNode    *val = p->left;
+        int idx = 0;
+
+        /* Probar variaciones: tal cual, con '@', con ':', con '$'. */
+        const char *prefixes[] = { "", "@", ":", "$", NULL };
+        if (*key == '@' || *key == ':' || *key == '$') {
+            /* Ya trae prefijo — probar tal cual primero. */
+            idx = sqlite3_bind_parameter_index(stmt, key);
+            if (idx == 0) {
+                /* Sin prefijo (saltarlo). */
+                idx = sqlite3_bind_parameter_index(stmt, key + 1);
+            }
+        } else {
+            for (int i = 0; prefixes[i] && idx == 0; i++) {
+                if (prefixes[i][0] == '\0') {
+                    idx = sqlite3_bind_parameter_index(stmt, key);
+                } else {
+                    snprintf(nbuf, sizeof(nbuf), "%s%s", prefixes[i], key);
+                    idx = sqlite3_bind_parameter_index(stmt, nbuf);
+                }
+            }
+        }
+
+        if (idx == 0) {
+            /* No matchea ningún placeholder — no es error fatal, sólo aviso. */
+            fprintf(stderr, "[sqlite] warning: param '%s' has no matching placeholder in SQL\n", key);
+            continue;
+        }
+        int rc = bind_value(stmt, idx, val);
+        if (rc != SQLITE_OK) return rc;
+    }
+    return SQLITE_OK;
+}
+
+/* Resuelve el arg N como params (head de KV_PAIR) si aplica.
+ * Devuelve NULL si no es un mapa o si la ABI del host es v1. Si
+ * *out_owned == 1, el caller debe llamar a g_host.free_node(head). */
+static ASTNode *arg_as_params(ASTNode *args, int idx, int *out_owned) {
+    if (out_owned) *out_owned = 0;
+    if (!host_has_v2()) return NULL;
+    ASTNode *a = arg_at(args, idx);
+    if (!arg_looks_like_params(a)) return NULL;
+    return g_host.arg_map_head(a, out_owned);
+}
+
 /* ─── builtins ─────────────────────────────────────────────────────── */
 
 static int te_sqlite_connect(ASTNode *node, ASTNode *args) {
@@ -200,16 +338,59 @@ static int te_sqlite_exec(ASTNode *node, ASTNode *args) {
         H->set_ret_int(0);
         return 1;
     }
-    char *errmsg = NULL;
-    int rc = sqlite3_exec(g_pool[slot], sql, NULL, NULL, &errmsg);
-    free(sql);
+
+    /* Detectar params Dapper-style (arg 2). */
+    int   owned = 0;
+    ASTNode *params = arg_as_params(args, 2, &owned);
+
+    if (!params) {
+        /* Fast path: SQL sin params → sqlite3_exec acepta múltiples sentencias
+         * separadas por ';'. */
+        char *errmsg = NULL;
+        int rc = sqlite3_exec(g_pool[slot], sql, NULL, NULL, &errmsg);
+        free(sql);
+        if (rc != SQLITE_OK) {
+            fprintf(stderr, "[sqlite_exec] error: %s\n", errmsg ? errmsg : "unknown");
+            if (errmsg) sqlite3_free(errmsg);
+            H->set_ret_int(-1);
+            return 1;
+        }
+        H->set_ret_int(sqlite3_changes(g_pool[slot]));
+        return 1;
+    }
+
+    /* Slow path con params: una sola sentencia, prepare + bind + step. */
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(g_pool[slot], sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "[sqlite_exec] error: %s\n", errmsg ? errmsg : "unknown");
-        if (errmsg) sqlite3_free(errmsg);
+        fprintf(stderr, "[sqlite_exec] prepare error: %s\n", sqlite3_errmsg(g_pool[slot]));
+        if (stmt) sqlite3_finalize(stmt);
+        if (owned) H->free_node(params);
+        free(sql);
         H->set_ret_int(-1);
         return 1;
     }
-    H->set_ret_int(sqlite3_changes(g_pool[slot]));
+    rc = bind_params_from_head(stmt, params);
+    if (owned) H->free_node(params);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "[sqlite_exec] bind error: %s\n", sqlite3_errmsg(g_pool[slot]));
+        sqlite3_finalize(stmt);
+        free(sql);
+        H->set_ret_int(-1);
+        return 1;
+    }
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+        fprintf(stderr, "[sqlite_exec] step error: %s\n", sqlite3_errmsg(g_pool[slot]));
+        sqlite3_finalize(stmt);
+        free(sql);
+        H->set_ret_int(-1);
+        return 1;
+    }
+    int changes = sqlite3_changes(g_pool[slot]);
+    sqlite3_finalize(stmt);
+    free(sql);
+    H->set_ret_int(changes);
     return 1;
 }
 
@@ -229,7 +410,35 @@ static int te_sqlite_query(ASTNode *node, ASTNode *args) {
     (void)node;
     int slot   = H->arg_int(arg_at(args, 0), -1);
     char *sql  = H->arg_string(arg_at(args, 1));
-    char *fmt  = H->arg_string(arg_at(args, 2));
+
+    /* Detección de variantes:
+     *   query(slot, sql)                       → fmt=json, params=NULL
+     *   query(slot, sql, "json"|"xml")         → fmt=arg2, params=NULL
+     *   query(slot, sql, {params})             → fmt=json, params=arg2
+     *   query(slot, sql, {params}, "json"|"xml") → fmt=arg3, params=arg2
+     */
+    int   params_owned = 0;
+    ASTNode *params = NULL;
+    char *fmt = NULL;
+
+    ASTNode *a2 = arg_at(args, 2);
+    if (a2) {
+        if (arg_looks_like_params(a2)) {
+            params = arg_as_params(args, 2, &params_owned);
+            /* Si arg_as_params devolvió NULL (no era map en realidad),
+             * tratamos a2 como fmt — pero arg_looks_like_params es muy
+             * laxo con IDENTIFIER, así que mejor: si params==NULL tras
+             * intentar, considerarlo fmt sólo si el tipo es STRING. */
+            if (!params) {
+                if (a2->type && strcmp(a2->type, "STRING") == 0)
+                    fmt = H->arg_string(a2);
+            } else {
+                fmt = H->arg_string(arg_at(args, 3));
+            }
+        } else {
+            fmt = H->arg_string(a2);
+        }
+    }
 
     int as_xml = (fmt && (strcmp(fmt, "xml") == 0 || strcmp(fmt, "XML") == 0));
 
@@ -237,12 +446,14 @@ static int te_sqlite_query(ASTNode *node, ASTNode *args) {
         fprintf(stderr, "[sqlite_query] invalid connection slot\n");
         if (sql) free(sql);
         if (fmt) free(fmt);
+        if (params_owned) H->free_node(params);
         H->set_ret_str(as_xml ? "<result/>" : "[]");
         return 1;
     }
     if (!sql || !*sql) {
         if (sql) free(sql);
         if (fmt) free(fmt);
+        if (params_owned) H->free_node(params);
         H->set_ret_str(as_xml ? "<result/>" : "[]");
         return 1;
     }
@@ -253,8 +464,20 @@ static int te_sqlite_query(ASTNode *node, ASTNode *args) {
         fprintf(stderr, "[sqlite_query] prepare error: %s\n", sqlite3_errmsg(g_pool[slot]));
         if (stmt) sqlite3_finalize(stmt);
         free(sql); if (fmt) free(fmt);
+        if (params_owned) H->free_node(params);
         H->set_ret_str(as_xml ? "<result/>" : "[]");
         return 1;
+    }
+    if (params) {
+        rc = bind_params_from_head(stmt, params);
+        if (params_owned) H->free_node(params);
+        if (rc != SQLITE_OK) {
+            fprintf(stderr, "[sqlite_query] bind error: %s\n", sqlite3_errmsg(g_pool[slot]));
+            sqlite3_finalize(stmt);
+            free(sql); if (fmt) free(fmt);
+            H->set_ret_str(as_xml ? "<result/>" : "[]");
+            return 1;
+        }
     }
     int ncols = sqlite3_column_count(stmt);
 
@@ -345,8 +568,8 @@ __declspec(dllexport)
 #endif
 void te_module_register(const TEHostAPI *host) {
     if (!host) return;
-    if (host->abi_version != TE_HOST_API_VERSION) {
-        fprintf(stderr, "[libte_sqlite] ABI mismatch: host=%d plugin=%d\n",
+    if (host->abi_version < TE_HOST_API_VERSION) {
+        fprintf(stderr, "[libte_sqlite] ABI mismatch: host=%d, plugin requires >= %d\n",
                 host->abi_version, TE_HOST_API_VERSION);
         return;
     }

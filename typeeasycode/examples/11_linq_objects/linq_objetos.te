@@ -14,12 +14,12 @@ class Producto {
 }
 
 let productos = [
-  new Producto(1, "manzana",  10, 50),
-  new Producto(2, "pera",     15, 20),
-  new Producto(3, "uva",       8, 80),
-  new Producto(4, "naranja",  12, 30),
-  new Producto(5, "platano",   5, 100),
-  new Producto(6, "mango",    20, 15)
+  new Producto(1, "manzana",  10, 10),
+  new Producto(2, "pera",     15, 10),
+  new Producto(3, "uva",       8, 10),
+  new Producto(4, "naranja",  12, 10),
+  new Producto(5, "platano",   5, 10),
+  new Producto(6, "mango",    20, 10)
 ];
 
 println("count="     + productos.length);
