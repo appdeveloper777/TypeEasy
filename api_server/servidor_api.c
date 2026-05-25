@@ -17,6 +17,7 @@
 #include <strings.h>
 #endif
 #include "civetweb.h"
+#include "te_websocket.h"
 #include <mysql/mysql.h>
 
 // Incluir el encabezado de TypeEasy
@@ -1141,6 +1142,9 @@ static int run_worker_ext(int enable_debug) {
 
     mg_set_request_handler(ctx, "/",      manejadorRaiz,        NULL);
     mg_set_request_handler(ctx, "/api/**", manejadorApiDinamico, NULL);
+
+    /* Register native WebSocket handlers for any [WebSocket("/path")] methods. */
+    te_ws_register_routes(ctx);
 
     while (exit_flag == 0) sleep(1);
 

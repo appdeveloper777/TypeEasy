@@ -852,6 +852,34 @@ static void native_response_header(ASTNode *arg) {
     te_set_ret_int(0);
 }
 
+/* ===== WebSocket builtins (impl in api_server/te_websocket.c) ===== */
+extern int te_ws_subscribe_current(const char *channel);
+extern int te_ws_send_current(const char *msg);
+extern int te_ws_broadcast(const char *channel, const char *msg);
+extern int te_ws_current_id_str(char *out, int cap);
+
+static void native_ws_subscribe(ASTNode *arg) {
+    const char *ch = te_arg_string(arg);
+    int rc = ch ? te_ws_subscribe_current(ch) : 0;
+    te_set_ret_int(rc);
+}
+static void native_ws_send(ASTNode *arg) {
+    const char *m = te_arg_string(arg);
+    int rc = m ? te_ws_send_current(m) : 0;
+    te_set_ret_int(rc);
+}
+static void native_ws_broadcast(ASTNode *arg) {
+    const char *ch = te_arg_string(arg);
+    const char *m  = arg && arg->right ? te_arg_string(arg->right) : NULL;
+    int rc = (ch && m) ? te_ws_broadcast(ch, m) : 0;
+    te_set_ret_int(rc);
+}
+static void native_request_ws_id(ASTNode *arg) {
+    (void)arg;
+    char buf[32]; te_ws_current_id_str(buf, sizeof(buf));
+    te_set_ret_string(buf);
+}
+
 int call_native_function(const char *name, ASTNode *arg) {
     /* Fase 1: registry first. New builtins live in the hash table only;
      * the legacy if-chain below remains as fallback for transparency. */
@@ -888,6 +916,10 @@ int call_native_function(const char *name, ASTNode *arg) {
     if (strcmp(name, "response_status")== 0) { native_response_status(arg);return 1; }
     if (strcmp(name, "response_header")== 0) { native_response_header(arg);return 1; }
     if (strcmp(name, "debug_log")      == 0) { native_debug_log(arg);      return 1; }
+    if (strcmp(name, "ws_subscribe")   == 0) { native_ws_subscribe(arg);   return 1; }
+    if (strcmp(name, "ws_send")        == 0) { native_ws_send(arg);        return 1; }
+    if (strcmp(name, "ws_broadcast")   == 0) { native_ws_broadcast(arg);   return 1; }
+    if (strcmp(name, "request_ws_id")  == 0) { native_request_ws_id(arg);  return 1; }
     if (strcmp(name, "concat") == 0) {
         native_concat(arg);
         return 1;

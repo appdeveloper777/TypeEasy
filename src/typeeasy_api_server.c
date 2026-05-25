@@ -41,6 +41,7 @@
 #include "typeeasy_api.h"
 #include "typeeasy_http.h"
 #include "typeeasy_api_server.h"
+#include "../api_server/te_websocket.h"
 
 #ifdef _WIN32
 static CRITICAL_SECTION g_invoke_lock;
@@ -478,6 +479,9 @@ int typeeasy_run_api_server(const char *host, int port) {
 
     /* Catch-all handler; routing happens inside. "**" matches every URI. */
     mg_set_request_handler(ctx, "**", request_handler, NULL);
+
+    /* Register native WebSocket handlers for any [WebSocket("/path")] methods. */
+    te_ws_register_routes(ctx);
 
     printf("[typeeasy --api] Escuchando en http://%s:%d (%d ruta%s)\n",
            (host && *host) ? host : "0.0.0.0", port,

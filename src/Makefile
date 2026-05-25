@@ -25,6 +25,8 @@ STRVARS_OBJ = strvars.o
 # --- CIVETWEB (para el agente) ---
 CIVETWEB_C = ../api_server/civetweb.c
 CIVETWEB_OBJ = civetweb.o
+TE_WS_C = ../api_server/te_websocket.c
+TE_WS_OBJ = te_websocket.o
 
 # Motor EasySpark
 SPARK_DIR = easyspark
@@ -32,7 +34,7 @@ SPARK_OBJ = $(SPARK_DIR)/dataframe.o
 
 CC = gcc
 CXX = g++
-CFLAGS = -Wall -g -O3 -mavx2 -mbmi -pthread -fopenmp -DTE_HAVE_OPENMP -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DTE_HAVE_LIBCURL $(CFLAGS_EXTRA)
+CFLAGS = -Wall -g -O3 -mavx2 -mbmi -pthread -fopenmp -DTE_HAVE_OPENMP -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET -DTE_HAVE_LIBCURL $(CFLAGS_EXTRA)
 CXXFLAGS = -Wall -g -O3 -std=c++17 -fopenmp
 LIBS_SCRIPT = -lfl -lm -lmysqlclient -lpq -lsybdb -lpthread -ldl -lssl -lcrypto -lcurl -lgomp
 LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto -lmysqlclient -lpq -lsybdb -lcurl -lgomp
@@ -65,6 +67,10 @@ $(MAIN_AGENT_OBJ): $(MAIN_AGENT_C)
 # Compila civetweb.o
 $(CIVETWEB_OBJ): $(CIVETWEB_C)
 	$(CC) $(CFLAGS) -c $(CIVETWEB_C) -o $(CIVETWEB_OBJ)
+
+# Compila te_websocket.o (WebSocket nativo para TypeEasy)
+$(TE_WS_OBJ): $(TE_WS_C) ../api_server/te_websocket.h
+	$(CC) $(CFLAGS) -c $(TE_WS_C) -o $(TE_WS_OBJ)
     
 # Compila strvars.o
 $(STRVARS_OBJ): strvars.c
@@ -72,12 +78,12 @@ $(STRVARS_OBJ): strvars.c
 
 # --- REGLAS DE EJECUTABLES ---
 # 1. 'typeeasy' (intérprete para scripts) — ahora linkea civetweb para soporte --api
-$(EXEC_SCRIPT): $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ)
-	$(CC) $(CFLAGS) -o $(EXEC_SCRIPT) $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ) $(LIBS_SCRIPT)
+$(EXEC_SCRIPT): $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ) $(TE_WS_OBJ)
+	$(CC) $(CFLAGS) -o $(EXEC_SCRIPT) $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ) $(TE_WS_OBJ) $(LIBS_SCRIPT)
 
 # 2. 'servidor_agent' (servidor del agente)
-$(EXEC_AGENT): $(MAIN_AGENT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ)
-	$(CC) $(CFLAGS) -o $(EXEC_AGENT) $(MAIN_AGENT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ) $(LIBS_AGENT)
+$(EXEC_AGENT): $(MAIN_AGENT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ) $(TE_WS_OBJ)
+	$(CC) $(CFLAGS) -o $(EXEC_AGENT) $(MAIN_AGENT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ) $(TE_WS_OBJ) $(LIBS_AGENT)
 
 # --- REGLAS DE EASYSPARK ---
 $(SPARK_OBJ): $(SPARK_DIR)/dataframe.cpp $(SPARK_DIR)/dataframe.hpp

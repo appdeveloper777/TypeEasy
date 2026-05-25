@@ -145,6 +145,8 @@
 "HttpPut"               { return HTTPPUT; }
 "HttpDelete"            { return HTTPDELETE; }
 "HttpPatch"             { return HTTPPATCH; }
+"WebSocket"             { return WEBSOCKET; }
+"WEBSOCKET"             { return WEBSOCKET; }
 "xml"                   { return XML; }
 "json"                  { return JSON; }
 
