@@ -391,11 +391,17 @@ int te_ws_broadcast(const char *channel, const char *msg) {
 
     size_t mlen = strlen(msg);
     for (int i = 0; i < n; i++) {
+        /* civetweb requires mg_lock_connection() before writing to a WS
+         * from a thread other than the one running the WS handler — without
+         * it, frames issued from HTTP request threads can be silently
+         * dropped or interleaved with other writes on the same socket. */
+        mg_lock_connection(targets[i]);
         int rc = mg_websocket_write(targets[i], MG_WEBSOCKET_OPCODE_TEXT, msg, mlen);
+        mg_unlock_connection(targets[i]);
         if (rc > 0) sent++;
     }
     free(targets);
-    if (sent) fprintf(stderr, "[WS] broadcast %s -> %d client(s)\n", channel, sent);
+    fprintf(stderr, "[WS] broadcast %s -> %d/%d client(s)\n", channel, sent, n);
     return sent;
 }
 

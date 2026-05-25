@@ -4011,14 +4011,26 @@ void interpret_ast(ASTNode *node) {
          * METHOD_CALL_ALONE; try built-ins before user-defined methods. */
         if (te_builtin_dispatch(node)) break;
         MethodNode *m = global_methods;
+        int matched = 0;
         while (m) {
             if (strcmp(m->name, node->id) == 0) {
                 debugger_push_frame(m->name, node);
                 interpret_ast(m->body);
                 debugger_pop_frame();
+                matched = 1;
                 break;
             }
             m = m->next;
+        }
+        if (!matched) {
+            /* Fallback: bare statement may be a native builtin not handled by
+             * te_builtin_dispatch (e.g. ws_subscribe/ws_send/ws_broadcast,
+             * request_*, response_*). Without this, such calls used as
+             * statements (return value discarded) are silently dropped.
+             * For METHOD_CALL_ALONE the arg list lives in node->right; we
+             * also accept node->left for legacy paths. */
+            ASTNode *a = node->right ? node->right : node->left;
+            call_native_function(node->id, a);
         }
         break;
     }
