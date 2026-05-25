@@ -108,8 +108,10 @@ TypeEasyEmbeddedContext* typeeasy_embedded_init(void) {
     ctx->capture_size = 0;
     ctx->capture_capacity = 0;
     
-    // Inicializar runtime del intérprete
-    runtime_save_initial_var_count();
+    // NOTA: el snapshot de variables iniciales se toma DESPUES de cargar el
+    // script en typeeasy_load_script_embedded(), no aqui, para que los `let`
+    // de top-level del bootstrap (ej. `let db = sqlite_connect(...)`)
+    // sobrevivan a runtime_reset_vars_to_initial_state() entre requests HTTP.
     
     return ctx;
 }
@@ -232,6 +234,12 @@ int typeeasy_embedded_load_script(TypeEasyEmbeddedContext* ctx, const char* scri
     interpret_ast(ast);
     
     fprintf(stderr, "[DEBUG] DESPUÉS de interpret_ast(scope global): __ret_var_active=%d\n", __ret_var_active);
+    
+    // Snapshot DESPUES del bootstrap: top-level `let`/`var` quedan por debajo
+    // del marcador y sobreviven a runtime_reset_vars_to_initial_state() entre
+    // requests. Si se cargan multiples scripts, cada uno re-snapshotea para
+    // que su propio bootstrap tambien sobreviva.
+    runtime_save_initial_var_count();
     
     printf("[TYPEEASY_API] Script cargado exitosamente (embebido verdadero): %s\n", script_path);
     

@@ -612,11 +612,7 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    // 4. Inicializar Runtime
-    runtime_save_initial_var_count();
-
-
-    // 4b. Iniciar el debugger ANTES de ejecutar el script (bloquea hasta que
+    // 4. Iniciar el debugger ANTES de ejecutar el script (bloquea hasta que
     // el adapter se conecte y envíe `start`).
     if (debug_port > 0) {
         debugger_init(debug_port, script_path);
@@ -627,6 +623,12 @@ int main(int argc, char *argv[]) {
     if (script_ast) {
         interpret_ast(script_ast); 
     }
+
+    // 6. Inicializar Runtime: snapshot DESPUÉS del bootstrap para que las
+    // variables top-level (ej. `let db = sqlite_connect(...)`) sobrevivan
+    // a runtime_reset_vars_to_initial_state() entre requests HTTP.
+    // (Mismo patrón que usa servidor_agent.c línea ~472.)
+    runtime_save_initial_var_count();
 
     /* Fase 2: si quedó un throw sin capturar, imprimir y salir con código de error */
     {
