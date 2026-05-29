@@ -317,7 +317,7 @@
 }
 
 
-[A-Za-z_][A-Za-z0-9_]*  {
+[A-Za-z_\x80-\xFF][A-Za-z0-9_\x80-\xFF]*  {
     yylval.sval = strdup(yytext);
     return IDENTIFIER;
 }

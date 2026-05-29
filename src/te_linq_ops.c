@@ -227,8 +227,8 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 return 1;
             }
             if (strcmp(fname, "reduce") == 0) {
-                /* arg list: (fn, init). arg->right es init. */
-                ASTNode *initArg = arg->right;
+                /* arg list: (fn, init). arg->next es init. */
+                ASTNode *initArg = arg->next; /* gotcha #1: 2nd arg via ->next */
                 ASTNode *acc = NULL;
                 if (initArg) {
                     if (is_string_type(initArg)) {

@@ -176,8 +176,8 @@ void handle_nlu_bridge(char* method_name, ASTNode* args) {
     if (strcmp(method_name, "parse") == 0) {
         mensaje_usuario = get_node_string(args);
     } else {
-        if (args && args->right) {
-            mensaje_usuario = get_node_string(args->right);
+        if (args && args->next) {
+            mensaje_usuario = get_node_string(args->next); /* gotcha #1: 2nd arg via ->next */
         } else {
             mensaje_usuario = strdup("");
         }
@@ -231,8 +231,8 @@ void handle_gemini_bridge(char* method_name, ASTNode* args) {
         char* message = NULL;
         
         path = get_node_string(args);
-        if (args->right) {
-            message = get_node_string(args->right);
+        if (args->next) {
+            message = get_node_string(args->next); /* gotcha #1: 2nd arg via ->next */
         }
         
         if (!path) path = strdup("");

@@ -75,7 +75,7 @@ static void pool_free(int slot) {
 
 static ASTNode *arg_at(ASTNode *args, int n) {
     ASTNode *p = args;
-    for (int i = 0; p && i < n; i++) p = p->right;
+    for (int i = 0; p && i < n; i++) p = p->next; /* gotcha #1: step args via ->next */
     return p;
 }
 

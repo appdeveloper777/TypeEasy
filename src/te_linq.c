@@ -133,9 +133,9 @@ int lazy_terminal(ASTNode *lazy_node, ASTNode *node) {
     ASTNode *t_lam = NULL;
     ASTNode *reduce_acc = NULL;
     if (is_reduce) {
-        /* reduce(init, fn): args via node->right (init) and ->right->right (fn) */
+        /* reduce(init, fn): args via node->right (init) and ->next (fn) */
         ASTNode *init_arg = node->right;
-        ASTNode *fn_arg = init_arg ? init_arg->right : NULL;
+        ASTNode *fn_arg = init_arg ? init_arg->next : NULL; /* gotcha #1: 2nd arg via ->next */
         if (init_arg) {
             ASTNode *iv = build_item_from_value(init_arg);
             reduce_acc = iv ? iv : init_arg;

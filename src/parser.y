@@ -53,6 +53,7 @@
 %token NODE ENDPOINT
 %type <sval> method_name
 %type <sval> method_return_type
+%type <sval> type_name
 %type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args lambda_expression httpget_method_decl lambda_value
 %type <sval> lambda_param_list
 %type <pnode> parameter_decl parameter_list
@@ -448,26 +449,30 @@ expression:
         ClassNode *cls = find_class($2);
         if (cls) { $$ = create_object_with_args(cls, $4); free($2); }
         else     { $$ = create_call_node($2, $4); } }
- | JSON LPAREN IDENTIFIER RPAREN  {       $$ = create_call_node_return_json($3, create_ast_leaf("json", 0, NULL, $3));}
-| XML LPAREN IDENTIFIER RPAREN  {      $$ = create_call_node_return_xml($3, create_ast_leaf("xml", 0, NULL, $3));}
+ | JSON LPAREN IDENTIFIER RPAREN  {       $$ = create_call_node("json", create_ast_leaf("IDENTIFIER", 0, NULL, $3)); }
+ | JSON LPAREN object_literal RPAREN  {   $$ = create_call_node("json", $3); }
+ | JSON LPAREN list_literal RPAREN    {   $$ = create_call_node("json", $3); }
+| XML LPAREN IDENTIFIER RPAREN  {      $$ = create_call_node("xml", create_ast_leaf("IDENTIFIER", 0, NULL, $3)); }
+ | XML LPAREN object_literal RPAREN   {   $$ = create_call_node("xml", $3); }
+ | XML LPAREN list_literal RPAREN     {   $$ = create_call_node("xml", $3); }
 ;
 
 var_decl:
     LET IDENTIFIER ASSIGN IDENTIFIER LPAREN expression_list RPAREN SEMICOLON
-      { ASTNode *args = $6; ASTNode *first = args; ASTNode *second = args ? args->right : NULL; ASTNode *third = second ? second->right : NULL;
+      { ASTNode *args = $6; ASTNode *first = args; ASTNode *second = args ? args->next : NULL; ASTNode *third = second ? second->next : NULL; /* gotcha #1: args via ->next */
         ASTNode *call;
         if (second && !third && second->type && strcmp(second->type, "LAMBDA") == 0 && (strcmp($4, "filter") == 0 || strcmp($4, "map") == 0)) {
-          args->right = NULL;
+          args->next = NULL;
           call = create_list_function_call_node(first, $4, second);
         } else {
           call = create_call_node($4, args);
         }
         ASTNode* d = create_var_decl_node($2, call); d->value = 1; /* let = immutable */ $$ = d; }
   | VAR IDENTIFIER ASSIGN IDENTIFIER LPAREN expression_list RPAREN SEMICOLON
-      { ASTNode *args = $6; ASTNode *first = args; ASTNode *second = args ? args->right : NULL; ASTNode *third = second ? second->right : NULL;
+      { ASTNode *args = $6; ASTNode *first = args; ASTNode *second = args ? args->next : NULL; ASTNode *third = second ? second->next : NULL; /* gotcha #1: args via ->next */
         ASTNode *call;
         if (second && !third && second->type && strcmp(second->type, "LAMBDA") == 0 && (strcmp($4, "filter") == 0 || strcmp($4, "map") == 0)) {
-          args->right = NULL;
+          args->next = NULL;
           call = create_list_function_call_node(first, $4, second);
         } else {
           call = create_call_node($4, args);
@@ -477,6 +482,9 @@ var_decl:
 
 
   | LET IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* d = create_var_decl_node($2, $4); d->value = 1; /* let = immutable */ $$ = d; }
+  | LET IDENTIFIER COLON type_name ASSIGN expression SEMICOLON  { ASTNode* d = create_var_decl_node($2, $6); d->value = 1; if ($4) d->str_value = $4; $$ = d; }
+  | VAR IDENTIFIER COLON type_name ASSIGN expression SEMICOLON  { ASTNode* d = create_var_decl_node($2, $6); if ($4) d->str_value = $4; $$ = d; }
+  | CONST IDENTIFIER COLON type_name ASSIGN expression SEMICOLON  { ASTNode* d = create_var_decl_node($2, $6); d->value = 1; if ($4) d->str_value = $4; $$ = d; }
   | STRING IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("STRING"); $$ = decl; }
   | BOOLTYPE IDENTIFIER ASSIGN expression SEMICOLON     { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("BOOL"); $$ = decl; }
   | DATETIMETYPE IDENTIFIER ASSIGN expression SEMICOLON { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("DATETIME"); $$ = decl; }
@@ -487,6 +495,16 @@ var_decl:
   | INT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("INT"); $$ = decl; }
   | IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
   | THIS DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,"this"); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
+;
+
+type_name:
+    INT          { $$ = strdup("INT"); }
+  | FLOAT        { $$ = strdup("FLOAT"); }
+  | STRING       { $$ = strdup("STRING"); }
+  | BOOLTYPE     { $$ = strdup("BOOL"); }
+  | DATETIMETYPE { $$ = strdup("DATETIME"); }
+  | UUIDTYPE     { $$ = strdup("UUID"); }
+  | IDENTIFIER   { $$ = NULL; /* custom/unknown type: keep dynamic */ }
 ;
 
 statement:

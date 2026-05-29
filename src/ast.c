@@ -272,6 +272,20 @@ void native_json(ASTNode *arg) {
         return;
     }
 
+    /* v1.0.0 gotcha-fix: `return json({...})` / `json([...])` inline literals.
+     * Serialize the OBJECT_LITERAL / MAP / LIST node directly via te_json. */
+    if (arg->type && (strcmp(arg->type, "OBJECT_LITERAL") == 0 ||
+                      strcmp(arg->type, "MAP") == 0 ||
+                      strcmp(arg->type, "LIST") == 0)) {
+        TeBuf b; tebuf_init(&b);
+        te_json_emit_node(&b, arg);
+        ASTNode *result_node = create_ast_leaf("STRING", 0, b.p ? b.p : "{}", NULL);
+        add_or_update_variable("__ret__", result_node);
+        free_ast(result_node);
+        if (b.p) free(b.p);
+        return;
+    }
+
     const char *var_id = NULL;
     if (arg->id) {
         var_id = arg->id;
@@ -362,8 +376,23 @@ void native_json(ASTNode *arg) {
 
     // Handle single OBJECT
     if (v->vtype != VAL_OBJECT) { printf("[DIAG] native_json: variable is not VAL_OBJECT, vtype=%d\n", v->vtype); return; }
+
+    /* v1.0.0 gotcha-fix: variable holding a MAP / OBJECT_LITERAL — serialize
+     * via te_json instead of falling through to the class-object path. */
+    if (v->type && (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0)) {
+        ASTNode *mapNode = (ASTNode *)(intptr_t)v->value.object_value;
+        TeBuf b; tebuf_init(&b);
+        te_json_emit_node(&b, mapNode);
+        ASTNode *result_node = create_ast_leaf("STRING", 0, b.p ? b.p : "{}", NULL);
+        add_or_update_variable("__ret__", result_node);
+        free_ast(result_node);
+        if (b.p) free(b.p);
+        return;
+    }
+
     ObjectNode *obj = v->value.object_value;
     if (!obj || !obj->class) return;
+
     
     char *json_buffer = malloc(4096);
     strcpy(json_buffer, "{");
@@ -411,6 +440,29 @@ void native_xml(ASTNode *arg) {
             add_or_update_variable("__ret__", result_node);
             free_ast(result_node);
         }
+        return;
+    }
+
+    /* v1.0.0 gotcha-fix: `return xml({...})` inline object literal. Emit each
+     * key/value pair as <key>value</key> wrapped in <root>. Must run before
+     * the var_id resolution below (which would mistake the first KV key for a
+     * variable name via arg->left->id). */
+    if (arg->type && (strcmp(arg->type, "OBJECT_LITERAL") == 0 || strcmp(arg->type, "MAP") == 0)) {
+        TeBuf b; tebuf_init(&b);
+        tebuf_puts(&b, "<root>");
+        for (ASTNode *kv = arg->left; kv; kv = kv->right) {
+            const char *key = kv->id ? kv->id : "item";
+            char *val = get_node_string(kv->left);
+            tebuf_putc(&b, '<'); tebuf_puts(&b, key); tebuf_putc(&b, '>');
+            tebuf_puts(&b, val ? val : "");
+            tebuf_puts(&b, "</"); tebuf_puts(&b, key); tebuf_putc(&b, '>');
+            if (val) free(val);
+        }
+        tebuf_puts(&b, "</root>");
+        ASTNode *result_node = create_ast_leaf("STRING", 0, b.p ? b.p : "<root></root>", NULL);
+        add_or_update_variable("__ret__", result_node);
+        free_ast(result_node);
+        if (b.p) free(b.p);
         return;
     }
 
@@ -655,7 +707,7 @@ void native_concat(ASTNode *arg) {
             current_len += len;
             free(s_temp);
         }
-        curr = curr->right; // Next argument
+        curr = curr->next; // Next argument (gotcha #1: step via ->next)
     }
     
     ASTNode *result_node = create_ast_leaf("STRING", 0, result, NULL);
@@ -847,7 +899,7 @@ static void native_request_params_all(ASTNode *arg) {
 static void native_response_status(ASTNode *arg) { g_resp_status = te_arg_int(arg, 200); te_set_ret_int(g_resp_status); }
 static void native_response_header(ASTNode *arg) {
     const char *k = te_arg_string(arg);
-    const char *v = arg && arg->right ? te_arg_string(arg->right) : NULL;
+    const char *v = arg && arg->next ? te_arg_string(arg->next) : NULL; /* gotcha #1: 2nd arg via ->next */
     if (k) te_kv_add(&g_resp_headers, k, v ? v : "");
     te_set_ret_int(0);
 }
@@ -870,7 +922,7 @@ static void native_ws_send(ASTNode *arg) {
 }
 static void native_ws_broadcast(ASTNode *arg) {
     const char *ch = te_arg_string(arg);
-    const char *m  = arg && arg->right ? te_arg_string(arg->right) : NULL;
+    const char *m  = arg && arg->next ? te_arg_string(arg->next) : NULL; /* gotcha #1: 2nd arg via ->next */
     int rc = (ch && m) ? te_ws_broadcast(ch, m) : 0;
     te_set_ret_int(rc);
 }
@@ -1692,7 +1744,7 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
                     }
                     add_or_update_variable(p->name, vn);
                     p = p->next;
-                    arg = arg->right;
+                    arg = arg->next; /* gotcha #1: step ctor args via ->next */
                 }
                 call_method(obj_clonado, "__constructor");
                 /* Ensure constructor side-effects (like return_flag) don't block later AST execution */
@@ -2482,12 +2534,18 @@ ASTNode* append_case_clause(ASTNode* list, ASTNode* case_clause) {
 // ====================== MANEJO DE LISTAS ======================
 
 ASTNode *add_statement(ASTNode *list, ASTNode *stmt) {
+    /* v0.0.12 gotcha #1: argument lists (expression_list) are chained on the
+     * canonical `->next` field so operator/BINOP arguments — which use `->right`
+     * for their own right operand — are never corrupted. ALL arg-stepping
+     * consumers have been migrated to walk `->next`. We do NOT touch `->right`
+     * here: the list head is still reachable via the parent's left/right slot,
+     * and inter-argument links live exclusively on `->next`. */
     if (!list) return stmt;
     ASTNode *current = list;
-    while (current->right) {
-        current = current->right;
+    while (current->next) {
+        current = current->next;
     }
-    current->right = stmt;
+    current->next = stmt;
     return list;
 }
 
@@ -3747,7 +3805,7 @@ static void interpret_for_in(ASTNode *node) {
                 // Fallback for objects that might store pointer in value field
                 obj = (ObjectNode *)(intptr_t)item->value;
             }
-            if (strcmp(node->id, list_expr->id) != 0) {
+            if (!list_expr->id || strcmp(node->id, list_expr->id) != 0) {
                 ASTNode *wrapper = calloc(1, sizeof(ASTNode));
                 wrapper->type = strdup("OBJECT");
                 wrapper->id = strdup(node->id);
@@ -3758,9 +3816,16 @@ static void interpret_for_in(ASTNode *node) {
                 /* debug print removed */
                 add_or_update_variable(node->id, wrapper);
             } 
-            /* debug print removed */
-            interpret_ast(node->right);
+        } else {
+            /* Gotcha #6: items escalares (NUMBER/STRING/FLOAT/...) — ligar la
+             * variable del bucle y ejecutar el cuerpo igual que para objetos.
+             * Antes el cuerpo SOLO corría dentro del branch OBJECT, así que
+             * `for x in nums { total = total + x }` se saltaba todas las
+             * iteraciones y el acumulador externo nunca se actualizaba. */
+            add_or_update_variable(node->id, item);
         }
+        /* debug print removed */
+        interpret_ast(node->right);
         if (break_flag) { break_flag = 0; break; }
         if (continue_flag) { continue_flag = 0; continue; }
         if (throw_flag || return_flag) break;
@@ -4487,6 +4552,31 @@ static void interpret_call_func(ASTNode *node) {
 static void interpret_call_method(ASTNode *node) {
     ASTNode *objNode = node->left;
 
+    /* ===== Gotcha #2: método sobre literal — `[1,2,3].map(...)`, `{...}.keys()`.
+     * Si el receptor es un literal LIST/OBJECT_LITERAL no tiene `id`, así que la
+     * resolución `find_variable(objNode->id)` da NULL y ningún dispatcher LIST/MAP
+     * corre (silenciosamente no hace nada / null-deref). Materializamos el literal
+     * en una variable temporal y reescribimos node->left a un ID, igual que el
+     * manejador de llamadas encadenadas más abajo. ===== */
+    if (objNode && objNode->type && !objNode->id &&
+        (strcmp(objNode->type, "LIST") == 0 || strcmp(objNode->type, "OBJECT_LITERAL") == 0)) {
+        static int _lit_seq = 0;
+        char tmp[40];
+        snprintf(tmp, sizeof(tmp), "__lit_%d__", _lit_seq++);
+        add_or_update_variable(tmp, objNode);
+        /* add_or_update_variable guarda OBJECT_LITERAL con type "OBJECT_LITERAL",
+         * pero los dispatchers de MAP exigen type "MAP" (igual que declare_variable). */
+        if (strcmp(objNode->type, "OBJECT_LITERAL") == 0) {
+            Variable *tv = find_variable(tmp);
+            if (tv && tv->type) { free(tv->type); tv->type = strdup("MAP"); }
+        }
+        ASTNode *id = (ASTNode*)calloc(1, sizeof(ASTNode));
+        id->type = strdup("ID");
+        id->id = strdup(tmp);
+        node->left = id;
+        objNode = id;
+    }
+
     /* ===== v0.0.11-pre: DataFrame analytics fast-path =====
      * Si el receptor es un LIST con DataFrame columnar adjunto, intentamos
      * despachar a sum/min/max/count/group_sum/print directamente sobre las
@@ -4912,7 +5002,7 @@ static void interpret_call_method(ASTNode *node) {
                             }
                             add_or_update_variable(p->name, vn);
                             p = p->next;
-                            carg = carg->right;
+                            carg = carg->next; /* gotcha #1: step ctor args via ->next */
                         }
                         call_method(obj_clone, "__constructor");
                         return_flag = 0;
@@ -5162,7 +5252,7 @@ static void interpret_call_method(ASTNode *node) {
                         }
                     }
                     cur_p = cur_p->next;
-                    cur_a = cur_a->right;
+                    cur_a = cur_a->next; /* gotcha #1: step args via ->next */
                 }
                 /* args bound directly; skip slow path */
                 goto fastcall_args_done;
@@ -5190,7 +5280,7 @@ static void interpret_call_method(ASTNode *node) {
         }
         add_or_update_variable(p->name, vn);
         p   = p->next;
-        arg = arg->right;
+        arg = arg->next; /* gotcha #1: step args via ->next */
     }
 fastcall_args_done:
 
@@ -5473,7 +5563,7 @@ static void interpret_call_method_alone(ASTNode *node) {
                 }
                 add_or_update_variable(p_class->name, vn);
                 p_class   = p_class->next;
-                arg_class = arg_class->right;
+                arg_class = arg_class->next; /* gotcha #1: step args via ->next */
             }
             debugger_push_frame(m->name, node);
             interpret_ast(m->body);
@@ -5520,7 +5610,7 @@ static void interpret_call_method_alone(ASTNode *node) {
         }
         add_or_update_variable(p_global->name, vn);
         p_global   = p_global->next;
-        arg_global = arg_global->right;
+        arg_global = arg_global->next; /* gotcha #1: step args via ->next */
     }
     debugger_push_frame(gm->name, node);
     interpret_ast(gm->body);
@@ -5686,7 +5776,7 @@ static void interpret_call_method_alone(ASTNode *node) {
             }
             add_or_update_variable(p->name, vn);
             p   = p->next;
-            arg = arg->right;
+            arg = arg->next; /* gotcha #1: step args via ->next */
         }
         debugger_push_frame(gm->name, node);
         interpret_ast(gm->body);
@@ -5776,7 +5866,7 @@ static void interpret_call_method_alone(ASTNode *node) {
         }
         add_or_update_variable(p->name, vn);
         p = p->next;
-        arg = arg->right;
+        arg = arg->next; /* gotcha #1: step args via ->next */
     }
     debugger_push_frame(m->name, NULL);
     interpret_ast(m->body);
@@ -6200,7 +6290,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 add_or_update_variable(p->name, vn);
                 if (g_debug_mode) fprintf(stderr, "[DEBUG] Constructor param '%s' set\n", p->name);
                 p   = p->next;
-                arg = arg->right;
+                arg = arg->next; /* gotcha #1: step ctor args via ->next */
             }
             if (g_debug_mode) fprintf(stderr, "[DEBUG] Calling __constructor for class '%s'\n", var->value.object_value->class->name);
             call_method(var->value.object_value, "__constructor");
@@ -6428,7 +6518,7 @@ ASTNode* call_lambda(ASTNode *lambda, ASTNode *argsList) {
                         valNode = create_ast_leaf("FLOAT", 0, buf, NULL);
                     }
                 }
-                cur_arg = cur_arg->right ? cur_arg->right : cur_arg->next;
+                cur_arg = cur_arg->next ? cur_arg->next : cur_arg->right; /* gotcha #1: prefer ->next (binop args); ->right is reduce's manual acc->right=item link */
             } else {
                 valNode = create_ast_leaf("NULL", 0, NULL, NULL);
             }

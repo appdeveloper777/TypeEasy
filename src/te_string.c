@@ -101,7 +101,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
      *      parse_int, parse_float, char_at, char_code ---- */
     if (strcmp(m, "replace") == 0) {
         ASTNode *arg = node->right;
-        ASTNode *arg2 = arg ? arg->right : NULL;
+        ASTNode *arg2 = arg ? arg->next : NULL; /* gotcha #1: 2nd arg via ->next */
         char *t1 = arg  ? get_node_string(arg)  : NULL;
         char *t2 = arg2 ? get_node_string(arg2) : NULL;
         const char *needle = t1 ? t1 : "";
@@ -134,7 +134,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
     }
     if (strcmp(m, "substr") == 0) {
         ASTNode *arg = node->right;
-        ASTNode *arg2 = arg ? arg->right : NULL;
+        ASTNode *arg2 = arg ? arg->next : NULL; /* gotcha #1: 2nd arg via ->next */
         int start = arg  ? (int)evaluate_expression(arg)  : 0;
         int slen = (int)strlen(s);
         int len  = arg2 ? (int)evaluate_expression(arg2) : slen - start;

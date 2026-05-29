@@ -1628,7 +1628,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
     if (!df || !node || !node->id) return 0;
     const char *m = node->id;
     ASTNode *arg1 = node->right;
-    ASTNode *arg2 = arg1 ? arg1->right : NULL;
+    ASTNode *arg2 = arg1 ? arg1->next : NULL; /* gotcha #1: 2nd arg via ->next */
     const char *s1 = (arg1 && arg1->str_value) ? arg1->str_value : NULL;
     const char *s2 = (arg2 && arg2->str_value) ? arg2->str_value : NULL;
 

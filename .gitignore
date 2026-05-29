@@ -65,3 +65,4 @@ src/mysql/
 # Proyecto chess/ — app demo separada, no es parte del core TypeEasy.
 # Se versiona en su propio repo git local dentro de chess/.
 chess/
+.github_issue_v0.0.13.md

@@ -20,7 +20,7 @@ int te_math_method_dispatch(ASTNode *node, ASTNode *objNode) {
 
     ASTNode *arg = node->right;
     double a = arg ? evaluate_expression(arg) : 0;
-    double b = (arg && arg->right) ? evaluate_expression(arg->right) : 0;
+    double b = (arg && arg->next) ? evaluate_expression(arg->next) : 0; /* gotcha #1: 2nd arg via ->next */
     double res = 0;
     const char *m = node->id;
     if      (strcmp(m, "sqrt") == 0)  res = sqrt(a);

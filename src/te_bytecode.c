@@ -455,7 +455,7 @@ static int bc_compile(ASTNode *node, Instr *out, int *pos, int max) {
         /* Count args */
         int n_args = 0;
         ASTNode *a = node->right;
-        while (a) { n_args++; a = a->right; }
+        while (a) { n_args++; a = a->next; } /* gotcha #1: step args via ->next */
         if (n_args != n_params) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: n_args=%d n_params=%d\n", n_args, n_params); return 0; }
 
         /* Emit args (leaves only) */
@@ -482,7 +482,7 @@ static int bc_compile(ASTNode *node, Instr *out, int *pos, int max) {
             } else {
                 return 0;
             }
-            a = a->right;
+            a = a->next; /* gotcha #1: step args via ->next */
         }
 
         /* Build site (cached param Variable*s) */

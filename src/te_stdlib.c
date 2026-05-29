@@ -162,7 +162,7 @@ int te_builtin_dispatch(ASTNode *node) {
     /* CALL_FUNC stores args on node->left; METHOD_CALL_ALONE on node->right.
      * Pick the non-null side. */
     ASTNode *a0 = node->left ? node->left : node->right;
-    ASTNode *a1 = a0 ? a0->right : NULL;
+    ASTNode *a1 = a0 ? a0->next : NULL; /* gotcha #1: 2nd arg via ->next */
 
     /* Fase 1: registry first. New builtins (and plugins loaded via
      * load_native) live in the hash table; the legacy if-chain below
@@ -205,7 +205,7 @@ int te_builtin_dispatch(ASTNode *node) {
         else if (a0 && a1) {
             start = (int)evaluate_expression(a0);
             end   = (int)evaluate_expression(a1);
-            if (a1->right) step = (int)evaluate_expression(a1->right);
+            if (a1->next) step = (int)evaluate_expression(a1->next); /* gotcha #1: 3rd arg via ->next */
         }
         if (step == 0) step = 1;
         ASTNode *list = create_list_node(NULL);
@@ -485,7 +485,7 @@ int te_builtin_dispatch(ASTNode *node) {
         static struct { uint64_t hash; int count; long window_start; } buckets[1024];
         char *key = a0 ? get_node_string(a0) : strdup("");
         int max  = a1 ? (int)evaluate_expression(a1) : 60;
-        ASTNode *a2 = a1 ? a1->right : NULL;
+        ASTNode *a2 = a1 ? a1->next : NULL; /* gotcha #1: 3rd arg via ->next */
         int win  = a2 ? (int)evaluate_expression(a2) : 60;
         if (max <= 0) max = 1;
         if (win <= 0) win = 1;
@@ -530,7 +530,7 @@ int te_builtin_dispatch(ASTNode *node) {
         /* http_post(url, body) | http_post(url, body, headers) */
         char *url  = a0 ? get_node_string(a0) : NULL;
         char *post = a1 ? get_node_string(a1) : NULL;
-        ASTNode *a2 = a1 ? a1->right : NULL;
+        ASTNode *a2 = a1 ? a1->next : NULL; /* gotcha #1: 3rd arg via ->next */
         char *hdrs = a2 ? get_node_string(a2) : NULL;
         char *body = url ? te_http_do("POST", url, post ? post : "", hdrs) : NULL;
         if (url) free(url);
@@ -547,8 +547,8 @@ int te_builtin_dispatch(ASTNode *node) {
          * http_request(method, url, body, headers) */
         char *method = a0 ? get_node_string(a0) : NULL;
         char *url    = a1 ? get_node_string(a1) : NULL;
-        ASTNode *a2  = a1 ? a1->right : NULL;
-        ASTNode *a3  = a2 ? a2->right : NULL;
+        ASTNode *a2  = a1 ? a1->next : NULL; /* gotcha #1: 3rd arg via ->next */
+        ASTNode *a3  = a2 ? a2->next : NULL; /* gotcha #1: 4th arg via ->next */
         char *post   = a2 ? get_node_string(a2) : NULL;
         char *hdrs   = a3 ? get_node_string(a3) : NULL;
         char *body   = (method && url) ? te_http_do(method, url, post, hdrs) : NULL;
@@ -632,7 +632,7 @@ static int adapt_env(ASTNode *node, ASTNode *args) {
         add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, val, NULL));
     } else {
         /* unset/empty: use the optional 2nd arg as default, else "" */
-        ASTNode *a1 = args ? args->right : NULL;
+        ASTNode *a1 = args ? args->next : NULL; /* gotcha #1: 2nd arg via ->next */
         char *def = a1 ? get_node_string(a1) : NULL;
         add_or_update_variable("__ret__",
             create_ast_leaf("STRING", 0, def ? def : "", NULL));
@@ -769,7 +769,7 @@ static int adapt_date_format(ASTNode *node, ASTNode *args) {
     (void)node;
     /* NOTE: evaluate_native_args mutates AST permanently — skip it. */
     time_t t = (time_t)(args ? (int)evaluate_expression(args) : 0);
-    ASTNode *a1 = args ? args->right : NULL;
+    ASTNode *a1 = args ? args->next : NULL; /* gotcha #1: 2nd arg via ->next */
     char *fmt = a1 ? get_node_string(a1) : NULL;
     struct tm g;
 #if defined(_WIN32)
@@ -789,9 +789,9 @@ static int adapt_date_add(ASTNode *node, ASTNode *args) {
     (void)node;
     /* NOTE: evaluate_native_args mutates AST permanently — skip it. */
     char *s = args ? get_node_string(args) : NULL;
-    ASTNode *a1 = args ? args->right : NULL;
+    ASTNode *a1 = args ? args->next : NULL; /* gotcha #1: 2nd arg via ->next */
     char *unit = a1 ? get_node_string(a1) : NULL;
-    ASTNode *a2 = a1 ? a1->right : NULL;
+    ASTNode *a2 = a1 ? a1->next : NULL; /* gotcha #1: 3rd arg via ->next */
     long long n = a2 ? (long long)evaluate_expression(a2) : 0;
     time_t t = 0;
     int rc = te_parse_iso_utc(s, &t);
@@ -820,9 +820,9 @@ static int adapt_date_diff(ASTNode *node, ASTNode *args) {
     (void)node;
     /* NOTE: evaluate_native_args mutates AST permanently — skip it. */
     char *sa = args ? get_node_string(args) : NULL;
-    ASTNode *a1 = args ? args->right : NULL;
+    ASTNode *a1 = args ? args->next : NULL; /* gotcha #1: 2nd arg via ->next */
     char *sb = a1 ? get_node_string(a1) : NULL;
-    ASTNode *a2 = a1 ? a1->right : NULL;
+    ASTNode *a2 = a1 ? a1->next : NULL; /* gotcha #1: 3rd arg via ->next */
     char *unit = a2 ? get_node_string(a2) : NULL;
     time_t ta = 0, tb = 0;
     int ra = te_parse_iso_utc(sa, &ta);
