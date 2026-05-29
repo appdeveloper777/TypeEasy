@@ -103,6 +103,49 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
             if (strcmp(fname, "map") == 0) {
                 ASTNode *result = create_list_node(NULL);
                 ASTNode *item = list->left;
+                /* v0.0.14 Paso 1 fast-path nivel 2: select(p => p.attr) /
+                 * select(p => p) construye los nodos escalares directo desde
+                 * el atributo, sin call_lambda (sin push/pop de scope, sin
+                 * tree-walk, sin strcmp del nombre por fila). Cae al path
+                 * general ante cualquier item no-OBJECT o atributo no escalar. */
+                if (fl.spec == SPEC_ATTR && fl.attr_name) {
+                    int ok = 1;
+                    ASTNode *it = item;
+                    while (it) {
+                        if (!it->type || strcmp(it->type, "OBJECT") != 0 || !it->extra) { ok = 0; break; }
+                        ObjectNode *obj = (ObjectNode*)it->extra;
+                        int idx = fl_attr_idx(&fl, obj);
+                        if (idx < 0) { ok = 0; break; }
+                        Variable *a = &obj->attributes[idx];
+                        ASTNode *node = NULL;
+                        if (a->vtype == VAL_INT) {
+                            /* Igual que build_item_from_value: tipo "NUMBER" + ->value. */
+                            node = create_ast_leaf_number("NUMBER", (int)a->value.int_value, NULL, NULL);
+                        } else if (a->vtype == VAL_FLOAT) {
+                            char buf[64]; snprintf(buf, sizeof(buf), "%f", a->value.float_value);
+                            node = create_ast_leaf("FLOAT", 0, buf, NULL);
+                        } else if (a->vtype == VAL_STRING) {
+                            node = create_ast_leaf("STRING", 0,
+                                a->value.string_value ? a->value.string_value : "", NULL);
+                        } else { ok = 0; break; }
+                        te_list_append(result, node);
+                        it = it->next;
+                    }
+                    if (ok) {
+                        add_or_update_variable("__ret__", result);
+                        return 1;
+                    }
+                    /* fallthrough: descartar parcial y rehacer por el path general. */
+                    result = create_list_node(NULL);
+                } else if (fl.spec == SPEC_IDENT) {
+                    /* select(p => p): identidad, copia directa de cada item. */
+                    while (item) {
+                        te_list_append(result, build_item_from_value(item));
+                        item = item->next;
+                    }
+                    add_or_update_variable("__ret__", result);
+                    return 1;
+                }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     if (r) te_list_append(result, r);
@@ -586,6 +629,23 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
             if (strcmp(fname, "avgBy") == 0) {
                 ASTNode *item = list->left;
                 double acc = 0.0; int cnt = 0;
+                /* v0.0.14 Paso 3 COLUMNAR: avgBy(p => p.attr) = sum/count
+                 * reutilizando los kernels de columna (AVX2/OMP). */
+                if (fl.spec == SPEC_ATTR && fl.attr_name && list->col_cache) {
+                    TeColCache *cc = (TeColCache*)list->col_cache;
+                    int aidx = te_class_attr_idx(cc->cls, fl.attr_name);
+                    if (aidx >= 0) {
+                        long long itotal = 0; double dtotal = 0.0; int is_int = 1;
+                        if (te_colcache_sum(cc, aidx, NULL, &itotal, &dtotal, &is_int)) {
+                            long long n = te_colcache_count(cc, NULL);
+                            double sum = is_int ? (double)itotal : dtotal;
+                            double res = n > 0 ? sum / (double)n : 0.0;
+                            char buf[64]; snprintf(buf, sizeof(buf), "%g", res);
+                            add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                            return 1;
+                        }
+                    }
+                }
                 if (fl.spec != SPEC_NONE) {
                     int ok = 1;
                     while (item) {
@@ -618,6 +678,22 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 ASTNode *best_item = NULL;
                 double best_key = 0.0;
                 int first = 1;
+                /* v0.0.14 Paso 3 COLUMNAR: minBy/maxBy(p => p.attr) localiza el
+                 * índice del extremo en la columna y devuelve items[idx]. Solo
+                 * para caches root (no lazy) con items[] poblado. */
+                if (fl.spec == SPEC_ATTR && fl.attr_name && list->col_cache) {
+                    TeColCache *cc = (TeColCache*)list->col_cache;
+                    if (!cc->lazy_mask && cc->items) {
+                        int aidx = te_class_attr_idx(cc->cls, fl.attr_name);
+                        if (aidx >= 0) {
+                            int bidx = -1;
+                            if (te_colcache_minmax(cc, aidx, want_max, NULL, &bidx) && bidx >= 0) {
+                                add_or_update_variable("__ret__", build_item_from_value(cc->items[bidx]));
+                                return 1;
+                            }
+                        }
+                    }
+                }
                 if (fl.spec != SPEC_NONE) {
                     int ok = 1;
                     while (item) {

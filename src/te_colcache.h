@@ -43,7 +43,12 @@ typedef enum {
     SPEC_ATTR,
     SPEC_CMP_GT, SPEC_CMP_LT, SPEC_CMP_GE, SPEC_CMP_LE, SPEC_CMP_EQ, SPEC_CMP_NE,
     SPEC_MOD_K,
-    SPEC_CMP_EQ_STR, SPEC_CMP_NE_STR
+    SPEC_CMP_EQ_STR, SPEC_CMP_NE_STR,
+    /* v0.0.14 Paso 2: aritmética simple sobre atributos del parámetro.
+     *   ATTR_ATTR: p => p.a OP p.b  (segundo atributo en attr_name2)
+     *   ATTR_K:    p => p.a OP k    (constante en k / k_d) */
+    SPEC_MUL_ATTR_ATTR, SPEC_ADD_ATTR_ATTR, SPEC_SUB_ATTR_ATTR,
+    SPEC_MUL_ATTR_K,    SPEC_ADD_ATTR_K,    SPEC_SUB_ATTR_K
 } LambdaSpec;
 
 typedef struct {
@@ -55,6 +60,10 @@ typedef struct {
     const char *k_str;          /* SPEC_CMP_EQ_STR/NE_STR: borrowed from AST */
     ClassNode  *cached_class;
     int         cached_idx;
+    /* v0.0.14 Paso 2: segundo atributo para specs ATTR_ATTR. */
+    const char *attr_name2;     /* borrowed from AST, do not free */
+    ClassNode  *cached_class2;
+    int         cached_idx2;
 } FastLambda;
 
 LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out);
@@ -107,6 +116,43 @@ static inline const char* fl_read_attr_str(FastLambda *fl, ASTNode *item) {
     return NULL;
 }
 
+/* v0.0.14 Paso 2: lector del SEGUNDO atributo (specs ATTR_ATTR). Idéntico a
+ * fl_attr_idx/fl_read_attr pero usando attr_name2/cached_class2/cached_idx2. */
+static inline int fl_attr_idx2(FastLambda *fl, ObjectNode *obj) {
+    if (!obj || !obj->class) return -1;
+    if (fl->cached_class2 == obj->class && fl->cached_idx2 >= 0) return fl->cached_idx2;
+    for (int i = 0; i < obj->class->attr_count; i++) {
+        const char *nm = obj->class->attributes[i].id;
+        if (nm && fl->attr_name2 && strcmp(nm, fl->attr_name2) == 0) {
+            fl->cached_class2 = obj->class;
+            fl->cached_idx2 = i;
+            return i;
+        }
+    }
+    return -1;
+}
+
+static inline int fl_read_attr2(FastLambda *fl, ASTNode *item, double *out_d, int *out_is_int) {
+    if (!item || !item->type) return 0;
+    if (strcmp(item->type, "OBJECT") != 0 || !item->extra) return 0;
+    ObjectNode *obj = (ObjectNode*)item->extra;
+    int idx = fl_attr_idx2(fl, obj);
+    if (idx < 0) return 0;
+    Variable *a = &obj->attributes[idx];
+    if (a->vtype == VAL_INT)   { *out_d = (double)a->value.int_value; *out_is_int = 1; return 1; }
+    if (a->vtype == VAL_FLOAT) { *out_d = a->value.float_value;       *out_is_int = 0; return 1; }
+    if (a->vtype == VAL_STRING && a->value.string_value) {
+        char *end = NULL;
+        double d = strtod(a->value.string_value, &end);
+        if (end && end != a->value.string_value) {
+            *out_d = d;
+            *out_is_int = (d == (double)(long long)d);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static inline int fast_eval(FastLambda *fl, ASTNode *item, double *out_d, int *out_is_int) {
     if (fl->spec == SPEC_NONE) return 0;
     if (fl->spec == SPEC_IDENT) {
@@ -129,6 +175,29 @@ static inline int fast_eval(FastLambda *fl, ASTNode *item, double *out_d, int *o
     double av; int av_is_int;
     if (!fl_read_attr(fl, item, &av, &av_is_int)) return 0;
     if (fl->spec == SPEC_ATTR) { *out_d = av; *out_is_int = av_is_int; return 1; }
+    /* v0.0.14 Paso 2: aritmética attr OP attr. */
+    if (fl->spec == SPEC_MUL_ATTR_ATTR || fl->spec == SPEC_ADD_ATTR_ATTR ||
+        fl->spec == SPEC_SUB_ATTR_ATTR) {
+        double bv; int bv_is_int;
+        if (!fl_read_attr2(fl, item, &bv, &bv_is_int)) return 0;
+        double r = (fl->spec == SPEC_MUL_ATTR_ATTR) ? av * bv
+                 : (fl->spec == SPEC_ADD_ATTR_ATTR) ? av + bv
+                 :                                    av - bv;
+        *out_d = r;
+        *out_is_int = (av_is_int && bv_is_int && r == (double)(long long)r);
+        return 1;
+    }
+    /* v0.0.14 Paso 2: aritmética attr OP constante. */
+    if (fl->spec == SPEC_MUL_ATTR_K || fl->spec == SPEC_ADD_ATTR_K ||
+        fl->spec == SPEC_SUB_ATTR_K) {
+        double kk = fl->k_is_float ? fl->k_d : (double)fl->k;
+        double r = (fl->spec == SPEC_MUL_ATTR_K) ? av * kk
+                 : (fl->spec == SPEC_ADD_ATTR_K) ? av + kk
+                 :                                  av - kk;
+        *out_d = r;
+        *out_is_int = (av_is_int && !fl->k_is_float && r == (double)(long long)r);
+        return 1;
+    }
     if (fl->spec == SPEC_MOD_K) {
         if (fl->k == 0) return 0;
         *out_d = (double)((long long)av % fl->k);
@@ -202,6 +271,12 @@ int        te_colcache_eval_pred(TeColCache *c, int attr_idx,
 int        te_colcache_sum(TeColCache *c, int attr_idx, const char *mask,
                            long long *out_i, double *out_d, int *out_is_int);
 long long  te_colcache_count(TeColCache *c, const char *mask);
+/* v0.0.14 Paso 3: \u00edndice de fila con el valor m\u00ednimo (want_max=0) o m\u00e1ximo
+ * (want_max=1) en una columna INT/FLOAT. mask opcional. Devuelve 1 y setea
+ * *out_idx (\u00edndice en el espacio de filas de `c`). No soporta vistas lazy
+ * (requiere items[] del caller para devolver el objeto). */
+int        te_colcache_minmax(TeColCache *c, int attr_idx, int want_max,
+                              const char *mask, int *out_idx);
 
 #ifdef __cplusplus
 }

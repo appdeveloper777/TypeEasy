@@ -446,6 +446,9 @@ LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out) {
     out->attr_name = NULL;
     out->k = 0; out->k_d = 0.0; out->k_is_float = 0;
     out->k_str = NULL;
+    out->attr_name2 = NULL;
+    out->cached_class2 = NULL;
+    out->cached_idx2 = -1;
     if (!te_fastpath_enabled()) return SPEC_NONE;
     if (!fn || !fn->left) return SPEC_NONE;
     if (!fn->id || !fn->id[0]) return SPEC_NONE;
@@ -510,6 +513,43 @@ LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out) {
                 out->attr_name = body->left->right->id;
                 out->k_str = R->str_value;
                 return ss;
+            }
+        }
+    }
+
+    /* v0.0.14 Paso 2: aritmética simple sobre atributos del parámetro.
+     *   p => p.a * p.b   (ATTR_ATTR — segundo atributo en attr_name2)
+     *   p => p.a * 2     (ATTR_K   — constante en k / k_d)
+     * Cubre el caso analítico clásico (precio*cantidad) que antes caía a
+     * call_lambda (nivel 3); ahora habilita el fast-path nivel 2. */
+    if (body->type && body->left && body->right) {
+        LambdaSpec sa = SPEC_NONE, sk = SPEC_NONE;
+        if      (strcmp(body->type, "MUL") == 0) { sa = SPEC_MUL_ATTR_ATTR; sk = SPEC_MUL_ATTR_K; }
+        else if (strcmp(body->type, "ADD") == 0) { sa = SPEC_ADD_ATTR_ATTR; sk = SPEC_ADD_ATTR_K; }
+        else if (strcmp(body->type, "SUB") == 0) { sa = SPEC_SUB_ATTR_ATTR; sk = SPEC_SUB_ATTR_K; }
+        if (sa != SPEC_NONE && fl_is_attr_of_param(body->left, params, plen)) {
+            ASTNode *R = body->right;
+            if (fl_is_attr_of_param(R, params, plen)) {
+                out->spec = sa;
+                out->attr_name  = body->left->right->id;
+                out->attr_name2 = R->right->id;
+                return sa;
+            }
+            if (R->type && (strcmp(R->type, "NUMBER") == 0 || strcmp(R->type, "INT") == 0)) {
+                out->spec = sk;
+                out->attr_name = body->left->right->id;
+                out->k = (long long)R->value;
+                out->k_d = (double)R->value;
+                out->k_is_float = 0;
+                return sk;
+            }
+            if (R->type && strcmp(R->type, "FLOAT") == 0 && R->str_value) {
+                out->spec = sk;
+                out->attr_name = body->left->right->id;
+                out->k_d = atof(R->str_value);
+                out->k = (long long)out->k_d;
+                out->k_is_float = 1;
+                return sk;
             }
         }
     }
@@ -734,4 +774,40 @@ long long te_colcache_count(TeColCache *c, const char *mask) {
 #endif
     for (int i = 0; i < n; i++) if (mask[i]) total++;
     return total;
+}
+
+int te_colcache_minmax(TeColCache *c, int attr_idx, int want_max,
+                       const char *mask, int *out_idx) {
+    if (!c || attr_idx < 0 || attr_idx >= c->nattr || !out_idx) return 0;
+    /* No soporta vistas lazy: el caller necesita items[] (en el espacio de
+     * filas de `c`) para devolver el objeto correspondiente. */
+    if (c->lazy_mask) return 0;
+    int n = c->n_rows;
+    if (n <= 0) return 0;
+    int kind = c->kinds[attr_idx];
+    int best = -1;
+    if (kind == 0) {
+        const int64_t *col = c->int_cols[attr_idx];
+        if (!col) return 0;
+        int64_t bv = 0;
+        for (int i = 0; i < n; i++) {
+            if (mask && !mask[i]) continue;
+            int64_t v = col[i];
+            if (best < 0 || (want_max ? (v > bv) : (v < bv))) { bv = v; best = i; }
+        }
+    } else if (kind == 1) {
+        const double *col = c->flt_cols[attr_idx];
+        if (!col) return 0;
+        double bv = 0.0;
+        for (int i = 0; i < n; i++) {
+            if (mask && !mask[i]) continue;
+            double v = col[i];
+            if (best < 0 || (want_max ? (v > bv) : (v < bv))) { bv = v; best = i; }
+        }
+    } else {
+        return 0;
+    }
+    if (best < 0) return 0;
+    *out_idx = best;
+    return 1;
 }
