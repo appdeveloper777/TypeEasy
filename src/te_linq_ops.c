@@ -137,6 +137,34 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     }
                     /* fallthrough: descartar parcial y rehacer por el path general. */
                     result = create_list_node(NULL);
+                } else if (fl.spec == SPEC_MUL_ATTR_ATTR || fl.spec == SPEC_ADD_ATTR_ATTR ||
+                           fl.spec == SPEC_SUB_ATTR_ATTR || fl.spec == SPEC_MUL_ATTR_K ||
+                           fl.spec == SPEC_ADD_ATTR_K || fl.spec == SPEC_SUB_ATTR_K) {
+                    /* v0.0.14 Paso 1+2 fast-path nivel 2: proyección aritmética
+                     * select(p => p.a * p.b) / select(p => p.a + K). Reutiliza
+                     * fast_eval (sin call_lambda). out_is_int decide NUMBER vs
+                     * FLOAT, igual que build_item_from_value. */
+                    int ok = 1;
+                    ASTNode *it = item;
+                    while (it) {
+                        double rv; int rv_is_int;
+                        if (!fast_eval(&fl, it, &rv, &rv_is_int)) { ok = 0; break; }
+                        ASTNode *node;
+                        if (rv_is_int) {
+                            node = create_ast_leaf_number("NUMBER", (int)rv, NULL, NULL);
+                        } else {
+                            char buf[64]; snprintf(buf, sizeof(buf), "%f", rv);
+                            node = create_ast_leaf("FLOAT", 0, buf, NULL);
+                        }
+                        te_list_append(result, node);
+                        it = it->next;
+                    }
+                    if (ok) {
+                        add_or_update_variable("__ret__", result);
+                        return 1;
+                    }
+                    /* fallthrough: descartar parcial y rehacer por path general. */
+                    result = create_list_node(NULL);
                 } else if (fl.spec == SPEC_IDENT) {
                     /* select(p => p): identidad, copia directa de cada item. */
                     while (item) {
