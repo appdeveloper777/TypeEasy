@@ -3040,6 +3040,178 @@ ASTNode* map_find_pair(ASTNode *map, const char *key) {
 
 /* Fase 3a: Expand string interpolation. Input contains {var} placeholders.
    Special chars: \1 = literal '{', \2 = literal '}'. Returns malloc'd string. */
+/* ============================================================
+ * Mini-evaluador de expresiones para interpolación ${expr} / {expr}
+ * ------------------------------------------------------------
+ * Parser recursivo-descendente que construye un AST temporal y lo
+ * evalúa reutilizando la semántica del intérprete (variables, acceso
+ * a miembros, concatenación, aritmética). Soporta:
+ *   números, strings, identificadores, acceso a miembros (a.b.c),
+ *   paréntesis, unario '-', y operadores + - * / %.
+ * Los nodos transitorios se marcan BC_NOT_COMPILABLE para que el
+ * fast-path de bytecode no los registre (bc_register_node) — así es
+ * seguro liberarlos con free_ast sin dejar punteros colgantes en el
+ * registro global que bc_invalidate_all recorre entre requests.
+ * ============================================================ */
+#define TEI_SP(c)    ((c)==' '||(c)=='\t')
+#define TEI_DIGIT(c) ((c)>='0'&&(c)<='9')
+#define TEI_ALPHA(c) ((((c)>='a')&&((c)<='z'))||(((c)>='A')&&((c)<='Z'))||(c)=='_')
+#define TEI_ALNUM(c) (TEI_ALPHA(c)||TEI_DIGIT(c))
+
+static ASTNode *tei_leaf(char *type, int value, char *str_value, char *id) {
+    ASTNode *n = create_ast_leaf(type, value, str_value, id);
+    if (n) n->bc = BC_NOT_COMPILABLE;
+    return n;
+}
+static ASTNode *tei_node(char *type, ASTNode *l, ASTNode *r) {
+    ASTNode *n = create_ast_node(type, l, r);
+    if (n) n->bc = BC_NOT_COMPILABLE;
+    return n;
+}
+
+static ASTNode *tei_parse_expr(const char **pp);  /* fwd */
+
+static ASTNode *tei_parse_primary(const char **pp) {
+    const char *p = *pp;
+    while (TEI_SP(*p)) p++;
+    if (*p == '(') {
+        p++;
+        ASTNode *e = tei_parse_expr(&p);
+        while (TEI_SP(*p)) p++;
+        if (*p == ')') p++;
+        *pp = p;
+        return e;
+    }
+    if (*p == '"' || *p == '\'') {
+        char q = *p++;
+        const char *start = p;
+        while (*p && *p != q) p++;
+        size_t len = (size_t)(p - start);
+        char *buf = (char*)malloc(len + 1);
+        memcpy(buf, start, len); buf[len] = '\0';
+        if (*p == q) p++;
+        ASTNode *n = tei_leaf("STRING", 0, buf, NULL);
+        free(buf);
+        *pp = p;
+        return n;
+    }
+    if (TEI_DIGIT(*p) || (*p == '.' && TEI_DIGIT(p[1]))) {
+        const char *start = p; int isfloat = 0;
+        while (TEI_DIGIT(*p)) p++;
+        if (*p == '.') { isfloat = 1; p++; while (TEI_DIGIT(*p)) p++; }
+        char numbuf[64]; size_t len = (size_t)(p - start);
+        if (len >= sizeof(numbuf)) len = sizeof(numbuf) - 1;
+        memcpy(numbuf, start, len); numbuf[len] = '\0';
+        *pp = p;
+        if (isfloat) return tei_leaf("FLOAT", 0, numbuf, NULL);
+        return tei_leaf("NUMBER", atoi(numbuf), NULL, NULL);
+    }
+    if (TEI_ALPHA(*p)) {
+        const char *start = p;
+        while (TEI_ALNUM(*p)) p++;
+        size_t len = (size_t)(p - start);
+        char *name = (char*)malloc(len + 1);
+        memcpy(name, start, len); name[len] = '\0';
+        ASTNode *node = tei_leaf("IDENTIFIER", 0, NULL, name);
+        free(name);
+        /* cadena de acceso a miembros: a.b.c → ACCESS_ATTR anidado */
+        while (TEI_SP(*p)) p++;
+        while (*p == '.') {
+            p++;
+            while (TEI_SP(*p)) p++;
+            const char *as = p;
+            while (TEI_ALNUM(*p)) p++;
+            size_t al = (size_t)(p - as);
+            char *attr = (char*)malloc(al + 1);
+            memcpy(attr, as, al); attr[al] = '\0';
+            ASTNode *anode = tei_leaf("IDENTIFIER", 0, NULL, attr);
+            free(attr);
+            node = tei_node("ACCESS_ATTR", node, anode);
+            while (TEI_SP(*p)) p++;
+        }
+        *pp = p;
+        return node;
+    }
+    *pp = p;
+    return NULL;
+}
+
+static ASTNode *tei_parse_factor(const char **pp) {
+    const char *p = *pp;
+    while (TEI_SP(*p)) p++;
+    if (*p == '-') {
+        p++;
+        ASTNode *operand = tei_parse_factor(&p);
+        *pp = p;
+        if (!operand) return NULL;
+        return tei_node("NEG", operand, NULL);
+    }
+    *pp = p;
+    return tei_parse_primary(pp);
+}
+
+static ASTNode *tei_parse_term(const char **pp) {
+    ASTNode *left = tei_parse_factor(pp);
+    if (!left) return NULL;
+    const char *p = *pp;
+    for (;;) {
+        while (TEI_SP(*p)) p++;
+        char op = *p;
+        if (op != '*' && op != '/' && op != '%') break;
+        p++;
+        *pp = p;
+        ASTNode *right = tei_parse_factor(pp);
+        p = *pp;
+        if (!right) break;
+        const char *t = (op == '*') ? "MUL" : (op == '/') ? "DIV" : "MOD";
+        left = tei_node((char*)t, left, right);
+    }
+    *pp = p;
+    return left;
+}
+
+static ASTNode *tei_parse_expr(const char **pp) {
+    ASTNode *left = tei_parse_term(pp);
+    if (!left) return NULL;
+    const char *p = *pp;
+    for (;;) {
+        while (TEI_SP(*p)) p++;
+        char op = *p;
+        if (op != '+' && op != '-') break;
+        p++;
+        *pp = p;
+        ASTNode *right = tei_parse_term(pp);
+        p = *pp;
+        if (!right) break;
+        left = tei_node((char*)(op == '+' ? "ADD" : "SUB"), left, right);
+    }
+    *pp = p;
+    return left;
+}
+
+/* Evalúa el contenido de un placeholder (`expr_src`, ya recortado) y
+ * devuelve una cadena malloc'd con el resultado. Para expresiones que
+ * resuelven a string usa get_node_string (concat/member access); para
+ * aritmética numérica usa evaluate_expression. Devuelve "" si no parsea. */
+static char *tei_eval_placeholder(const char *expr_src) {
+    const char *p = expr_src;
+    ASTNode *expr = tei_parse_expr(&p);
+    if (!expr) return strdup("");
+    char *res;
+    if (is_string_type(expr)) {
+        res = get_node_string(expr);
+        if (!res) res = strdup("");
+    } else {
+        double d = evaluate_expression(expr);
+        char tmp[64];
+        if (d == (double)(long long)d) snprintf(tmp, sizeof(tmp), "%lld", (long long)d);
+        else snprintf(tmp, sizeof(tmp), "%g", d);
+        res = strdup(tmp);
+    }
+    free_ast(expr);
+    return res;
+}
+
 char* expand_interp_string(const char *raw) {
     if (!raw) return strdup("");
     size_t cap = strlen(raw) + 64;
@@ -3074,6 +3246,24 @@ char* expand_interp_string(const char *raw) {
             memcpy(name, p+1, nlen); name[nlen] = '\0';
             char *s = name; while (*s == ' ') s++;
             char *e = s + strlen(s); while (e > s && (e[-1]==' ')) { e--; *e='\0'; }
+            /* ¿es un identificador simple (var directa)? Conserva el
+             * comportamiento histórico (incl. null) y todos los tests.
+             * Si no, trátalo como EXPRESIÓN: ${3*3}, {n*2}, {user.name},
+             * {"a"+b}, etc. (v0.0.15) */
+            int simple = (s[0] != '\0') && !TEI_DIGIT((unsigned char)s[0]);
+            if (simple) {
+                for (char *q = s; *q; q++) {
+                    if (!TEI_ALNUM((unsigned char)*q)) { simple = 0; break; }
+                }
+            }
+            if (!simple) {
+                char *res = tei_eval_placeholder(s);
+                size_t rl = res ? strlen(res) : 0;
+                while (len + rl + 1 >= cap) { cap *= 2; out = realloc(out, cap); }
+                if (res) { memcpy(out + len, res, rl); len += rl; free(res); }
+                p = end + 1;
+                continue;
+            }
             char buf[256]; const char *valstr = "";
             Variable *v = find_variable(s);
             if (v) {

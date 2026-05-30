@@ -37,13 +37,13 @@ endpoint {
     [HttpGet("/api/hola-interp/{nombre}")]
     HolaInterp() {
         let nombre = request_param("nombre");
-        return json({ mensaje: $"¡Hola {nombre}!" });                       // interpolación {}
+        return json({ mensaje: $"¡Hola {3* 3}!" });                       // interpolación {}
     }
 
     [HttpGet("/api/hola-dollar/{nombre}")]
     HolaDollar() {
         let nombre = request_param("nombre");
-        return json({ mensaje: $"¡Hola ${nombre}!" });                      // interpolación ${}
+        return json({ mensaje: $"¡Hola ${ 3 * 3}!" });                      // interpolación ${}
     }
 
     [HttpGet("/users/{id}")]

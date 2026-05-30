@@ -1,0 +1,10 @@
+// expect: a=9 b=11 c=12 d=2.5 e=1 f=-5 g=60 h=Hola Ana
+// v0.0.15: interpolación con expresiones reales dentro de ${...} y {...}:
+// aritmética, precedencia, paréntesis, módulo, unario, acceso a miembros y concat.
+class User { name : string; age : int; }
+var u = new User();
+u.name = "Ana";
+u.age = 30;
+var n = 5;
+var nombre = "Ana";
+println($"a=${3 * 3} b=${n * 2 + 1} c=${(n + 1) * 2} d=${10 / 4} e=${10 % 3} f=${-n} g=${u.age * 2} h=${\"Hola \" + nombre}");
