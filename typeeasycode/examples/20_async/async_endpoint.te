@@ -1,0 +1,42 @@
+// 20_async/async_endpoint.te
+// El runtime async (lang_call_async + await_all) funciona DENTRO de un
+// endpoint HTTP. Arranca con:
+//   bin/typeeasy.exe --api typeeasycode/examples/20_async/async_endpoint.te --port 8099
+// Prueba:  curl http://localhost:8099/parallel
+//
+// Notas (limitaciones preexistentes del interprete, NO del async):
+//  - json_stringify solo serializa valores LITERALES de un mapa; para devolver
+//    valores calculados construye el string con concat o devuelve el JSON crudo
+//    que ya produce el worker.
+
+endpoint {
+    // 3 workers que "duermen" 500 ms cada uno, lanzados en paralelo.
+    // Secuencial serian ~1500 ms; con await_all el total es ~500 ms.
+    [HttpGet("/parallel")]
+    parallel() {
+        let cmd = "python typeeasycode/examples/20_async/worker_slow.py";
+        let p1 = lang_spawn(cmd);
+        let p2 = lang_spawn(cmd);
+        let p3 = lang_spawn(cmd);
+
+        let t0 = now_ms();
+        let a = lang_call_async(p1, json_stringify({ "op": "sleep", "ms": 500, "payload": "uno" }));
+        let b = lang_call_async(p2, json_stringify({ "op": "sleep", "ms": 500, "payload": "dos" }));
+        let c = lang_call_async(p3, json_stringify({ "op": "sleep", "ms": 500, "payload": "tres" }));
+        let rs = await_all(a, b, c);
+        let t1 = now_ms();
+
+        let s0 = rs[0];
+        let s1 = rs[1];
+        let s2 = rs[2];
+        let d = t1 - t0;
+
+        lang_close(p1);
+        lang_close(p2);
+        lang_close(p3);
+
+        // Devolvemos los 3 JSON crudos del worker + el tiempo total medido.
+        let body = concat("{\"r0\":", s0, ",\"r1\":", s1, ",\"r2\":", s2, ",\"ms\":", d, "}");
+        return json(body);
+    }
+}

@@ -38,7 +38,7 @@ TypeEasy es un intérprete / framework experimental escrito principalmente en C 
 
 ✔️ **Crear endpoints REST** como FastAPI pero con sintaxis familiar (C# / TypeScript) <br>
 ✔️ **Crear tu propia sintaxis** adaptada perfectamente a tu dominio o equipo <br>
-✔️ **Hacer "bridge"** sin esfuerzo con otros lenguajes potentes como Java, Rust y C# <br>
+✔️ **Hacer "bridge"** sin esfuerzo con otros lenguajes potentes como Java, Rust y C# (vía subproceso + protocolo de líneas JSON) <br>
 ✔️ **Crear scripts** para integraciones y automatizaciones
 
 **¿Por qué TypeEasy?**
@@ -48,6 +48,7 @@ TypeEasy es un intérprete / framework experimental escrito principalmente en C 
 - 🔐 **Listo para producción** — JWT (HS256), CORS multi-dominio, worker pool y Swagger UI integrado.
 - 🛠️ **CLI estilo Rails** — `te new`, `te gen`, `te serve` sin boilerplate.
 - 🤖 **Baterías incluidas** — bridge con Gemini AI, chatbot de WhatsApp y conectores de base de datos.
+- 🔀 **Async cooperativo real** — event loop con `spawn` / `await` / `await_all` que solapa E/S de subprocesos (no bloqueante); 3 llamadas lentas en paralelo ≈ el tiempo de una. Ver `typeeasycode/examples/20_async/`.
 
 <img width="1910" height="932" alt="image" src="https://github.com/user-attachments/assets/6abbb4f1-9066-44e1-8da6-dfd804cd7d1a" />
 

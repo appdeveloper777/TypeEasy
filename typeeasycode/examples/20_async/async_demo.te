@@ -1,0 +1,49 @@
+// 20_async/async_demo.te
+// Demonstrates TypeEasy's cooperative async runtime overlapping slow I/O.
+//
+// Three Python workers each "sleep" 500 ms. Run sequentially that would be
+// ~1500 ms; with lang_call_async + await_all the event loop polls all three
+// at once, so the total is ~500 ms. That gap is the proof the concurrency is
+// real, not cosmetic.
+//
+// Run:  bin/typeeasy.exe typeeasycode/examples/20_async/async_demo.te
+
+let cmd = "python typeeasycode/examples/20_async/worker_slow.py";
+
+let py1 = lang_spawn(cmd);
+let py2 = lang_spawn(cmd);
+let py3 = lang_spawn(cmd);
+
+let t0 = now_ms();
+
+// Each call writes its request immediately and returns a task handle (an int).
+let a = lang_call_async(py1, json_stringify({ "op": "sleep", "ms": 500, "payload": "uno" }));
+let b = lang_call_async(py2, json_stringify({ "op": "sleep", "ms": 500, "payload": "dos" }));
+let c = lang_call_async(py3, json_stringify({ "op": "sleep", "ms": 500, "payload": "tres" }));
+
+// Drive the event loop until all three replies arrive (concurrently).
+let rs = await_all(a, b, c);
+
+let t1 = now_ms();
+
+let s0 = rs[0];
+let s1 = rs[1];
+let s2 = rs[2];
+let m0 = json_parse(s0);
+let m1 = json_parse(s1);
+let m2 = json_parse(s2);
+print("r0 -> ");
+println(m0["result"]);
+print("r1 -> ");
+println(m1["result"]);
+print("r2 -> ");
+println(m2["result"]);
+
+print("Tiempo total (ms): ");
+println(t1 - t0);
+println("Si fuese secuencial seria ~1500 ms; concurrente es ~500 ms.");
+
+lang_close(py1);
+lang_close(py2);
+lang_close(py3);
+println("Async OK.");

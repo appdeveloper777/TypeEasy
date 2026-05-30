@@ -1,0 +1,43 @@
+// ==========================================================================
+//  Ejemplo 19: Bridge a otros lenguajes via subproceso
+// --------------------------------------------------------------------------
+//  TypeEasy lanza un programa externo (aqui Python, pero puede ser Java, C#,
+//  Node, Rust...) y se comunica con el por un protocolo de lineas JSON:
+//    - lang_spawn(cmd)        -> abre el proceso, devuelve un "slot" (int)
+//    - lang_call(slot, linea) -> envia una linea y espera UNA linea de respuesta
+//    - lang_send / lang_recv  -> envio y recepcion por separado (fire-and-forget)
+//    - lang_close(slot)       -> cierra el proceso
+//
+//  El worker (worker.py) lee JSON de stdin y responde JSON por stdout.
+//  Ejecuta:  te run typeeasycode/examples/19_bridge/bridge_demo.te
+// ==========================================================================
+
+println("=== Bridge TypeEasy <-> Python ===");
+
+// Lanzamos el worker. Cambia "python" por "python3" segun tu sistema.
+let py = lang_spawn("python typeeasycode/examples/19_bridge/worker.py");
+
+if (py < 0) {
+    println("No se pudo lanzar el worker. Revisa que 'python' este en el PATH.");
+} else {
+    // 1) Pedimos al worker que ponga un texto en mayusculas.
+    let req1 = json_stringify({ "op": "upper", "text": "hola mundo" });
+    let resp1 = json_parse(lang_call(py, req1));
+    print("upper('hola mundo') -> ");
+    println(resp1["result"]);
+
+    // 2) Sumamos dos numeros en el otro lenguaje.
+    let req2 = json_stringify({ "op": "add", "a": 7, "b": 35 });
+    let resp2 = json_parse(lang_call(py, req2));
+    print("add(7, 35) -> ");
+    println(resp2["result"]);
+
+    // 3) Echo simple.
+    let req3 = json_stringify({ "op": "echo", "text": "ping" });
+    let resp3 = json_parse(lang_call(py, req3));
+    print("echo('ping') -> ");
+    println(resp3["result"]);
+
+    lang_close(py);
+    println("Proceso cerrado. Bridge OK.");
+}

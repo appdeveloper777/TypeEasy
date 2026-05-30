@@ -19,6 +19,8 @@
 #include "te_http.h"
 #include "te_json.h"
 #include "db_params.h"
+#include "te_bridge.h"
+#include "te_async.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1053,6 +1055,10 @@ void te_register_ast_builtins(void) {
     te_builtin_register("date_diff",         adapt_date_diff);
     te_builtin_register("uuid_v4",           adapt_uuid_v4);
     te_builtin_register("uuid_valid",        adapt_uuid_valid);
+    /* subprocess language bridge (lang_spawn/lang_call/...) */
+    te_register_bridge_builtins();
+    /* cooperative async runtime (spawn/await_task/await_all/lang_call_async) */
+    te_register_async_builtins();
     /* Other builtins (json, xml, request_*, response_*, len, range,
      * read_file, http_get, etc.) still served by the legacy if-chains
      * in call_native_function / te_builtin_dispatch. They can be migrated
