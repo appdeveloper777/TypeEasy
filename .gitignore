@@ -66,3 +66,33 @@ src/mysql/
 # Se versiona en su propio repo git local dentro de chess/.
 chess/
 .github_issue_v0.0.13.md
+
+# Artefactos de debug/bench/smoke en la raíz (no versionar)
+build_log.txt
+build_tail.txt
+copy_done.txt
+grep_ws.txt
+iso_out.txt
+mem_out.txt
+ping.txt
+probe.txt
+response.txt
+smoke_out.txt
+te_phase_d.txt
+
+# Bases de datos SQLite de pruebas
+*.db
+*.db-shm
+*.db-wal
+
+# Scratch / probes / benchmarks generados bajo typeeasycode/
+typeeasycode/_*.te
+typeeasycode/_*.py
+typeeasycode/probe*.te
+typeeasycode/bench_csv_*.py
+typeeasycode/*.csv
+test_chess_repro.te
+test_dup_params.te
+
+# SQLite amalgamation descargada (plugin)
+plugins/sqlite/sqlite-amalgamation-*/
