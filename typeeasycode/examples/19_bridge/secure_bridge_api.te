@@ -1,0 +1,89 @@
+// =============================================================
+// apis/secure_bridge_api — API segura (JWT + CORS) + Bridge a otro lenguaje
+//
+// Combina tres piezas:
+//   1) JWT   : POST /api/login emite un token; las rutas protegidas exigen
+//              Authorization: Bearer <token> y lo validan con jwt_verify.
+//   2) CORS  : el server --api ya envia las cabeceras CORS y responde el
+//              preflight OPTIONS, asi un frontend en otro dominio consume esto.
+//   3) Bridge: la ruta protegida NO calcula en TypeEasy; delega el trabajo a
+//              un worker en otro lenguaje (Python) via lang_spawn/lang_call.
+//
+// Ejecutar (abierto a cualquier dominio = default *):
+//   typeeasy --api examples/19_bridge/secure_bridge_api.te --port 9103
+//
+// Ejecutar restringiendo CORS a tu frontend:
+//   typeeasy --api examples/19_bridge/secure_bridge_api.te --port 9103 \
+//       --cors-origin "https://app.ejemplo.com"
+//
+// Probar:
+//   # 1) login -> token
+//   curl -s -X POST -d '{"user":"ana","pass":"1234"}' \
+//        http://localhost:9103/api/login
+//
+//   # 2) calculo protegido, delegado al worker (factorial de 20)
+//   curl -s -H "Authorization: Bearer <TOKEN>" \
+//        "http://localhost:9103/api/calc?op=factorial&n=20"
+//
+//   # 3) sin token -> 401
+//   curl -s -i "http://localhost:9103/api/calc?op=fib&n=10"
+//
+//   # 4) preflight CORS (lo que envia el navegador antes del GET con Authorization)
+//   curl -s -i -X OPTIONS http://localhost:9103/api/calc \
+//        -H "Origin: https://app.ejemplo.com" \
+//        -H "Access-Control-Request-Method: GET" \
+//        -H "Access-Control-Request-Headers: Authorization"
+// =============================================================
+
+let SECRET = "mi-clave-secreta";
+let WORKER = "python typeeasycode/examples/19_bridge/secure_worker.py";
+
+endpoint {
+    // --- Login: emite un JWT valido por 1 hora -------------------
+    [HttpPost("/api/login")]
+    login() {
+        let body = request_body();
+        // Demo: credencial fija. En produccion valida contra tu BD.
+        if (body != "{\"user\":\"ana\",\"pass\":\"1234\"}") {
+            response_status(401);
+            return json("{\"error\":\"credenciales_invalidas\"}");
+        }
+        let exp = now_epoch() + 3600;
+        let payload = "{\"sub\":\"ana\",\"role\":\"admin\",\"exp\":" + exp + "}";
+        let token = jwt_sign(payload, SECRET);
+        return json("{\"token\":\"" + token + "\"}");
+    }
+
+    // --- Calculo protegido: JWT obligatorio + delega al worker ---
+    [HttpGet("/api/calc")]
+    calc() {
+        // 1) Autenticacion JWT (Bearer).
+        let auth = request_header("Authorization");
+        var token = auth;
+        if (auth.starts_with("Bearer ")) {
+            token = auth.substr(7);
+        }
+        let claims = jwt_verify(token, SECRET);
+        if (claims == "") {
+            response_status(401);
+            return json("{\"error\":\"no_autorizado\"}");
+        }
+
+        // 2) Parametros de la peticion.
+        let op = request_query("op");
+        let n  = request_query("n");
+
+        // 3) Bridge: delega el calculo al worker en otro lenguaje.
+        let slot = lang_spawn(WORKER);
+        if (slot < 0) {
+            response_status(500);
+            return json("{\"error\":\"no_se_pudo_lanzar_worker\"}");
+        }
+        let req = json_stringify({ "op": op, "n": n });
+        let resp = lang_call(slot, req);
+        lang_close(slot);
+
+        // 4) Devuelve el resultado del worker tal cual (ya es JSON).
+        return json(resp);
+    }
+}
