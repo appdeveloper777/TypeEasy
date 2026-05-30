@@ -1,0 +1,45 @@
+// Demo universal: prueba interpretes en orden y usa el primero que responda.
+// Funciona sin cambios en Windows (python) y Linux/Docker (perl), etc.
+//
+// Protocolo del worker: recibe una linea, devuelve la misma en MAYUSCULAS.
+// Probamos cada candidato enviando "ping"; si responde "PING", lo usamos.
+
+println("=== Bridge universal (auto-deteccion de interprete) ===");
+
+// Candidatos: comando -> descripcion. Se prueban en este orden.
+let candidatos = [
+    "python typeeasycode/examples/19_bridge/upper_worker.py",
+    "python3 typeeasycode/examples/19_bridge/upper_worker.py",
+    "perl typeeasycode/examples/19_bridge/perl_worker.pl"
+];
+
+var slot = -1;
+
+for (let cmd in candidatos) {
+    let s = lang_spawn(cmd);
+    if (s < 0) {
+        continue;
+    }
+    // Probe: si el worker responde "PING" a "ping", es valido.
+    let r = lang_call(s, "ping");
+    if (r == "PING") {
+        slot = s;
+        print("Interprete en uso: ");
+        println(cmd);
+        break;
+    }
+    lang_close(s);
+}
+
+if (slot < 0) {
+    println("No se encontro un interprete disponible (python/python3/perl).");
+} else {
+    print("upper('hola mundo') -> ");
+    println(lang_call(slot, "hola mundo"));
+
+    print("upper('typeeasy bridge') -> ");
+    println(lang_call(slot, "typeeasy bridge"));
+
+    lang_close(slot);
+    println("Bridge OK.");
+}

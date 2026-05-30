@@ -1,0 +1,20 @@
+// Prueba del bridge en Linux usando un worker en Perl (texto plano).
+println("=== Bridge en Linux: TypeEasy <-> Perl ===");
+
+let w = lang_spawn("perl typeeasycode/examples/19_bridge/perl_worker.pl");
+
+if (w < 0) {
+    println("No se pudo lanzar el worker perl.");
+} else {
+    print("upper('hola desde linux') -> ");
+    println(lang_call(w, "hola desde linux"));
+
+    print("upper('typeeasy') -> ");
+    println(lang_call(w, "typeeasy"));
+
+    print("upper('bridge ok') -> ");
+    println(lang_call(w, "bridge ok"));
+
+    lang_close(w);
+    println("Bridge OK.");
+}

@@ -1,0 +1,31 @@
+// Prueba: pasar parametros a funciones Python reales y recibir su resultado.
+println("=== Bridge: funciones Python reales ===");
+
+let py = lang_spawn("python typeeasycode/examples/19_bridge/math_worker.py");
+
+if (py < 0) {
+    println("No se pudo lanzar el worker. Revisa que 'python' este en el PATH.");
+} else {
+    let r1 = json_parse(lang_call(py, json_stringify({ "op": "factorial", "n": 6 })));
+    print("factorial(6) -> ");
+    println(r1["result"]);
+
+    let r2 = json_parse(lang_call(py, json_stringify({ "op": "sqrt", "x": 144 })));
+    print("sqrt(144) -> ");
+    println(r2["result"]);
+
+    let r3 = json_parse(lang_call(py, json_stringify({ "op": "reverse", "text": "TypeEasy" })));
+    print("reverse('TypeEasy') -> ");
+    println(r3["result"]);
+
+    let r4 = json_parse(lang_call(py, json_stringify({ "op": "is_prime", "n": 97 })));
+    print("is_prime(97) -> ");
+    println(r4["result"]);
+
+    let r5 = json_parse(lang_call(py, json_stringify({ "op": "is_prime", "n": 100 })));
+    print("is_prime(100) -> ");
+    println(r5["result"]);
+
+    lang_close(py);
+    println("Bridge OK.");
+}
