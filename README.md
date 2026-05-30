@@ -11,7 +11,16 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/appdeveloper777/TypeEasy?style=social)](https://github.com/appdeveloper777/TypeEasy/stargazers)
 
-**Un intérprete / framework experimental para crear lenguajes, scripts y bridges con servicios externos / API Endpoint maker**
+**Crea APIs REST con sintaxis tipo C# / TypeScript — sin frameworks pesados ni runtime gigante.**
+
+Un intérprete / framework escrito en C: tu propio lenguaje, scripts, bridges con servicios externos y *API Endpoint maker*.
+
+```ts
+endpoint {
+    [HttpGet("/api/hola")]
+    Hola() { return json({ mensaje: "¡Hola desde TypeEasy!" }); }
+}
+```
 
 [🚀 Inicio Rápido](#-inicio-rápido) • [📖 Chatbot WhatsApp](#-chatbot-whatsapp-con-gemini-ai) • [🔌 APIs REST](#-crear-apis-rest) • [⭐ Apoyar](#-apoya-el-proyecto)
 
@@ -23,10 +32,18 @@
 
 TypeEasy es un intérprete / framework experimental escrito principalmente en C que te permite:
 
+✔️ **Crear endpoints REST** como FastAPI pero con sintaxis familiar (C# / TypeScript) <br>
 ✔️ **Crear tu propia sintaxis** adaptada perfectamente a tu dominio o equipo <br>
 ✔️ **Hacer "bridge"** sin esfuerzo con otros lenguajes potentes como Java, Rust y C# <br>
-✔️ **Crear endpoints REST** como FastAPI pero con sintaxis TypeEasy(C# y TypeScript familiar) <br>
 ✔️ **Crear scripts** para integraciones y automatizaciones
+
+**¿Por qué TypeEasy?**
+
+- ⚡ **Ligero y rápido** — un solo binario nativo, sin SDK pesado que instalar.
+- 🧩 **Sintaxis familiar** — clases, tipado y atributos `[HttpGet]` estilo C#/.NET.
+- 🔐 **Listo para producción** — JWT (HS256), CORS multi-dominio, worker pool y Swagger UI integrado.
+- 🛠️ **CLI estilo Rails** — `te new`, `te gen`, `te serve` sin boilerplate.
+- 🤖 **Baterías incluidas** — bridge con Gemini AI, chatbot de WhatsApp y conectores de base de datos.
 
 <img width="1910" height="932" alt="image" src="https://github.com/user-attachments/assets/6abbb4f1-9066-44e1-8da6-dfd804cd7d1a" />
 
