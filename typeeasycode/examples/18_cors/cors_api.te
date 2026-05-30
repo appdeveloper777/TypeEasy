@@ -1,0 +1,47 @@
+// =============================================================
+// apis/cors_api — CORS (consumir la API desde un navegador / otro dominio)
+//
+// El servidor `--api` envía cabeceras CORS y responde el preflight
+// OPTIONS automaticamente, asi un frontend alojado en OTRO dominio
+// puede llamar a estos endpoints (incluido el flujo JWT con el header
+// Authorization).
+//
+// El origen permitido se configura con esta precedencia (mayor gana):
+//   1) Flag CLI:            --cors-origin "https://app.com"
+//   2) Variable de entorno: TYPEEASY_CORS_ORIGIN=https://app.com
+//   3) typeeasy.toml:       cors_origin = "https://app.com"
+//   4) Default:             *  (cualquier dominio)
+//
+// Ejecutar (abierto a cualquier dominio = default *):
+//   typeeasy --api examples/18_cors/cors_api.te --port 9102
+//
+// Ejecutar (restringido a un dominio):
+//   typeeasy --api examples/18_cors/cors_api.te --port 9102 \
+//       --cors-origin "https://app.ejemplo.com"
+//
+// Probar el preflight (lo que envia el navegador antes de un POST/PUT):
+//   curl -s -i -X OPTIONS http://localhost:9102/api/saludo \
+//        -H "Origin: https://app.ejemplo.com" \
+//        -H "Access-Control-Request-Method: POST" \
+//        -H "Access-Control-Request-Headers: Content-Type, Authorization"
+//   # -> 200/204 con Access-Control-Allow-Origin / -Methods / -Headers
+//
+// Probar una respuesta normal (mira la cabecera Access-Control-Allow-Origin):
+//   curl -s -i http://localhost:9102/api/saludo -H "Origin: https://app.ejemplo.com"
+// =============================================================
+
+endpoint {
+    // GET simple: la respuesta lleva las cabeceras CORS.
+    [HttpGet("/api/saludo")]
+    saludo() {
+        return json("{\"mensaje\":\"hola desde otro dominio\"}");
+    }
+
+    // POST: el navegador dispara primero un preflight OPTIONS, que el
+    // server responde solo. Aqui solo manejas el POST real.
+    [HttpPost("/api/eco")]
+    eco() {
+        let body = request_body();
+        return json("{\"recibido\":" + body + "}");
+    }
+}

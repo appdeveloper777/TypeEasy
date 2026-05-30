@@ -1,0 +1,88 @@
+// =====================================================
+// Ejemplo Dapper-style — SQLite (plugin libte_sqlite)
+//
+// Ejecutar:
+//   te dapper_sqlite.te
+//   (con libte_sqlite.so/.dll disponible en plugins/ o LD_LIBRARY_PATH)
+//
+// Mismo estilo que dapper_mysql.te / dapper_postgres.te:
+// los placeholders @nombre se bindean por nombre usando
+// sqlite3_bind_* nativo (inmune a inyección SQL).
+// =====================================================
+
+load_native("sqlite");
+
+let db = sqlite_connect(":memory:");
+
+// Tabla de demo
+sqlite_exec(db, "CREATE TABLE productos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT, precio REAL)");
+
+// 1) INSERT parametrizado (escape automático de comillas en O'Reilly)
+sqlite_exec(db,
+    "INSERT INTO productos(nombre, precio) VALUES(@nombre, @precio)",
+    { "@nombre": "O'Reilly Book", "@precio": 19.9 });
+sqlite_exec(db,
+    "INSERT INTO productos(nombre, precio) VALUES(@nombre, @precio)",
+    { "@nombre": "Manzana", "@precio": 0.5 });
+sqlite_exec(db,
+    "INSERT INTO productos(nombre, precio) VALUES(@nombre, @precio)",
+    { "@nombre": "Avena", "@precio": 2.3 });
+
+// 2) SELECT con parámetros nombrados (@min, @pat)
+let r1 = sqlite_query(db,
+    "SELECT nombre, precio FROM productos WHERE precio > @min AND nombre LIKE @pat",
+    { "@min": 1, "@pat": "%a%" },
+    "json");
+print("[SQLite] productos filtrados:");
+println(r1);
+
+// 3) SELECT por id (las claves del map pueden ir SIN '@')
+let r2 = sqlite_query(db,
+    "SELECT * FROM productos WHERE id = @id",
+    { "id": 1 },
+    "json");
+print("[SQLite] producto por id:");
+println(r2);
+
+// 4) UPDATE parametrizado
+let n = sqlite_exec(db,
+    "UPDATE productos SET precio = @nuevo WHERE nombre = @nombre",
+    { "@nuevo": 25, "@nombre": "O'Reilly Book" });
+print("[SQLite] update affected rows: " + n);
+
+// 5) Usando una clase como contenedor de parámetros
+//    (sus atributos se exponen como @id, @nombre, @precio)
+class FiltroProducto {
+    id: int;
+    nombre: string;
+    precio: float;
+    __constructor(_id: int, _nombre: string, _precio: float) {
+        this.id = _id;
+        this.nombre = _nombre;
+        this.precio = _precio;
+    }
+}
+
+let filtro = new FiltroProducto(1, "O'Reilly Book", 25.0);
+
+let r5 = sqlite_query(db,
+    "SELECT * FROM productos WHERE id = @id OR nombre = @nombre",
+    filtro,
+    "json");
+print("[SQLite] filtro por objeto:");
+println(r5);
+
+// 6) Backwards-compat: sin params (firma vieja sigue funcionando)
+let r6 = sqlite_query(db, "SELECT COUNT(*) AS total FROM productos", "json");
+print("[SQLite] total (sin params):");
+println(r6);
+
+// 7) XML output
+let r7 = sqlite_query(db,
+    "SELECT id, nombre FROM productos WHERE precio < @max",
+    { "@max": 5 },
+    "xml");
+print("[SQLite] XML:");
+println(r7);
+
+sqlite_close(db);

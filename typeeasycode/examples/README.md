@@ -16,6 +16,8 @@ Categorias organizadas por concepto. Cada carpeta tiene su propio README.
 | `10_errors/`     | Manejo de errores graves                           |
 | `15_sqlite/`     | Plugin nativo SQLite (CRUD embebido)               |
 | `16_websocket/`  | Endpoints WebSocket nativos (`[WebSocket(...)]`)   |
+| `17_jwt/`        | Autenticación con JWT HS256 (`jwt_sign`/`jwt_verify`) |
+| `18_cors/`       | CORS: consumir la API desde otro dominio (`--cors-origin`) |
 | `_scratch/`      | Tests de debug / temporales (no en regression)     |
 
 ## Como correr un test

@@ -338,6 +338,8 @@ MethodNode* typeeasy_find_method(const char* function_name) {
 
 /* v0.0.13 — model binding helpers (defined in src/ast.c). */
 extern ObjectNode *te_object_from_json(ClassNode *cls, const char *json);
+extern char       *te_validate_body_against_class(ClassNode *cls, const char *json);
+extern void        typeeasy_http_set_status(int s);
 extern ClassNode  *find_class(char *name);
 extern const char *typeeasy_http_get_body(void);
 extern const char *typeeasy_http_find_param(const char *k);
@@ -346,6 +348,11 @@ extern ASTNode    *create_ast_leaf(char *type, int value, char *str_value, char 
 extern ASTNode    *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
 extern void        add_or_update_variable(char *id, ASTNode *value);
 extern void        free_ast(ASTNode *node);
+
+/* Pending validation error for the current request (NULL when valid).
+ * Set by te_bind_param when a typed-class body fails validation; consumed
+ * by typeeasy_embedded_invoke_method which replies HTTP 422. */
+static char *g_param_validation_error = NULL;
 
 /* Bind a single MethodNode parameter before interpret_ast.
  * Resolution order:
@@ -361,6 +368,15 @@ static void te_bind_param(ParameterNode *p) {
         ClassNode *cls = find_class((char*)ptype);
         if (cls) {
             const char *body = typeeasy_http_get_body();
+            /* FastAPI-style automatic validation: reject malformed bodies
+             * with HTTP 422 before the handler runs. Only the first failing
+             * typed-class parameter's error is reported. */
+            char *verr = te_validate_body_against_class(cls, body ? body : "");
+            if (verr) {
+                if (!g_param_validation_error) g_param_validation_error = verr;
+                else free(verr);
+                return;
+            }
             ObjectNode *obj = te_object_from_json(cls, body ? body : "");
             if (obj) {
                 ASTNode *wrap = (ASTNode*)calloc(1, sizeof(ASTNode));
@@ -415,7 +431,18 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
     return_flag = 0;
 
     /* v0.0.13: bind declared handler parameters from HTTP request context. */
+    g_param_validation_error = NULL;
     for (ParameterNode *p = m->params; p; p = p->next) te_bind_param(p);
+
+    /* Typed body validation failed: short-circuit with HTTP 422 and the
+     * error JSON as the response body. The handler body is never executed. */
+    if (g_param_validation_error) {
+        typeeasy_http_set_status(422);
+        char *err = g_param_validation_error;
+        g_param_validation_error = NULL;
+        runtime_reset_vars_to_initial_state();
+        return err;
+    }
 
     debugger_push_frame(m->name ? m->name : "<endpoint>", m->body);
     interpret_ast(m->body);

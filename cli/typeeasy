@@ -198,6 +198,7 @@ cmd_serve() {
   local use_docker=0
   local cli_port="" cli_host="" cli_workers=""
   local cli_hotreload=""  # "1" / "0" / "" (use mode default)
+  local cli_cors=""
   local pass_args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -207,6 +208,7 @@ cmd_serve() {
       --port)            cli_port="$2"; shift 2 ;;
       --host)            cli_host="$2"; shift 2 ;;
       --workers)         cli_workers="$2"; shift 2 ;;
+      --cors-origin)     cli_cors="$2"; shift 2 ;;
       --hotreload)       cli_hotreload="1"; shift ;;
       --no-hotreload)    cli_hotreload="0"; shift ;;
       *)                 pass_args+=("$1"); shift ;;
@@ -244,6 +246,13 @@ cmd_serve() {
     [[ -z "$hotreload" ]] && { [[ "$env_mode" == "prod" ]] && hotreload="0" || hotreload="1"; }
   fi
 
+  # CORS origin: [env.X] > [server] > "*" (passed to the server via the
+  # TYPEEASY_CORS_ORIGIN env var, honored by both native and Docker binaries).
+  local cors_origin
+  cors_origin="${cli_cors:-$(toml_get "$section" cors_origin)}"
+  [[ -z "$cors_origin" ]] && cors_origin="$(toml_get server cors_origin)"
+  cors_origin="${cors_origin:-*}"
+
   # --- Auto-fallback to Docker if native binary missing ---
   if [[ ! -x "$TYPEEASY_BIN" ]]; then
     if command -v docker >/dev/null 2>&1; then
@@ -277,6 +286,7 @@ Options:
   echo "  bind:       http://$host:$port"
   echo "  workers:    $workers"
   echo "  hot-reload: $hr_tag"
+  echo "  cors:       $cors_origin"
   echo "  swagger UI: $docs_url"
   echo "============================================================"
 
@@ -331,6 +341,7 @@ Options:
         -e TYPEEASY_APIS_DIR=/app/apis \
         -e TYPEEASY_PORT="$port" \
         -e TYPEEASY_HOST="$host" \
+        -e TYPEEASY_CORS_ORIGIN="$cors_origin" \
         -v "${apis_abs}:/app/apis" \
         api
     else
@@ -339,6 +350,7 @@ Options:
         -e TYPEEASY_APIS_DIR=/app/apis \
         -e TYPEEASY_PORT="$port" \
         -e TYPEEASY_HOST="$host" \
+        -e TYPEEASY_CORS_ORIGIN="$cors_origin" \
         -v "${apis_abs}:/app/apis" \
         api
     fi
@@ -386,6 +398,11 @@ Options:
     # still works since it just re-spawns the process.
   fi
   args+=("${pass_args[@]}")
+
+  # CORS origin -> env var (new binaries read it; old ones ignore it). The
+  # native server also accepts a --cors-origin flag, but the env var keeps us
+  # backward-compatible with binaries that predate the flag.
+  export TYPEEASY_CORS_ORIGIN="$cors_origin"
 
   if [[ "$env_mode" == "prod" ]]; then
     # Watchdog loop: re-spawn the binary on any non-zero exit, with backoff.
@@ -532,6 +549,7 @@ SERVE MODES:
                        watchdog auto-restart si el server crashea
 
   Overrides:  --port N  --host H  --workers N  --hotreload  --no-hotreload
+              --cors-origin URL   (CORS Allow-Origin; default "*" o el del toml)
   Container:  --docker  (fuerza modo Docker en lugar de binario nativo)
 
 DIRECT SERVER MODE (no project required):

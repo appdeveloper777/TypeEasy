@@ -16,6 +16,7 @@ void typeeasy_http_add_query (const char *k, const char *v);
 void typeeasy_http_add_header(const char *k, const char *v);
 void typeeasy_http_add_param (const char *k, const char *v);
 int  typeeasy_http_get_status(void);
+void typeeasy_http_set_status(int s);
 int  typeeasy_http_iter_response_header(int idx, const char **k, const char **v);
 
 /* --- Debugger introspection: read live request data ---- */

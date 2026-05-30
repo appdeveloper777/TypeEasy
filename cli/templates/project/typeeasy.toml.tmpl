@@ -8,10 +8,12 @@ description = "TypeEasy application"
 
 [server]
 # Defaults applied when running `typeeasy serve` (overridden by [env.X] below).
-apis_dir = "./apis"
-host     = "0.0.0.0"
-port     = 8080
-workers  = 0          # 0 = auto-detect
+apis_dir    = "./apis"
+host        = "0.0.0.0"
+port        = 8080
+workers     = 0          # 0 = auto-detect
+cors_origin = "*"        # CORS Access-Control-Allow-Origin. "*" = cualquier dominio;
+                         # un origen "https://app.com"; o lista "https://a.com, https://b.com"
 
 # --------------------------------------------------------------------------
 # Per-environment overrides. Selected by `typeeasy serve --dev` / `--prod`.
@@ -19,16 +21,19 @@ workers  = 0          # 0 = auto-detect
 # --------------------------------------------------------------------------
 
 [env.dev]
-host       = "127.0.0.1"   # bind sólo local
-port       = 8080
-workers    = 1             # 1 worker = fácil debuggear
-hotreload  = true          # recarga .te al cambiar
+host        = "127.0.0.1"   # bind sólo local
+port        = 8080
+workers     = 1             # 1 worker = fácil debuggear
+hotreload   = true          # recarga .te al cambiar
+cors_origin = "*"           # en dev, abierto a cualquier origen
 
 [env.prod]
-host       = "0.0.0.0"     # acepta conexiones externas
-port       = 8080
-workers    = 0             # 0 = auto (nproc)
-hotreload  = false         # zero overhead
+host        = "0.0.0.0"     # acepta conexiones externas
+port        = 8080
+workers     = 0             # 0 = auto (nproc)
+hotreload   = false         # zero overhead
+# cors_origin = "https://tu-frontend.com"   # en prod, restringe a tu dominio
+# cors_origin = "https://web.com, https://admin.com"  # o varios (lista por comas)
 
 [prod]
 # Deploy target — used by `typeeasy deploy`

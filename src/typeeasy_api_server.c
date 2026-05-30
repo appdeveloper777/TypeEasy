@@ -26,15 +26,26 @@
 #include <string.h>
 #include <ctype.h>
 #include <signal.h>
+#include <setjmp.h>
 
 #ifdef _WIN32
+  /* winsock2 must precede windows.h to avoid the legacy winsock.h clash. */
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
   #include <windows.h>
   #define te_sleep_ms(ms) Sleep(ms)
 #else
   #include <unistd.h>
   #include <pthread.h>
+  #include <sys/wait.h>
   #define te_sleep_ms(ms) usleep((ms) * 1000)
 #endif
+
+/* Runtime fatal-error recovery hook (defined in ast.c). When set to a valid
+ * jmp_buf*, the interpreter longjmp's here instead of calling exit(1) on a
+ * runtime error, letting the server answer HTTP 500 and stay alive. */
+extern jmp_buf *g_runtime_recovery;
+extern void runtime_reset_vars_to_initial_state(void);
 
 #include "civetweb.h"
 #include "ast.h"
@@ -62,6 +73,69 @@ static void on_signal(int sig) {
     (void)sig;
     g_stop_requested = 1;
 }
+
+/* CORS: value(s) allowed in Access-Control-Allow-Origin. Default "*" (any
+ * origin). Configurable via the --cors-origin <url> CLI flag / the
+ * TYPEEASY_CORS_ORIGIN env var (see typeeasy_main.c). May hold:
+ *   - "*"                              -> any origin
+ *   - a single origin                  -> that origin only
+ *   - a comma-separated list of origins -> the request Origin is reflected
+ *                                          if it matches one of the entries. */
+static char g_cors_origin[1024] = "*";
+
+void typeeasy_set_cors_origin(const char *origin) {
+    if (origin && *origin) {
+        strncpy(g_cors_origin, origin, sizeof(g_cors_origin) - 1);
+        g_cors_origin[sizeof(g_cors_origin) - 1] = '\0';
+    }
+}
+
+/* Resolve the Access-Control-Allow-Origin value to send for this request.
+ * Handles the single-value cases directly and, when g_cors_origin is a
+ * comma-separated list, reflects the request's Origin header if it matches
+ * one of the configured entries (otherwise falls back to the first entry,
+ * which the browser will reject for a disallowed origin). The result is
+ * always NUL-terminated. */
+static void cors_resolve_origin(struct mg_connection *conn,
+                                char *out, size_t outsz) {
+    if (outsz == 0) return;
+    /* "*" or a single origin: emit verbatim. */
+    if (!strchr(g_cors_origin, ',')) {
+        snprintf(out, outsz, "%s", g_cors_origin);
+        return;
+    }
+    /* List: match the request Origin against the configured entries. */
+    const char *req_origin = conn ? mg_get_header(conn, "Origin") : NULL;
+    size_t req_len = req_origin ? strlen(req_origin) : 0;
+    const char *first = NULL; size_t first_len = 0;
+    const char *p = g_cors_origin;
+    while (*p) {
+        while (*p == ' ' || *p == ',') p++;
+        const char *start = p;
+        while (*p && *p != ',') p++;
+        const char *end = p;
+        while (end > start && end[-1] == ' ') end--;
+        size_t len = (size_t)(end - start);
+        if (len == 0) continue;
+        if (!first) { first = start; first_len = len; }
+        if (req_origin && req_len == len && strncmp(req_origin, start, len) == 0) {
+            size_t n = len < outsz - 1 ? len : outsz - 1;
+            memcpy(out, start, n); out[n] = '\0';
+            return;
+        }
+    }
+    if (first) {
+        size_t n = first_len < outsz - 1 ? first_len : outsz - 1;
+        memcpy(out, first, n); out[n] = '\0';
+    } else {
+        snprintf(out, outsz, "*");
+    }
+}
+
+/* Constant CORS headers sent alongside Access-Control-Allow-Origin. */
+#define TE_CORS_EXTRA_HEADERS \
+    "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS\r\n" \
+    "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
 
 /* Match `/users/{id}` against `/users/42`, populating params. */
 static int match_route_pattern(const char *pattern, const char *uri) {
@@ -338,13 +412,16 @@ static int serve_root_swagger_ui(struct mg_connection *conn) {
         "function updatePreview(i){}"
         "</script></body></html>");
 
+    char cors_org[1024];
+    cors_resolve_origin(conn, cors_org, sizeof(cors_org));
     mg_printf(conn,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
         "Content-Length: %d\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
+        "Access-Control-Allow-Origin: %s\r\n"
+        TE_CORS_EXTRA_HEADERS
         "Connection: close\r\n\r\n",
-        off);
+        off, cors_org);
     mg_write(conn, html, off);
     free(html);
 #undef ENSURE_CAP
@@ -357,6 +434,23 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
     const char *uri    = req->local_uri ? req->local_uri : "/";
     const char *method = req->request_method ? req->request_method : "GET";
     const char *qs     = req->query_string;
+
+    /* CORS preflight: answer OPTIONS immediately with the allow headers so
+     * browsers permit cross-origin requests carrying Authorization /
+     * Content-Type: application/json (e.g. the JWT auth flow). */
+    if (strcmp(method, "OPTIONS") == 0) {
+        char cors_org[1024];
+        cors_resolve_origin(conn, cors_org, sizeof(cors_org));
+        mg_printf(conn,
+                  "HTTP/1.1 204 No Content\r\n"
+                  "Access-Control-Allow-Origin: %s\r\n"
+                  TE_CORS_EXTRA_HEADERS
+                  "Access-Control-Max-Age: 86400\r\n"
+                  "Content-Length: 0\r\n"
+                  "Connection: close\r\n\r\n",
+                  cors_org);
+        return 1;
+    }
 
     /* Serve the built-in Swagger-style UI at GET /. */
     if (strcmp(method, "GET") == 0 && strcmp(uri, "/") == 0) {
@@ -417,28 +511,84 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
         }
     }
 
+    /* Install a runtime recovery point: if the interpreter hits a fatal
+     * runtime error (undefined function, const reassignment, etc) it
+     * longjmp's back here instead of killing the whole server. We answer
+     * HTTP 500, reset interpreter state and keep serving. */
+    jmp_buf recovery;
+    if (setjmp(recovery) != 0) {
+        g_runtime_recovery = NULL;
+        runtime_reset_vars_to_initial_state();
+        const char *err = "{\"error\":\"internal_error\"}";
+        int elen = (int)strlen(err);
+        char cors_org[1024];
+        cors_resolve_origin(conn, cors_org, sizeof(cors_org));
+        invoke_lock_release();
+        mg_printf(conn,
+                  "HTTP/1.1 500 Internal Server Error\r\n"
+                  "Content-Type: application/json\r\n"
+                  "Content-Length: %d\r\n"
+                  "Access-Control-Allow-Origin: %s\r\n"
+                  TE_CORS_EXTRA_HEADERS
+                  "\r\n",
+                  elen, cors_org);
+        mg_write(conn, err, elen);
+        return 1;
+    }
+    g_runtime_recovery = &recovery;
+
     char *result = typeeasy_embedded_invoke_method(m);
+
+    g_runtime_recovery = NULL;
     const char *ctype = (strcmp(detect_response_type_embedded(m->body), "xml") == 0)
                         ? "application/xml" : "application/json";
 
     if (!result) result = strdup("");
     int len = (int)strlen(result);
 
+    /* Honor the response status set by the interpreter (response_status())
+     * or by automatic typed-body validation (HTTP 422). */
+    int status = typeeasy_http_get_status();
+    if (status <= 0) status = 200;
+    const char *reason = "OK";
+    switch (status) {
+        case 200: reason = "OK"; break;
+        case 201: reason = "Created"; break;
+        case 204: reason = "No Content"; break;
+        case 400: reason = "Bad Request"; break;
+        case 401: reason = "Unauthorized"; break;
+        case 403: reason = "Forbidden"; break;
+        case 404: reason = "Not Found"; break;
+        case 422: reason = "Unprocessable Entity"; break;
+        case 500: reason = "Internal Server Error"; break;
+        default:  reason = "OK"; break;
+    }
+
+    /* The interpreter is done and `result`/`status`/`ctype` are now local
+     * copies (ctype is a string literal). Release the global interpreter lock
+     * BEFORE the network write so slow clients / large bodies don't keep the
+     * single-threaded interpreter blocked. This lets request I/O overlap. */
+    char cors_org[1024];
+    cors_resolve_origin(conn, cors_org, sizeof(cors_org));
+    invoke_lock_release();
+
     mg_printf(conn,
-              "HTTP/1.1 200 OK\r\n"
+              "HTTP/1.1 %d %s\r\n"
               "Content-Type: %s\r\n"
               "Content-Length: %d\r\n"
-              "Access-Control-Allow-Origin: *\r\n"
+              "Access-Control-Allow-Origin: %s\r\n"
+              TE_CORS_EXTRA_HEADERS
               "\r\n",
-              ctype, len);
+              status, reason, ctype, len, cors_org);
     if (len > 0) mg_write(conn, result, len);
 
     free(result);
-    invoke_lock_release();
     return 1;
 }
 
-int typeeasy_run_api_server(const char *host, int port) {
+/* Run a single in-process civetweb server bound to host:port. When part of a
+ * worker pool, `worker_index` >= 0 tweaks the banner; -1 means standalone. */
+static int run_single_server(const char *host, int port, int worker_index) {
     invoke_lock_init();
 
     /* Banner: list registered routes. */
@@ -462,6 +612,12 @@ int typeeasy_run_api_server(const char *host, int port) {
     const char *options[] = {
         "listening_ports", port_spec,
         "num_threads", "8",
+        /* CORS is handled entirely by request_handler (see cors_resolve_origin)
+         * so a comma-separated origin list can be matched against the request's
+         * Origin header. We force access_control_allow_methods to "" so
+         * civetweb does NOT auto-answer the OPTIONS preflight (it would emit a
+         * single literal origin), letting our handler pick the right one. */
+        "access_control_allow_methods", "",
         NULL
     };
 
@@ -483,15 +639,21 @@ int typeeasy_run_api_server(const char *host, int port) {
     /* Register native WebSocket handlers for any [WebSocket("/path")] methods. */
     te_ws_register_routes(ctx);
 
-    printf("[typeeasy --api] Escuchando en http://%s:%d (%d ruta%s)\n",
-           (host && *host) ? host : "0.0.0.0", port,
-           route_count, route_count == 1 ? "" : "s");
-    for (MethodNode *m = global_methods; m; m = m->next) {
-        if (m->route_path) {
-            printf("    %-6s %s -> %s()\n",
-                   m->http_method ? m->http_method : "GET",
-                   m->route_path,
-                   m->name ? m->name : "?");
+    if (worker_index >= 0) {
+        printf("[typeeasy --api] worker #%d listo (pid %ld) en http://%s:%d\n",
+               worker_index, (long)getpid(),
+               (host && *host) ? host : "0.0.0.0", port);
+    } else {
+        printf("[typeeasy --api] Escuchando en http://%s:%d (%d ruta%s)\n",
+               (host && *host) ? host : "0.0.0.0", port,
+               route_count, route_count == 1 ? "" : "s");
+        for (MethodNode *m = global_methods; m; m = m->next) {
+            if (m->route_path) {
+                printf("    %-6s %s -> %s()\n",
+                       m->http_method ? m->http_method : "GET",
+                       m->route_path,
+                       m->name ? m->name : "?");
+            }
         }
     }
     fflush(stdout);
@@ -503,8 +665,323 @@ int typeeasy_run_api_server(const char *host, int port) {
         te_sleep_ms(200);
     }
 
-    printf("\n[typeeasy --api] Detenido.\n");
+    if (worker_index < 0) printf("\n[typeeasy --api] Detenido.\n");
     mg_stop(ctx);
     mg_exit_library();
     return 0;
+}
+
+int typeeasy_run_api_server(const char *host, int port) {
+    return run_single_server(host, port, -1);
+}
+
+int typeeasy_run_api_server_worker(const char *host, int port, int worker_index) {
+    return run_single_server(host, port, worker_index);
+}
+
+#if defined(_WIN32)
+/* ----- Windows worker pool via internal TCP load-balancer (Option A) -------
+ * Windows lacks fork() and SO_REUSEPORT connection balancing, so we emulate
+ * gunicorn's prefork model:
+ *   - The master re-spawns N child processes of this same binary, each a
+ *     normal single server bound to 127.0.0.1:<internal port>.
+ *   - The master binds the PUBLIC host:port and acts as a round-robin TCP
+ *     reverse proxy, forwarding each accepted connection to one worker.
+ * Each worker is a separate process with its own interpreter state, so they
+ * run scripts in true parallel. */
+
+typedef struct { SOCKET src; SOCKET dst; } te_relay_ctx;
+
+/* Pump bytes src->dst until src closes, then half-close dst for writing. */
+static DWORD WINAPI te_relay_thread(LPVOID arg) {
+    te_relay_ctx *c = (te_relay_ctx *)arg;
+    char buf[16384];
+    for (;;) {
+        int n = recv(c->src, buf, (int)sizeof(buf), 0);
+        if (n <= 0) break;
+        int off = 0;
+        while (off < n) {
+            int w = send(c->dst, buf + off, n - off, 0);
+            if (w <= 0) goto done;
+            off += w;
+        }
+    }
+done:
+    shutdown(c->dst, SD_SEND);
+    free(c);
+    return 0;
+}
+
+typedef struct { SOCKET client; int worker_port; } te_conn_ctx;
+
+/* Handle one client connection: connect to the assigned worker and relay
+ * bytes in both directions until both ends close. */
+static DWORD WINAPI te_conn_thread(LPVOID arg) {
+    te_conn_ctx *cc = (te_conn_ctx *)arg;
+    SOCKET client = cc->client;
+    int wport = cc->worker_port;
+    free(cc);
+
+    SOCKET worker = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (worker == INVALID_SOCKET) { closesocket(client); return 0; }
+
+    struct sockaddr_in wa;
+    memset(&wa, 0, sizeof(wa));
+    wa.sin_family = AF_INET;
+    wa.sin_port = htons((unsigned short)wport);
+    wa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(worker, (struct sockaddr *)&wa, sizeof(wa)) != 0) {
+        closesocket(worker);
+        closesocket(client);
+        return 0;
+    }
+
+    /* worker -> client on a helper thread; client -> worker inline here. */
+    te_relay_ctx *w2c = (te_relay_ctx *)malloc(sizeof(*w2c));
+    HANDLE h = NULL;
+    if (w2c) {
+        w2c->src = worker; w2c->dst = client;
+        h = CreateThread(NULL, 0, te_relay_thread, w2c, 0, NULL);
+        if (!h) free(w2c);
+    }
+
+    char buf[16384];
+    for (;;) {
+        int n = recv(client, buf, (int)sizeof(buf), 0);
+        if (n <= 0) break;
+        int off = 0;
+        while (off < n) {
+            int wr = send(worker, buf + off, n - off, 0);
+            if (wr <= 0) goto finish;
+            off += wr;
+        }
+    }
+finish:
+    shutdown(worker, SD_SEND);
+    if (h) { WaitForSingleObject(h, INFINITE); CloseHandle(h); }
+    closesocket(worker);
+    closesocket(client);
+    return 0;
+}
+
+static int run_windows_pool(const char *host, int port, int num_workers,
+                            const char *script_path) {
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        fprintf(stderr, "[typeeasy --api] WSAStartup falló.\n");
+        return 1;
+    }
+
+    char exe[MAX_PATH];
+    DWORD elen = GetModuleFileNameA(NULL, exe, (DWORD)sizeof(exe));
+    if (elen == 0 || elen >= sizeof(exe)) {
+        fprintf(stderr, "[typeeasy --api] no se pudo obtener la ruta del ejecutable.\n");
+        WSACleanup();
+        return 1;
+    }
+
+    int *wports = (int *)calloc((size_t)num_workers, sizeof(int));
+    PROCESS_INFORMATION *procs =
+        (PROCESS_INFORMATION *)calloc((size_t)num_workers, sizeof(PROCESS_INFORMATION));
+    SOCKET lsock = INVALID_SOCKET;
+    struct sockaddr_in la;
+    unsigned long rr = 0;
+    if (!wports || !procs) { free(wports); free(procs); WSACleanup(); return 1; }
+
+    printf("[typeeasy --api] Iniciando pool de %d workers (load-balancer) en http://%s:%d\n",
+           num_workers, (host && *host) ? host : "0.0.0.0", port);
+    for (MethodNode *m = global_methods; m; m = m->next) {
+        if (m->route_path) {
+            printf("    %-6s %s -> %s()\n",
+                   m->http_method ? m->http_method : "GET",
+                   m->route_path, m->name ? m->name : "?");
+        }
+    }
+    fflush(stdout);
+
+    /* Spawn workers on 127.0.0.1:(port+1+i). */
+    for (int i = 0; i < num_workers; i++) {
+        wports[i] = port + 1 + i;
+        char cmd[2048];
+        snprintf(cmd, sizeof(cmd),
+                 "\"%s\" --api \"%s\" --host 127.0.0.1 --port %d --worker-index %d",
+                 exe, script_path ? script_path : "", wports[i], i);
+
+        STARTUPINFOA si;
+        memset(&si, 0, sizeof(si));
+        si.cb = sizeof(si);
+        if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL,
+                            &si, &procs[i])) {
+            fprintf(stderr, "[typeeasy --api] CreateProcess del worker %d falló (err=%lu).\n",
+                    i, (unsigned long)GetLastError());
+            for (int j = 0; j < i; j++) {
+                if (procs[j].hProcess) {
+                    TerminateProcess(procs[j].hProcess, 1);
+                    CloseHandle(procs[j].hProcess);
+                    CloseHandle(procs[j].hThread);
+                }
+            }
+            free(wports); free(procs); WSACleanup();
+            return 1;
+        }
+    }
+
+    /* Give workers a moment to bind their internal ports. */
+    te_sleep_ms(800);
+
+    lsock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (lsock == INVALID_SOCKET) {
+        fprintf(stderr, "[typeeasy --api] no se pudo crear el socket público.\n");
+        goto kill_workers;
+    }
+    {
+        BOOL reuse = TRUE;
+        setsockopt(lsock, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
+    }
+    memset(&la, 0, sizeof(la));
+    la.sin_family = AF_INET;
+    la.sin_port = htons((unsigned short)port);
+    if (host && *host && strcmp(host, "0.0.0.0") != 0) {
+        la.sin_addr.s_addr = inet_addr(host);
+        if (la.sin_addr.s_addr == INADDR_NONE) la.sin_addr.s_addr = htonl(INADDR_ANY);
+    } else {
+        la.sin_addr.s_addr = htonl(INADDR_ANY);
+    }
+    if (bind(lsock, (struct sockaddr *)&la, sizeof(la)) != 0 ||
+        listen(lsock, SOMAXCONN) != 0) {
+        fprintf(stderr, "[typeeasy --api] no se pudo escuchar en %s:%d\n",
+                (host && *host) ? host : "0.0.0.0", port);
+        closesocket(lsock);
+        lsock = INVALID_SOCKET;
+        goto kill_workers;
+    }
+
+    printf("[typeeasy --api] Pool listo: balanceando hacia %d workers (puertos %d-%d).\n",
+           num_workers, wports[0], wports[num_workers - 1]);
+    fflush(stdout);
+
+    signal(SIGINT,  on_signal);
+    signal(SIGTERM, on_signal);
+
+    /* Short accept timeout so we can poll g_stop_requested. */
+    {
+        DWORD tmo = 500;
+        setsockopt(lsock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tmo, sizeof(tmo));
+    }
+
+    while (!g_stop_requested) {
+        struct sockaddr_in ca;
+        int calen = (int)sizeof(ca);
+        SOCKET client = accept(lsock, (struct sockaddr *)&ca, &calen);
+        if (client == INVALID_SOCKET) {
+            continue; /* timeout or transient error: re-check stop flag */
+        }
+        te_conn_ctx *cc = (te_conn_ctx *)malloc(sizeof(*cc));
+        if (!cc) { closesocket(client); continue; }
+        cc->client = client;
+        cc->worker_port = wports[rr++ % (unsigned long)num_workers];
+        HANDLE h = CreateThread(NULL, 0, te_conn_thread, cc, 0, NULL);
+        if (!h) { closesocket(client); free(cc); }
+        else CloseHandle(h);
+    }
+
+    if (lsock != INVALID_SOCKET) closesocket(lsock);
+
+kill_workers:
+    printf("\n[typeeasy --api] Deteniendo pool de %d workers...\n", num_workers);
+    for (int i = 0; i < num_workers; i++) {
+        if (procs[i].hProcess) {
+            TerminateProcess(procs[i].hProcess, 0);
+            WaitForSingleObject(procs[i].hProcess, 2000);
+            CloseHandle(procs[i].hProcess);
+            CloseHandle(procs[i].hThread);
+        }
+    }
+    free(wports);
+    free(procs);
+    WSACleanup();
+    return 0;
+}
+#endif /* _WIN32 */
+
+int typeeasy_run_api_server_pool(const char *host, int port, int num_workers,
+                                 const char *script_path) {
+    if (num_workers <= 1) {
+        return run_single_server(host, port, -1);
+    }
+
+#if defined(_WIN32)
+    /* Windows lacks fork()/SO_REUSEPORT; use the internal load-balancer pool
+     * (Option A) which re-spawns worker processes and proxies to them. */
+    return run_windows_pool(host, port, num_workers, script_path);
+#else
+    /* POSIX worker pool: the parent forks N children. Each child runs its own
+     * civetweb server binding the same port; the kernel (SO_REUSEPORT, enabled
+     * in civetweb.c) load-balances incoming connections across them. Because
+     * each child has its own address space (copy-on-write of the already-parsed
+     * AST + interpreter globals), they execute scripts in true parallel without
+     * sharing the non-thread-safe interpreter state. Mirrors gunicorn -w N. */
+    (void)script_path; /* not needed on POSIX (children inherit via fork). */
+    printf("[typeeasy --api] Iniciando pool de %d workers en http://%s:%d\n",
+           num_workers, (host && *host) ? host : "0.0.0.0", port);
+    for (MethodNode *m = global_methods; m; m = m->next) {
+        if (m->route_path) {
+            printf("    %-6s %s -> %s()\n",
+                   m->http_method ? m->http_method : "GET",
+                   m->route_path, m->name ? m->name : "?");
+        }
+    }
+    fflush(stdout);
+
+    pid_t *pids = (pid_t *)calloc((size_t)num_workers, sizeof(pid_t));
+    if (!pids) return 1;
+
+    for (int i = 0; i < num_workers; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("[typeeasy --api] fork");
+            /* Reap any children already spawned, then bail. */
+            for (int j = 0; j < i; j++) {
+                if (pids[j] > 0) kill(pids[j], SIGTERM);
+            }
+            for (int j = 0; j < i; j++) {
+                if (pids[j] > 0) waitpid(pids[j], NULL, 0);
+            }
+            free(pids);
+            return 1;
+        }
+        if (pid == 0) {
+            /* Child: become a worker and never return to the spawn loop. */
+            free(pids);
+            int rc = run_single_server(host, port, i);
+            _exit(rc);
+        }
+        pids[i] = pid;
+    }
+
+    /* Parent: forward SIGINT/SIGTERM to the whole group, then reap. */
+    signal(SIGINT,  on_signal);
+    signal(SIGTERM, on_signal);
+    while (!g_stop_requested) {
+        te_sleep_ms(200);
+        /* If a worker died unexpectedly, stop the pool. */
+        int status;
+        pid_t gone = waitpid(-1, &status, WNOHANG);
+        if (gone > 0) {
+            fprintf(stderr, "[typeeasy --api] worker pid %ld terminó; apagando pool.\n",
+                    (long)gone);
+            break;
+        }
+    }
+
+    printf("\n[typeeasy --api] Deteniendo pool de %d workers...\n", num_workers);
+    for (int i = 0; i < num_workers; i++) {
+        if (pids[i] > 0) kill(pids[i], SIGTERM);
+    }
+    for (int i = 0; i < num_workers; i++) {
+        if (pids[i] > 0) waitpid(pids[i], NULL, 0);
+    }
+    free(pids);
+    return 0;
+#endif
 }

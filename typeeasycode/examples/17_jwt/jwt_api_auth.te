@@ -1,0 +1,61 @@
+// =============================================================
+// apis/jwt_api_auth — autenticación con JWT en endpoints --api
+//
+// Flujo típico:
+//   1) POST /api/login  -> valida credenciales y devuelve un JWT.
+//   2) GET  /api/perfil -> protegido; exige header Authorization
+//      con un token válido (Bearer).
+//
+// Ejecutar:
+//   typeeasy --api examples/17_jwt/jwt_api_auth.te --port 9101
+//
+// Probar:
+//   # 1) login -> obtienes un token
+//   curl -s -X POST -d '{"user":"ana","pass":"1234"}' \
+//        http://localhost:9101/api/login
+//
+//   # 2) acceso protegido con el token devuelto
+//   curl -s -H "Authorization: Bearer <TOKEN>" \
+//        http://localhost:9101/api/perfil
+//
+//   # 3) sin token -> 401
+//   curl -s -i http://localhost:9101/api/perfil
+// =============================================================
+
+endpoint {
+    // --- Login: emite un JWT válido por 1 hora -------------------
+    [HttpPost("/api/login")]
+    login() {
+        let body = request_body();
+        // Demo: credencial fija. En producción valida contra tu BD.
+        if (body != "{\"user\":\"ana\",\"pass\":\"1234\"}") {
+            response_status(401);
+            return json("{\"error\":\"credenciales_invalidas\"}");
+        }
+
+        let exp = now_epoch() + 3600;
+        let payload = "{\"sub\":\"ana\",\"role\":\"admin\",\"exp\":" + exp + "}";
+        let token = jwt_sign(payload, "mi-clave-secreta");
+        return json("{\"token\":\"" + token + "\"}");
+    }
+
+    // --- Endpoint protegido: exige Bearer token válido ----------
+    [HttpGet("/api/perfil")]
+    perfil() {
+        let auth = request_header("Authorization");
+        // Quita el prefijo "Bearer " si está presente.
+        var token = auth;
+        if (auth.starts_with("Bearer ")) {
+            token = auth.substr(7);
+        }
+
+        let claims = jwt_verify(token, "mi-clave-secreta");
+        if (claims == "") {
+            response_status(401);
+            return json("{\"error\":\"no_autorizado\"}");
+        }
+
+        // claims es el payload JSON con sub/role/exp.
+        return json("{\"perfil\":" + claims + "}");
+    }
+}

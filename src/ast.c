@@ -38,6 +38,27 @@
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
 #include <time.h>
+#include <setjmp.h>
+
+/* ============================================================
+ * Runtime fatal-error recovery.
+ *
+ * The interpreter historically calls exit(1) on any runtime error
+ * (undefined function, assigning to a const, OOM, etc). That is fine
+ * for the one-shot CLI, but in --api server mode it would tear down the
+ * whole process on a single bad request.
+ *
+ * te_runtime_fatal() is the single choke point: if a recovery point is
+ * installed (g_runtime_recovery != NULL, set by the API request handler
+ * around each invoke) it longjmp's back there so the server can answer
+ * HTTP 500 and keep serving. Otherwise it behaves exactly like the old
+ * exit(1), so CLI semantics are unchanged.
+ * ============================================================ */
+jmp_buf *g_runtime_recovery = NULL;
+void te_runtime_fatal(void) {
+    if (g_runtime_recovery) longjmp(*g_runtime_recovery, 1);
+    exit(1);
+}
 
 /* Headers POSIX/sockets disponibles en todas las plataformas (MSYS2 / Linux / macOS).
  * En Windows usamos winsock; en POSIX, sockets BSD. */
@@ -768,6 +789,7 @@ void typeeasy_http_add_query (const char *k, const char *v) { te_kv_add(&g_req_q
 void typeeasy_http_add_header(const char *k, const char *v) { te_kv_add(&g_req_headers, k, v); }
 void typeeasy_http_add_param (const char *k, const char *v) { te_kv_add(&g_req_params,  k, v); }
 int  typeeasy_http_get_status(void) { return g_resp_status; }
+void typeeasy_http_set_status(int s) { g_resp_status = s; }
 int  typeeasy_http_iter_response_header(int idx, const char **k, const char **v) {
     TeKV *c = g_resp_headers; int i = 0;
     while (c) { if (i == idx) { if (k) *k = c->k; if (v) *v = c->v; return 1; } c = c->next; i++; }
@@ -1941,7 +1963,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
     if (var) {        
         if (var->is_const) {
             fprintf(stderr, "Error: cannot assign to constant variable '%s'.\n", id);
-            exit(1);
+            te_runtime_fatal();
         }
         free(var->type);
         var->type = strdup(value->type);
@@ -2195,7 +2217,7 @@ ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para ASTNode.\n");
-        exit(1);
+        te_runtime_fatal();
     }
     node->line = yylineno;
     node->type = strdup(type);
@@ -4408,6 +4430,92 @@ static void interpret_predict_node(ASTNode *node) {
 
 /* JSON parser+emitter now live in te_json.c (Fase 1 modularization). */
 /* ---------------------------------------------------------------
+ * Automatic typed-body validation (FastAPI-style).
+ * Validates `json` against the attribute types declared in `cls`
+ * and returns a malloc'd JSON error string describing every problem
+ * (missing required field, wrong type), or NULL when the body is
+ * valid. The caller owns the returned string; the API server replies
+ * HTTP 422 with it as the body.
+ * --------------------------------------------------------------- */
+static int te_str_is_numeric(const char *s, int allow_dot) {
+    if (!s || !*s) return 0;
+    int i = 0, digits = 0, dot = 0;
+    if (s[i] == '+' || s[i] == '-') i++;
+    for (; s[i]; i++) {
+        if (s[i] >= '0' && s[i] <= '9') { digits++; continue; }
+        if (allow_dot && s[i] == '.' && !dot) { dot = 1; continue; }
+        return 0;
+    }
+    return digits > 0;
+}
+
+char *te_validate_body_against_class(ClassNode *cls, const char *json) {
+    if (!cls) return NULL;
+    char errbuf[2048];
+    int n = 0;
+    n += snprintf(errbuf + n, sizeof(errbuf) - n,
+                  "{\"error\":\"validation_failed\",\"detail\":[");
+    int first = 1;
+    #define TE_ADD_ERR(field, issue) do { \
+        if (n < (int)sizeof(errbuf) - 128) { \
+            n += snprintf(errbuf + n, sizeof(errbuf) - n, \
+                "%s{\"field\":\"%s\",\"issue\":\"%s\"}", first ? "" : ",", (field), (issue)); \
+            first = 0; \
+        } \
+    } while (0)
+
+    /* The body must be a JSON object. */
+    const char *p = json ? json : "";
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    if (*p != '{') {
+        TE_ADD_ERR("body", "request body must be a JSON object");
+        n += snprintf(errbuf + n, sizeof(errbuf) - n, "]}");
+        return strdup(errbuf);
+    }
+    const char *pp = json;
+    ASTNode *root = te_json_parse_value(&pp);
+    if (!root || !root->type || strcmp(root->type, "OBJECT_LITERAL") != 0) {
+        TE_ADD_ERR("body", "request body must be a JSON object");
+        n += snprintf(errbuf + n, sizeof(errbuf) - n, "]}");
+        return strdup(errbuf);
+    }
+
+    for (int a = 0; a < cls->attr_count; a++) {
+        const char *aname = cls->attributes[a].id;
+        const char *atype = cls->attributes[a].type ? cls->attributes[a].type : "int";
+        if (!aname) continue;
+        ASTNode *val = NULL;
+        for (ASTNode *pair = root->left; pair; pair = pair->right) {
+            if (pair->id && strcmp(pair->id, aname) == 0) { val = pair->left; break; }
+        }
+        if (!val) { TE_ADD_ERR(aname, "required field missing"); continue; }
+        const char *vt = val->type ? val->type : "";
+        int is_str = strcmp(vt, "STRING") == 0;
+        int is_flt = strcmp(vt, "FLOAT") == 0;
+        int is_int = strcmp(vt, "INT") == 0;
+        int is_obj = strcmp(vt, "OBJECT_LITERAL") == 0;
+        int is_lst = strcmp(vt, "LIST") == 0;
+        if (strcmp(atype, "string") == 0) {
+            if (is_obj || is_lst) TE_ADD_ERR(aname, "expected string");
+        } else if (strcmp(atype, "float") == 0) {
+            if (is_obj || is_lst) TE_ADD_ERR(aname, "expected float");
+            else if (is_str && !te_str_is_numeric(val->str_value, 1)) TE_ADD_ERR(aname, "expected float");
+        } else if (strcmp(atype, "bool") == 0) {
+            if (!is_int) TE_ADD_ERR(aname, "expected bool");
+        } else { /* int and integer-like types */
+            if (is_obj || is_lst) TE_ADD_ERR(aname, "expected int");
+            else if (is_str && !te_str_is_numeric(val->str_value, 0)) TE_ADD_ERR(aname, "expected int");
+        }
+        (void)is_flt;
+    }
+    #undef TE_ADD_ERR
+
+    if (first) return NULL; /* all attributes valid */
+    n += snprintf(errbuf + n, sizeof(errbuf) - n, "]}");
+    return strdup(errbuf);
+}
+
+/* ---------------------------------------------------------------
  * v0.0.13: POST/PUT body -> typed-class model binding helper.
  * Parses `json` as an object and copies matching attribute values
  * into a freshly-created ObjectNode of `cls`. Missing keys keep
@@ -4536,7 +4644,7 @@ static void interpret_call_func(ASTNode *node) {
          fprintf(stderr, "Warning: Calling user function '%s' as expression is not fully supported yet.\n", node->id);
     } else {
         fprintf(stderr, "Error: function '%s' not defined.\n", node->id);
-        exit(1);
+        te_runtime_fatal();
     }
 }
 
@@ -6001,7 +6109,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         //printf("[DEBUG] interpret_var_decl: find_variable returned %p\n", (void*)evaluated_value_var); fflush(stdout);
         if (!evaluated_value_var) {
             fprintf(stderr, "Error: no return value captured from expression '%s'. __ret_var_active=%d\n", value_node->type ? value_node->type : "unknown", __ret_var_active);
-            exit(1);
+            te_runtime_fatal();
         }
     }
     // ... (rest of function)
@@ -6212,7 +6320,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
             }
         } else {
             fprintf(stderr, "Internal error: unknown return type for variable assignment '%s'.\n", node->id);
-            exit(1);
+            te_runtime_fatal();
         }
         
         //printf("[DEBUG] interpret_var_decl: declaring variable %s\n", node->id); fflush(stdout);

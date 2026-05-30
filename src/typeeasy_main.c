@@ -411,6 +411,7 @@ int main(int argc, char *argv[]) {
             printf("  --api [-p PORT]        Levanta servidor HTTP con los endpoints del .te\n");
             printf("  --port <p>             Puerto para --api (default 8080)\n");
             printf("  --host <h>             Host bind para --api (default 0.0.0.0)\n");
+            printf("  --cors-origin <url>    Origen permitido CORS (default *)\n");
             return 0;
         }
     }
@@ -437,6 +438,9 @@ int main(int argc, char *argv[]) {
     int api_mode = 0;
     int api_port = 8080;
     const char *api_host = "0.0.0.0";
+    int api_workers = 1;
+    int api_worker_index = -1;
+    const char *api_cors_origin = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--emit-wat") == 0) {
@@ -462,6 +466,18 @@ int main(int argc, char *argv[]) {
             api_host = argv[++i];
         } else if (strncmp(argv[i], "--host=", 7) == 0) {
             api_host = argv[i] + 7;
+        } else if (strcmp(argv[i], "--workers") == 0 && i + 1 < argc) {
+            api_workers = atoi(argv[++i]);
+        } else if (strncmp(argv[i], "--workers=", 10) == 0) {
+            api_workers = atoi(argv[i] + 10);
+        } else if (strcmp(argv[i], "--worker-index") == 0 && i + 1 < argc) {
+            api_worker_index = atoi(argv[++i]);
+        } else if (strncmp(argv[i], "--worker-index=", 15) == 0) {
+            api_worker_index = atoi(argv[i] + 15);
+        } else if (strcmp(argv[i], "--cors-origin") == 0 && i + 1 < argc) {
+            api_cors_origin = argv[++i];
+        } else if (strncmp(argv[i], "--cors-origin=", 14) == 0) {
+            api_cors_origin = argv[i] + 14;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: -o requiere una ruta de salida.\n");
@@ -643,7 +659,20 @@ int main(int argc, char *argv[]) {
 
     // 5b. Modo --api: levantar servidor HTTP con los endpoints del .te.
     if (api_mode) {
-        int rc = typeeasy_run_api_server(api_host, api_port);
+        if (api_workers < 1) api_workers = 1;
+        /* CORS origin: el flag --cors-origin tiene prioridad; si no se pasa,
+         * se usa la variable de entorno TYPEEASY_CORS_ORIGIN (config sin
+         * archivo, ideal para Docker / .env). Default "*" si no hay ninguno. */
+        if (!api_cors_origin) api_cors_origin = getenv("TYPEEASY_CORS_ORIGIN");
+        if (api_cors_origin && *api_cors_origin) typeeasy_set_cors_origin(api_cors_origin);
+        int rc;
+        if (api_worker_index >= 0) {
+            /* Spawned by the Windows load-balancer master: run as a single
+             * worker bound to the internal port with a short banner. */
+            rc = typeeasy_run_api_server_worker(api_host, api_port, api_worker_index);
+        } else {
+            rc = typeeasy_run_api_server_pool(api_host, api_port, api_workers, script_path);
+        }
         free_ast(script_ast);
         return rc;
     }

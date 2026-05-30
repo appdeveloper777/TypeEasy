@@ -1,0 +1,47 @@
+// ============================================================
+// jwt — JSON Web Tokens (HS256) — firmar, verificar, expirar
+// ============================================================
+//
+// Builtins:
+//   jwt_sign(payload_json, secret)  -> "header.payload.signature" (base64url)
+//   jwt_verify(token, secret)       -> payload JSON si la firma es válida
+//                                       y el token no expiró; si no, "".
+//
+// El header siempre es {"alg":"HS256","typ":"JWT"} y la firma es
+// HMAC-SHA256(header.payload, secret).
+
+let secret = "mi-clave-secreta-super-larga";
+
+// --- 1. Firmar un token con claims -----------------------------------
+let payload = "{\"sub\":\"ana\",\"role\":\"admin\",\"exp\":1900000000}";
+let token = jwt_sign(payload, secret);
+println("Token:");
+println(token);
+println("");
+
+// --- 2. Verificar con la clave correcta ------------------------------
+let claims = jwt_verify(token, secret);
+println("Verificado OK -> " + claims);          // devuelve el payload JSON
+
+// --- 3. Verificar con una clave incorrecta ---------------------------
+let fake = jwt_verify(token, "clave-equivocada");
+println("Clave incorrecta -> [" + fake + "]");  // -> [] (vacío)
+
+// --- 4. Detectar manipulación (token alterado) -----------------------
+let tampered = token + "x";
+let bad = jwt_verify(tampered, secret);
+println("Token alterado  -> [" + bad + "]");     // -> [] (vacío)
+
+// --- 5. Expiración: claim "exp" en el pasado se rechaza --------------
+let exp_pasado = now_epoch() - 60;
+let venc_payload = "{\"sub\":\"ana\",\"exp\":" + exp_pasado + "}";
+let venc_token = jwt_sign(venc_payload, secret);
+let venc = jwt_verify(venc_token, secret);
+println("Token expirado  -> [" + venc + "]");    // -> [] (vacío)
+
+// --- 6. Expiración: claim "exp" en el futuro se acepta ---------------
+let exp_futuro = now_epoch() + 3600;
+let ok_payload = "{\"sub\":\"ana\",\"exp\":" + exp_futuro + "}";
+let ok_token = jwt_sign(ok_payload, secret);
+let ok = jwt_verify(ok_token, secret);
+println("Token vigente   -> " + ok);

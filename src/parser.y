@@ -495,6 +495,13 @@ var_decl:
   | INT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("INT"); $$ = decl; }
   | IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
   | THIS DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,"this"); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
+  /* v0.0.x: acceso a atributo como RHS de let/var/const (gotcha A).
+   * Reglas explícitas para evitar el conflicto shift/reduce introducido por
+   * las reglas especiales de method-call (LET ... IDENTIFIER DOT IDENTIFIER LPAREN ...),
+   * que dejan el IDENTIFIER sin reducir y rompen el caso terminado en ';'. */
+  | LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$4); ASTNode *attr = create_ast_leaf("ID",0,NULL,$6); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); ASTNode* d = create_var_decl_node($2, access); d->value = 1; /* let = immutable */ $$ = d; }
+  | VAR IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$4); ASTNode *attr = create_ast_leaf("ID",0,NULL,$6); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_var_decl_node($2, access); }
+  | CONST IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$4); ASTNode *attr = create_ast_leaf("ID",0,NULL,$6); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); ASTNode* d = create_var_decl_node($2, access); d->value = 1; $$ = d; }
 ;
 
 type_name:
