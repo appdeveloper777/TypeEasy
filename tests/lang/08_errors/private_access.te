@@ -1,0 +1,12 @@
+// expect: blocked
+// expect-stderr-contains: is private and cannot be accessed outside class
+// Reading or writing a private field from OUTSIDE the class is rejected.
+// The error is reported on stderr (in English) and execution continues.
+class Box {
+    private int _secret = 7;
+    Secret() : int { return this._secret; }
+}
+let b = new Box();
+let x = b._secret;   // private read from outside -> stderr error
+b._secret = 99;      // private write from outside -> stderr error
+println("blocked");

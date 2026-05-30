@@ -6,6 +6,7 @@
 
 extern FILE *yyin;
 extern int yyparse(void);
+extern const char *g_script_path;
 
 int main(int argc, char **argv) {
     int debug_port = 0;
@@ -23,6 +24,7 @@ int main(int argc, char **argv) {
     }
 
     if (script_path) {
+        g_script_path = script_path;
         yyin = fopen(script_path, "r");
         if (!yyin) {
             perror("No se pudo abrir el archivo");

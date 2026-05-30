@@ -1,0 +1,9 @@
+// expect-contains: before
+// expect-contains: division by zero
+// expect-contains: after
+// expect-exit: 0
+// Runtime error: dividing by zero reports an English error and the program
+// keeps running (does not abort), so both "before" and "after" are printed.
+println("before");
+let z = 10 / 0;
+println("after");

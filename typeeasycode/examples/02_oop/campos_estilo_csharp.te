@@ -1,0 +1,64 @@
+// ============================================================
+//  Campos de clase estilo C# (modificadores de acceso + tipo + default)
+// ============================================================
+//  TypeEasy soporta DOS formas de declarar atributos en una clase:
+//
+//   1) Forma clásica de propiedad:   nombre : tipo;
+//   2) Forma estilo C# / Java:       [public|private|protected] tipo nombre [= valor];
+//
+//  Ambas conviven en la misma clase. En la forma C# puedes dar un
+//  valor por defecto que se asigna al crear el objeto, ANTES de que
+//  corra el __constructor (que puede sobreescribirlo).
+// ============================================================
+
+class CuentaBancaria {
+    // Forma C#: modificador + tipo + nombre + valor por defecto
+    private int _saldo = 0;
+    public string titular = "Sin nombre";
+
+    // Forma clásica de propiedad (sigue funcionando)
+    moneda : string;
+
+    __constructor(titular : string, saldoInicial : int) {
+        this.titular = titular;
+        this._saldo = saldoInicial;
+        this.moneda = "PEN";
+    }
+
+    Depositar(monto : int) : int {
+        this._saldo = this._saldo + monto;
+        return this._saldo;
+    }
+
+    Saldo() : int {
+        return this._saldo;
+    }
+}
+
+// Clase mínima: un campo privado con default y un getter que lo expone.
+// `private` se respeta: solo se puede leer `texto` desde un método de la
+// propia clase (a través de this). Acceder a e.texto desde fuera da error.
+class Etiqueta {
+    private string texto = "nueva";
+    Texto() : string { return this.texto; }
+}
+
+var cuenta = new CuentaBancaria("Fernando", 100);
+// `titular` es string: asignarle un int da error de tipo (descomenta para probar):
+cuenta._saldo = 999;   // Error: no se puede asignar int al atributo 'titular' de tipo string.
+cuenta.titular = "Fernando Ingunza";  // Asignación correcta (string a string)
+
+let saldo1 = cuenta.Saldo();
+let saldo2 = cuenta.Depositar(50);
+
+println("Titular : " + cuenta.titular);
+println("Moneda  : " + cuenta.moneda);
+println("Saldo   : " + saldo1);
+println("Tras dep: " + saldo2);
+
+let e = new Etiqueta();
+let txt = e.Texto();
+println("Etiqueta: " + txt);
+
+// Acceso externo a un campo private -> error en stderr (descomenta para probar):
+// println(e.texto);

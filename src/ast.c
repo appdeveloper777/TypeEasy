@@ -9,6 +9,11 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 #include "bytecode.h"
 #include "mysql_bridge.h"
 #include "postgres_bridge.h"
@@ -197,6 +202,27 @@ void evaluate_native_args(ASTNode *arg) {
 // Global buffer for capturing println output
 char *g_stdout_buffer = NULL;
 size_t g_stdout_size = 0;
+
+/* Ruta del script en ejecución (para mensajes de error). La asigna main(). */
+const char *g_script_path = NULL;
+
+/* Color ANSI para mensajes de error (rojo). Git Bash / terminales VT lo
+ * soportan. Se desactiva automáticamente si stderr no es una terminal para
+ * no ensuciar archivos/pipes con códigos de escape. */
+#define TE_ERR_RED   (te_stderr_is_tty() ? "\033[31m" : "")
+#define TE_ERR_RESET (te_stderr_is_tty() ? "\033[0m"  : "")
+
+static int te_stderr_is_tty(void) {
+    static int cached = -1;
+    if (cached < 0) {
+#ifdef _WIN32
+        cached = _isatty(_fileno(stderr)) ? 1 : 0;
+#else
+        cached = isatty(fileno(stderr)) ? 1 : 0;
+#endif
+    }
+    return cached;
+}
 
 /* When non-zero, dbg_printf does NOT write to real stdout — only to the
  * capture buffer (g_stdout_buffer) and the debugger sink. Set during
@@ -662,6 +688,7 @@ char* get_node_string(ASTNode* node) {
         if (obj && obj->class) {
             for (int i = 0; i < obj->class->attr_count; i++) {
                 if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
+                    if (!te_attr_access_ok(obj->class, i, o)) return strdup("");
                     Variable *attr = &obj->attributes[i];
                     if (attr->vtype == VAL_STRING) return strdup(attr->value.string_value ? attr->value.string_value : "");
                     if (attr->vtype == VAL_INT) {
@@ -1383,6 +1410,8 @@ ClassNode *create_class(char *name) {
     class_node->name = strdup(name);
     class_node->attributes = NULL;
     class_node->attr_count = 0;
+    class_node->attr_defaults = NULL;
+    class_node->attr_access = NULL;
     class_node->methods = NULL;
     class_node->parent = NULL;
     class_node->next = NULL;
@@ -1408,6 +1437,12 @@ void inherit_from(ClassNode *child, char *parent_name) {
         child->attributes[child->attr_count].is_const = parent->attributes[i].is_const;
         child->attributes[child->attr_count].vtype = parent->attributes[i].vtype;
         memset(&child->attributes[child->attr_count].value, 0, sizeof(child->attributes[child->attr_count].value));
+        /* Inherit default-value expression (AST is read-only, safe to share). */
+        child->attr_defaults = realloc(child->attr_defaults, (child->attr_count + 1) * sizeof(ASTNode *));
+        child->attr_defaults[child->attr_count] = parent->attr_defaults ? parent->attr_defaults[i] : NULL;
+        /* Inherit access modifier. */
+        child->attr_access = realloc(child->attr_access, (child->attr_count + 1) * sizeof(int));
+        child->attr_access[child->attr_count] = parent->attr_access ? parent->attr_access[i] : 0;
         child->attr_count++;
     }
     /* Copy methods. Parent's method list is already in some order; we
@@ -1455,7 +1490,45 @@ void add_attribute_to_class(ClassNode *class, char *attr_name, char *attr_type) 
     class->attributes = realloc(class->attributes, (class->attr_count + 1) * sizeof(Variable));
     class->attributes[class->attr_count].id = strdup(attr_name);
     class->attributes[class->attr_count].type = strdup(attr_type);
+    /* Keep attr_defaults[] parallel to attributes[]; default is NULL unless
+     * the field was declared with an initializer (set_last_attr_default). */
+    class->attr_defaults = realloc(class->attr_defaults, (class->attr_count + 1) * sizeof(ASTNode *));
+    class->attr_defaults[class->attr_count] = NULL;
+    class->attr_access = realloc(class->attr_access, (class->attr_count + 1) * sizeof(int));
+    class->attr_access[class->attr_count] = 0; /* public by default */
     class->attr_count++;
+}
+
+/* Attach a default-value expression to the most recently added attribute.
+ * Called from the parser after add_attribute_to_class for C#-style fields
+ * such as `private int _total = 0;`. */
+void set_last_attr_default(ClassNode *class, ASTNode *default_expr) {
+    if (!class || class->attr_count == 0 || !class->attr_defaults) return;
+    class->attr_defaults[class->attr_count - 1] = default_expr;
+}
+
+/* Set the access modifier (0=public, 1=private, 2=protected) of the most
+ * recently added attribute. Called from the parser for declarations with an
+ * explicit access keyword. */
+void set_last_attr_access(ClassNode *class, int access) {
+    if (!class || class->attr_count == 0 || !class->attr_access) return;
+    class->attr_access[class->attr_count - 1] = access;
+}
+
+/* Runtime access check for a class attribute.
+ * Returns 1 if the access is allowed, 0 (and prints an error) if it is a
+ * private-field violation. Private fields may only be touched through `this`
+ * (i.e. from inside the class's own methods). `protected` and `public` are
+ * always allowed for now. obj_ref is the object expression of the access
+ * (its ->id is "this" for internal access). */
+int te_attr_access_ok(ClassNode *cls, int idx, ASTNode *obj_ref) {
+    if (!cls || idx < 0 || idx >= cls->attr_count) return 1;
+    if (!cls->attr_access || cls->attr_access[idx] != 1) return 1; /* not private */
+    if (obj_ref && obj_ref->id && strcmp(obj_ref->id, "this") == 0) return 1;
+    fprintf(stderr,
+            "%sError: attribute '%s' is private and cannot be accessed outside class '%s'.%s\n",
+            TE_ERR_RED, cls->attributes[idx].id, cls->name, TE_ERR_RESET);
+    return 0;
 }
 
 void add_method_to_class(ClassNode *cls, char *method, ParameterNode *params, ASTNode *body, char *return_type) {
@@ -1507,6 +1580,20 @@ ObjectNode *create_object(ClassNode *class) {
         } else {
             obj->attributes[i].vtype = VAL_INT;
             obj->attributes[i].value.int_value = 0;
+        }
+        /* Apply declared default value (C#-style field initializer), e.g.
+         * `private int _total = 0;` or `public string name = "";`. Runs
+         * before the constructor, which may still override it. */
+        if (class->attr_defaults && class->attr_defaults[i]) {
+            ASTNode *d = class->attr_defaults[i];
+            if (obj->attributes[i].vtype == VAL_STRING) {
+                if (obj->attributes[i].value.string_value) free(obj->attributes[i].value.string_value);
+                obj->attributes[i].value.string_value = strdup(d->str_value ? d->str_value : "");
+            } else if (obj->attributes[i].vtype == VAL_FLOAT) {
+                obj->attributes[i].value.float_value = evaluate_expression(d);
+            } else {
+                obj->attributes[i].value.int_value = (int)evaluate_expression(d);
+            }
         }
     }
     
@@ -1877,6 +1964,11 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         ObjectNode *obj = v->value.object_value;
         for (int i = 0; i < obj->class->attr_count; i++) {
             if (strcmp(obj->attributes[i].id, a->id) == 0) {
+                if (!te_attr_access_ok(obj->class, i, o)) {
+                    vars[my_index].vtype = VAL_INT;
+                    vars[my_index].value.int_value = 0;
+                    return;
+                }
                 // Encontramos el atributo. Copiamos su valor.
                 if (obj->attributes[i].vtype == VAL_STRING) {
                     vars[my_index].vtype = VAL_STRING;
@@ -3532,6 +3624,7 @@ double evaluate_expression(ASTNode *node) {
             if (ic_enabled && node->cached_class == (void*)obj->class) {
                 int idx = node->cached_attr_idx;
                 if (idx >= 0 && idx < obj->class->attr_count) {
+                    if (!te_attr_access_ok(obj->class, idx, objRef)) return 0;
                     if (obj->attributes[idx].vtype == VAL_INT)
                         return obj->attributes[idx].value.int_value;
                     if (obj->attributes[idx].vtype == VAL_FLOAT)
@@ -3540,6 +3633,7 @@ double evaluate_expression(ASTNode *node) {
             }
             for (int i = 0; i < obj->class->attr_count; i++) {
                 if (strcmp(obj->class->attributes[i].id, attr->id) == 0) {
+                    if (!te_attr_access_ok(obj->class, i, objRef)) return 0;
                     /* Cache the resolved (class, idx) for next time. */
                     if (ic_enabled) {
                         node->cached_class    = (void*)obj->class;
@@ -6802,6 +6896,7 @@ static void interpret_assign_attr(ASTNode *node) {
         if(strcmp(obj->class->attributes[i].id,attr_name)==0){idx=i;break;}
     }
     if(idx<0){ printf("Error: attribute '%s' not found in class '%s'.\n", attr_name, obj->class->name); return; }
+    if (!te_attr_access_ok(obj->class, idx, access->left)) return;
     const char *declared = obj->attributes[idx].type; 
 
     /* detailed attribute assignment trace removed */
@@ -6810,6 +6905,44 @@ static void interpret_assign_attr(ASTNode *node) {
         printf("Error: El atributo '%s' no tiene tipo definido.\n", attr_name);
         return;
     }    
+
+    /* Validación de tipo: no permitir asignar un valor de tipo incompatible.
+     * Se determina si el atributo declarado es de texto (string) o numérico,
+     * y si el valor asignado es de texto o numérico. Un desajuste aborta. */
+    {
+        int decl_is_str = (strcmp(declared, "string") == 0);
+        /* val_kind: 0 = desconocido, 1 = string, 2 = numérico */
+        int val_kind = 0;
+        if (value_node->type) {
+            if (strcmp(value_node->type, "STRING") == 0) {
+                val_kind = 1;
+            } else if (strcmp(value_node->type, "NUMBER") == 0 ||
+                       strcmp(value_node->type, "INT") == 0 ||
+                       strcmp(value_node->type, "FLOAT") == 0) {
+                val_kind = 2;
+            } else if (strcmp(value_node->type, "IDENTIFIER") == 0 ||
+                       strcmp(value_node->type, "ID") == 0) {
+                Variable *vv = find_variable(value_node->id ? value_node->id : value_node->str_value);
+                if (vv) {
+                    if (vv->vtype == VAL_STRING) val_kind = 1;
+                    else if (vv->vtype == VAL_INT || vv->vtype == VAL_FLOAT) val_kind = 2;
+                }
+            }
+        }
+        if (val_kind != 0) {
+            const char *val_tname = (val_kind == 1) ? "string" : "int";
+            if ((decl_is_str && val_kind == 2) || (!decl_is_str && val_kind == 1)) {
+                int ln = node->line ? node->line
+                       : (value_node->line ? value_node->line
+                       : (access->line ? access->line : 0));
+                const char *fname = g_script_path ? g_script_path : "<script>";
+                fprintf(stderr,
+                        "%s%s:%d: Error: cannot assign %s to attribute '%s' of type %s.%s\n",
+                        TE_ERR_RED, fname, ln, val_tname, attr_name, declared, TE_ERR_RESET);
+                return;
+            }
+        }
+    }
 
     if (strcmp(declared, "string") == 0) {
         if (value_node->type && strcmp(value_node->type, "STRING") == 0) {
@@ -6990,6 +7123,7 @@ static void interpret_assign(ASTNode *node) {
         ObjectNode *obj = v->value.object_value;
         for (int i = 0; i < obj->class->attr_count; i++) {
             if (strcmp(obj->attributes[i].id, a->id) == 0) {
+                if (!te_attr_access_ok(obj->class, i, o)) return;
                 // Encontramos el atributo. Creamos un nodo temporal y lo asignamos.
                 ASTNode* temp_node = NULL;
                 if (obj->attributes[i].vtype == VAL_STRING) {
@@ -7147,6 +7281,7 @@ static void interpret_print(ASTNode *node) {
             dbg_printf("Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
             return;
         }
+        if (!te_attr_access_ok(obj->class, idx, o)) return;
         Variable *attr = &obj->attributes[idx];
         if (attr->vtype == VAL_STRING)
             dbg_printf("%s", attr->value.string_value);
@@ -7233,6 +7368,7 @@ static void interpret_fprint(ASTNode *node) {
             dbg_eprintf( "Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
             return;
         }
+        if (!te_attr_access_ok(obj->class, idx, o)) return;
         Variable *attr = &obj->attributes[idx];
         if (attr->vtype == VAL_STRING)
             dbg_eprintf( "%s", attr->value.string_value);
@@ -7319,6 +7455,7 @@ static void interpret_fprintln(ASTNode *node) {
             dbg_eprintf( "Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
             return;
         }
+        if (!te_attr_access_ok(obj->class, idx, o)) return;
         Variable *attr = &obj->attributes[idx];
         if (attr->vtype == VAL_STRING)
             dbg_eprintf( "%s\n", attr->value.string_value);
@@ -7639,6 +7776,7 @@ static void interpret_println(ASTNode *node) {
             dbg_printf("Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
             return;
         }
+        if (!te_attr_access_ok(obj->class, idx, o)) return;
         Variable *attr = &obj->attributes[idx];
         if (attr->vtype == VAL_STRING) {
             dbg_printf("%s\n", attr->value.string_value);

@@ -1,0 +1,23 @@
+// expect: name=Ana saldo=150 secret=7
+// Access modifiers (public/private) happy path:
+//  - public fields can be read AND written from outside the class
+//  - private fields are reachable from outside only through a getter method
+class Account {
+    private int _saldo = 0;
+    public string name = "anon";
+    __constructor(n : string, s : int) {
+        this.name = n;
+        this._saldo = s;
+    }
+    Deposit(m : int) : int { this._saldo = this._saldo + m; return this._saldo; }
+    Saldo() : int { return this._saldo; }
+}
+class Box {
+    private int _secret = 7;
+    Secret() : int { return this._secret; }
+}
+let a = new Account("Ana", 100);
+a.name = "Ana";          // public write OK
+let s = a.Deposit(50);   // 100 + 50 = 150
+let b = new Box();
+println("name=" + a.name + " saldo=" + s + " secret=" + b.Secret());

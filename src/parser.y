@@ -36,6 +36,7 @@
  * registry (te_builtins.c). */
 %token       EXTENDS
 %token       VOID DYNAMIC
+%token       PUBLIC PRIVATE PROTECTED
 %token       NULLTOK QMARK
 %token       TRUETOK FALSETOK
 %token <sval> BOOLTYPE DATETIMETYPE UUIDTYPE
@@ -54,6 +55,8 @@
 %type <sval> method_name
 %type <sval> method_return_type
 %type <sval> type_name
+%type <sval> field_type
+%type <ival> access_mod
 %type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args lambda_expression httpget_method_decl lambda_value
 %type <sval> lambda_param_list
 %type <pnode> parameter_decl parameter_list
@@ -330,7 +333,32 @@ attribute_decl:
   | IDENTIFIER COLON BOOLTYPE QMARK SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "bool?"); } }
   | IDENTIFIER COLON DATETIMETYPE QMARK SEMICOLON { if (last_class) { add_attribute_to_class(last_class, $1, "datetime?"); } }
   | IDENTIFIER COLON UUIDTYPE QMARK SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "uuid?"); } }
+  /* C#/C-style fields: [public|private|protected] type name [= default] ; */
+  | field_type IDENTIFIER SEMICOLON
+      { if (last_class) { add_attribute_to_class(last_class, $2, $1); } free($1); }
+  | field_type IDENTIFIER ASSIGN expression SEMICOLON
+      { if (last_class) { add_attribute_to_class(last_class, $2, $1); set_last_attr_default(last_class, $4); } free($1); }
+  | access_mod field_type IDENTIFIER SEMICOLON
+      { if (last_class) { add_attribute_to_class(last_class, $3, $2); set_last_attr_access(last_class, $1); } free($2); }
+  | access_mod field_type IDENTIFIER ASSIGN expression SEMICOLON
+      { if (last_class) { add_attribute_to_class(last_class, $3, $2); set_last_attr_access(last_class, $1); set_last_attr_default(last_class, $5); } free($2); }
   ;
+
+field_type:
+    INT          { $$ = $1; }
+  | STRING       { $$ = $1; }
+  | FLOAT        { $$ = $1; }
+  | BOOLTYPE     { $$ = $1; }
+  | DATETIMETYPE { $$ = $1; }
+  | UUIDTYPE     { $$ = $1; }
+  ;
+
+access_mod:
+    PUBLIC    { $$ = 0; }
+  | PRIVATE   { $$ = 1; }
+  | PROTECTED { $$ = 2; }
+  ;
+
 
 constructor_decl:
     CONSTRUCTOR LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET  { if (last_class) { add_constructor_to_class(last_class, $3, $6); } else { printf("Error: No hay clase definida para el constructor.\n"); } $$ = NULL; }

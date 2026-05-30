@@ -1,0 +1,13 @@
+// expect: ok
+// expect-stderr-contains: cannot assign int to attribute
+// Assigning a value whose type does not match the declared attribute type
+// is rejected. The error is reported on stderr (in English) and execution
+// continues without mutating the attribute.
+class Person {
+    public string nombre = "x";
+    public int edad = 0;
+}
+let p = new Person();
+p.nombre = 123;   // int -> string attribute: type error
+p.edad = "hola";  // string -> int attribute: type error
+println("ok");

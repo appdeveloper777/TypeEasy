@@ -1,0 +1,6 @@
+// expect: t=15
+// Closure: a lambda captures an outer variable (`factor`) and uses it when
+// called later. 5 * 3 = 15.
+var factor = 3;
+var triple = fn(x) => x * factor;
+println("t=" + triple(5));

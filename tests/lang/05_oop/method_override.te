@@ -1,0 +1,22 @@
+// expect-contains: Animal generico
+// expect-contains: Perro
+// expect-contains: Hola Rex
+// expect-exit: 0
+// Inheritance with method override:
+//  - Perro overrides describir() -> "Perro" (Animal's returns "Animal generico")
+//  - Perro inherits saludar() from Animal, which reads the inherited field.
+class Animal {
+    nombre : string;
+    __constructor(n : string) { this.nombre = n; }
+    describir() : string { return "Animal generico"; }
+    saludar() : void { print("Hola "); println(this.nombre); }
+}
+class Perro extends Animal {
+    __constructor(n : string) { this.nombre = n; }
+    describir() : string { return "Perro"; }
+}
+let a = new Animal("Bicho");
+let p = new Perro("Rex");
+println(a.describir());
+println(p.describir());
+p.saludar();

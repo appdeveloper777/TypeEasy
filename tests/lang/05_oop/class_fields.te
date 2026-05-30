@@ -1,0 +1,23 @@
+// expect: tot=10 name=contador total=0 tag=x
+// C#-style class fields: access modifiers (public/private) + type-first +
+// default value. The classic `name : type;` property form keeps working,
+// and the default is applied before the constructor (which may override it).
+// `private` is enforced: a private field can only be read through `this`
+// inside the class's own methods, so `tag` is exposed via the getter Tag().
+class Counter {
+    private int _total = 0;
+    public string name = "contador";
+    total : int;
+    __constructor(start : int) { this._total = start; }
+    Total() : int { return this._total; }
+}
+class Tag {
+    private string tag = "x";
+    Tag() : string { return this.tag; }
+}
+
+let c = new Counter(10);
+let tot = c.Total();
+let t = new Tag();
+let tg = t.Tag();
+println("tot=" + tot + " name=" + c.name + " total=" + c.total + " tag=" + tg);

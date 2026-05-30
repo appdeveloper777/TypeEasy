@@ -539,6 +539,7 @@ int main(int argc, char *argv[]) {
     //     resuelva relativo al .te además del cwd. Cubre syntax-check,
     //     symbols y modo normal.
     te_set_script_dir_from_path(script_path);
+    g_script_path = script_path;
 
     if (syntax_check_mode) return run_syntax_check(script_path);
     if (symbols_mode) return run_symbols(script_path);

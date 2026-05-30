@@ -1,0 +1,7 @@
+// expect: fact5=120
+// Recursion: a lambda that calls itself. 5! = 120.
+var fact = fn(n) => {
+    if (n <= 1) { return 1; }
+    return n * fact(n - 1);
+};
+println("fact5=" + fact(5));

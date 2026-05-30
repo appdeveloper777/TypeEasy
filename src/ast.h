@@ -148,6 +148,16 @@ typedef struct ClassNode {
     char *name;
     Variable *attributes;
     int attr_count;
+    /* Default-value expressions, parallel to attributes[] (NULL = none).
+     * Set when a field is declared C#-style with an initializer, e.g.
+     * `private int _total = 0;`. Applied in create_object() before the
+     * constructor runs. AST nodes are owned by the parse tree (read-only). */
+    struct ASTNode **attr_defaults;
+    /* Access modifier per attribute, parallel to attributes[]:
+     *   0 = public (default), 1 = private, 2 = protected.
+     * `private` is enforced at runtime: a private field can only be read or
+     * written through `this` (inside the class's own methods). */
+    int *attr_access;
     MethodNode *methods;
     struct ClassNode *parent;   /* Phase E: superclass (NULL if none) */
     struct ClassNode *next;
@@ -244,6 +254,9 @@ ClassNode *create_class(char *name);
 void inherit_from(ClassNode *child, char *parent_name);  /* Phase E */
 void add_class(ClassNode *class);
 void add_attribute_to_class(ClassNode *class, char *attr_name, char *attr_type);
+void set_last_attr_default(ClassNode *class, ASTNode *default_expr);
+void set_last_attr_access(ClassNode *class, int access);
+int te_attr_access_ok(ClassNode *cls, int idx, ASTNode *obj_ref);
 void add_method_to_class(ClassNode *class,
                              char *method,
                              ParameterNode *params,
@@ -263,6 +276,9 @@ ASTNode *create_train_option_node(const char *option_name, int value);
 
 extern Variable __ret_var;
 extern int __ret_var_active;
+
+/* Ruta del script en ejecución (para mensajes de error). La asigna main(). */
+extern const char *g_script_path;
 
 // Funciones adicionales que faltan
 double evaluate_expression(ASTNode *node);

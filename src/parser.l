@@ -170,6 +170,9 @@
 "string"                { yylval.sval = strdup(yytext); return STRING; }
 "void"                  { return VOID; }
 "dynamic"               { return DYNAMIC; }
+"public"                { return PUBLIC; }
+"private"               { return PRIVATE; }
+"protected"             { return PROTECTED; }
 "null"                  { return NULLTOK; }
 "true"                  { return TRUETOK; }
 "false"                 { return FALSETOK; }

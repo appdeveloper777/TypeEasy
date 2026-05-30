@@ -1,0 +1,11 @@
+// expect: sum=7
+// `for ... in` over a list with both `continue` and `break`.
+// Iterates 1..6: skips 3 (continue), stops at 5 (break).
+// So it accumulates 1 + 2 + 4 = 7.
+var sum = 0;
+for (let n in [1, 2, 3, 4, 5, 6]) {
+    if (n == 3) { continue; }
+    if (n == 5) { break; }
+    sum = sum + n;
+}
+println("sum=" + sum);
