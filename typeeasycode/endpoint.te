@@ -7,8 +7,8 @@
 //
 // El cuerpo de la respuesta debe enviarse con `return json(<var>)`,
 // `return json("<string-literal>")` o `return xml(...)`.
-// Un `return json({...})` con object literal inline NO se serializa todavia
-// (limitacion del intérprete): asigna a variable primero.
+// Desde v0.0.15 `return json({...})` con object literal inline tambien
+// se serializa correctamente (ver endpoint /api/hola).
 
 class User {
     name : string;
@@ -24,6 +24,26 @@ endpoint {
     [HttpGet("/ping")]
     ping() {
         return json("{\"pong\":1}");
+    }
+
+    // v0.0.15: object literal inline serializado directamente por json().
+    // Las tres formas de construir el valor funcionan:
+    [HttpGet("/api/hola/{nombre}")]
+    Hola() {
+        let nombre = request_param("nombre");
+        return json({ mensaje: "¡Hola " + nombre + " desde TypeEasy!" });   // concat con +
+    }
+
+    [HttpGet("/api/hola-interp/{nombre}")]
+    HolaInterp() {
+        let nombre = request_param("nombre");
+        return json({ mensaje: $"¡Hola {nombre}!" });                       // interpolación {}
+    }
+
+    [HttpGet("/api/hola-dollar/{nombre}")]
+    HolaDollar() {
+        let nombre = request_param("nombre");
+        return json({ mensaje: $"¡Hola ${nombre}!" });                      // interpolación ${}
     }
 
     [HttpGet("/users/{id}")]

@@ -20,6 +20,10 @@
 static te_json_eval_fn g_eval_call_func   = NULL;
 static te_json_eval_fn g_eval_call_method = NULL;
 
+/* Declared in ast.c (not in ast.h): tells whether an expression node
+ * evaluates to a string (used to pick string vs numeric JSON emission). */
+int is_string_type(ASTNode *node);
+
 void te_json_set_eval_hooks(te_json_eval_fn call_func,
                             te_json_eval_fn call_method) {
     g_eval_call_func   = call_func;
@@ -134,6 +138,30 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
                 return;
             }
         }
+    }
+    /* v1.0.1: evaluate expression nodes used as inline object-literal values,
+     * e.g. { mensaje: "Hola " + nombre } (ADD string concat) or an
+     * interpolated string { mensaje: $"Hola {nombre}" }. Strings go through
+     * get_node_string(); numeric arithmetic through evaluate_expression(). */
+    if (strcmp(n->type, "ADD") == 0 || strcmp(n->type, "SUB") == 0 ||
+        strcmp(n->type, "MUL") == 0 || strcmp(n->type, "DIV") == 0 ||
+        strcmp(n->type, "MOD") == 0 || strcmp(n->type, "NEG") == 0 ||
+        strcmp(n->type, "STRING_INTERP") == 0) {
+        if (strcmp(n->type, "STRING_INTERP") == 0 || is_string_type(n)) {
+            char *s = get_node_string(n);
+            te_json_emit_str(b, s ? s : "");
+            if (s) free(s);
+        } else {
+            double d = evaluate_expression(n);
+            if (d == (long long)d) {
+                char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)d);
+                tebuf_puts(b, tmp);
+            } else {
+                char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", d);
+                tebuf_puts(b, tmp);
+            }
+        }
+        return;
     }
     tebuf_puts(b, "null");
 }

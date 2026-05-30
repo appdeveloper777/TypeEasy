@@ -3057,6 +3057,11 @@ char* expand_interp_string(const char *raw) {
             out[len++] = '}'; p++;
             continue;
         }
+        /* Soporta interpolación estilo JS: ${var} además de {var}.
+         * Un '$' seguido de '{' se trata como inicio de placeholder. */
+        if (*p == '$' && *(p+1) == '{') {
+            p++; /* saltar '$', el '{' lo procesa el bloque siguiente */
+        }
         if (*p == '{') {
             const char *end = strchr(p, '}');
             if (!end) {
