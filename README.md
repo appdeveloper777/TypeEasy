@@ -15,12 +15,16 @@
 
 Un intérprete / framework escrito en C: tu propio lenguaje, scripts, bridges con servicios externos y *API Endpoint maker*.
 
+</div>
+
 ```ts
 endpoint {
     [HttpGet("/api/hola")]
     Hola() { return json({ mensaje: "¡Hola desde TypeEasy!" }); }
 }
 ```
+
+<div align="center">
 
 [🚀 Inicio Rápido](#-inicio-rápido) • [📖 Chatbot WhatsApp](#-chatbot-whatsapp-con-gemini-ai) • [🔌 APIs REST](#-crear-apis-rest) • [⭐ Apoyar](#-apoya-el-proyecto)
 
