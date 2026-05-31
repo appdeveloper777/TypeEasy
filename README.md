@@ -11,9 +11,10 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/appdeveloper777/TypeEasy?style=social)](https://github.com/appdeveloper777/TypeEasy/stargazers)
 
-**Crea APIs REST con sintaxis tipo C# / TypeScript — sin frameworks pesados ni runtime gigante.**
+**La API más rápida de escribir y desplegar: un binario, cero runtime, cero Docker, cero `npm install`.**
 
-Un intérprete / framework escrito en C: tu propio lenguaje, scripts, bridges con servicios externos y *API Endpoint maker*.
+Escribís un endpoint con sintaxis tipo C# / TypeScript y lo servís con un único
+ejecutable nativo. Sin intérprete que instalar, sin árbol de dependencias.
 
 </div>
 
@@ -34,21 +35,44 @@ endpoint {
 
 ## ¿Qué es TypeEasy?
 
-TypeEasy es un intérprete / framework experimental escrito principalmente en C que te permite:
+TypeEasy es un **framework de APIs en un solo binario nativo (escrito en C)**.
+Su única promesa: que escribir y desplegar una API sea más rápido que con
+cualquier stack que tenga runtime y gestor de paquetes.
 
-✔️ **Crear endpoints REST** como FastAPI pero con sintaxis familiar (C# / TypeScript) <br>
-✔️ **Crear tu propia sintaxis** adaptada perfectamente a tu dominio o equipo <br>
-✔️ **Hacer "bridge"** sin esfuerzo con otros lenguajes potentes como Java, Rust y C# (vía subproceso + protocolo de líneas JSON) <br>
-✔️ **Crear scripts** para integraciones y automatizaciones
+```bash
+# Quickstart real, 4 líneas:
+git clone https://github.com/appdeveloper777/TypeEasy.git
+cd TypeEasy
+echo 'endpoint { [HttpGet("/")] home() { return json({ ok: true }); } }' > hola.te
+typeeasy --api hola.te --port 8080      # -> http://localhost:8080/
+```
 
-**¿Por qué TypeEasy?**
+**¿En qué se enfoca?**
 
-- ⚡ **Ligero y rápido** — un solo binario nativo, sin SDK pesado que instalar.
+- ⚡ **Un binario, cero runtime** — no instalás intérprete ni `node_modules`; el
+  ejecutable *es* el servidor. Desplegar = copiar un archivo.
 - 🧩 **Sintaxis familiar** — clases, tipado y atributos `[HttpGet]` estilo C#/.NET.
-- 🔐 **Listo para producción** — JWT (HS256), CORS multi-dominio, worker pool y Swagger UI integrado.
+- 🔐 **Listo para el camino feliz** — JWT (HS256), `@auth`, CORS, model binding
+  con validación 422, worker pool y Swagger UI integrado.
 - 🛠️ **CLI estilo Rails** — `te new`, `te gen`, `te serve` sin boilerplate.
-- 🤖 **Baterías incluidas** — bridge con Gemini AI, chatbot de WhatsApp y conectores de base de datos.
-- 🔀 **Async cooperativo real** — event loop con `spawn` / `await` / `await_all` que solapa E/S de subprocesos (no bloqueante); 3 llamadas lentas en paralelo ≈ el tiempo de una. Ver `typeeasycode/examples/20_async/`.
+
+### TypeEasy vs FastAPI (comparación honesta)
+
+|  | TypeEasy | FastAPI |
+|--|----------|---------|
+| Runtime a instalar | ninguno (un `.exe`) | Python + pip + uvicorn |
+| Desplegar | copiar 1 binario | imagen/venv + dependencias |
+| Arranque en frío | inmediato | importar el árbol de paquetes |
+| Ecosistema | acotado, enfocado en API | enorme (todo PyPI) |
+| Madurez | experimental (v0.0.x) | producción, batería completa |
+
+> TypeEasy **no** intenta reemplazar a FastAPI en features ni ecosistema. Gana
+> en **time-to-deploy**: una API funcionando sin instalar nada alrededor.
+> Las capacidades de **CSV/LINQ/DataFrame** son *features de soporte* para mover
+> datos dentro de tus endpoints — **no** un competidor de Polars/pandas.
+
+> Documentación de los builtins de API: [docs/API_BUILTINS.md](docs/API_BUILTINS.md) ·
+> Hoja de ruta: [docs/ROADMAP.md](docs/ROADMAP.md)
 
 <img width="1910" height="932" alt="image" src="https://github.com/user-attachments/assets/6abbb4f1-9066-44e1-8da6-dfd804cd7d1a" />
 

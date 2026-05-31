@@ -1,0 +1,8 @@
+// expect: 2|4|6
+// REGRESIÓN POSITIVA: closures que capturan una variable externa dentro de
+// .map() FUNCIONAN (este gotcha histórico ya está resuelto). Este test bloquea
+// una regresión futura: cada elemento se multiplica por `factor` capturado.
+var factor = 2;
+let xs = [1, 2, 3];
+let ys = xs.map(fn(x) => x * factor);
+print(ys[0]); print("|"); print(ys[1]); print("|"); println(ys[2]);

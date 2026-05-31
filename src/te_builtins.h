@@ -73,6 +73,15 @@ typedef struct TEHostAPI {
      * Disponible solo si abi_version >= 2. */
     ASTNode* (*arg_map_head)(ASTNode *arg, int *out_owned);
     void     (*free_node)(ASTNode *node);
+
+    /* === Guard append-only (Nivel 2.1) =================================
+     * sizeof(TEHostAPI) que el HOST compiló. Permite detectar drift de
+     * layout aunque alguien olvide subir TE_HOST_API_VERSION: si un plugin
+     * obsoleto (compilado contra otra disposición de campos) se carga, su
+     * sizeof local NO coincidirá y debe rechazarse RUIDOSAMENTE en vez de
+     * registrar punteros desalineados que devuelven [] en silencio.
+     * Plugins viejos que no leen este campo simplemente lo ignoran (0). */
+    int      struct_size;
 } TEHostAPI;
 
 #define TE_HOST_API_VERSION 2

@@ -6,18 +6,24 @@ on:
     paths:
       - 'src/**'
       - 'tests/lang/**'
+      - 'tests/api/**'
+      - 'typeeasycode/endpoint.te'
       - 'tools/te-test/**'
       - '.github/workflows/lang-tests.yml'
       - 'src/Dockerfile'
       - 'docker-compose.yml'
+      - 'scripts/audit_llp64_prototypes.sh'
   pull_request:
     paths:
       - 'src/**'
       - 'tests/lang/**'
+      - 'tests/api/**'
+      - 'typeeasycode/endpoint.te'
       - 'tools/te-test/**'
       - '.github/workflows/lang-tests.yml'
       - 'src/Dockerfile'
       - 'docker-compose.yml'
+      - 'scripts/audit_llp64_prototypes.sh'
   workflow_dispatch:
 
 permissions:
@@ -26,6 +32,17 @@ permissions:
   pull-requests: write
 
 jobs:
+  llp64-prototype-audit:
+    # Guard estático (Nivel 1.2): detecta constructores del parser/lexer sin
+    # prototipo en src/*.h, que en Windows (LLP64) truncan punteros a 32 bits y
+    # provocan SIGSEGV invisibles en Linux. Corre en segundos, sin compilar.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit constructor prototypes (LLP64 guard)
+        run: bash scripts/audit_llp64_prototypes.sh
+
   lang-conformance:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -69,3 +86,31 @@ jobs:
           path: tests/.report/junit-lang.xml
           reporter: java-junit
           fail-on-error: false
+
+  api-smoke:
+    # End-to-end smoke (Nivel 2.x): levanta el server `typeeasy --api` real y
+    # pega HTTP contra typeeasycode/endpoint.te (rutas, model binding, JWT/@auth).
+    # Es independiente de la suite de lenguaje: cubre el modo API, no el AST.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build TypeEasy interpreter image
+        run: docker compose build typeeasy
+
+      - name: Run API smoke suite
+        env:
+          JWT_SECRET: ci-api-smoke-secret
+        run: |
+          python tests/api/run_api_tests.py \
+            --mode docker \
+            --image typeeasy-typeeasy:latest

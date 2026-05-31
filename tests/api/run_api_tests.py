@@ -34,6 +34,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENDPOINT_TE = REPO_ROOT / "typeeasycode" / "endpoint.te"
 
+# Shared JWT secret for the login + @auth round-trip tests. The server's
+# jwt_sign (in /api/login) and the @auth decorator both read env("JWT_SECRET"),
+# so the runner forces the SAME value into both server modes (native + docker)
+# to make the protected-route tests deterministic.
+TEST_JWT_SECRET = os.environ.get("JWT_SECRET") or "testsecret123"
+
 # ---------------------------------------------------------------------------
 # Server lifecycle
 # ---------------------------------------------------------------------------
@@ -64,6 +70,7 @@ def start_docker_server(image: str, port: int) -> str:
         "-v", f"{code_mount}:/code",
         "-w", "/code",
         "--entrypoint", "/typeeasy/typeeasy",
+        "-e", f"JWT_SECRET={TEST_JWT_SECRET}",
         image,
         "--api", "endpoint.te", "--port", "9000", "--host", "0.0.0.0",
     ]
@@ -82,6 +89,7 @@ def start_native_server(port: int) -> subprocess.Popen:
     if not binary.exists():
         sys.exit(f"native binary not found at {binary}")
     env = os.environ.copy()
+    env["JWT_SECRET"] = TEST_JWT_SECRET  # login + @auth must share the secret
     if os.name == "nt":
         # Ensure MSYS2 mingw64 runtime DLLs are visible.
         env["PATH"] = "C:\\msys64\\mingw64\\bin;C:\\msys64\\usr\\bin;" + env.get("PATH", "")
@@ -111,9 +119,10 @@ def wait_for_server(port: int, timeout: float = 20.0) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def http_get(port: int, path: str) -> tuple[int, str]:
+def http_get(port: int, path: str,
+             headers: dict[str, str] | None = None) -> tuple[int, str]:
     url = f"http://127.0.0.1:{port}{path}"
-    req = urllib.request.Request(url, method="GET")
+    req = urllib.request.Request(url, method="GET", headers=headers or {})
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
             return r.status, r.read().decode("utf-8", errors="replace")
@@ -179,7 +188,7 @@ def run_tests(port: int) -> tuple[int, int, int]:
         expect("hola-mundo" in b, f"echo missing payload: {b!r}")
 
     def t_model_bind():
-        s, b = http_post(port, "/api/users",
+        s, b = http_post(port, "/api/users2",
                          '{"name":"Ana","age":30}', "application/json")
         expect(s == 200, f"status {s}")
         data = jsonlib.loads(b)
@@ -221,7 +230,7 @@ def run_tests(port: int) -> tuple[int, int, int]:
 
     def t_users_extra_field():
         # Extra unknown JSON field must be ignored, valid fields bound.
-        s, b = http_post(port, "/api/users",
+        s, b = http_post(port, "/api/users2",
                          '{"name":"Bea","age":21,"role":"admin"}',
                          "application/json")
         expect(s == 200, f"status {s}")
@@ -232,13 +241,13 @@ def run_tests(port: int) -> tuple[int, int, int]:
     def t_users_missing_age():
         # Missing field: server must respond (200 with default or 4xx)
         # — we accept anything non-5xx as a sane outcome.
-        s, b = http_post(port, "/api/users",
+        s, b = http_post(port, "/api/users2",
                          '{"name":"Cee"}', "application/json")
         expect(s < 500, f"server crashed on missing field: status {s}")
 
     def t_users_malformed_json():
         # Malformed JSON: must not 5xx the process.
-        s, b = http_post(port, "/api/users",
+        s, b = http_post(port, "/api/users2",
                          '{"name":"Ana", "age":', "application/json")
         expect(s < 500, f"server crashed on bad JSON: status {s}")
 
@@ -252,6 +261,43 @@ def run_tests(port: int) -> tuple[int, int, int]:
         # reject only 5xx (server crash).
         s, b = http_post(port, "/ping", "", "text/plain")
         expect(s < 500, f"5xx on method mismatch: status {s}")
+
+    # ---- JWT: login + protected route (@auth) --------------------------
+
+    def _login_token() -> str:
+        s, b = http_post(port, "/api/login",
+                         '{"name":"ana","age":30}', "application/json")
+        expect(s == 200, f"login status {s}: {b!r}")
+        data = jsonlib.loads(b)
+        token = data.get("token", "")
+        expect(token.count(".") == 2, f"token not a JWS (3 parts): {token!r}")
+        return token
+
+    def t_login():
+        # POST /api/login -> 200 with a HS256 JWT (header.payload.signature).
+        _login_token()
+
+    def t_perfil_no_token():
+        # @auth must reject a request with no Authorization header.
+        s, b = http_get(port, "/api/perfil")
+        expect(s == 401, f"expected 401 without token, got {s}: {b!r}")
+
+    def t_perfil_bad_token():
+        # A malformed/forged bearer token must be rejected by @auth.
+        s, b = http_get(port, "/api/perfil",
+                        {"Authorization": "Bearer not.a.jwt"})
+        expect(s == 401, f"expected 401 for bad token, got {s}: {b!r}")
+
+    def t_perfil_with_token():
+        # Full round-trip: login -> use token -> 200 with the claims echoed.
+        token = _login_token()
+        s, b = http_get(port, "/api/perfil",
+                        {"Authorization": f"Bearer {token}"})
+        expect(s == 200, f"expected 200 with valid token, got {s}: {b!r}")
+        data = jsonlib.loads(b)
+        expect(data.get("ok") is True, f"missing ok=true: {data}")
+        expect('"sub":"ana"' in b or data.get("claims", {}).get("sub") == "ana",
+               f"claims did not carry sub=ana: {b!r}")
 
     case("GET /", t_root)
     case("GET /ping", t_ping)
@@ -267,6 +313,10 @@ def run_tests(port: int) -> tuple[int, int, int]:
     case("POST /api/users malformed JSON", t_users_malformed_json)
     case("POST /api/no-such-route (404)", t_not_found_post)
     case("POST /ping (method mismatch)", t_method_mismatch)
+    case("POST /api/login (JWT issue)", t_login)
+    case("GET /api/perfil no token (401)", t_perfil_no_token)
+    case("GET /api/perfil bad token (401)", t_perfil_bad_token)
+    case("GET /api/perfil valid token (200)", t_perfil_with_token)
 
     passed = failed = warned = 0
     for name, fn in cases:

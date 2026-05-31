@@ -1,0 +1,5 @@
+// expect: val=10
+// REGRESIÓN POSITIVA: "texto" + mapa["clave"] concatena correctamente (gotcha
+// histórico ya resuelto). Este test bloquea una regresión futura.
+let m = {"k": 10};
+println("val=" + m["k"]);

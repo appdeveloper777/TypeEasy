@@ -1,0 +1,8 @@
+// xfail: retornar una función desde otra función no preserva la captura (sale con error)
+// Comportamiento deseado: make(10) devuelve un sumador; add10(5) == 15.
+// El runner trata xfail por EXIT CODE: hoy este caso termina con código ≠ 0.
+// Cuando se arregle (exit 0 + salida 15): el runner lo marca XPASS -> quitá
+// la directiva xfail y agregá `// expect: 15`.
+var make = fn(n) => fn(x) => x + n;
+let add10 = make(10);
+println(add10(5));

@@ -72,7 +72,7 @@ endpoint {
     crearUsuario(u : User) {
         let resp = concat("{\"name\":\"", u.name, "\",\"age\":", u.age, "}");
         u.age = u.age + 1;  // Modificar el objeto `u` no afecta al JSON devuelto, que ya se construyó con el valor original.
-        return json(u);
+        return json(resp);
     }
 
     // ===================================================================

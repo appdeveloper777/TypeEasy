@@ -573,6 +573,18 @@ void te_module_register(const TEHostAPI *host) {
                 host->abi_version, TE_HOST_API_VERSION);
         return;
     }
+    /* Nivel 2.1: guard append-only contra drift de layout. Si el host fue
+     * recompilado con un TEHostAPI de tamaño distinto al que vio este plugin,
+     * los punteros de la API quedarían desalineados y sqlite_* devolvería []
+     * en silencio. Rechazamos RUIDOSAMENTE y pedimos recompilar el plugin. */
+    if (host->struct_size != 0 && host->struct_size != (int)sizeof(TEHostAPI)) {
+        fprintf(stderr,
+            "[libte_sqlite] ABI layout mismatch: host TEHostAPI=%d bytes, "
+            "plugin=%d bytes. Recompilá el plugin contra este binario "
+            "(plugins/sqlite) antes de usar sqlite_*.\n",
+            host->struct_size, (int)sizeof(TEHostAPI));
+        return;
+    }
     g_host = *host;   /* copia la API por valor (el original vive en el stack del host) */
     host->register_builtin("sqlite_connect", te_sqlite_connect);
     host->register_builtin("sqlite_exec",    te_sqlite_exec);

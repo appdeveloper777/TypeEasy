@@ -817,13 +817,17 @@ void yyerror(const char *s) {
     extern char *yytext;
     extern int g_capture_errors;
     extern void te_capture_error(int line, const char *msg, const char *near);
+    extern const char *g_debug_source_file;
     if (g_capture_errors) {
         te_capture_error(yylineno, s, yytext);
         return;
     }
-    printf("Error de sintaxis en linea %d: %s\n", yylineno, s);
-    if (yytext) {
-        printf("Cerca de: '%s'\n", yytext);
+    /* Diagnostics go to stderr in an English, editor-jumpable file:line: form. */
+    const char *src = (g_debug_source_file && g_debug_source_file[0])
+                      ? g_debug_source_file : "<stdin>";
+    fprintf(stderr, "%s:%d: syntax error: %s\n", src, yylineno, s);
+    if (yytext && yytext[0]) {
+        fprintf(stderr, "%s:%d: near '%s'\n", src, yylineno, yytext);
     }
 }
 

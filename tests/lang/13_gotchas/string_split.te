@@ -1,0 +1,8 @@
+// expect: 0
+// TRIPWIRE (bug conocido): s.split(sep) devuelve longitud 0 en vez de 3.
+// Salida DESEADA: 3. Hoy el intérprete imprime 0 (exit 0, sin error).
+// Cuando este test empiece a FALLAR significa que el bug se arregló:
+//   -> actualizá el expect a 3 y borrá este aviso.
+let s = "a,b,c";
+let parts = s.split(",");
+println(parts.length);

@@ -1119,6 +1119,7 @@ void te_fill_host_api(TEHostAPI *out) {
     if (!out) return;
     memset(out, 0, sizeof(*out));
     out->abi_version      = TE_HOST_API_VERSION;
+    out->struct_size      = (int)sizeof(TEHostAPI);
     out->register_builtin = te_builtin_register;
     out->set_ret_int      = host_set_ret_int;
     out->set_ret_str      = host_set_ret_str;

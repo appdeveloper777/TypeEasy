@@ -540,6 +540,10 @@ int main(int argc, char *argv[]) {
     //     symbols y modo normal.
     te_set_script_dir_from_path(script_path);
     g_script_path = script_path;
+    /* Make the user-visible source path available to yyerror so syntax errors
+       are reported as `path:line: syntax error: ...` (Level 1.3). */
+    extern const char *g_debug_source_file;
+    g_debug_source_file = script_path;
 
     if (syntax_check_mode) return run_syntax_check(script_path);
     if (symbols_mode) return run_symbols(script_path);
@@ -555,7 +559,7 @@ int main(int argc, char *argv[]) {
     fclose(file);
 
     if (!script_ast) {
-        fprintf(stderr, "Error: no se pudo parsear el archivo '%s'.\n", script_path);
+        fprintf(stderr, "%s: error: could not parse file (see syntax errors above)\n", script_path);
         return 1;
     }
 
