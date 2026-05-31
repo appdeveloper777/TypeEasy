@@ -1,0 +1,82 @@
+// =============================================================
+// examples/17_jwt/jwt_auth_decorator — proteccion con el decorador @auth
+//
+// A diferencia de jwt_api_auth.te (que verifica el token a mano dentro
+// del handler), aqui el decorador `@auth` hace TODA la verificacion ANTES
+// de entrar al metodo:
+//
+//   - Lee el header `Authorization: Bearer <token>`.
+//   - Valida la firma HS256 usando el secret de la variable de entorno
+//     JWT_SECRET (NO se hardcodea en el codigo).
+//   - Comprueba que el claim `exp` no este vencido.
+//   - Si algo falla -> responde 401 {"error":"unauthorized"} y el handler
+//     NUNCA se ejecuta (cero boilerplate dentro del metodo).
+//
+// Dentro de un handler @auth podes leer el payload validado con
+// `current_claims()` (devuelve el JSON de claims como string).
+//
+// -------------------------------------------------------------
+// Ejecutar (IMPORTANTE: exportar el secret ANTES de arrancar):
+//
+//   # Linux / macOS / Git-Bash:
+//   export JWT_SECRET="mi-clave-secreta"
+//   typeeasy --api examples/17_jwt/jwt_auth_decorator.te --port 9102
+//
+//   # PowerShell:
+//   $env:JWT_SECRET="mi-clave-secreta"
+//   typeeasy --api examples/17_jwt/jwt_auth_decorator.te --port 9102
+//
+//   # Docker (el secret se define en docker-compose.yml como JWT_SECRET):
+//   docker compose up -d typeeasy
+//
+// Probar:
+//   # 1) login -> token (firmado con el MISMO JWT_SECRET)
+//   curl -s -X POST -H "Content-Type: application/json" \
+//        -d '{"name":"ana","age":30}' http://localhost:9102/api/login
+//
+//   # 2) ruta protegida con el token devuelto -> 200 + claims
+//   curl -s -H "Authorization: Bearer <TOKEN>" http://localhost:9102/api/perfil
+//
+//   # 3) sin token / token invalido / expirado -> 401
+//   curl -s -i http://localhost:9102/api/perfil
+// =============================================================
+
+class User {
+    name : string;
+    age  : int;
+}
+
+endpoint {
+    // --- Login: firma un JWT con el secret de entorno --------------
+    //   POST /api/login  body: {"name":"ana","age":30}
+    [HttpPost("/api/login")]
+    login(u : User) {
+        let secret  = env("JWT_SECRET");          // mismo secret que valida @auth
+        let exp     = now_epoch() + 3600;         // vence en 1 hora
+        let payload = concat("{\"sub\":\"", u.name, "\",\"role\":\"admin\",\"exp\":", exp, "}");
+        let token   = jwt_sign(payload, secret);
+        return json({ token: token });
+    }
+
+    // --- Ruta protegida: @auth valida el Bearer token ANTES del handler
+    //   El secret se toma de JWT_SECRET. current_claims() trae el payload.
+    @auth
+    [HttpGet("/api/perfil")]
+    perfil() {
+        // claims es el JSON validado: {"sub":"ana","role":"admin","exp":...}
+        return json(concat("{\"ok\":true,\"claims\":", current_claims(), "}"));
+    }
+
+    // --- Otra ruta protegida: el mismo decorador, sin repetir codigo
+    [HttpGet("/api/admin")]
+    home() {
+        return json("{\"msg\":\"ruta publica (sin @auth)\"}");
+    }
+
+    // @auth se aplica a la ruta que le sigue inmediatamente.
+    @auth
+    [HttpGet("/api/secreto")]
+    secreto() {
+        return json("{\"dato\":\"solo visible con token valido\"}");
+    }
+}

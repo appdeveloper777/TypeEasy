@@ -250,13 +250,14 @@ ASTNode *te_json_parse_value(const char **p) {
     if (c == '[') {
         (*p)++;
         ASTNode *list = create_list_node(NULL);
-        ASTNode *tail = NULL;
         te_json_skip_ws(p);
         if (**p == ']') { (*p)++; return list; }
         while (**p) {
             ASTNode *val = te_json_parse_value(p);
-            if (!list->left) list->left = val; else tail->next = val;
-            tail = val;
+            /* Usar te_list_append mantiene el índice lateral (TEListIdx) en
+             * sincronía. Encadenar a mano dejaba la lista con longitud 0 según
+             * list_length()/list_get_item(), rompiendo el indexado arr[i]. */
+            te_list_append(list, val);
             te_json_skip_ws(p);
             if (**p == ',') { (*p)++; continue; }
             if (**p == ']') { (*p)++; break; }

@@ -349,6 +349,11 @@ extern ASTNode    *create_ast_leaf_number(char *type, int value, char *str_value
 extern void        add_or_update_variable(char *id, ASTNode *value);
 extern void        free_ast(ASTNode *node);
 
+/* v0.0.16 — @auth decorator helpers. */
+extern char       *te_jwt_verify_alloc(const char *token, const char *secret);
+extern const char *typeeasy_http_get_header(const char *k);
+extern void        typeeasy_set_current_claims(const char *json);
+
 /* Pending validation error for the current request (NULL when valid).
  * Set by te_bind_param when a typed-class body fails validation; consumed
  * by typeeasy_embedded_invoke_method which replies HTTP 422. */
@@ -429,6 +434,27 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
     __ret_var.vtype = VAL_INT;
     __ret_var.value.int_value = 0;
     return_flag = 0;
+
+    /* v0.0.16: @auth decorator — require a valid Bearer JWT before the handler
+     * runs. Secret comes from the JWT_SECRET environment variable. On success
+     * the payload is exposed to the handler via current_claims(). */
+    typeeasy_set_current_claims(NULL);
+    if (m->requires_auth) {
+        const char *secret = getenv("JWT_SECRET");
+        const char *auth   = typeeasy_http_get_header("Authorization");
+        const char *tok    = NULL;
+        if (auth && strncmp(auth, "Bearer ", 7) == 0) tok = auth + 7;
+        char *claims = (secret && secret[0] && tok)
+                         ? te_jwt_verify_alloc(tok, secret) : strdup("");
+        if (!claims || claims[0] == '\0') {
+            if (claims) free(claims);
+            typeeasy_http_set_status(401);
+            runtime_reset_vars_to_initial_state();
+            return strdup("{\"error\":\"unauthorized\"}");
+        }
+        typeeasy_set_current_claims(claims);
+        free(claims);
+    }
 
     /* v0.0.13: bind declared handler parameters from HTTP request context. */
     g_param_validation_error = NULL;

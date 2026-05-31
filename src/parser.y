@@ -15,6 +15,8 @@
     void generate_code(const char* code);
     void clean_generated_code();
     int g_debug_mode = 0;
+    static int g_pending_auth = 0;   /* @auth decorator flag, applied to next endpoint_method */
+    static int g_endpoint_auth_all = 0; /* @auth at endpoint level, applied to ALL methods */
     ASTNode* parse_file(FILE* file);
 %}
 
@@ -52,6 +54,7 @@
 %token IF ELSE
 %token AGENT LISTENER BRIDGE STATE MATCH CASE
 %token NODE ENDPOINT
+%token AUTH
 %type <sval> method_name
 %type <sval> method_return_type
 %type <sval> type_name
@@ -81,7 +84,7 @@
 %type <node> object_literal key_value_list key_value_pair
 %type <node> node_decl
 %type <node> state_decl
-%type <node> endpoint_decl endpoint_methods endpoint_method
+%type <node> endpoint_decl auth_endpoint_decl endpoint_methods endpoint_method
 %type <ival> cache_decorator
 %right ARROW
 %left QQ
@@ -107,6 +110,8 @@ program:
     | program bridge_decl     { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; root = $$; }
     | program endpoint_decl   { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; root = $$; }
     | endpoint_decl           { $$ = $1; root = $$; }
+    | program auth_endpoint_decl { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; root = $$; }
+    | auth_endpoint_decl      { $$ = $1; root = $$; }
     | cache_decorator endpoint_decl { if ($2 && $2->extra) ((MethodNode*)$2->extra)->cache_ttl = $1; $$ = $2; root = $$; }
     | httpget_method_decl     { $$ = $1; root = $$; }
     | cache_decorator httpget_method_decl { if ($2 && $2->extra) ((MethodNode*)$2->extra)->cache_ttl = $1; $$ = $2; root = $$; }
@@ -125,11 +130,26 @@ endpoint_decl:
         { $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
     ;
 
+/* @auth endpoint { ... } : exige autenticacion en TODOS los metodos del bloque.
+ * El mid-rule action arma el flag ANTES de parsear los metodos. */
+auth_endpoint_decl:
+    AUTH ENDPOINT LBRACKET { g_endpoint_auth_all = 1; } endpoint_methods RBRACKET
+        { g_endpoint_auth_all = 0; $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
+    ;
+
 endpoint_methods:
     endpoint_method
-        { $$ = NULL; }
+        { if (global_methods) global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; g_pending_auth = 0; $$ = NULL; }
     | endpoint_methods endpoint_method
+        { if (global_methods) global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; g_pending_auth = 0; $$ = NULL; }
+    | auth_marker
         { $$ = NULL; }
+    | endpoint_methods auth_marker
+        { $$ = NULL; }
+    ;
+
+auth_marker:
+    AUTH { g_pending_auth = 1; }
     ;
 
 endpoint_method:

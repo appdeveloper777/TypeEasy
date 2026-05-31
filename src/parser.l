@@ -159,6 +159,7 @@
 "endpoint"              { return ENDPOINT; }
 "node"                  { return NODE; }
 "@Cache"                { yylval.sval = strdup(yytext); return CACHE; }
+"@auth"                 { return AUTH; }
 
 "for"                   { return FOR; }
 "foreach"               { return FOREACH; }

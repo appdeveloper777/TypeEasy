@@ -1,0 +1,26 @@
+// expect: first=Cake skip=Cafe any=1 all=1 avg=14.000000 min=Galleta max=Cake
+// LINQ extendido: orderByDescending, take, skip, any, all, avgBy, minBy, maxBy.
+
+class Producto {
+    nombre    : string;
+    precio    : int;
+    categoria : string;
+}
+
+let productos = from "productos.csv", Producto;
+
+let desc = productos.orderByDescending(fn(p) => p.precio);
+let top = desc.take(2);
+let first = top.first();
+
+let rest = desc.skip(2);
+let rest2 = rest.take(2);
+let skipFirst = rest2.first();
+
+let anyExpensive = productos.any(fn(p) => p.precio > 25);
+let allPositive = productos.all(fn(p) => p.precio > 0);
+let avg = productos.avgBy(fn(p) => p.precio);
+let cheapest = productos.minBy(fn(p) => p.precio);
+let dearest = productos.maxBy(fn(p) => p.precio);
+
+println("first=" + first.nombre + " skip=" + skipFirst.nombre + " any=" + anyExpensive + " all=" + allPositive + " avg=" + avg + " min=" + cheapest.nombre + " max=" + dearest.nombre);

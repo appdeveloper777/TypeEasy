@@ -1,0 +1,10 @@
+// expect: bool=true store=false neg=false eq=1
+// Boolean values round-trip through `bool`-typed vars; println shows
+// true/false, while string concatenation shows 1/0 (matches a raw comparison).
+bool flag = (10 > 2);
+bool stored = (1 == 2);
+bool neg = !flag;
+print("bool="); print(flag);
+print(" store="); print(stored);
+print(" neg="); print(neg);
+println(" eq=" + (3 == 3));

@@ -1,0 +1,13 @@
+class Producto {
+    id        : int;
+    nombre    : string;
+    precio    : int;
+    categoria : string;
+}
+
+let productos = from "benchmarks/bench_10m.csv", Producto;
+let cnt = productos.countWhere(fn(p) => p.categoria == "dulce");
+let dulces = productos.where(fn(p) => p.categoria == "dulce");
+let suma = dulces.sumBy(fn(p) => p.precio);
+let prom = dulces.avgBy(fn(p) => p.precio);
+println("count=" + cnt + " sum=" + suma + " avg=" + prom);

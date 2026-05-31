@@ -1,0 +1,25 @@
+// expect: id=3 rows=3 cheap=2 updated=1 sum=16
+// SQLite CRUD smoke: connect (in-memory), create, insert, query, update.
+// Requires the libte_sqlite plugin (bundled in the Docker image; on native
+// Windows the DLL must sit next to typeeasy.exe).
+load_native("sqlite");
+let db = sqlite_connect(":memory:");
+sqlite_exec(db, "CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price INTEGER)");
+sqlite_exec(db, "INSERT INTO items (name, price) VALUES ('a', 3)");
+sqlite_exec(db, "INSERT INTO items (name, price) VALUES ('b', 5)");
+sqlite_exec(db, "INSERT INTO items (name, price) VALUES ('c', 7)");
+let lastId = sqlite_last_id(db);
+print("id="); print(lastId);
+let all = sqlite_query(db, "SELECT id, name, price FROM items", "json");
+let rows = json_parse(all);
+print(" rows="); print(rows.length);
+let cheap = sqlite_query(db, "SELECT name FROM items WHERE price < 7", "json");
+let cr = json_parse(cheap);
+print(" cheap="); print(cr.length);
+let upd = sqlite_exec(db, "UPDATE items SET price = price + 1 WHERE name = 'a'");
+print(" updated="); print(upd);
+let totalRows = sqlite_query(db, "SELECT SUM(price) AS s FROM items", "json");
+let tr = json_parse(totalRows);
+let first = tr[0];
+print(" sum="); println(first["s"]);
+sqlite_close(db);

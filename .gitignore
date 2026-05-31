@@ -91,6 +91,9 @@ typeeasycode/_*.py
 typeeasycode/probe*.te
 typeeasycode/bench_csv_*.py
 typeeasycode/*.csv
+
+# CSV grandes generados para benchmarks (regenerables con benchmarks/gen_csv.py)
+benchmarks/bench_*.csv
 test_chess_repro.te
 test_dup_params.te
 

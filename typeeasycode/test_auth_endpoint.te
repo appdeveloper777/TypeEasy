@@ -1,0 +1,26 @@
+// Prueba: @auth a nivel de endpoint -> aplica a TODOS los metodos del bloque.
+class User { name : string; age : int; }
+
+// /api/login queda FUERA del bloque protegido (publico).
+endpoint {
+    [HttpPost("/api/login")]
+    login(u : User) {
+        let secret = env("JWT_SECRET");
+        let payload = concat("{\"sub\":\"", u.name, "\",\"exp\":1900000000}");
+        let token = jwt_sign(payload, secret);
+        return json({ token: token });
+    }
+}
+
+// Todo este bloque exige Authorization: Bearer <token> sin anotar cada metodo.
+@auth endpoint {
+    [HttpGet("/api/perfil")]
+    perfil() {
+        return json(concat("{\"ok\":true,\"claims\":", current_claims(), "}"));
+    }
+
+    [HttpGet("/api/secreto")]
+    secreto() {
+        return json("{\"data\":\"top-secret\"}");
+    }
+}

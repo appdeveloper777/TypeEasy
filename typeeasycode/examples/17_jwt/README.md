@@ -31,7 +31,7 @@ curl -s -H "Authorization: Bearer <TOKEN>" http://localhost:9101/api/perfil
 curl -s -i http://localhost:9101/api/perfil
 ```
 
-## Patrón de middleware de auth
+## Patrón de middleware de auth (manual)
 
 ```typeeasy
 let auth   = request_header("Authorization");
@@ -45,6 +45,46 @@ if (claims == "") {
 }
 // claims contiene el payload JSON (sub/role/exp).
 ```
+
+## Decorador `@auth` (recomendado, sin boilerplate)
+
+Desde v0.0.16 podés proteger una ruta con el decorador `@auth`. La verificación
+del Bearer token (firma HS256 + claim `exp`) ocurre **antes** de entrar al
+handler; si falla, responde `401 {"error":"unauthorized"}` y el método no se
+ejecuta. El secret se toma de la variable de entorno **`JWT_SECRET`** (no se
+hardcodea). Dentro del handler, `current_claims()` devuelve el payload validado.
+
+Ejemplo completo: [`jwt_auth_decorator.te`](jwt_auth_decorator.te).
+
+```typeeasy
+@auth
+[HttpGet("/api/perfil")]
+perfil() {
+    // current_claims() -> {"sub":"ana","role":"admin","exp":...}
+    return json(concat("{\"ok\":true,\"claims\":", current_claims(), "}"));
+}
+```
+
+```bash
+# IMPORTANTE: exportar el secret ANTES de arrancar el servidor.
+export JWT_SECRET="mi-clave-secreta"            # PowerShell: $env:JWT_SECRET="..."
+typeeasy --api examples/17_jwt/jwt_auth_decorator.te --port 9102
+
+# En Docker el secret se define en docker-compose.yml (env JWT_SECRET).
+
+# 1) login con el MISMO secret -> token
+curl -s -X POST -H "Content-Type: application/json" \
+     -d '{"name":"ana","age":30}' http://localhost:9102/api/login
+
+# 2) ruta protegida con el token -> 200 + claims
+curl -s -H "Authorization: Bearer <TOKEN>" http://localhost:9102/api/perfil
+
+# 3) sin token / inválido / expirado -> 401
+curl -s -i http://localhost:9102/api/perfil
+```
+
+> El token de `/api/login` debe firmarse con el **mismo** `JWT_SECRET` que
+> valida `@auth`. Si cambiás el secret, los tokens viejos dejan de ser válidos.
 
 > Nota: usa `var` (no `let`) para variables que reasignas; `let`/`const` son
 > constantes. El claim `exp` debe ser un epoch en segundos (`now_epoch()`).

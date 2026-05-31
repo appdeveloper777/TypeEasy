@@ -1,0 +1,16 @@
+// expect: true|false|true|false|true|true|true|false|true
+// Comparison and logical operators stored in variables (regression for the
+// bug where `let x = (a > b)` was stored as 0 instead of a boolean).
+// A bool-typed var renders as true/false via print/println.
+let gt   = (5 > 3);
+let lt   = (5 < 3);
+let eq   = (4 == 4);
+let ne   = (4 != 4);
+let ge   = (3 >= 3);
+let le   = (2 <= 9);
+let andv = (true && true);
+let orv  = (false || false);
+let notv = !false;
+print(gt); print("|"); print(lt); print("|"); print(eq); print("|");
+print(ne); print("|"); print(ge); print("|"); print(le); print("|");
+print(andv); print("|"); print(orv); print("|"); println(notv);

@@ -36,14 +36,17 @@ endpoint {
 
     [HttpGet("/api/hola-interp/{nombre}")]
     HolaInterp() {
-        let nombre = request_param("nombre");
-        return json({ mensaje: $"¡Hola {3* 3}!" });                       // interpolación {}
+        var nombre = request_param("nombre");
+        var n = to_int(nombre);
+
+        return json({ mensaje: $"¡Hola {n* 3}!" });                       // interpolación {}
     }
 
     [HttpGet("/api/hola-dollar/{nombre}")]
     HolaDollar() {
-        let nombre = request_param("nombre");
-        return json({ mensaje: $"¡Hola ${ 3 * 3}!" });                      // interpolación ${}
+        var nombre = request_param("nombre");
+        var n = to_int(nombre);
+        return json({ mensaje: $"¡Hola ${ n * 3}!" });                      // interpolación ${}
     }
 
     [HttpGet("/users/{id}")]
@@ -65,9 +68,41 @@ endpoint {
     // v0.0.13: model binding — el cuerpo JSON se mapea a la clase User.
     //   curl -X POST -H 'Content-Type: application/json' \
     //        -d '{"name":"Ana","age":30}' http://localhost:9000/api/users
-    [HttpPost("/api/users")]
+    [HttpPost("/api/users2")]
     crearUsuario(u : User) {
         let resp = concat("{\"name\":\"", u.name, "\",\"age\":", u.age, "}");
-        return json(resp);
+        u.age = u.age + 1;  // Modificar el objeto `u` no afecta al JSON devuelto, que ya se construyó con el valor original.
+        return json(u);
+    }
+
+    // ===================================================================
+    // JWT (HS256) — login + ruta protegida. Builtins: jwt_sign / jwt_verify.
+    // ===================================================================
+    //
+    // 1) LOGIN — devuelve un token. Probar en Postman:
+    //    POST http://localhost:9000/api/login
+    //    Header: Content-Type: application/json
+    //    Body (raw JSON): {"name":"ana","age":30}
+    //    -> { "token": "xxx.yyy.zzz" }
+    [HttpPost("/api/login")]
+    login(u : User) {
+        let secret = env("JWT_SECRET");   // mismo secret que valida @auth
+        // payload con subject (sub) y expiración (exp) en epoch seconds.
+        let payload = concat("{\"sub\":\"", u.name, "\",\"exp\":1900000000}");
+        let token = jwt_sign(payload, secret);
+        return json({ token: token });
+    }
+
+    // 2) RUTA PROTEGIDA — el decorador @auth exige Authorization: Bearer <token>.
+    //    El secret se toma de la variable de entorno JWT_SECRET.
+    //    En Postman: pestaña Authorization -> Type: Bearer Token -> pega el token.
+    //    Token válido   -> ejecuta el handler; current_claims() trae el payload.
+    //    Token ausente/ inválido / expirado -> 401 { "error": "unauthorized" }
+    //    (la verificación ocurre ANTES del handler, no hace falta boilerplate).
+    @auth
+    [HttpGet("/api/perfil")]
+    perfil() {
+        // current_claims() devuelve el payload JSON validado (string).
+        return json(concat("{\"ok\":true,\"claims\":", current_claims(), "}"));
     }
 }

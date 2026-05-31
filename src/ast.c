@@ -705,6 +705,48 @@ char* get_node_string(ASTNode* node) {
         return strdup(""); // Attribute not found
     }
 
+    /* Bug fix: m["key"] / arr[i] inside a string context (concat, "a" + x,
+     * string ==). Without this, ACCESS_EXPR fell through to the empty
+     * fallback below and string values from json_parse() were lost. */
+    if (node->type && strcmp(node->type, "ACCESS_EXPR") == 0) {
+        ASTNode *val = NULL;
+        ASTNode *map = resolve_to_map(node->left);
+        if (map) {
+            const char *key = NULL;
+            if (node->right && node->right->type) {
+                if (strcmp(node->right->type, "STRING") == 0) key = node->right->str_value;
+                else if (strcmp(node->right->type, "IDENTIFIER") == 0 ||
+                         strcmp(node->right->type, "ID") == 0) {
+                    Variable *kv = find_variable(node->right->id);
+                    if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+                }
+            }
+            if (key) {
+                ASTNode *pair = map_find_pair(map, key);
+                if (pair) val = pair->left;
+            }
+        } else {
+            ASTNode *list = resolve_to_list(node->left);
+            if (list && node->right) {
+                int idx = (int)evaluate_expression(node->right);
+                if (idx >= 0 && idx < list_length(list)) val = list_get_item(list, idx);
+            }
+        }
+        if (val && val->type) {
+            if (strcmp(val->type, "STRING") == 0)
+                return strdup(val->str_value ? val->str_value : "");
+            if (strcmp(val->type, "NUMBER") == 0 || strcmp(val->type, "INT") == 0) {
+                snprintf(temp, sizeof(temp), "%d", val->value);
+                return strdup(temp);
+            }
+            if (strcmp(val->type, "FLOAT") == 0) {
+                snprintf(temp, sizeof(temp), "%f", val->str_value ? atof(val->str_value) : 0.0);
+                return strdup(temp);
+            }
+        }
+        return strdup("");
+    }
+
     /* Fallback: arithmetic / bitwise sub-expressions (MUL, SUB, DIV, MOD,
      * NEG, BIT_*, SHL, SHR, paren-wrapped, etc.). Let evaluate_expression
      * compute the numeric value and format it. Keeps `"x" + (s*2)` working. */
@@ -727,6 +769,23 @@ char* get_node_string(ASTNode* node) {
             snprintf(temp, sizeof(temp), "%g", d);
         }
         return strdup(temp);
+    }
+
+    /* Comparison / logical operators in a string context emit "1"/"0" to
+     * match how a raw comparison renders elsewhere (println(5 > 3) -> 1) and
+     * how boolean-typed variables concatenate. Without this they fell through
+     * to the empty fallback. */
+    if (node->type && (
+        strcmp(node->type, "GT") == 0 ||
+        strcmp(node->type, "LT") == 0 ||
+        strcmp(node->type, "EQ") == 0 ||
+        strcmp(node->type, "GT_EQ") == 0 ||
+        strcmp(node->type, "LT_EQ") == 0 ||
+        strcmp(node->type, "DIFF") == 0 ||
+        strcmp(node->type, "AND") == 0 ||
+        strcmp(node->type, "OR") == 0 ||
+        strcmp(node->type, "NOT") == 0)) {
+        return strdup(evaluate_expression(node) != 0 ? "1" : "0");
     }
 
     return strdup(""); // Fallback
@@ -882,6 +941,17 @@ static void native_request_query (ASTNode *arg) { const char *k = te_arg_string(
 static void native_request_header(ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_headers, k); te_set_ret_string(v ? v : ""); }
 static void native_request_param (ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_params,  k); te_set_ret_string(v ? v : ""); }
 
+/* v0.0.16: @auth decorator support. g_current_claims holds the validated JWT
+ * payload (JSON) for the current request; set by the API dispatch when an
+ * @auth endpoint passes verification, exposed to handlers via current_claims(). */
+static char *g_current_claims = NULL;
+const char *typeeasy_http_get_header(const char *k) { return te_kv_find(g_req_headers, k); }
+void typeeasy_set_current_claims(const char *json) {
+    if (g_current_claims) { free(g_current_claims); g_current_claims = NULL; }
+    if (json) g_current_claims = strdup(json);
+}
+static void native_current_claims(ASTNode *arg) { (void)arg; te_set_ret_string(g_current_claims ? g_current_claims : ""); }
+
 /* v0.0.13: Debug-print que va a stderr (NO entra al pipeline de captura
  * de stdout que arma el cuerpo HTTP). Pensado para inspeccionar handlers
  * POST/GET en `docker compose logs typeeasy` sin contaminar la respuesta.
@@ -1011,6 +1081,7 @@ int call_native_function(const char *name, ASTNode *arg) {
     if (strcmp(name, "request_query")  == 0) { native_request_query(arg);  return 1; }
     if (strcmp(name, "request_header") == 0) { native_request_header(arg); return 1; }
     if (strcmp(name, "request_param")  == 0) { native_request_param(arg);  return 1; }
+    if (strcmp(name, "current_claims") == 0) { native_current_claims(arg); return 1; }
     if (strcmp(name, "request_headers")== 0) { native_request_headers(arg);return 1; }
     if (strcmp(name, "request_queries")== 0) { native_request_queries(arg);return 1; }
     if (strcmp(name, "request_params") == 0) { native_request_params_all(arg); return 1; }
@@ -1458,6 +1529,7 @@ void inherit_from(ClassNode *child, char *parent_name) {
         cm->route_path = pm->route_path ? strdup(pm->route_path) : NULL;
         cm->http_method = pm->http_method ? strdup(pm->http_method) : NULL;
         cm->cache_ttl = pm->cache_ttl;
+        cm->requires_auth = pm->requires_auth;
         cm->return_type = pm->return_type ? strdup(pm->return_type) : NULL;
         cm->bc_body = NULL;            /* don't share bytecode cache */
         cm->next = NULL;
@@ -1918,6 +1990,21 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
             vars[my_index].value.float_value = result;
             vars[my_index].type = strdup("FLOAT");
         }
+    }
+    /* Comparison / logical operators yield a boolean (0|1). Storing them as
+     * type "BOOL" makes `let/var/bool x = (a > b)` behave exactly like a bool
+     * literal variable: println(x) -> true/false, "s=" + x -> "s=1".
+     * Without this branch these node types fell through to the final else and
+     * were stored as INT 0 (losing the real value). */
+    else if (strcmp(value->type, "GT") == 0 || strcmp(value->type, "LT") == 0 ||
+             strcmp(value->type, "EQ") == 0 || strcmp(value->type, "GT_EQ") == 0 ||
+             strcmp(value->type, "LT_EQ") == 0 || strcmp(value->type, "DIFF") == 0 ||
+             strcmp(value->type, "AND") == 0 || strcmp(value->type, "OR") == 0 ||
+             strcmp(value->type, "NOT") == 0) {
+        free(vars[my_index].type);
+        vars[my_index].type = strdup("BOOL");
+        vars[my_index].vtype = VAL_INT;
+        vars[my_index].value.int_value = evaluate_expression(value) != 0 ? 1 : 0;
     }
     else if (strcmp(value->type, "OBJECT") == 0) {
         vars[my_index].vtype = VAL_OBJECT;
@@ -6432,6 +6519,13 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                     effective_value_type_str = "FLOAT";
                 }
             }
+        } else if (strcmp(value_node->type, "GT") == 0 || strcmp(value_node->type, "LT") == 0 ||
+                   strcmp(value_node->type, "EQ") == 0 || strcmp(value_node->type, "GT_EQ") == 0 ||
+                   strcmp(value_node->type, "LT_EQ") == 0 || strcmp(value_node->type, "DIFF") == 0 ||
+                   strcmp(value_node->type, "AND") == 0 || strcmp(value_node->type, "OR") == 0 ||
+                   strcmp(value_node->type, "NOT") == 0) {
+            /* Comparison / logical operators produce a boolean. */
+            effective_value_type_str = "BOOL";
         } else {
             effective_value_type_str = value_node->type;
         }
@@ -6485,6 +6579,63 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
      * Si el ítem no se puede resolver, cae al flujo legacy. */
     if (evaluated_value_var == NULL && value_node && value_node->type &&
         strcmp(value_node->type, "ACCESS_EXPR") == 0) {
+        /* Bug fix: `let v = m["key"]` cuando m es un MAP (p.ej. de json_parse).
+         * Sin esto, declare_variable caía al final-else y trataba v como INT 0,
+         * perdiendo los valores STRING/OBJECT del mapa. */
+        ASTNode *map = resolve_to_map(value_node->left);
+        if (map) {
+            const char *key = NULL;
+            if (value_node->right && value_node->right->type) {
+                if (strcmp(value_node->right->type, "STRING") == 0) key = value_node->right->str_value;
+                else if (strcmp(value_node->right->type, "IDENTIFIER") == 0 ||
+                         strcmp(value_node->right->type, "ID") == 0) {
+                    Variable *kv = find_variable(value_node->right->id);
+                    if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+                }
+            }
+            ASTNode *pair = key ? map_find_pair(map, key) : NULL;
+            ASTNode *val  = pair ? pair->left : NULL;
+            if (val && val->type) {
+                Variable *var = &vars[var_count];
+                var->id = strdup(node->id);
+                var->is_const = is_const_flag;
+                if (strcmp(val->type, "STRING") == 0) {
+                    var->vtype = VAL_STRING; var->type = strdup("STRING");
+                    var->value.string_value = strdup(val->str_value ? val->str_value : "");
+                } else if (strcmp(val->type, "NUMBER") == 0 || strcmp(val->type, "INT") == 0) {
+                    var->vtype = VAL_INT; var->type = strdup("INT");
+                    var->value.int_value = val->value;
+                } else if (strcmp(val->type, "FLOAT") == 0) {
+                    var->vtype = VAL_FLOAT; var->type = strdup("FLOAT");
+                    var->value.float_value = val->str_value ? atof(val->str_value) : 0.0;
+                } else if (strcmp(val->type, "OBJECT_LITERAL") == 0 || strcmp(val->type, "MAP") == 0) {
+                    var->vtype = VAL_OBJECT; var->type = strdup("MAP");
+                    var->value.object_value = (void *)(intptr_t)val;
+                } else if (strcmp(val->type, "LIST") == 0) {
+                    var->vtype = VAL_OBJECT; var->type = strdup("LIST");
+                    var->value.object_value = (void *)(intptr_t)val;
+                } else if (strcmp(val->type, "OBJECT") == 0) {
+                    var->vtype = VAL_OBJECT; var->type = strdup("OBJECT");
+                    var->value.object_value = val->extra ? (void*)val->extra
+                                                         : (void *)(intptr_t)val->value;
+                } else {
+                    var->vtype = VAL_STRING; var->type = strdup("STRING");
+                    var->value.string_value = strdup("");
+                }
+                var_count++;
+                te_sym_insert(var->id, var_count - 1);
+                return;
+            }
+            /* clave ausente -> string vacío (permite chequear == "") */
+            Variable *var = &vars[var_count];
+            var->id = strdup(node->id);
+            var->is_const = is_const_flag;
+            var->vtype = VAL_STRING; var->type = strdup("STRING");
+            var->value.string_value = strdup("");
+            var_count++;
+            te_sym_insert(var->id, var_count - 1);
+            return;
+        }
         ASTNode *list = resolve_to_list(value_node->left);
         if (list) {
             int idx = (int)evaluate_expression(value_node->right);
@@ -6506,6 +6657,17 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                             te_sym_insert(var->id, var_count - 1);
                             return;
                         }
+                    } else if (strcmp(item->type, "OBJECT_LITERAL") == 0 ||
+                               strcmp(item->type, "MAP") == 0) {
+                        /* item de json_parse("[{...}]")[i] -> un MAP. */
+                        Variable *var = &vars[var_count++];
+                        var->id = strdup(node->id);
+                        var->is_const = is_const_flag;
+                        var->vtype = VAL_OBJECT;
+                        var->type = strdup("MAP");
+                        var->value.object_value = (void *)(intptr_t)item;
+                        te_sym_insert(var->id, var_count - 1);
+                        return;
                     } else if (strcmp(item->type, "STRING") == 0) {
                         Variable *var = &vars[var_count++];
                         var->id = strdup(node->id);

@@ -1,0 +1,10 @@
+// expect: 14 20 3 2 -8 6
+// Arithmetic operators and precedence: + - * / % and unary minus.
+// 2 + 3*4 = 14 ; (2+3)*4 = 20 ; 7%4 = 3 ; 6%4 = 2 ; -(3+5) = -8 ; 2*3 = 6
+var a = 2 + 3 * 4;
+var b = (2 + 3) * 4;
+var d = 7 % 4;
+var e = 6 % 4;
+var f = -(3 + 5);
+var g = 2 * 3;
+println(a + " " + b + " " + d + " " + e + " " + f + " " + g);

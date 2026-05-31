@@ -15,8 +15,8 @@
  ********************************************************************/
 
 // ======================= IMPORTACIONES ============================
-import "models/Usuario.te";          // Modelo ORM para la tabla usuarios
-import "settings/mysql_config.te";   // Configuración global de MySQL
+import "../models/Usuario.te";          // Modelo ORM para la tabla usuarios
+import "../settings/mysql_config.te";   // Configuración global de MySQL
 
 // ======================= ENDPOINT ================================
 // Endpoint para consultas ORM a MySQL usando configuración global
@@ -25,7 +25,10 @@ endpoint {
   GetUsuarios() {
       string global_query = "SELECT * FROM usuarios LIMIT 3";
 
-      let _conn_id = mysql_connect(global_host, global_user, global_pass, global_db, global_port);
+      // TiDB / PlanetScale / Aiven y demas servicios cloud exigen TLS.
+      // El 6to parametro { tls: 1 } activa SSL. Para MySQL/MariaDB local
+      // (XAMPP) puedes omitirlo (default sin SSL).
+      let _conn_id = mysql_connect(global_host, global_user, global_pass, global_db, global_port, { tls: 1 });
       let _usuarios = orm_query(_conn_id, global_query, UsuarioModel);
       mysql_close(_conn_id);
 

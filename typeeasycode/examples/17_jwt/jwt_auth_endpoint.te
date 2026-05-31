@@ -1,0 +1,85 @@
+// =============================================================
+// examples/17_jwt/jwt_auth_endpoint — @auth a nivel de BLOQUE endpoint
+//
+// En jwt_auth_decorator.te el decorador `@auth` se pone delante de CADA
+// metodo que quieras proteger. Aqui mostramos la forma compacta:
+//
+//   @auth endpoint { ... }
+//
+// Pones `@auth` UNA sola vez antes de `endpoint {` y se aplica a TODOS
+// los metodos del bloque, sin tener que anotar cada ruta.
+//
+// La verificacion es identica a la del decorador por metodo:
+//   - Lee el header `Authorization: Bearer <token>`.
+//   - Valida la firma HS256 con el secret de la variable JWT_SECRET.
+//   - Comprueba que el claim `exp` no este vencido.
+//   - Si algo falla -> 401 {"error":"unauthorized"} y el handler NO se ejecuta.
+//
+// Dentro de cualquier handler protegido podes leer el payload validado
+// con `current_claims()`.
+//
+// El bloque de login va en un `endpoint { }` SEPARADO (sin @auth) para
+// que sea publico: necesitas pegar el token sin estar autenticado todavia.
+//
+// -------------------------------------------------------------
+// Ejecutar (exportar el secret ANTES de arrancar):
+//
+//   # Linux / macOS / Git-Bash:
+//   export JWT_SECRET="mi-clave-secreta"
+//   typeeasy --api examples/17_jwt/jwt_auth_endpoint.te --port 9103
+//
+//   # PowerShell:
+//   $env:JWT_SECRET="mi-clave-secreta"
+//   typeeasy --api examples/17_jwt/jwt_auth_endpoint.te --port 9103
+//
+// Probar:
+//   # 1) login -> token (publico, sin @auth)
+//   curl -s -X POST -H "Content-Type: application/json" \
+//        -d '{"name":"ana","age":30}' http://localhost:9103/api/login
+//
+//   # 2) rutas protegidas con el token -> 200 + datos
+//   curl -s -H "Authorization: Bearer <TOKEN>" http://localhost:9103/api/perfil
+//   curl -s -H "Authorization: Bearer <TOKEN>" http://localhost:9103/api/secreto
+//
+//   # 3) sin token / token invalido / expirado -> 401 en TODO el bloque
+//   curl -s -i http://localhost:9103/api/perfil
+//   curl -s -i http://localhost:9103/api/secreto
+// =============================================================
+
+class User {
+    name : string;
+    age  : int;
+}
+
+// --- Bloque PUBLICO: login (sin @auth) ------------------------
+endpoint {
+    //   POST /api/login  body: {"name":"ana","age":30}
+    [HttpPost("/api/login")]
+    login(u : User) {
+        let secret  = env("JWT_SECRET");          // mismo secret que valida @auth
+        let exp     = now_epoch() + 3600;         // vence en 1 hora
+        let payload = concat("{\"sub\":\"", u.name, "\",\"role\":\"admin\",\"exp\":", exp, "}");
+        let token   = jwt_sign(payload, secret);
+        return json({ token: token });
+    }
+}
+
+// --- Bloque PROTEGIDO: @auth aplica a TODOS los metodos -------
+//     No hace falta repetir @auth en cada ruta.
+@auth endpoint {
+    [HttpGet("/api/perfil")]
+    perfil() {
+        // current_claims() = JSON validado: {"sub":"ana","role":"admin","exp":...}
+        return json(concat("{\"ok\":true,\"claims\":", current_claims(), "}"));
+    }
+
+    [HttpGet("/api/secreto")]
+    secreto() {
+        return json("{\"dato\":\"solo visible con token valido\"}");
+    }
+
+    [HttpGet("/api/admin")]
+    admin() {
+        return json("{\"msg\":\"panel admin, tambien protegido por @auth del bloque\"}");
+    }
+}

@@ -378,7 +378,9 @@ extern void free_ast(ASTNode *node);
 static const char* get_arg_string(ASTNode* args, int index) {
     ASTNode* current = args;
     for (int i = 0; i < index && current; i++) {
-        current = current->right;
+        /* v0.0.12: las listas de argumentos se encadenan por ->next.
+         * Fallback a ->right por compat con listas construidas a mano. */
+        current = current->next ? current->next : current->right;
     }
     if (!current) return NULL;
     
@@ -393,6 +395,23 @@ static const char* get_arg_string(ASTNode* args, int index) {
         current->left->str_value) {
         return current->left->str_value;
     }
+
+    // Si es un identificador (variable), resolver su valor string.
+    if (current->type && strcmp(current->type, "IDENTIFIER") == 0 && current->id) {
+        Variable* v = find_variable(current->id);
+        if (v && v->vtype == VAL_STRING && v->value.string_value) {
+            return v->value.string_value;
+        }
+    }
+
+    // También verificar current->left si es IDENTIFIER.
+    if (current->left && current->left->type &&
+        strcmp(current->left->type, "IDENTIFIER") == 0 && current->left->id) {
+        Variable* v = find_variable(current->left->id);
+        if (v && v->vtype == VAL_STRING && v->value.string_value) {
+            return v->value.string_value;
+        }
+    }
     
     return NULL;
 }
@@ -401,7 +420,8 @@ static const char* get_arg_string(ASTNode* args, int index) {
 static int get_arg_int(ASTNode* args, int index) {
     ASTNode* current = args;
     for (int i = 0; i < index && current; i++) {
-        current = current->right;
+        /* v0.0.12: args encadenados por ->next (fallback ->right). */
+        current = current->next ? current->next : current->right;
     }
     if (!current) return -1;
 
@@ -487,7 +507,7 @@ void native_mysql_connect(ASTNode* args) {
         int idx = 0;
         while (curr) {
             //printf("[DEBUG][native_mysql_connect] Arg #%d: type=%s, id=%s, str_value=%s, value=%d\n", idx, curr->type ? curr->type : "NULL", curr->id ? curr->id : "NULL", curr->str_value ? curr->str_value : "NULL", curr->value);
-            curr = curr->right;
+            curr = curr->next ? curr->next : curr->right;
             idx++;
         }
     // Debug: imprimir estructura de argumentos
@@ -679,7 +699,8 @@ extern void orm_run_mapped_query(int conn_id, const char* query, ClassNode* cls)
 /* Devuelve el ASTNode en posicion idx (0-based) sin resolverlo. */
 static ASTNode* mysql_arg_at(ASTNode* args, int idx) {
     ASTNode* cur = args;
-    for (int i = 0; i < idx && cur; i++) cur = cur->right;
+    /* v0.0.12: args encadenados por ->next (fallback ->right). */
+    for (int i = 0; i < idx && cur; i++) cur = cur->next ? cur->next : cur->right;
     return cur;
 }
 

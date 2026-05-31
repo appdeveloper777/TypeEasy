@@ -45,7 +45,8 @@ void native_orm_query(ASTNode* args) {
             Variable* v = find_variable(curr->id);
             if (v && v->vtype == VAL_INT) conn_id = v->value.int_value;
         }
-        curr = curr->right;
+        /* v0.0.12: args encadenados por ->next (fallback ->right). */
+        curr = curr->next ? curr->next : curr->right;
     }
     
     // query
@@ -56,7 +57,8 @@ void native_orm_query(ASTNode* args) {
             Variable* v = find_variable(curr->id);
             if (v && v->vtype == VAL_STRING) query = v->value.string_value;
         }
-        curr = curr->right;
+        /* v0.0.12: args encadenados por ->next (fallback ->right). */
+        curr = curr->next ? curr->next : curr->right;
     }
     
     // class

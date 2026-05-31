@@ -180,6 +180,7 @@ typedef struct MethodNode {
     char *route_path;    // For endpoints
     char *http_method;   // For endpoints
     int cache_ttl;       // For endpoint cache decorator
+    int requires_auth;   // For endpoint @auth decorator (Bearer JWT required)
     char *return_type;   // "int" | "string" | "float" | "void" | "dynamic" | NULL (legacy/internal)
     /* Ola 4 (perf): cached bytecode for simple `return <numeric expr>;` bodies.
      * NULL = not yet attempted. (void*)0x1 = tried, not compilable. Else BCInfo*. */

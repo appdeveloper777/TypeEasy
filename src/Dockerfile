@@ -104,6 +104,9 @@ RUN apt-get update && \
 COPY --from=typeeasy_builder /app/src/typeeasy .
 # Copia los scripts del proyecto para que puedan ejecutarse dentro de la imagen
 COPY --from=base /app/typeeasycode ./typeeasycode
+# Instala el plugin SQLite (load_native("sqlite")) en la ruta que busca el
+# intérprete, para que los ejemplos/tests de SQLite funcionen dentro de Docker.
+COPY --from=base /app/plugins/sqlite/libte_sqlite.so /root/.te/packages/sqlite/libte_sqlite.so
 # El punto de entrada es el propio intérprete.
 ENTRYPOINT ["./typeeasy"]
 

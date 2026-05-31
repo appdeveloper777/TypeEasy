@@ -8,7 +8,9 @@
 ASTNode* db_arg_as_map_head(ASTNode* args, int idx, int* out_owned) {
     if (out_owned) *out_owned = 0;
     ASTNode* cur = args;
-    for (int i = 0; i < idx && cur; i++) cur = cur->right;
+    /* v0.0.12: la lista de argumentos del call se encadena por ->next
+     * (fallback ->right por compat con listas construidas a mano). */
+    for (int i = 0; i < idx && cur; i++) cur = cur->next ? cur->next : cur->right;
     if (!cur || !cur->type) return NULL;
 
     /* Caso 1: literal { "k": v, ... } */

@@ -1,0 +1,171 @@
+// ============================================================================
+// jwt_refresh.te — Refresh tokens con SQLite (mismo patrón que ASP.NET Core / C#)
+// ----------------------------------------------------------------------------
+// Replica el flujo clásico de C#:
+//   - ACCESS TOKEN  = JWT firmado HS256, corto (15 min). Se valida SIN tocar
+//                     la base de datos (stateless) con el decorador @auth.
+//   - REFRESH TOKEN = valor opaco aleatorio (uuid_v4), largo (30 días),
+//                     guardado en SQLite. Se puede REVOCAR (logout real) y
+//                     se ROTA en cada uso (igual que IsRevoked / ReplacedByToken).
+//
+// Tabla refresh_tokens  (equivalente a la entidad RefreshToken de EF Core):
+//   token        TEXT  PK   -> el valor opaco (uuid)
+//   username     TEXT       -> dueño (UserId)
+//   expiry       INTEGER    -> epoch de expiración (Expiry)
+//   revoked      INTEGER    -> 0/1 (IsRevoked)
+//   replaced_by  TEXT       -> token que lo reemplazó al rotar (ReplacedByToken)
+//
+// Requiere:
+//   - libte_sqlite (plugin). Ver plugins/sqlite/README.md.
+//   - Variable de entorno JWT_SECRET.
+//
+// Levantar (Windows nativo, MSYS bash):
+//   export JWT_SECRET="mi-clave-super-secreta"
+//   export TE_PLUGIN_PATH="plugins/sqlite"
+//   ./bin/typeeasy.exe --api typeeasycode/examples/17_jwt/jwt_refresh.te --port 9104 --host 127.0.0.1
+//
+// Probar (curl):
+//   # 1) login -> access + refresh
+//   curl -s -X POST http://127.0.0.1:9104/api/login \
+//        -H "Content-Type: application/json" \
+//        -d '{"name":"ana","age":30}'
+//
+//   # 2) ruta protegida con el access token
+//   curl -s http://127.0.0.1:9104/api/perfil -H "Authorization: Bearer <ACCESS>"
+//
+//   # 3) refrescar (rota el refresh, devuelve access+refresh nuevos)
+//   curl -s -X POST http://127.0.0.1:9104/api/refresh \
+//        -H "Content-Type: application/json" -d '{"refresh":"<REFRESH>"}'
+//
+//   # 4) logout (revoca el refresh -> ya no sirve)
+//   curl -s -X POST http://127.0.0.1:9104/api/logout \
+//        -H "Content-Type: application/json" -d '{"refresh":"<REFRESH>"}'
+// ============================================================================
+
+load_native("sqlite");
+
+class User {
+    name : string;
+    age  : int;
+}
+
+endpoint {
+
+    // ---- POST /api/login -------------------------------------------------
+    // Valida credenciales (demo: acepta cualquiera) y emite el par de tokens.
+    [HttpPost("/api/login")]
+    login(u : User) {
+        let secret = env("JWT_SECRET");
+
+        // Access token corto: 15 minutos.
+        let aexp     = now_epoch() + 900;
+        let rawName  = u.name;
+        let safeName = rawName.replace("'", "''");   // escape mínimo anti-inyección
+        let payload  = concat("{\"sub\":\"", safeName, "\",\"exp\":", aexp, "}");
+        let access  = jwt_sign(payload, secret);
+
+        // Refresh token opaco y aleatorio: 30 días, persistido en SQLite.
+        let rt   = uuid_v4();
+        let rexp = now_epoch() + 2592000;
+
+        let db = sqlite_connect("jwt_refresh.db");
+        sqlite_exec(db, "CREATE TABLE IF NOT EXISTS refresh_tokens (token TEXT PRIMARY KEY, username TEXT NOT NULL, expiry INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, replaced_by TEXT)");
+        // NOTA: construir el SQL en una variable intermedia (no pasar concat(...)
+        // como argumento directo) para que el plugin reciba el string ya evaluado.
+        let insSql = concat("INSERT INTO refresh_tokens (token, username, expiry) VALUES ('", rt, "','", safeName, "',", rexp, ")");
+        sqlite_exec(db, insSql);
+        sqlite_close(db);
+
+        return json(concat("{\"access\":\"", access, "\",\"refresh\":\"", rt, "\",\"token_type\":\"Bearer\",\"expires_in\":900}"));
+    }
+
+    // ---- POST /api/refresh ----------------------------------------------
+    // body: {"refresh":"<token>"}
+    // Comprueba que el refresh exista, no esté revocado ni expirado, lo ROTA
+    // (revoca el viejo + emite uno nuevo) y devuelve access+refresh nuevos.
+    [HttpPost("/api/refresh")]
+    refresh() {
+        let secret = env("JWT_SECRET");
+        let body   = json_parse(request_body());
+        let rt     = body["refresh"];
+        // Los refresh tokens son UUID v4: validar el formato sirve de doble
+        // propósito -> rechaza tokens basura Y bloquea inyección SQL (un UUID
+        // válido no puede contener comillas).
+        if (rt == null || uuid_valid(rt) == 0) {
+            response_status(401);
+            return json("{\"error\":\"invalid_refresh\"}");
+        }
+
+        let db  = sqlite_connect("jwt_refresh.db");
+        let now = now_epoch();
+
+        let selSql = concat("SELECT username, expiry, revoked FROM refresh_tokens WHERE token='", rt, "'");
+        let raw = sqlite_query(db, selSql, "json");
+        if (raw == "[]") {
+            sqlite_close(db);
+            response_status(401);
+            return json("{\"error\":\"invalid_refresh\"}");
+        }
+        // NOTA: parsear a una variable intermedia y luego indexar (rows[0]).
+        // Encadenar inline json_parse(...)[0] no resuelve el elemento.
+        let rows     = json_parse(raw);
+        let row      = rows[0];
+        let username = row["username"];
+        let expiry   = row["expiry"];
+        let revoked  = row["revoked"];
+
+        // Reuso de un refresh ya rotado/revocado => posible robo: revoca toda
+        // la cadena de ese usuario (igual que la detección de reuso en C#).
+        if (revoked != 0) {
+            let revokeAllSql = concat("UPDATE refresh_tokens SET revoked=1 WHERE username='", username, "'");
+            sqlite_exec(db, revokeAllSql);
+            sqlite_close(db);
+            response_status(401);
+            return json("{\"error\":\"refresh_reused\"}");
+        }
+        if (expiry < now) {
+            sqlite_close(db);
+            response_status(401);
+            return json("{\"error\":\"refresh_expired\"}");
+        }
+
+        // Rotación: nuevo refresh, marca el viejo como revocado+reemplazado.
+        let newRt = uuid_v4();
+        let rexp  = now + 2592000;
+        let insNewSql = concat("INSERT INTO refresh_tokens (token, username, expiry) VALUES ('", newRt, "','", username, "',", rexp, ")");
+        sqlite_exec(db, insNewSql);
+        let rotateSql = concat("UPDATE refresh_tokens SET revoked=1, replaced_by='", newRt, "' WHERE token='", rt, "'");
+        sqlite_exec(db, rotateSql);
+        sqlite_close(db);
+
+        let aexp   = now + 900;
+        let access = jwt_sign(concat("{\"sub\":\"", username, "\",\"exp\":", aexp, "}"), secret);
+        return json(concat("{\"access\":\"", access, "\",\"refresh\":\"", newRt, "\",\"token_type\":\"Bearer\",\"expires_in\":900}"));
+    }
+
+    // ---- POST /api/logout -----------------------------------------------
+    // body: {"refresh":"<token>"} -> revoca el refresh (logout REAL).
+    [HttpPost("/api/logout")]
+    logout() {
+        let body = json_parse(request_body());
+        let rt   = body["refresh"];
+        if (rt == null || uuid_valid(rt) == 0) {
+            response_status(400);
+            return json("{\"error\":\"missing_refresh\"}");
+        }
+
+        let db = sqlite_connect("jwt_refresh.db");
+        let logoutSql = concat("UPDATE refresh_tokens SET revoked=1 WHERE token='", rt, "'");
+        sqlite_exec(db, logoutSql);
+        sqlite_close(db);
+        return json("{\"ok\":true,\"msg\":\"logged_out\"}");
+    }
+
+    // ---- GET /api/perfil (protegido) ------------------------------------
+    // Validado de forma stateless por el decorador @auth (igual que [Authorize]).
+    @auth
+    [HttpGet("/api/perfil")]
+    perfil() {
+        return json(concat("{\"ok\":true,\"claims\":", current_claims(), "}"));
+    }
+}

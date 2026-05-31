@@ -117,6 +117,68 @@ static unsigned char *te_b64url_decode(const char *s, size_t *outlen) {
     return out;
 }
 
+/* ============================================================
+ * te_jwt_verify_alloc — standalone HS256 JWT verification reused by both the
+ * jwt_verify() builtin and the @auth endpoint decorator (src/typeeasy_api.c).
+ * Returns a malloc'd payload JSON string when the signature is valid and the
+ * optional "exp" claim is not in the past; otherwise a malloc'd empty string "".
+ * Caller owns the result.
+ * ============================================================ */
+char *te_jwt_verify_alloc(const char *token_in, const char *secret) {
+    char *result = strdup(""); /* default: invalid */
+    char *t = token_in ? strdup(token_in) : strdup("");
+    char *d1 = strchr(t, '.');
+    if (d1) {
+        char *d2 = strchr(d1 + 1, '.');
+        if (d2) {
+            *d1 = 0; *d2 = 0;
+            const char *h64 = t;
+            const char *p64 = d1 + 1;
+            const char *s64 = d2 + 1;
+            size_t silen = strlen(h64) + 1 + strlen(p64);
+            char *signing = (char*)malloc(silen + 1);
+            snprintf(signing, silen + 1, "%s.%s", h64, p64);
+            unsigned char md[EVP_MAX_MD_SIZE]; unsigned int mdlen = 0;
+            HMAC(EVP_sha256(), secret ? secret : "", secret ? (int)strlen(secret) : 0,
+                 (const unsigned char*)signing, strlen(signing), md, &mdlen);
+            char *expect = te_b64url_encode(md, mdlen);
+            /* constant-time signature comparison */
+            int ok = 0;
+            size_t el = strlen(expect), sl = strlen(s64);
+            if (el == sl) {
+                volatile unsigned char diff = 0;
+                for (size_t i = 0; i < el; i++)
+                    diff |= (unsigned char)(expect[i] ^ s64[i]);
+                ok = (diff == 0);
+            }
+            if (ok) {
+                size_t plen = 0;
+                unsigned char *payload = te_b64url_decode(p64, &plen);
+                int expired = 0;
+                const char *pp = (const char*)payload;
+                ASTNode *root = te_json_parse_value(&pp);
+                if (root && root->type && strcmp(root->type, "OBJECT_LITERAL") == 0) {
+                    for (ASTNode *pair = root->left; pair; pair = pair->right) {
+                        if (pair->id && strcmp(pair->id, "exp") == 0 && pair->left) {
+                            long expv = 0;
+                            const char *vt = pair->left->type ? pair->left->type : "";
+                            if (strcmp(vt, "INT") == 0) expv = pair->left->value;
+                            else if (strcmp(vt, "STRING") == 0) expv = atol(pair->left->str_value ? pair->left->str_value : "0");
+                            else if (strcmp(vt, "FLOAT") == 0) expv = (long)atof(pair->left->str_value ? pair->left->str_value : "0");
+                            if (expv > 0 && (long)time(NULL) >= expv) expired = 1;
+                            break;
+                        }
+                    }
+                }
+                if (!expired) { free(result); result = strdup((char*)payload); }
+                free(payload);
+            }
+            free(expect); free(signing);
+        }
+    }
+    free(t);
+    return result;
+}
 
 /* ============================================================
  * te_resolve_arg — shared arg resolver.
@@ -560,58 +622,7 @@ int te_builtin_dispatch(ASTNode *node) {
     if (strcmp(fn, "jwt_verify") == 0) {
         char *token  = a0 ? get_node_string(a0) : strdup("");
         char *secret = a1 ? get_node_string(a1) : strdup("");
-        char *result = strdup(""); /* default: invalid */
-        char *t = token ? strdup(token) : strdup("");
-        char *d1 = strchr(t, '.');
-        if (d1) {
-            char *d2 = strchr(d1 + 1, '.');
-            if (d2) {
-                *d1 = 0; *d2 = 0;
-                const char *h64 = t;
-                const char *p64 = d1 + 1;
-                const char *s64 = d2 + 1;
-                size_t silen = strlen(h64) + 1 + strlen(p64);
-                char *signing = (char*)malloc(silen + 1);
-                snprintf(signing, silen + 1, "%s.%s", h64, p64);
-                unsigned char md[EVP_MAX_MD_SIZE]; unsigned int mdlen = 0;
-                HMAC(EVP_sha256(), secret ? secret : "", secret ? (int)strlen(secret) : 0,
-                     (const unsigned char*)signing, strlen(signing), md, &mdlen);
-                char *expect = te_b64url_encode(md, mdlen);
-                /* constant-time signature comparison */
-                int ok = 0;
-                size_t el = strlen(expect), sl = strlen(s64);
-                if (el == sl) {
-                    volatile unsigned char diff = 0;
-                    for (size_t i = 0; i < el; i++)
-                        diff |= (unsigned char)(expect[i] ^ s64[i]);
-                    ok = (diff == 0);
-                }
-                if (ok) {
-                    size_t plen = 0;
-                    unsigned char *payload = te_b64url_decode(p64, &plen);
-                    int expired = 0;
-                    const char *pp = (const char*)payload;
-                    ASTNode *root = te_json_parse_value(&pp);
-                    if (root && root->type && strcmp(root->type, "OBJECT_LITERAL") == 0) {
-                        for (ASTNode *pair = root->left; pair; pair = pair->right) {
-                            if (pair->id && strcmp(pair->id, "exp") == 0 && pair->left) {
-                                long expv = 0;
-                                const char *vt = pair->left->type ? pair->left->type : "";
-                                if (strcmp(vt, "INT") == 0) expv = pair->left->value;
-                                else if (strcmp(vt, "STRING") == 0) expv = atol(pair->left->str_value ? pair->left->str_value : "0");
-                                else if (strcmp(vt, "FLOAT") == 0) expv = (long)atof(pair->left->str_value ? pair->left->str_value : "0");
-                                if (expv > 0 && (long)time(NULL) >= expv) expired = 1;
-                                break;
-                            }
-                        }
-                    }
-                    if (!expired) { free(result); result = strdup((char*)payload); }
-                    free(payload);
-                }
-                free(expect); free(signing);
-            }
-        }
-        free(t);
+        char *result = te_jwt_verify_alloc(token, secret);
         ASTNode *r = create_ast_leaf("STRING", 0, result, NULL);
         free(result);
         if (token) free(token); if (secret) free(secret);
