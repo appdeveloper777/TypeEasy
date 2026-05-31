@@ -21,8 +21,8 @@ Este roadmap traduce las 5 prioridades estratégicas en releases concretos.
 | 1.2 | Blindar LLP64 con guard de CI | ✅ `scripts/audit_llp64_prototypes.sh` + workflow |
 | 1.3 | Errores en inglés `file:line:` | ✅ `yyerror` + test de regresión |
 | 2.1 | DB sin fallos silenciosos | ✅ ABI guard `struct_size` (falla ruidoso) |
-| 2.2 | Hot-reload sólido en `--dev` | ⏳ pendiente |
-| 2.3 | Errores HTTP no tumban el server | ✅ setjmp/longjmp → 500 (revisar `file:line` en dev) |
+| 2.2 | Hot-reload sólido en `--dev` | ✅ servidor de producción (`typeeasy_api`, `--hotreload`/`TYPEEASY_HOTRELOAD`) |
+| 2.3 | Errores HTTP no tumban el server | ✅ setjmp/longjmp → 500; `file:line` en el cuerpo con `TYPEEASY_DEV=1` |
 | 2.4 | Documentar los ~15 builtins de API | ✅ `docs/API_BUILTINS.md` |
 | 3.1 | Reposicionar CSV/LINQ como soporte | ✅ narrativa (hero + READMEs de ejemplos) |
 | 3.2 | README con promesa única | ✅ hero reescrito |
@@ -63,11 +63,14 @@ sorpresas, y el camino infeliz da un error claro en vez de un cuelgue o `[]`.
 - [x] **DB sin silencio**: el host publica `struct_size`; un plugin obsoleto se
   rechaza ruidosamente al registrar (no más `sqlite_*` devolviendo `[]`).
 - [x] **Referencia de builtins de API** (`docs/API_BUILTINS.md`).
-- [ ] **Hot-reload en `--dev`**: al cambiar el `.te`, recargar sin reiniciar a
-  mano; invalidar AST y workers de forma segura.
-- [ ] **Errores HTTP con `file:line` en modo dev**: hoy un error de runtime se
-  convierte en 500 vía setjmp/longjmp; exponer la ubicación en el cuerpo cuando
-  `--dev` está activo (nunca en producción).
+- [x] **Hot-reload en `--dev`**: cubierto por el servidor de producción
+  (`api_server/servidor_api.c`, binario `typeeasy_api`) con modelo supervisor +
+  rolling reload (`--hotreload` / `TYPEEASY_HOTRELOAD`). El path `typeeasy --api`
+  (`typeeasy_api_server.c`) aún no lo porta (queda como mejora opcional).
+- [x] **Errores HTTP con `file:line` en modo dev**: un error de runtime se
+  convierte en 500 vía setjmp/longjmp; con `TYPEEASY_DEV=1` el cuerpo incluye
+  `message`, `file` y `line` (nunca en producción: por defecto sólo
+  `{"error":"internal_error"}`).
 
 **Salida medible:** demo de 4 líneas levanta una API con auth + SQLite sin
 tocar Docker; un plugin viejo produce un mensaje accionable, no `[]`.

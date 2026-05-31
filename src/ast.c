@@ -44,6 +44,7 @@
 #include <openssl/evp.h>
 #include <time.h>
 #include <setjmp.h>
+#include <stdarg.h>
 
 /* ============================================================
  * Runtime fatal-error recovery.
@@ -60,9 +61,37 @@
  * exit(1), so CLI semantics are unchanged.
  * ============================================================ */
 jmp_buf *g_runtime_recovery = NULL;
+
+/* ------------------------------------------------------------------
+ * Runtime error location capture (item 2.3).
+ *
+ * g_current_exec_line tracks the source line of the statement currently
+ * being interpreted (cheap single int assignment per statement, no debug
+ * gate). When a fatal runtime error fires we snapshot that line and the
+ * formatted message so the API server can surface file:line in the HTTP
+ * 500 body, but ONLY when dev mode is active. In production the server
+ * keeps emitting the opaque {"error":"internal_error"}.
+ * ------------------------------------------------------------------ */
+int  g_current_exec_line   = 0;
+int  g_runtime_error_line  = 0;
+char g_runtime_error_msg[256] = "";
+
 void te_runtime_fatal(void) {
+    g_runtime_error_line = g_current_exec_line;
     if (g_runtime_recovery) longjmp(*g_runtime_recovery, 1);
     exit(1);
+}
+
+/* Same as te_runtime_fatal() but also formats a human-readable message to
+ * stderr (governance: user-facing errors in English on stderr) and stashes
+ * it for the dev-mode HTTP 500 body. */
+void te_runtime_fatalf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(g_runtime_error_msg, sizeof(g_runtime_error_msg), fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "%s\n", g_runtime_error_msg);
+    te_runtime_fatal();
 }
 
 /* Headers POSIX/sockets disponibles en todas las plataformas (MSYS2 / Linux / macOS).
@@ -2141,8 +2170,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
     Variable *var = find_variable_for(id);
     if (var) {        
         if (var->is_const) {
-            fprintf(stderr, "Error: cannot assign to constant variable '%s'.\n", id);
-            te_runtime_fatal();
+            te_runtime_fatalf("Error: cannot assign to constant variable '%s'.", id);
         }
         free(var->type);
         var->type = strdup(value->type);
@@ -2395,8 +2423,7 @@ const char *tee_intern(const char *s) {
 ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
-        fprintf(stderr, "Error fatal: No se pudo asignar memoria para ASTNode.\n");
-        te_runtime_fatal();
+        te_runtime_fatalf("Fatal error: could not allocate memory for ASTNode.");
     }
     node->line = yylineno;
     node->type = strdup(type);
@@ -4383,6 +4410,11 @@ void interpret_ast(ASTNode *node) {
         s_te_json_hooks_set = 1;
     }
 
+    /* Item 2.3: track the source line of the statement currently executing
+     * so a fatal runtime error can report file:line in dev mode. Cheap
+     * (one branch + store), no debug gate. */
+    if (node->line > 0) g_current_exec_line = node->line;
+
     /* Debugger hook: only stop on "stoppable" statement-level nodes.
      * Cheap when g_debug_enabled == 0 (single load+test). */
     if (g_debug_enabled) {
@@ -4403,7 +4435,6 @@ void interpret_ast(ASTNode *node) {
                 break;
         }
     }
-
     /* Fase 1 (perf): single dispatch via cached NodeKind enum. */
     switch (nk_of(node)) {
     case NK_STATE_DECL:
@@ -5019,8 +5050,7 @@ static void interpret_call_func(ASTNode *node) {
         // For now, let's assume it's not needed for orm_query.
          fprintf(stderr, "Warning: Calling user function '%s' as expression is not fully supported yet.\n", node->id);
     } else {
-        fprintf(stderr, "Error: function '%s' not defined.\n", node->id);
-        te_runtime_fatal();
+        te_runtime_fatalf("Error: function '%s' not defined.", node->id);
     }
 }
 
@@ -6484,8 +6514,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         evaluated_value_var = find_variable("__ret__");
         //printf("[DEBUG] interpret_var_decl: find_variable returned %p\n", (void*)evaluated_value_var); fflush(stdout);
         if (!evaluated_value_var) {
-            fprintf(stderr, "Error: no return value captured from expression '%s'. __ret_var_active=%d\n", value_node->type ? value_node->type : "unknown", __ret_var_active);
-            te_runtime_fatal();
+            te_runtime_fatalf("Error: no return value captured from expression '%s'. __ret_var_active=%d", value_node->type ? value_node->type : "unknown", __ret_var_active);
         }
     }
     // ... (rest of function)
@@ -6770,8 +6799,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 value_to_assign_node->next = NULL;
             }
         } else {
-            fprintf(stderr, "Internal error: unknown return type for variable assignment '%s'.\n", node->id);
-            te_runtime_fatal();
+            te_runtime_fatalf("Internal error: unknown return type for variable assignment '%s'.", node->id);
         }
         
         //printf("[DEBUG] interpret_var_decl: declaring variable %s\n", node->id); fflush(stdout);

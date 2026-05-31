@@ -47,6 +47,12 @@
 extern jmp_buf *g_runtime_recovery;
 extern void runtime_reset_vars_to_initial_state(void);
 
+/* Item 2.3: runtime error location captured by te_runtime_fatal[f]() in ast.c,
+ * surfaced in the HTTP 500 body when dev mode is active. */
+extern int  g_runtime_error_line;
+extern char g_runtime_error_msg[256];
+extern const char *g_debug_source_file;
+
 #include "civetweb.h"
 #include "ast.h"
 #include "typeeasy_api.h"
@@ -519,7 +525,36 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
     if (setjmp(recovery) != 0) {
         g_runtime_recovery = NULL;
         runtime_reset_vars_to_initial_state();
-        const char *err = "{\"error\":\"internal_error\"}";
+
+        /* Item 2.3: in dev mode expose the runtime error location (file:line)
+         * in the 500 body to aid debugging. NEVER in production: default is the
+         * opaque {"error":"internal_error"}. Dev mode is opt-in via TYPEEASY_DEV. */
+        static int s_dev_mode = -1;
+        if (s_dev_mode < 0) s_dev_mode = getenv("TYPEEASY_DEV") ? 1 : 0;
+
+        char devbuf[640];
+        const char *err;
+        if (s_dev_mode) {
+            /* JSON-escape the captured message (may contain user identifiers). */
+            char esc[256]; size_t ei = 0;
+            const char *src = g_runtime_error_msg;
+            for (; *src && ei + 2 < sizeof(esc); src++) {
+                unsigned char c = (unsigned char)*src;
+                if (c == '"' || c == '\\') { esc[ei++] = '\\'; esc[ei++] = (char)c; }
+                else if (c == '\n') { esc[ei++] = '\\'; esc[ei++] = 'n'; }
+                else if (c == '\t') { esc[ei++] = '\\'; esc[ei++] = 't'; }
+                else if (c < 0x20) { /* skip other control chars */ }
+                else esc[ei++] = (char)c;
+            }
+            esc[ei] = '\0';
+            const char *file = g_debug_source_file ? g_debug_source_file : "";
+            snprintf(devbuf, sizeof(devbuf),
+                     "{\"error\":\"internal_error\",\"message\":\"%s\",\"file\":\"%s\",\"line\":%d}",
+                     esc, file, g_runtime_error_line);
+            err = devbuf;
+        } else {
+            err = "{\"error\":\"internal_error\"}";
+        }
         int elen = (int)strlen(err);
         char cors_org[1024];
         cors_resolve_origin(conn, cors_org, sizeof(cors_org));
