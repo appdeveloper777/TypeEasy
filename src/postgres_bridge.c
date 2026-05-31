@@ -141,7 +141,7 @@ void native_postgres_connect(ASTNode* args) {
     }
 
     pg_connections[slot] = conn;
-    printf("[Postgres] Conexión exitosa (ID: %d)\n", slot); fflush(stdout);
+    printf("[Postgres] Connection successful (ID: %d)\n", slot); fflush(stdout);
     ASTNode* r = create_ast_leaf("NUMBER", slot, NULL, NULL);
     add_or_update_variable("__ret__", r); free_ast(r);
 }

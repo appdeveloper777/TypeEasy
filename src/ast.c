@@ -2071,7 +2071,7 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
             }
         }
         
-        printf("Error: Atributo '%s' no encontrado en '%s'.\n", a->id, o->id);
+        fprintf(stderr, "Error: attribute '%s' not found in '%s'.\n", a->id, o->id);
         vars[my_index].vtype = VAL_INT;
         vars[my_index].value.int_value = 0; // Valor de error
         return;
@@ -2555,7 +2555,7 @@ ASTNode *create_method_call_node(ASTNode *objectNode, const char *methodName, AS
 
 ASTNode *create_object_with_args(ClassNode *class, ASTNode *args) {
     if (!class) {
-        printf("Error: Clase no encontrada.\n");
+        fprintf(stderr, "Error: class not found.\n");
         return NULL;
     }
 
@@ -6928,7 +6928,7 @@ ASTNode *append_argument_raw(ASTNode *list, ASTNode *arg) {
 ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
     if (!item) return list;
     if (strcmp(item->type, "LIST") == 0) {
-        printf("Error: No se puede insertar un nodo LIST dentro de una lista.\n");
+        fprintf(stderr, "Error: cannot insert a LIST node inside a list.\n");
         return list;
     }
     if (list == item) {
@@ -6937,7 +6937,7 @@ ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
     }
     if (!list) {
         if (strcmp(item->type, "LIST") == 0) {
-            printf("Error: No se puede crear lista con nodo LIST como item.\n");
+            fprintf(stderr, "Error: cannot create a list with a LIST node as item.\n");
             return NULL;
         }
         item->next = NULL;
@@ -7259,7 +7259,7 @@ static void interpret_assign_attr(ASTNode *node) {
     /* detailed attribute assignment trace removed */
 
     if (declared == NULL) {
-        printf("Error: El atributo '%s' no tiene tipo definido.\n", attr_name);
+        fprintf(stderr, "Error: attribute '%s' has no defined type.\n", attr_name);
         return;
     }    
 
@@ -7498,7 +7498,7 @@ static void interpret_assign(ASTNode *node) {
                 return; // ¡Asignación completada!
             }
         }
-        printf("Error: Atributo '%s' no encontrado en '%s'.\n", a->id, o->id);
+        fprintf(stderr, "Error: attribute '%s' not found in '%s'.\n", a->id, o->id);
         return;
     }
     // ¿Es una expresión matemática?
@@ -8266,7 +8266,7 @@ void free_ast(ASTNode *node) {
 void print_object_as_xml_by_id(const char* id) {
     Variable *var = find_variable((char*)id);
     if (!var) {
-        printf("Error: No se encontró variable con id '%s' para serializar a XML.\n", id);
+        fprintf(stderr, "Error: no variable with id '%s' found to serialize to XML.\n", id);
         return;
     }
     
@@ -8340,7 +8340,7 @@ void print_object_as_xml_by_id(const char* id) {
     }
 
     if (var->vtype != VAL_OBJECT || !var->value.object_value) {
-        printf("Error: Variable '%s' no es un objeto válido para serializar a XML.\n", id);
+        fprintf(stderr, "Error: variable '%s' is not a valid object to serialize to XML.\n", id);
         return;
     }
 

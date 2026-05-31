@@ -177,7 +177,7 @@ void native_sqlserver_connect(ASTNode* args) {
     }
 
     mssql_connections[slot] = dbproc;
-    printf("[SQLServer] Conexión exitosa (ID: %d)\n", slot); fflush(stdout);
+    printf("[SQLServer] Connection successful (ID: %d)\n", slot); fflush(stdout);
     ASTNode* r = create_ast_leaf("NUMBER", slot, NULL, NULL);
     add_or_update_variable("__ret__", r); free_ast(r);
 }

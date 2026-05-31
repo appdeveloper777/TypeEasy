@@ -298,7 +298,7 @@ ASTNode* mysql_query_result(int conn_id, const char* query) {
     
     // Validar conexión
     if (conn_id < 0 || conn_id >= 10 || !connections[conn_id]) {
-        printf("[ORM] Error: Conexión inválida (ID: %d)\n", conn_id);
+        fprintf(stderr, "[ORM] Error: invalid connection (ID: %d)\n", conn_id);
         return NULL;
     }
     
@@ -685,7 +685,7 @@ void native_mysql_connect(ASTNode* args) {
     pool_register(conn_id, pool_key);
     // next_conn_id is no longer used for allocation logic
     
-    printf("[MySQL] Conexión exitosa (ID: %d)%s\n", conn_id, pool_enabled() ? " [pool]" : ""); fflush(stdout);
+    printf("[MySQL] Connection successful (ID: %d)%s\n", conn_id, pool_enabled() ? " [pool]" : ""); fflush(stdout);
     ASTNode* ret_node = create_ast_leaf("NUMBER", conn_id, NULL, NULL);
     add_or_update_variable("__ret__", ret_node);
     free_ast(ret_node);
@@ -913,7 +913,7 @@ void native_mysql_close(ASTNode* args) {
     int conn_id = get_arg_int(args, 0);
     
     if (conn_id < 0 || conn_id >= MYSQL_POOL_SIZE || !connections[conn_id]) {
-        printf("[MySQL] Error: Conexión inválida (ID: %d)\n", conn_id);
+        fprintf(stderr, "[MySQL] Error: invalid connection (ID: %d)\n", conn_id);
         return;
     }
     

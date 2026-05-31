@@ -89,7 +89,7 @@ void native_orm_query(ASTNode* args) {
         cls = find_class((char*)class_name);
     }
     if (!cls) {
-        printf("[ORM] Clase destino '%s' no encontrada\n", class_name ? class_name : "NULL");
+        fprintf(stderr, "[ORM] target class '%s' not found\n", class_name ? class_name : "NULL");
         if (final_query) free(final_query);
         return;
     }

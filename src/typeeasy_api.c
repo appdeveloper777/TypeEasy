@@ -241,7 +241,7 @@ int typeeasy_embedded_load_script(TypeEasyEmbeddedContext* ctx, const char* scri
     // que su propio bootstrap tambien sobreviva.
     runtime_save_initial_var_count();
     
-    printf("[TYPEEASY_API] Script cargado exitosamente (embebido verdadero): %s\n", script_path);
+    printf("[TYPEEASY_API] Script loaded successfully (true embedded): %s\n", script_path);
     
     return 1;
 }

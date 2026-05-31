@@ -46,8 +46,10 @@ que falla, falla ruidosamente y en inglés.
   en `src/*.h` (causa raíz del SIGSEGV-solo-Windows).
 - [x] **Diagnósticos en inglés** formato `archivo:linea: syntax error: ...` por
   stderr, salteables desde el editor; test de regresión en `09_diagnostics/`.
-- [ ] **Barrido de mensajes residuales** en español de cara al usuario en
-  `ast.c`/bridges (los `printf("Error: ...")` que llegan a stdout).
+- [x] **Barrido de mensajes residuales** en español de cara al usuario en
+  `ast.c`/parser/bridges: traducidos a inglés y redirigidos a `stderr` (los
+  `printf("Error: ...")` que llegaban a stdout). Trazas `dbg_*` quedan como
+  están (son depuración, no de cara al usuario).
 
 **Salida medible:** suite verde (45 PASS / 3 XFAIL), guard LLP64 en cada PR.
 

@@ -341,9 +341,9 @@ layer_list: layer_list layer_decl               { $$ = append_layer_to_list($1, 
 layer_decl: LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON { $$ = create_layer_node($2, $4, $6); };
 
 attribute_decl:
-    IDENTIFIER COLON INT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "int"); } else { printf("Error: No hay clase definida para el atributo '%s'.\n", $1); } }
-  | IDENTIFIER COLON STRING SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "string"); } else { printf("Error: No hay clase definida para el atributo '%s'.\n", $1); } }
-  | IDENTIFIER COLON FLOAT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "float"); } else { printf("Error: No hay clase definida para el atributo '%s'.\n", $1); } }
+    IDENTIFIER COLON INT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "int"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
+  | IDENTIFIER COLON STRING SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "string"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
+  | IDENTIFIER COLON FLOAT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "float"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
   | IDENTIFIER COLON BOOLTYPE SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "bool"); } }
   | IDENTIFIER COLON DATETIMETYPE SEMICOLON { if (last_class) { add_attribute_to_class(last_class, $1, "datetime"); } }
   | IDENTIFIER COLON UUIDTYPE SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "uuid"); } }
@@ -381,7 +381,7 @@ access_mod:
 
 
 constructor_decl:
-    CONSTRUCTOR LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET  { if (last_class) { add_constructor_to_class(last_class, $3, $6); } else { printf("Error: No hay clase definida para el constructor.\n"); } $$ = NULL; }
+    CONSTRUCTOR LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET  { if (last_class) { add_constructor_to_class(last_class, $3, $6); } else { fprintf(stderr, "Error: no class defined for the constructor.\n"); } $$ = NULL; }
   ;
 
 parameter_decl:
@@ -424,8 +424,8 @@ method_return_type:
   ;
 
 method_decl:
-    IDENTIFIER LPAREN RPAREN COLON method_return_type LBRACKET statement_list RBRACKET  { if (!last_class) { printf("Error interno: no hay clase activa para añadir método '%s'.\n", $1); } else { add_method_to_class(last_class, $1, NULL, $7, $5); } $$ = NULL; }
-  | IDENTIFIER LPAREN parameter_list RPAREN COLON method_return_type LBRACKET statement_list RBRACKET  { if (!last_class) { printf("Error interno: no hay clase activa para añadir método '%s'.\n", $1); } else { add_method_to_class(last_class, $1, $3, $8, $6); } $$ = NULL; }
+    IDENTIFIER LPAREN RPAREN COLON method_return_type LBRACKET statement_list RBRACKET  { if (!last_class) { fprintf(stderr, "Internal error: no active class to add method '%s'.\n", $1); } else { add_method_to_class(last_class, $1, NULL, $7, $5); } $$ = NULL; }
+  | IDENTIFIER LPAREN parameter_list RPAREN COLON method_return_type LBRACKET statement_list RBRACKET  { if (!last_class) { fprintf(stderr, "Internal error: no active class to add method '%s'.\n", $1); } else { add_method_to_class(last_class, $1, $3, $8, $6); } $$ = NULL; }
   ;
 
 expression:
@@ -644,7 +644,7 @@ func_call_expr SEMICOLON { $$ = $1; }
   | IDENTIFIER ASSIGN NUMBER    { $$ = create_train_option_node($1, $3); }
   | LET IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER SEMICOLON 
     { ClassNode* cls = find_class($7);
-      if (!cls) { printf("Clase '%s' no encontrada.\n", $7); $$ = NULL; } 
+      if (!cls) { fprintf(stderr, "class '%s' not found.\n", $7); $$ = NULL; } 
       else { /* v0.0.14: defer load; te_csv_lazy_resolve_all() will autodetect COLUMNAR. */
              ASTNode* placeholder = create_ast_node("LIST", NULL, NULL);
              ASTNode* d = create_var_decl_node($2, placeholder); d->value = 1; /* let = immutable */
@@ -652,15 +652,15 @@ func_call_expr SEMICOLON { $$ = $1; }
              $$ = d; } }
   | VAR IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER SEMICOLON
     { ClassNode* cls = find_class($7);
-      if (!cls) { printf("Clase '%s' no encontrada.\n", $7); $$ = NULL; }
+      if (!cls) { fprintf(stderr, "class '%s' not found.\n", $7); $$ = NULL; }
       else { ASTNode* placeholder = create_ast_node("LIST", NULL, NULL);
              ASTNode* d = create_var_decl_node($2, placeholder);
              te_csv_lazy_register_df(d, $5, $7, 0);
              $$ = d; } }
   | LET IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER AS IDENTIFIER SEMICOLON
     { ClassNode* cls = find_class($7);
-      if (!cls) { printf("Clase '%s' no encontrada.\n", $7); $$ = NULL; }
-      else if (strcmp($9, "dataframe") != 0) { printf("Modificador desconocido tras 'as': '%s' (esperado 'dataframe').\n", $9); $$ = NULL; }
+      if (!cls) { fprintf(stderr, "class '%s' not found.\n", $7); $$ = NULL; }
+      else if (strcmp($9, "dataframe") != 0) { fprintf(stderr, "unknown modifier after 'as': '%s' (expected 'dataframe').\n", $9); $$ = NULL; }
       else { /* v1.0.0: defer load to runtime so now_ms() brackets measure I/O. */
              ASTNode* placeholder = create_ast_node("LIST", NULL, NULL);
              ASTNode* d = create_var_decl_node($2, placeholder); d->value = 1;
@@ -668,8 +668,8 @@ func_call_expr SEMICOLON { $$ = $1; }
              $$ = d; } }
   | VAR IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER AS IDENTIFIER SEMICOLON
     { ClassNode* cls = find_class($7);
-      if (!cls) { printf("Clase '%s' no encontrada.\n", $7); $$ = NULL; }
-      else if (strcmp($9, "dataframe") != 0) { printf("Modificador desconocido tras 'as': '%s' (esperado 'dataframe').\n", $9); $$ = NULL; }
+      if (!cls) { fprintf(stderr, "class '%s' not found.\n", $7); $$ = NULL; }
+      else if (strcmp($9, "dataframe") != 0) { fprintf(stderr, "unknown modifier after 'as': '%s' (expected 'dataframe').\n", $9); $$ = NULL; }
       else { ASTNode* placeholder = create_ast_node("LIST", NULL, NULL);
              ASTNode* d = create_var_decl_node($2, placeholder);
              te_csv_lazy_register_df(d, $5, $7, 1);
@@ -774,7 +774,7 @@ object_expression:
     NEW IDENTIFIER LPAREN expression_list RPAREN
     {
         ClassNode *cls = find_class($2);
-        if (!cls) { printf("Error: Clase '%s' no encontrada.\n", $2); $$ = NULL; } 
+        if (!cls) { fprintf(stderr, "Error: class '%s' not found.\n", $2); $$ = NULL; } 
         else { $$ = create_object_with_args(cls, $4); }
     }
 ;
