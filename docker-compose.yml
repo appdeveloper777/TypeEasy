@@ -42,6 +42,9 @@ services:
       - MYSQL_USER=root # Usuario de MySQL
       - MYSQL_PASSWORD=rootpassword # Contraseña de MySQL
       - MYSQL_DATABASE=meri # Nombre de la base de datos
+      # Secret HS256 para firmar (login) y validar (@auth) los JWT.
+      # Se toma de la variable JWT_SECRET del archivo .env (no commiteado).
+      - JWT_SECRET=${JWT_SECRET}
     volumes:
       - ./typeeasycode/apis:/app/apis
       - ./typeeasycode/models:/app/models
@@ -67,8 +70,8 @@ services:
     environment:
       - TYPEEASY_DEBUG=0
       # Secret HS256 para firmar (login) y validar (@auth) los JWT.
-      # En produccion usar un valor fuerte y secreto (no commitear el real).
-      - JWT_SECRET=testsecret123
+      # Se toma de la variable JWT_SECRET del archivo .env (no commiteado).
+      - JWT_SECRET=${JWT_SECRET}
       # --- CSV reader tuning (opcional) ---
       # - TE_CSV_MAX_THREADS=16   # tope de hilos (default 16, rango 1-256)
       # - TE_CSV_THREADS=8        # forzar N hilos exactos
