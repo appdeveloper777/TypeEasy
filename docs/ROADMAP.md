@@ -24,7 +24,7 @@ Este roadmap traduce las 5 prioridades estratégicas en releases concretos.
 | 2.2 | Hot-reload sólido en `--dev` | ⏳ pendiente |
 | 2.3 | Errores HTTP no tumban el server | ✅ setjmp/longjmp → 500 (revisar `file:line` en dev) |
 | 2.4 | Documentar los ~15 builtins de API | ✅ `docs/API_BUILTINS.md` |
-| 3.1 | Reposicionar CSV/LINQ como soporte | ⏳ narrativa |
+| 3.1 | Reposicionar CSV/LINQ como soporte | ✅ narrativa (hero + READMEs de ejemplos) |
 | 3.2 | README con promesa única | ✅ hero reescrito |
 | 3.3 | Installer empaqueta el CLI wrapper | ✅ `.iss` + `package_windows_release.sh` |
 | 4 | Crecer en el carril (migraciones, middleware, ORM liviano, WS) | 🔜 post v0.1.0 |
@@ -80,9 +80,10 @@ tocar Docker; un plugin viejo produce un mensaje accionable, no `[]`.
 - [x] **Installer empaqueta el CLI**: `bin/typeeasy-bin.exe` + dispatchers
   `typeeasy.cmd`/`te.cmd` + árbol `cli/` y `cli/templates/`; `InstallDelete`
   limpia los `.exe` viejos que rompían `te new` (bug v0.0.10).
-- [ ] **Reposicionar CSV/LINQ** de "bandera principal" a "feature de soporte":
-  mover ejemplos de DataFrame fuera del hero; dejar claro que TypeEasy **no**
-  compite con Polars/pandas — es para mover datos *dentro de tus endpoints*.
+- [x] **Reposicionar CSV/LINQ** de "bandera principal" a "feature de soporte":
+  el hero aclara que TypeEasy **no** compite con Polars/pandas, y los READMEs de
+  ejemplos (`06_csv/`, `11_linq_objects/`) encuadran CSV/LINQ como soporte para
+  mover datos *dentro de tus endpoints*.
 
 **Salida medible:** un dev nuevo entiende en 30s qué es TypeEasy y para qué no.
 

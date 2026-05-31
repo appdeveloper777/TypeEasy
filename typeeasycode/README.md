@@ -22,4 +22,4 @@ Carpeta `cwd` cuando se corre `docker compose run --rm typeeasy <file.te>`
 | `wasm/`                    | Ejemplos WebAssembly                            |
 | `_regression.sh`           | Suite de regression (corre tests categorizados) |
 | `_orm_regression.sh`       | Smoke ORM                                       |
-| `cmp_bench.sh`             | Benchmark CSV vs polars                         |
+| `cmp_bench.sh`             | Benchmark de regresion del parser CSV (referencia polars) |

@@ -3,6 +3,11 @@
 Operadores LINQ de v0.0.11 aplicados a colecciones de instancias de clases
 definidas por el usuario.
 
+> **Alcance:** LINQ es una *feature de soporte* para filtrar/ordenar/proyectar
+> datos **dentro de tus endpoints** (p. ej. preparar la respuesta de un
+> handler). **No** compite con Polars/pandas ni pretende ser un motor de
+> consultas de proposito general.
+
 ## Cómo correr
 
 ```bash
