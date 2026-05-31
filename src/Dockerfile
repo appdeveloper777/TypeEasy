@@ -6,8 +6,9 @@
 FROM gcc:13.2.0 AS base
 
 # Instala las herramientas que ambos componentes necesitan
+# libsqlite3-dev: necesario para compilar el plugin nativo libte_sqlite.so
 RUN apt-get update && \
-    apt-get install -y flex bison libssl-dev default-libmysqlclient-dev libcurl4-openssl-dev libpq-dev freetds-dev && \
+    apt-get install -y flex bison libssl-dev default-libmysqlclient-dev libcurl4-openssl-dev libpq-dev freetds-dev libsqlite3-dev && \
     apt-get clean
 
 WORKDIR /app
@@ -23,6 +24,16 @@ FROM base AS typeeasy_builder
 # 'make all' ahora construye AMBOS: 'typeeasy' y 'servidor_agent'
 # Asume que tu Makefile modificado está en /app/src/
 RUN make -C /app/src clean && make -C /app/src all
+
+# Compila el plugin nativo SQLite (libte_sqlite.so) desde el código fuente,
+# enlazando con la libsqlite3 del sistema. Se hace aquí (no se versiona el .so
+# ni se copia del checkout) para garantizar compatibilidad de ABI con el
+# intérprete recién compilado y que CI funcione sin binarios precompilados.
+RUN gcc -shared -fPIC -O2 -Wall -Wno-unused-parameter \
+        -I/app/src \
+        /app/plugins/sqlite/sqlite_plugin.c \
+        -lsqlite3 \
+        -o /app/plugins/sqlite/libte_sqlite.so
 
 # =================================================================
 # ETAPA: COMPILAR EL SHIM RUST (motor_nlu_shim)
@@ -106,7 +117,8 @@ COPY --from=typeeasy_builder /app/src/typeeasy .
 COPY --from=base /app/typeeasycode ./typeeasycode
 # Instala el plugin SQLite (load_native("sqlite")) en la ruta que busca el
 # intérprete, para que los ejemplos/tests de SQLite funcionen dentro de Docker.
-COPY --from=base /app/plugins/sqlite/libte_sqlite.so /root/.te/packages/sqlite/libte_sqlite.so
+# Se copia desde typeeasy_builder, donde se compila desde fuente (no del checkout).
+COPY --from=typeeasy_builder /app/plugins/sqlite/libte_sqlite.so /root/.te/packages/sqlite/libte_sqlite.so
 # El punto de entrada es el propio intérprete.
 ENTRYPOINT ["./typeeasy"]
 
