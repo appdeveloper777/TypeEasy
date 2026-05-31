@@ -186,6 +186,14 @@ typedef struct MethodNode {
      * NULL = not yet attempted. (void*)0x1 = tried, not compilable. Else BCInfo*. */
     void *bc_body;
     struct MethodNode *next;
+    /* v0.1.0 — WebSocket lifecycle. When ws_lifecycle != 0 the handler declares
+     * on_open/on_message/on_close blocks; `body` holds the on_message body. For
+     * legacy flat [WebSocket] handlers ws_lifecycle == 0 and `body` is the
+     * single-shot connect handler (run once on ws_ready, unchanged behavior). */
+    int      ws_lifecycle;   /* 1 if on_open/on_message/on_close blocks present */
+    ASTNode *ws_on_open;     /* on_open body (NULL = none) */
+    ASTNode *ws_on_close;    /* on_close body (NULL = none) */
+    char    *ws_msg_param;   /* on_message(param) name bound to frame text (NULL) */
 } MethodNode;
 
 // --- Endpoint Cache Support ---
@@ -201,8 +209,11 @@ typedef struct CachedResponse {
 CachedResponse *get_cached_response(MethodNode *method, ASTNode *args);
 void set_cached_response(MethodNode *method, ASTNode *args, ASTNode *result);
 void invalidate_cache(MethodNode *method);
-
-typedef struct ParameterNode {
+/* v0.1.0 — WebSocket lifecycle invocation (defined in typeeasy_api.c). */
+int   typeeasy_ws_is_lifecycle(MethodNode *method);
+char *typeeasy_ws_invoke_open(MethodNode *method);
+char *typeeasy_ws_invoke_message(MethodNode *method);
+char *typeeasy_ws_invoke_close(MethodNode *method);typedef struct ParameterNode {
     char *name;
     char *type;
     /* Ola 3 Fase B (perf): cached pointer to the Variable* used by this

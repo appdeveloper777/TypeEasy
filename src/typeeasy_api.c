@@ -484,6 +484,54 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
     return result;
 }
 
+/* v0.1.0 — WebSocket lifecycle invocation. -----------------------------------
+ * te_websocket.c calls these from the civetweb callbacks. The lifecycle bodies
+ * live on the MethodNode: ws_on_open, body (= on_message), ws_on_close. We run
+ * each one through the same machinery as a normal handler by temporarily
+ * pointing m->body at the target body. Legacy flat [WebSocket] handlers
+ * (ws_lifecycle == 0) keep their single-shot body, run via *_invoke_open, so
+ * their behavior is unchanged. */
+int typeeasy_ws_is_lifecycle(MethodNode *m) {
+    return (m && m->ws_lifecycle) ? 1 : 0;
+}
+
+char *typeeasy_ws_invoke_open(MethodNode *m) {
+    if (!m) return NULL;
+    if (m->ws_lifecycle) {
+        if (!m->ws_on_open) return NULL;       /* on_open is optional */
+        ASTNode *saved = m->body;
+        m->body = m->ws_on_open;
+        char *r = typeeasy_embedded_invoke_method(m);
+        m->body = saved;
+        return r;
+    }
+    /* Legacy: the single-shot connect handler is m->body. */
+    return typeeasy_embedded_invoke_method(m);
+}
+
+char *typeeasy_ws_invoke_message(MethodNode *m) {
+    if (!m || !m->ws_lifecycle || !m->body) return NULL;
+    /* Bind the declared on_message(param) name to the incoming frame text so
+     * the handler can use it directly; request_body() also returns it. The
+     * frame text was placed into the request body by the caller. */
+    if (m->ws_msg_param) {
+        const char *frame = typeeasy_http_get_body();
+        ASTNode *n = create_ast_leaf((char*)"STRING", 0, (char*)(frame ? frame : ""), NULL);
+        add_or_update_variable(m->ws_msg_param, n);
+        free_ast(n);
+    }
+    return typeeasy_embedded_invoke_method(m);
+}
+
+char *typeeasy_ws_invoke_close(MethodNode *m) {
+    if (!m || !m->ws_lifecycle || !m->ws_on_close) return NULL;
+    ASTNode *saved = m->body;
+    m->body = m->ws_on_close;
+    char *r = typeeasy_embedded_invoke_method(m);
+    m->body = saved;
+    return r;
+}
+
 char* typeeasy_embedded_invoke(TypeEasyEmbeddedContext* ctx, const char* script_path, const char* function_name) {
     if (!ctx || !script_path || !function_name) return NULL;
     LoadedScript* script = find_loaded_script(ctx, script_path);

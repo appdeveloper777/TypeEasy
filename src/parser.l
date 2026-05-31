@@ -147,6 +147,9 @@
 "HttpPatch"             { return HTTPPATCH; }
 "WebSocket"             { return WEBSOCKET; }
 "WEBSOCKET"             { return WEBSOCKET; }
+"on_open"               { return ON_OPEN; }
+"on_message"            { return ON_MESSAGE; }
+"on_close"              { return ON_CLOSE; }
 "xml"                   { return XML; }
 "json"                  { return JSON; }
 

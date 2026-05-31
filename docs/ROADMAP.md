@@ -105,8 +105,9 @@ debe poder explicarse como "esto hace tu API más rápida de escribir/desplegar"
   `@cors` declarativos por handler, en la línea de `@auth`.
 - [ ] **Relaciones ligeras de ORM**: `has_many` / `belongs_to` sobre el bridge
   existente, sin convertirse en un ORM completo.
-- [ ] **WebSockets de primera clase**: handler `[Ws("/canal")]` con
-  `on_open/on_message/on_close`, reusando `te_websocket`.
+- [x] **WebSockets de primera clase**: handler `[WebSocket("/canal")]` con
+  cláusulas `on_open/on_message(msg)/on_close`, reusando `te_websocket`.
+  Los handlers planos legacy siguen funcionando (sin cláusulas de ciclo de vida).
 
 **Fuera de alcance (explícito):** closures generales, async/await,
 metaprogramación, scripting de propósito general. Si un pedido no acelera

@@ -35,11 +35,20 @@ struct MethodNode;
 extern struct MethodNode *global_methods;
 char *typeeasy_embedded_invoke_method(struct MethodNode *m);
 
+/* v0.1.0 — WebSocket lifecycle invocation (defined in src/typeeasy_api.c).
+ * These read the WS lifecycle fields off the real MethodNode (visible there),
+ * so this file does not need to mirror those fields in its MN struct. */
+int   typeeasy_ws_is_lifecycle(struct MethodNode *m);
+char *typeeasy_ws_invoke_open(struct MethodNode *m);
+char *typeeasy_ws_invoke_message(struct MethodNode *m);
+char *typeeasy_ws_invoke_close(struct MethodNode *m);
+
 /* HTTP state setters (defined in src/ast.c) — we reuse the same machinery for
  * passing path params and query string into the .te handler. */
 void typeeasy_http_reset(void);
 void typeeasy_http_set_method(const char *m);
 void typeeasy_http_set_path  (const char *p);
+void typeeasy_http_set_body  (const char *b);
 void typeeasy_http_add_query (const char *k, const char *v);
 void typeeasy_http_add_header(const char *k, const char *v);
 void typeeasy_http_add_param (const char *k, const char *v);
@@ -75,7 +84,19 @@ typedef struct TeWsConn {
 } TeWsConn;
 
 /* ===== Globals ===== */
-static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;  /* protects the lists AND interpreter calls */
+/* Recursive: a .te handler invoked while we hold g_lock (cb_ready / cb_data /
+ * cb_close) may itself call ws_broadcast(), which re-locks g_lock. A recursive
+ * mutex makes that nesting safe. Initialized at runtime (te_ws_init) for
+ * portability across glibc and winpthreads. */
+static pthread_mutex_t g_lock;
+static pthread_once_t  g_lock_once = PTHREAD_ONCE_INIT;
+static void make_lock(void) {
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&g_lock, &attr);
+    pthread_mutexattr_destroy(&attr);
+}
 static TeWsConn *g_conns = NULL;
 static unsigned int g_next_id = 1;
 
@@ -251,7 +272,7 @@ static void cb_ready(struct mg_connection *conn, void *cbdata) {
     }
 
     set_current_conn(c);
-    char *result = typeeasy_embedded_invoke_method((struct MethodNode*)handler);
+    char *result = typeeasy_ws_invoke_open((struct MethodNode*)handler);
     set_current_conn(NULL);
 
     if (result) free(result);
@@ -259,22 +280,84 @@ static void cb_ready(struct mg_connection *conn, void *cbdata) {
     pthread_mutex_unlock(&g_lock);
 }
 
-/* data: invoked when the client sends a frame. We only handle text frames;
- * we don't expose them to .te yet (handler is one-shot at connect). Just
- * keep the connection alive. Return 1 to keep, 0 to close. */
+/* data: invoked when the client sends a frame. For lifecycle handlers we run
+ * the on_message body once per text/binary frame, exposing the frame payload
+ * via request_body() and the declared on_message(param). Legacy single-shot
+ * handlers ignore inbound frames (handler already ran at connect). Return 1 to
+ * keep the connection, 0 to close. */
 static int cb_data(struct mg_connection *conn, int bits, char *data, size_t len, void *cbdata) {
-    (void)conn; (void)data; (void)len; (void)cbdata;
+    MN *handler = (MN*)cbdata;
     int opcode = bits & 0x0F;
-    if (opcode == 0x8) return 0; /* close */
+    if (opcode == 0x8) return 0;                 /* close frame */
+    if (opcode != 0x0 && opcode != 0x1 && opcode != 0x2) return 1; /* ignore ping/pong */
+    if (!handler || !typeeasy_ws_is_lifecycle((struct MethodNode*)handler)) return 1;
+
+    pthread_mutex_lock(&g_lock);
+    TeWsConn *c = NULL;
+    for (TeWsConn *it = g_conns; it; it = it->next) {
+        if (it->mg_conn == conn) { c = it; break; }
+    }
+    if (!c) { pthread_mutex_unlock(&g_lock); return 1; }
+
+    /* Re-populate HTTP state so request_param/request_query/request_body work
+     * inside the on_message body (state is shared and may have been clobbered
+     * by another request between frames). */
+    const struct mg_request_info *req = mg_get_request_info(conn);
+    typeeasy_http_reset();
+    typeeasy_http_set_method("WS");
+    if (req) {
+        typeeasy_http_set_path(req->local_uri);
+        ws_match_pattern(handler->route_path, req->local_uri);
+        ws_populate_query(req->query_string);
+        for (int i = 0; i < req->num_headers; i++) {
+            typeeasy_http_add_header(req->http_headers[i].name,
+                                     req->http_headers[i].value);
+        }
+    }
+    /* Expose the frame text as the request body. */
+    {
+        char *frame = (char*)malloc(len + 1);
+        if (frame) {
+            memcpy(frame, data, len);
+            frame[len] = '\0';
+            typeeasy_http_set_body(frame);
+            free(frame);
+        }
+    }
+
+    set_current_conn(c);
+    char *result = typeeasy_ws_invoke_message((struct MethodNode*)handler);
+    set_current_conn(NULL);
+
+    if (result) free(result);
+    typeeasy_http_reset();
+    pthread_mutex_unlock(&g_lock);
     return 1;
 }
 
-/* close: connection closed. Remove from registry. */
+/* close: connection closed. Run the on_close body (lifecycle handlers) then
+ * remove the connection from the registry. */
 static void cb_close(const struct mg_connection *conn, void *cbdata) {
-    (void)cbdata;
+    MN *handler = (MN*)cbdata;
     pthread_mutex_lock(&g_lock);
     for (TeWsConn *c = g_conns; c; c = c->next) {
         if (c->mg_conn == conn) {
+            if (handler && typeeasy_ws_is_lifecycle((struct MethodNode*)handler)) {
+                const struct mg_request_info *req =
+                    mg_get_request_info((struct mg_connection*)conn);
+                typeeasy_http_reset();
+                typeeasy_http_set_method("WS");
+                if (req) {
+                    typeeasy_http_set_path(req->local_uri);
+                    ws_match_pattern(handler->route_path, req->local_uri);
+                    ws_populate_query(req->query_string);
+                }
+                set_current_conn(c);
+                char *r = typeeasy_ws_invoke_close((struct MethodNode*)handler);
+                set_current_conn(NULL);
+                if (r) free(r);
+                typeeasy_http_reset();
+            }
             fprintf(stderr, "[WS] close id=%u %s\n", c->id, c->route_path ? c->route_path : "?");
             conn_remove(c);
             break;
@@ -285,6 +368,7 @@ static void cb_close(const struct mg_connection *conn, void *cbdata) {
 
 /* ===== Public API ===== */
 void te_ws_init(void) {
+    pthread_once(&g_lock_once, make_lock);
     pthread_once(&g_tls_once, make_tls);
 }
 

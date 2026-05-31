@@ -17,6 +17,14 @@
     int g_debug_mode = 0;
     static int g_pending_auth = 0;   /* @auth decorator flag, applied to next endpoint_method */
     static int g_endpoint_auth_all = 0; /* @auth at endpoint level, applied to ALL methods */
+    /* v0.1.0 — WebSocket lifecycle blocks (on_open/on_message/on_close).
+     * Filled while parsing a single [WebSocket] handler body, then consumed by
+     * the WS endpoint_method action. Reset at the start of each WS handler. */
+    static int      g_ws_is_lifecycle = 0;
+    static ASTNode *g_ws_on_open    = NULL;
+    static ASTNode *g_ws_on_message = NULL;
+    static ASTNode *g_ws_on_close   = NULL;
+    static char    *g_ws_msg_param  = NULL;
     ASTNode* parse_file(FILE* file);
 %}
 
@@ -29,6 +37,7 @@
 
 %token <sval> INT STRING FLOAT FLOAT_LITERAL LAYER LSBRACKET RSBRACKET CACHE
 %token DATASET MODEL TRAIN PREDICT FROM PLOT ARROW IN LAMBDA CONCAT JSON XML HTTPGET HTTPPOST HTTPPUT HTTPDELETE HTTPPATCH WEBSOCKET
+%token ON_OPEN ON_MESSAGE ON_CLOSE
 %token AS
 %token       VAR ASSIGN PRINT PRINTLN FOR FOREACH LPAREN RPAREN SEMICOLON CONCAT FPRINT FPRINTLN 
 %token       PLUS MINUS MULTIPLY DIVIDE LBRACKET RBRACKET
@@ -85,6 +94,7 @@
 %type <node> node_decl
 %type <node> state_decl
 %type <node> endpoint_decl auth_endpoint_decl endpoint_methods endpoint_method
+%type <node> ws_body ws_clauses ws_clause
 %type <ival> cache_decorator
 %right ARROW
 %left QQ
@@ -194,12 +204,22 @@ endpoint_method:
         m->route_path = strdup($4); m->http_method = strdup("PATCH");
         m->cache_ttl = 0; m->next = global_methods; global_methods = m; $$ = NULL;
     }
-    | LSBRACKET WEBSOCKET LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
+    | LSBRACKET WEBSOCKET { g_ws_is_lifecycle = 0; g_ws_on_open = NULL; g_ws_on_message = NULL; g_ws_on_close = NULL; g_ws_msg_param = NULL; } LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET ws_body RBRACKET
     {
-        MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
-        m->name = strdup($7); m->body = $12; m->params = $9;
-        m->route_path = strdup($4); m->http_method = strdup("WS");
-        m->cache_ttl = 0; m->next = global_methods; global_methods = m; $$ = NULL;
+        MethodNode *m = (MethodNode*)calloc(1, sizeof(MethodNode));
+        m->name = strdup($8); m->params = $10;
+        m->route_path = strdup($5); m->http_method = strdup("WS");
+        m->cache_ttl = 0;
+        if (g_ws_is_lifecycle) {
+            m->ws_lifecycle = 1;
+            m->body         = g_ws_on_message;  /* per-message handler */
+            m->ws_on_open   = g_ws_on_open;
+            m->ws_on_close  = g_ws_on_close;
+            m->ws_msg_param = g_ws_msg_param;
+        } else {
+            m->body = $13;                       /* legacy single-shot handler */
+        }
+        m->next = global_methods; global_methods = m; $$ = NULL;
     }
     | cache_decorator LSBRACKET HTTPGET LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
     {
@@ -242,6 +262,36 @@ endpoint_method:
         m->route_path = strdup($5); m->http_method = strdup("PATCH");
         m->cache_ttl = $1; m->next = global_methods; global_methods = m; $$ = NULL;
     }
+    ;
+
+/* WebSocket handler body: either a flat statement_list (legacy single-shot,
+ * runs once on connect) or one-or-more lifecycle clauses (on_open /
+ * on_message / on_close). The two are disambiguated purely by lookahead:
+ * lifecycle clauses always start with a dedicated keyword token, which can
+ * never begin a statement. */
+ws_body:
+      statement_list   { g_ws_is_lifecycle = 0; $$ = $1; }
+    | ws_clauses       { g_ws_is_lifecycle = 1; $$ = NULL; }
+    ;
+
+ws_clauses:
+      ws_clause                 { $$ = NULL; }
+    | ws_clauses ws_clause      { $$ = NULL; }
+    ;
+
+ws_clause:
+      ON_OPEN LBRACKET statement_list RBRACKET
+        { g_ws_on_open = $3; $$ = NULL; }
+    | ON_OPEN LPAREN RPAREN LBRACKET statement_list RBRACKET
+        { g_ws_on_open = $5; $$ = NULL; }
+    | ON_MESSAGE LPAREN RPAREN LBRACKET statement_list RBRACKET
+        { g_ws_on_message = $5; $$ = NULL; }
+    | ON_MESSAGE LPAREN IDENTIFIER RPAREN LBRACKET statement_list RBRACKET
+        { g_ws_on_message = $6; g_ws_msg_param = strdup($3); $$ = NULL; }
+    | ON_CLOSE LBRACKET statement_list RBRACKET
+        { g_ws_on_close = $3; $$ = NULL; }
+    | ON_CLOSE LPAREN RPAREN LBRACKET statement_list RBRACKET
+        { g_ws_on_close = $5; $$ = NULL; }
     ;
 
 httpget_method_decl:
