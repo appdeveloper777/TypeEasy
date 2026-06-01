@@ -63,6 +63,25 @@
 jmp_buf *g_runtime_recovery = NULL;
 
 /* ------------------------------------------------------------------
+ * Interpreter call-depth guard (item #7: limits).
+ *
+ * g_call_depth tracks how many user function/method/lambda invocations are
+ * currently nested on the C stack. Runaway user recursion (a function that
+ * never hits a base case) would otherwise grow the native call stack without
+ * bound and crash the whole process with a stack overflow (SIGSEGV) — fatal
+ * even with prefork, since it kills a worker. te_depth_enter()/te_depth_leave()
+ * (defined just below, after te_runtime_fatalf) bracket every invocation; past
+ * g_max_call_depth te_depth_enter() raises a normal fatal runtime error: in
+ * --api mode te_runtime_fatalf longjmp's back to the request recovery point
+ * (HTTP 500, server keeps serving); in CLI mode it exits like any other fatal
+ * error. The counter is defined here (above runtime_reset_vars_to_initial_state)
+ * so the recovery path can reset it to 0 after a longjmp skips the matching
+ * te_depth_leave() calls.
+ * ------------------------------------------------------------------ */
+int g_call_depth     = 0;
+int g_max_call_depth = 0;   /* lazily initialised from TYPEEASY_MAX_DEPTH */
+
+/* ------------------------------------------------------------------
  * Runtime error location capture (item 2.3).
  *
  * g_current_exec_line tracks the source line of the statement currently
@@ -103,6 +122,32 @@ void te_runtime_fatalf(const char *fmt, ...) {
 void te_oom_fatal(const char *what) {
     te_runtime_fatalf("Fatal: out of memory allocating %s",
                       what ? what : "node");
+}
+
+/* item #7: call-depth guard helpers. te_depth_enter() is called at the top of
+ * every user function/method/lambda invocation and te_depth_leave() right
+ * before it returns; the matched pair keeps g_call_depth equal to the current
+ * nesting of invocations on the C stack. The limit (max nested calls before we
+ * abort with a clean runtime error instead of a native stack overflow) is read
+ * once from TYPEEASY_MAX_DEPTH, defaulting to 250 — calibrated to fire well
+ * before the ~1 MiB Windows thread stack overflows, given each interpreter call
+ * level consumes several large C frames (call_lambda + evaluate_expression +
+ * interpret_ast). Legitimate recursion rarely exceeds a few dozen levels. */
+void te_depth_enter(void) {
+    if (g_max_call_depth == 0) {
+        const char *e = getenv("TYPEEASY_MAX_DEPTH");
+        long v = e ? strtol(e, NULL, 10) : 0;
+        g_max_call_depth = (v > 0) ? (int)v : 250;
+    }
+    if (++g_call_depth > g_max_call_depth) {
+        --g_call_depth;
+        te_runtime_fatalf("Error: maximum call depth %d exceeded "
+                          "(possible infinite recursion).", g_max_call_depth);
+    }
+}
+
+void te_depth_leave(void) {
+    if (g_call_depth > 0) --g_call_depth;
 }
 
 /* Headers POSIX/sockets disponibles en todas las plataformas (MSYS2 / Linux / macOS).
@@ -212,7 +257,6 @@ static inline long te_nprocs_online(void) {
 char* expand_interp_string(const char *raw);
 int is_string_type(struct ASTNode *node);
 extern int g_debug_mode;
-
 /* Debugger: lexer line counter (from flex). Used to stamp ASTNode->line at
  * creation time so the runtime debugger can match breakpoints. */
 extern int yylineno;
@@ -222,6 +266,14 @@ extern int yylineno;
 static void interpret_call_func(ASTNode *node);
 /* Gotcha #2: forward decl para invocar el resultado de una llamada — `make(10)(5)`. */
 static void interpret_call_expr(ASTNode *node);
+
+/* item #7: call-depth guard. Public helpers (defined after te_runtime_fatalf)
+ * plus the *_impl bodies the guarded wrappers delegate to. */
+void te_depth_enter(void);
+void te_depth_leave(void);
+static void interpret_call_func_impl(ASTNode *node);
+static void interpret_call_method_impl(ASTNode *node);
+static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList);
 
 // Helper: Recursively evaluate arguments for native calls
 void evaluate_native_args(ASTNode *arg) {
@@ -1389,6 +1441,12 @@ void runtime_save_initial_var_count() {
 }
 
 void runtime_reset_vars_to_initial_state() {
+    /* item #7: a fatal error (e.g. call-depth limit hit) longjmp's straight to
+     * the request recovery point, skipping the matching te_depth_leave() calls
+     * in the invocation wrappers. Reset the depth counter here so the next
+     * request starts from a clean slate. */
+    g_call_depth = 0;
+
     /* Invalidate all cached bytecode whose Instrs hold raw Variable*
      * pointers into vars[]. After this reset, slots are recycled and
      * those cached pointers become stale. Force recompilation on next
@@ -5073,6 +5131,12 @@ const char *typeeasy_http_find_query(const char *k) {
 /* stdlib dispatcher + plugin host API moved to te_stdlib.c (Fase 2 paso 4). */
 
 static void interpret_call_func(ASTNode *node) {
+    te_depth_enter();
+    interpret_call_func_impl(node);
+    te_depth_leave();
+}
+
+static void interpret_call_func_impl(ASTNode *node) {
     if (te_builtin_dispatch(node)) return;
 
     /* Fase B: si node->id es una variable de tipo LAMBDA, invocar el lambda. */
@@ -5157,6 +5221,12 @@ static void interpret_call_expr(ASTNode *node) {
 /* DataFrame, te_list_df, te_df_dispatch_method now declared in te_csv.h. */
 
 static void interpret_call_method(ASTNode *node) {
+    te_depth_enter();
+    interpret_call_method_impl(node);
+    te_depth_leave();
+}
+
+static void interpret_call_method_impl(ASTNode *node) {
     ASTNode *objNode = node->left;
 
     /* ===== Gotcha #2: método sobre literal — `[1,2,3].map(...)`, `{...}.keys()`.
@@ -7262,6 +7332,13 @@ static ASTNode *te_capture_lambda(ASTNode *lam) {
 }
 
 ASTNode* call_lambda(ASTNode *lambda, ASTNode *argsList) {
+    te_depth_enter();
+    ASTNode *r = call_lambda_impl(lambda, argsList);
+    te_depth_leave();
+    return r;
+}
+
+static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
     if (!lambda || !lambda->id) {
         return create_ast_leaf("NULL", 0, NULL, NULL);
     }

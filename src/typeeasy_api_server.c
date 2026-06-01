@@ -504,9 +504,35 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
                                  req->http_headers[i].value);
     }
 
-    /* Body (cap 1 MiB). */
+    /* Body. Reject oversized payloads explicitly with HTTP 413 instead of
+     * silently ignoring them (item #7: limits/backpressure). The previous
+     * code dropped any body >= 1 MiB on the floor and ran the handler with an
+     * empty body — confusing and unbounded-looking to clients. The cap is now
+     * configurable via TYPEEASY_MAX_BODY (bytes, default 1 MiB). */
+    static long long s_max_body = -1;
+    if (s_max_body < 0) {
+        const char *e = getenv("TYPEEASY_MAX_BODY");
+        long long v = e ? strtoll(e, NULL, 10) : 0;
+        s_max_body = (v > 0) ? v : (1 << 20);
+    }
     long long clen = req->content_length;
-    if (clen > 0 && clen < (1 << 20)) {
+    if (clen > s_max_body) {
+        invoke_lock_release();
+        char cors_org[1024];
+        cors_resolve_origin(conn, cors_org, sizeof(cors_org));
+        const char *body413 = "{\"error\":\"payload_too_large\"}";
+        mg_printf(conn,
+                  "HTTP/1.1 413 Payload Too Large\r\n"
+                  "Access-Control-Allow-Origin: %s\r\n"
+                  TE_CORS_EXTRA_HEADERS
+                  "Content-Type: application/json\r\n"
+                  "Connection: close\r\n"
+                  "Content-Length: %d\r\n\r\n"
+                  "%s",
+                  cors_org, (int)strlen(body413), body413);
+        return 1;
+    }
+    if (clen > 0) {
         char *body = (char *)malloc((size_t)clen + 1);
         if (body) {
             int n = mg_read(conn, body, (size_t)clen);
@@ -644,9 +670,20 @@ static int run_single_server(const char *host, int port, int worker_index) {
         snprintf(port_spec, sizeof(port_spec), "%d", port);
     }
 
+    /* item #7: bound how long a single request may tie up a connection so a
+     * slow/stalled client cannot hold a worker thread forever. Configurable
+     * via TYPEEASY_REQUEST_TIMEOUT_MS (default 30000). */
+    char timeout_spec[32];
+    {
+        const char *e = getenv("TYPEEASY_REQUEST_TIMEOUT_MS");
+        long v = e ? strtol(e, NULL, 10) : 0;
+        snprintf(timeout_spec, sizeof(timeout_spec), "%ld", (v > 0) ? v : 30000L);
+    }
+
     const char *options[] = {
         "listening_ports", port_spec,
         "num_threads", "8",
+        "request_timeout_ms", timeout_spec,
         /* CORS is handled entirely by request_handler (see cors_resolve_origin)
          * so a comma-separated origin list can be matched against the request's
          * Origin header. We force access_control_allow_methods to "" so

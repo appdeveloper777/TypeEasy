@@ -1,0 +1,11 @@
+// expect-stderr-contains: maximum call depth
+// expect-exit: 1
+// item #7 (limits): unbounded recursion is stopped by the call-depth guard
+// with a clean English runtime error instead of crashing the process with a
+// native C stack overflow (SIGSEGV). f() recurses without ever reaching a
+// large enough base case, so it blows past the default depth limit.
+var f = fn(n) => {
+    if (n <= 0) { return 0; }
+    return 1 + f(n - 1);
+};
+println("r=" + f(100000));
