@@ -143,3 +143,34 @@ jobs:
           name: junit-asan
           path: tests/.report/junit-asan.xml
           if-no-files-found: warn
+
+  load-test:
+    # Concurrency survival (Nivel 2.y, production-ready bloqueante #4): levanta
+    # el server real y le pega N requests concurrentes sobre un mix de rutas.
+    # No mide throughput; verifica correctitud y supervivencia bajo concurrencia
+    # (cero 5xx, cuerpos correctos, server vivo al final). Cubre el modelo de
+    # interprete serializado + el reset de estado por request.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build TypeEasy interpreter image
+        run: docker compose build typeeasy
+
+      - name: Run concurrency/load test
+        env:
+          JWT_SECRET: ci-load-secret
+        run: |
+          python tests/api/run_load_test.py \
+            --mode docker \
+            --image typeeasy-typeeasy:latest \
+            --requests 600 --workers 24
