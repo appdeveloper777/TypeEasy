@@ -868,11 +868,21 @@ void generate_code(const char* code) {
     }
 }
 
+/* When set (used by the libFuzzer harness), yyerror stays silent. The fuzzer
+ * feeds tens of thousands of malformed inputs per second; printing a syntax
+ * error for each one floods the CI log (hundreds of MB) without adding signal.
+ * ASan crash reports are unaffected — they are written by the sanitizer, not
+ * through yyerror. */
+int g_quiet_parse_errors = 0;
+
 void yyerror(const char *s) {
     extern char *yytext;
     extern int g_capture_errors;
     extern void te_capture_error(int line, const char *msg, const char *near);
     extern const char *g_debug_source_file;
+    if (g_quiet_parse_errors) {
+        return;
+    }
     if (g_capture_errors) {
         te_capture_error(yylineno, s, yytext);
         return;

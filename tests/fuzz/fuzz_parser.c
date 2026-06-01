@@ -35,6 +35,19 @@ extern ASTNode *parse_file(FILE *file);
  * bounds memory growth across millions of iterations. */
 extern int class_count;
 
+/* Silence the parser's per-input syntax-error chatter. The fuzzer drives tens
+ * of thousands of malformed inputs per second; yyerror would otherwise flood
+ * the CI log (hundreds of MB) with no added signal. Defined in parser.y. ASan
+ * crash reports are written by the sanitizer, not yyerror, so they still show. */
+extern int g_quiet_parse_errors;
+
+int LLVMFuzzerInitialize(int *argc, char ***argv) {
+    (void)argc;
+    (void)argv;
+    g_quiet_parse_errors = 1;
+    return 0;
+}
+
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     /* Cap input size: the goal is to find parser/AST bugs, not to DoS the
      * fuzzer with multi-MB inputs that only slow down the corpus. 64 KiB is far
