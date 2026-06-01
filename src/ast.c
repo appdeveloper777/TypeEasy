@@ -2131,6 +2131,76 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
 }
 
 
+/* ───────────────────────────────────────────────────────────────────────────
+ * te_value_to_variable: ÚNICO punto de verdad para mapear un ASTNode-valor a
+ * (vtype, type, payload) sobre un Variable destino.
+ *
+ * Antes esta lógica estaba TRIPLICADA dentro de add_or_update_variable (handler
+ * de __ret__, var existente, var nueva) y ya desincronizada entre sí: el path
+ * de var-nueva no manejaba FLOAT ni MAP, y sólo __ret__ normalizaba
+ * OBJECT_LITERAL→MAP. Cualquier tipo que cayera al `else` colapsaba en silencio
+ * a INT 0. Centralizar elimina esa clase de bug: agregar un tipo de valor de
+ * retorno nuevo ahora es editar UN solo switch.
+ *
+ * Contrato: el caller debe haber liberado dst->type y —si dst->vtype era
+ * VAL_STRING— dst->value.string_value ANTES de llamar. No toca dst->id ni
+ * dst->is_const. dst->type queda con un strdup propio.
+ * ─────────────────────────────────────────────────────────────────────────── */
+static void te_value_to_variable(Variable *dst, ASTNode *value) {
+    const char *t = value->type;
+    if (strcmp(t, "STRING") == 0) {
+        dst->vtype = VAL_STRING;
+        dst->type = strdup("STRING");
+        dst->value.string_value = strdup(value->str_value ? value->str_value : "");
+    } else if (strcmp(t, "OBJECT") == 0) {
+        dst->vtype = VAL_OBJECT;
+        dst->type = strdup("OBJECT");
+        dst->value.object_value = (ObjectNode *)value->extra;
+    } else if (strcmp(t, "LIST") == 0) {
+        dst->vtype = VAL_OBJECT;
+        dst->type = strdup("LIST");
+        dst->value.object_value = (ObjectNode *)(intptr_t)value;
+    } else if (strcmp(t, "MAP") == 0 || strcmp(t, "OBJECT_LITERAL") == 0) {
+        dst->vtype = VAL_OBJECT;
+        dst->type = strdup("MAP");
+        dst->value.object_value = (ObjectNode *)(intptr_t)value;
+    } else if (strcmp(t, "LAMBDA") == 0) {
+        /* gotcha closure-return: una función puede devolver un lambda capturado */
+        dst->vtype = VAL_OBJECT;
+        dst->type = strdup("LAMBDA");
+        dst->value.object_value = (ObjectNode *)(intptr_t)value;
+    } else if (strcmp(t, "LAZY_ITER") == 0) {
+        /* v0.0.12 #8: lazy iterator carries pointer to LAZY_ITER ASTNode */
+        dst->vtype = VAL_OBJECT;
+        dst->type = strdup("LAZY_ITER");
+        dst->value.object_value = (ObjectNode *)(intptr_t)value;
+    } else if (strcmp(t, "NULL") == 0) {
+        dst->vtype = VAL_OBJECT;
+        dst->type = strdup("NULL");
+        dst->value.object_value = NULL;
+    } else if (strcmp(t, "FLOAT") == 0) {
+        dst->vtype = VAL_FLOAT;
+        dst->type = strdup("FLOAT");
+        dst->value.float_value = value->str_value ? atof(value->str_value) : 0.0;
+    } else {
+        /* Red de seguridad: lo que antes era el `else` silencioso. INT es el
+         * destino legítimo para NUMBER/INT/BOOL y nodos de op ya evaluados,
+         * pero si llega un tipo desconocido lo avisamos en builds de debug en
+         * lugar de colapsar a INT 0 sin dejar rastro. */
+#ifdef TE_DEBUG_VALUE_TYPES
+        if (strcmp(t, "INT") != 0 && strcmp(t, "NUMBER") != 0 &&
+            strcmp(t, "BOOL") != 0) {
+            fprintf(stderr, "[te_value_to_variable] WARNING: tipo no manejado '%s' "
+                            "almacenado como INT (posible colapso silencioso).\n", t);
+        }
+#endif
+        dst->vtype = VAL_INT;
+        dst->type = strdup("INT");
+        dst->value.int_value = value->value;
+    }
+}
+
+
 void add_or_update_variable(char *id, ASTNode *value) {
     if (!value) return;
     /* Fase 3a: si es STRING_INTERP, expandir a STRING antes de almacenar */
@@ -2152,41 +2222,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
         }
         __ret_var.id = strdup(id);
         __ret_var.is_const = 0;
-        if (strcmp(value->type, "STRING") == 0) {
-            __ret_var.vtype = VAL_STRING;
-            __ret_var.type = strdup("STRING");
-            __ret_var.value.string_value = strdup(value->str_value);
-        } else if (strcmp(value->type, "OBJECT") == 0) {
-            __ret_var.vtype = VAL_OBJECT;
-            __ret_var.type = strdup("OBJECT");
-            __ret_var.value.object_value = (ObjectNode *)value->extra;
-        } else if (strcmp(value->type, "LIST") == 0) {
-            __ret_var.vtype = VAL_OBJECT;
-            __ret_var.type = strdup("LIST");
-            __ret_var.value.object_value = (ObjectNode *)value;
-        } else if (strcmp(value->type, "LAMBDA") == 0) {
-            /* gotcha closure-return: una función puede devolver un lambda capturado */
-            __ret_var.vtype = VAL_OBJECT;
-            __ret_var.type = strdup("LAMBDA");
-            __ret_var.value.object_value = (ObjectNode *)value;
-        } else if (strcmp(value->type, "LAZY_ITER") == 0) {
-            /* v0.0.12 #8: lazy iterator carries pointer to LAZY_ITER ASTNode */
-            __ret_var.vtype = VAL_OBJECT;
-            __ret_var.type = strdup("LAZY_ITER");
-            __ret_var.value.object_value = (ObjectNode *)value;
-        } else if (strcmp(value->type, "MAP") == 0 || strcmp(value->type, "OBJECT_LITERAL") == 0) {
-            __ret_var.vtype = VAL_OBJECT;
-            __ret_var.type = strdup("MAP");
-            __ret_var.value.object_value = (ObjectNode *)value;
-        } else if (strcmp(value->type, "FLOAT") == 0) {
-            __ret_var.vtype = VAL_FLOAT;
-            __ret_var.type = strdup("FLOAT");
-            __ret_var.value.float_value = atof(value->str_value);
-        } else {
-            __ret_var.vtype = VAL_INT;
-            __ret_var.type = strdup("INT");
-            __ret_var.value.int_value = value->value;
-        }
+        te_value_to_variable(&__ret_var, value);
         __ret_var_active = 1;
         return;
     }
@@ -2196,54 +2232,19 @@ void add_or_update_variable(char *id, ASTNode *value) {
         if (var->is_const) {
             te_runtime_fatalf("Error: cannot assign to constant variable '%s'.", id);
         }
-        free(var->type);
-        var->type = strdup(value->type);
         if (var->vtype == VAL_STRING && var->value.string_value) free(var->value.string_value);
-        if (strcmp(value->type, "STRING") == 0) {
-            var->vtype = VAL_STRING;
-            var->value.string_value = strdup(value->str_value);
-        } else if (strcmp(value->type, "OBJECT") == 0) {
-            var->vtype = VAL_OBJECT;
-            var->value.object_value = (ObjectNode *)value->extra;
-        } else if (strcmp(value->type, "LAMBDA") == 0) {
-            var->vtype = VAL_OBJECT;
-            var->value.object_value = (ObjectNode *)(intptr_t)value;
-        } else if (strcmp(value->type, "LIST") == 0 || strcmp(value->type, "OBJECT_LITERAL") == 0 || strcmp(value->type, "LAZY_ITER") == 0) {
-            var->vtype = VAL_OBJECT;
-            var->value.object_value = (ObjectNode *)(intptr_t)value;
-        } else if (strcmp(value->type, "FLOAT") == 0) {
-            var->vtype = VAL_FLOAT;
-            var->value.float_value = value->str_value ? atof(value->str_value) : 0.0;
-        } else {
-            var->vtype = VAL_INT;
-            var->value.int_value = value->value;
-        }
+        free(var->type);
+        te_value_to_variable(var, value);
     } else {
         if (var_count >= MAX_VARS) {
             printf("Error: too many declared variables.\n");
             return;
         }
         vars[var_count].id = strdup(id);
-        vars[var_count].type = strdup(value->type);
         vars[var_count].is_const = 0;
         /* Ola 16 */
         te_sym_insert(vars[var_count].id, var_count);
-        if (strcmp(value->type, "STRING") == 0) {
-            vars[var_count].vtype = VAL_STRING;
-            vars[var_count].value.string_value = strdup(value->str_value);
-        } else if (strcmp(value->type, "OBJECT") == 0) {
-            vars[var_count].vtype = VAL_OBJECT;
-            vars[var_count].value.object_value = (ObjectNode *)value->extra;
-        } else if (strcmp(value->type, "LAMBDA") == 0) {
-            vars[var_count].vtype = VAL_OBJECT;
-            vars[var_count].value.object_value = (ObjectNode *)(intptr_t)value;
-        } else if (strcmp(value->type, "LIST") == 0 || strcmp(value->type, "OBJECT_LITERAL") == 0 || strcmp(value->type, "LAZY_ITER") == 0) {
-            vars[var_count].vtype = VAL_OBJECT;
-            vars[var_count].value.object_value = (ObjectNode *)(intptr_t)value;
-        } else {
-            vars[var_count].vtype = VAL_INT;
-            vars[var_count].value.int_value = value->value;
-        }
+        te_value_to_variable(&vars[var_count], value);
         var_count++;
     }
 }
