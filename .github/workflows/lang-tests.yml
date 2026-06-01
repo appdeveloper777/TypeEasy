@@ -7,22 +7,30 @@ on:
       - 'src/**'
       - 'tests/lang/**'
       - 'tests/api/**'
+      - 'tests/fuzz/**'
       - 'typeeasycode/endpoint.te'
       - 'tools/te-test/**'
       - '.github/workflows/lang-tests.yml'
       - 'src/Dockerfile'
       - 'docker-compose.yml'
       - 'scripts/audit_llp64_prototypes.sh'
+      - 'scripts/run_fuzz.sh'
+      - 'scripts/build_fuzzer.sh'
+      - 'scripts/run_asan_tests.sh'
   pull_request:
     paths:
       - 'src/**'
       - 'tests/lang/**'
       - 'tests/api/**'
+      - 'tests/fuzz/**'
       - 'typeeasycode/endpoint.te'
       - 'tools/te-test/**'
       - '.github/workflows/lang-tests.yml'
       - 'src/Dockerfile'
       - 'docker-compose.yml'
+      - 'scripts/run_fuzz.sh'
+      - 'scripts/build_fuzzer.sh'
+      - 'scripts/run_asan_tests.sh'
       - 'scripts/audit_llp64_prototypes.sh'
   workflow_dispatch:
 
@@ -143,6 +151,46 @@ jobs:
           name: junit-asan
           path: tests/.report/junit-asan.xml
           if-no-files-found: warn
+
+  fuzz-smoke:
+    # Fuzzing del front-end (production-ready bloqueante #8): construye el harness
+    # libFuzzer del parser (lexer + Bison + AST + free_ast) con clang+ASan y corre
+    # una sesión corta y acotada sobre el corpus semilla. Convierte los "segfaults
+    # intermitentes en paths no cubiertos por los tests" en crashes deterministas
+    # con stack trace. No persigue cobertura exhaustiva (eso es un fuzz largo
+    # offline); es un guard de regresión que falla el build si una entrada
+    # adversaria rompe el parser. Corre dentro de gcc:13.2.0 + clang (libFuzzer).
+    #
+    # seccomp=unconfined: el runtime de ASan colisiona con la ASLR de alta
+    # entropía del kernel host y crashea en su PROPIA init (AsanInitInternal ->
+    # internal_mmap) antes de tocar el target. run_fuzz.sh lo evita con
+    # `setarch -R` (personality(ADDR_NO_RANDOMIZE)), syscall vetada por el perfil
+    # seccomp por defecto; por eso se desactiva aquí.
+    runs-on: ubuntu-latest
+    container:
+      image: gcc:13.2.0
+      options: --security-opt seccomp=unconfined
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build + fuzz deps
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq clang flex bison libomp-dev libssl-dev \
+            default-libmysqlclient-dev libcurl4-openssl-dev libpq-dev freetds-dev \
+            libsqlite3-dev util-linux
+
+      - name: Build fuzzer and run bounded smoke
+        run: bash scripts/run_fuzz.sh 60
+
+      - name: Upload crash artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: tests/fuzz/artifacts/
+          if-no-files-found: ignore
 
   load-test:
     # Concurrency survival (Nivel 2.y, production-ready bloqueante #4): levanta

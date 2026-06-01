@@ -1,0 +1,13 @@
+class Point {
+    int x;
+    int y;
+    __constructor(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+    fn sum() {
+        return this.x + this.y;
+    }
+}
+let p = new Point(3, 4);
+println(p.sum());

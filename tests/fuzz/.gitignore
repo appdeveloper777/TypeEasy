@@ -1,0 +1,13 @@
+# Generated fuzzer binary
+/../../src/fuzz_parser
+
+# libFuzzer working corpus (grows at runtime; seeds/ is the curated source)
+corpus/
+
+# Crash reproducers and libFuzzer logs
+artifacts/
+crash-*
+leak-*
+oom-*
+timeout-*
+fuzz-*.log

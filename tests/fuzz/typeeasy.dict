@@ -1,0 +1,96 @@
+# typeeasy.dict — libFuzzer dictionary for the TypeEasy parser.
+# Tokens that the lexer recognizes; feeding these to the mutator lets it build
+# syntactically interesting inputs far faster than byte-level mutation alone.
+# Format: https://llvm.org/docs/LibFuzzer.html#dictionaries
+
+# --- declarations / structure ---
+kw_let="let "
+kw_var="var "
+kw_const="const "
+kw_fn="fn "
+kw_class="class "
+kw_extends="extends "
+kw_new="new "
+kw_this="this"
+kw_return="return "
+kw_ctor="__constructor"
+kw_import="import "
+kw_public="public "
+kw_private="private "
+kw_protected="protected "
+
+# --- control flow ---
+kw_if="if "
+kw_else="else "
+kw_for="for "
+kw_foreach="foreach "
+kw_while="while "
+kw_in=" in "
+kw_match="match "
+kw_case="case "
+kw_throw="throw "
+
+# --- types ---
+ty_int="int"
+ty_float="float"
+ty_string="string"
+ty_bool="bool"
+ty_void="void"
+ty_dynamic="dynamic"
+ty_datetime="datetime"
+
+# --- literals ---
+lit_true="true"
+lit_false="false"
+lit_null="null"
+
+# --- builtins / io ---
+bi_print="print"
+bi_println="println("
+bi_concat="concat"
+bi_json="json"
+bi_xml="xml"
+
+# --- endpoints / web ---
+ep_endpoint="endpoint "
+ep_get="HttpGet"
+ep_post="HttpPost"
+ep_put="HttpPut"
+ep_delete="HttpDelete"
+ep_patch="HttpPatch"
+ep_ws="WebSocket"
+ep_auth="@auth"
+ep_cache="@Cache"
+
+# --- data / ml ---
+dl_from="from "
+dl_as=" as "
+dl_model="model "
+dl_dataset="dataset "
+dl_train="train "
+dl_predict="predict "
+
+# --- operators / punctuation ---
+op_lbrace="{"
+op_rbrace="}"
+op_lparen="("
+op_rparen=")"
+op_lbrack="["
+op_rbrack="]"
+op_semi=";"
+op_comma=","
+op_dot="."
+op_assign="="
+op_eq="=="
+op_neq="!="
+op_le="<="
+op_ge=">="
+op_arrow="=>"
+op_plus="+"
+op_minus="-"
+op_star="*"
+op_slash="/"
+op_and="&&"
+op_or="||"
+op_colon=":"
+op_dquote="\""

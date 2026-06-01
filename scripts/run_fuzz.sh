@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# run_fuzz.sh — construye y corre el fuzzer del parser de TypeEasy.
+#
+# Orquesta: build (scripts/build_fuzzer.sh) -> siembra corpus desde tests/lang
+# -> corre libFuzzer con el diccionario. Pensado para correr dentro de un
+# contenedor con clang (ver cabecera de build_fuzzer.sh para deps).
+#
+# Uso:
+#   bash scripts/run_fuzz.sh [SEGUNDOS] [args extra de libFuzzer...]
+#
+# Ejemplos:
+#   bash scripts/run_fuzz.sh 60                 # smoke de 60s (CI)
+#   bash scripts/run_fuzz.sh 0                  # indefinido (Ctrl-C para parar)
+#   bash scripts/run_fuzz.sh 300 -jobs=4        # 5 min, 4 procesos
+#
+# Los crashes se guardan como crash-<sha1> en tests/fuzz/artifacts/ y se
+# reproducen con: src/fuzz_parser tests/fuzz/artifacts/crash-<sha1>
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+ROOT="$PWD"
+
+SECS="${1:-60}"
+shift || true
+
+CORPUS="$ROOT/tests/fuzz/corpus"
+SEEDS="$ROOT/tests/fuzz/seeds"
+ARTIFACTS="$ROOT/tests/fuzz/artifacts"
+DICT="$ROOT/tests/fuzz/typeeasy.dict"
+
+# 1) Build (idempotente; recompila el harness + objetos del motor con clang).
+if [[ ! -x "$ROOT/src/fuzz_parser" || "${FUZZ_REBUILD:-1}" == "1" ]]; then
+  bash "$ROOT/scripts/build_fuzzer.sh"
+fi
+
+# 2) Sembrar corpus: seeds curados + todos los .te de la suite de lenguaje.
+#    Un corpus rico en programas válidos da a libFuzzer puntos de partida con
+#    alta cobertura para mutar hacia los paths raros.
+mkdir -p "$CORPUS" "$ARTIFACTS"
+if [[ -d "$SEEDS" ]]; then
+  cp -n "$SEEDS"/*.te "$CORPUS"/ 2>/dev/null || true
+fi
+if [[ -d "$ROOT/tests/lang" ]]; then
+  find "$ROOT/tests/lang" -name '*.te' -exec cp -n {} "$CORPUS"/ \; 2>/dev/null || true
+fi
+echo "=== [fuzz] corpus inicial: $(find "$CORPUS" -type f | wc -l) archivos ==="
+
+# 3) Correr. detect_leaks=0: el intérprete no libera todo al salir por diseño;
+#    cazamos crashes (UAF/overflow/SEGV), no leaks (eso lo cubre #6).
+export ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:print_stacktrace=1:handle_abort=1"
+
+MAXLEN_ARG="-max_len=8192"
+TIME_ARG=""
+if [[ "$SECS" != "0" ]]; then
+  TIME_ARG="-max_total_time=$SECS"
+fi
+
+# Mitigación ASLR vs ASan: en kernels host modernos (6.x bajo Docker
+# Desktop/WSL2) la entropía alta de mmap (vm.mmap_rnd_bits=32) hace que el
+# allocator de ASan falle al reservar su shadow memory y el proceso reciba un
+# SIGSEGV *durante AsanInitInternal*, antes de ejecutar el target. Esto produce
+# "segfaults intermitentes" que NO son bugs del código bajo prueba. Desactivar
+# la aleatorización de direcciones con `setarch -R` lo elimina de forma
+# determinista. Requiere lanzar el contenedor con `--security-opt
+# seccomp=unconfined` (la syscall personality(ADDR_NO_RANDOMIZE) está vetada por
+# el perfil seccomp por defecto). Si setarch no está o no puede desactivar
+# ASLR, se corre directo (best-effort).
+RUNNER=()
+if command -v setarch >/dev/null 2>&1 && setarch -R true >/dev/null 2>&1; then
+  RUNNER=(setarch -R)
+  echo "=== [fuzz] ASLR desactivada vía 'setarch -R' (evita falso SIGSEGV de ASan) ==="
+else
+  echo "=== [fuzz] AVISO: no se pudo desactivar ASLR; si ves SIGSEGV en AsanInit," \
+       "relanza el contenedor con --security-opt seccomp=unconfined ==="
+fi
+
+set -x
+"${RUNNER[@]}" "$ROOT/src/fuzz_parser" \
+  "$CORPUS" \
+  -dict="$DICT" \
+  -artifact_prefix="$ARTIFACTS/" \
+  $MAXLEN_ARG $TIME_ARG \
+  "$@"

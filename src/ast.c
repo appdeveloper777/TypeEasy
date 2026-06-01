@@ -1943,6 +1943,10 @@ Variable *find_variable_for(char *id) {
     return NULL;
 }
 
+/* #5: punto único de mapeo de tipos. Forward decl porque declare_variable
+ * (abajo) lo usa antes de la definición de te_value_to_variable. */
+static void te_value_to_variable(Variable *dst, ASTNode *value);
+
 void declare_variable(char *id, ASTNode *value, int is_const) {
     if (var_count >= MAX_VARS) {
         printf("Error: too many declared variables.\n");
@@ -1968,11 +1972,7 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         vars[my_index].type = strdup(value->type);
     }
 
-   if (strcmp(value->type, "STRING") == 0 || strcmp(value->type, "STRING_LITERAL") == 0) {
-        vars[my_index].vtype = VAL_STRING;
-        vars[my_index].value.string_value = strdup(value->str_value);
-    }
-    else if (strcmp(value->type, "STRING_INTERP") == 0) {
+   if (strcmp(value->type, "STRING_INTERP") == 0) {
         /* Fase 3a: expandir interpolación */
         free(vars[my_index].type);
         vars[my_index].type = strdup("STRING");
@@ -2056,31 +2056,6 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         }
     /* debug print removed */
     }
-    else if (strcmp(value->type, "OBJECT_LITERAL") == 0) {
-        /* Fase 1c: Maps — almacenado como tipo "MAP", lista enlazada de KV_PAIR en value->left */
-        free(vars[my_index].type);
-        vars[my_index].type = strdup("MAP");
-        vars[my_index].vtype = VAL_OBJECT;
-        vars[my_index].value.object_value = (void *)(intptr_t)value;
-    }
-    else if (strcmp(value->type, "LAMBDA") == 0) {
-        /* Fase B: lambda como first-class value. Guardamos el ASTNode tal cual. */
-        free(vars[my_index].type);
-        vars[my_index].type = strdup("LAMBDA");
-        vars[my_index].vtype = VAL_OBJECT;
-        vars[my_index].value.object_value = (void *)(intptr_t)value;
-    }
-    else if (strcmp(value->type, "NULL") == 0) {
-        /* Fase 1d: null */
-        free(vars[my_index].type);
-        vars[my_index].type = strdup("NULL");
-        vars[my_index].vtype = VAL_OBJECT;
-        vars[my_index].value.object_value = NULL;
-    }
-    else if (strcmp(value->type, "FLOAT") == 0) {
-        vars[my_index].vtype = VAL_FLOAT;
-        vars[my_index].value.float_value = atof(value->str_value);
-    }
     else if (strcmp(value->type, "ADD") == 0 || strcmp(value->type, "SUB") == 0 || 
              strcmp(value->type, "MUL") == 0 || strcmp(value->type, "DIV") == 0 ||
              strcmp(value->type, "MOD") == 0 || strcmp(value->type, "NEG") == 0 ||
@@ -2122,25 +2097,6 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         vars[my_index].type = strdup("BOOL");
         vars[my_index].vtype = VAL_INT;
         vars[my_index].value.int_value = evaluate_expression(value) != 0 ? 1 : 0;
-    }
-    else if (strcmp(value->type, "OBJECT") == 0) {
-        vars[my_index].vtype = VAL_OBJECT;
-        vars[my_index].value.object_value = (ObjectNode *)value->extra;
-
-        //if (obj_dbg && obj_dbg->class && obj_dbg->class->name) {
-       //     printf("[DIAG] declare_variable: objeto '%s' de clase '%s' declarado\n", id, obj_dbg->class->name);
-       // } else {
-        //    printf("[DIAG] declare_variable: objeto '%s' declarado pero clase no encontrada\n", id);
-       // }
-    }
-    else if (strcmp(value->type, "LAZY_ITER") == 0) {
-        /* v0.0.12 #8: lazy iterator. The actual LAZY_ITER ASTNode pointer is
-         * either in value->extra (when called from interpret_var_decl with a
-         * wrapper) or value itself (when called directly). */
-        vars[my_index].vtype = VAL_OBJECT;
-        vars[my_index].value.object_value = value->extra
-            ? (ObjectNode *)value->extra
-            : (ObjectNode *)(intptr_t)value;
     }
     else if (strcmp(value->type, "ACCESS_ATTR") == 0) {
         // Esto maneja: let item = intencion.item;
@@ -2194,8 +2150,13 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         return;
     }
     else {
-        vars[my_index].vtype = VAL_INT;
-        vars[my_index].value.int_value = value->value;
+        /* #5: ramas terminales de mapeo de tipos delegadas al punto único
+         * te_value_to_variable (STRING/STRING_LITERAL, FLOAT, OBJECT_LITERAL→MAP,
+         * LAMBDA, NULL, OBJECT, LAZY_ITER y el catch-all→INT). El `type`
+         * pre-asignado al inicio se libera antes de delegar, pues el helper
+         * hace su propio strdup de dst->type (ver contrato). */
+        free(vars[my_index].type);
+        te_value_to_variable(&vars[my_index], value);
     }
 }
 
@@ -2217,7 +2178,7 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
  * ─────────────────────────────────────────────────────────────────────────── */
 static void te_value_to_variable(Variable *dst, ASTNode *value) {
     const char *t = value->type;
-    if (strcmp(t, "STRING") == 0) {
+    if (strcmp(t, "STRING") == 0 || strcmp(t, "STRING_LITERAL") == 0) {
         dst->vtype = VAL_STRING;
         dst->type = strdup("STRING");
         dst->value.string_value = strdup(value->str_value ? value->str_value : "");
@@ -2239,10 +2200,14 @@ static void te_value_to_variable(Variable *dst, ASTNode *value) {
         dst->type = strdup("LAMBDA");
         dst->value.object_value = (ObjectNode *)(intptr_t)value;
     } else if (strcmp(t, "LAZY_ITER") == 0) {
-        /* v0.0.12 #8: lazy iterator carries pointer to LAZY_ITER ASTNode */
+        /* v0.0.12 #8: lazy iterator carries pointer to LAZY_ITER ASTNode.
+         * El nodo real está en ->extra cuando viene envuelto (declare_variable
+         * desde interpret_var_decl) o es `value` mismo cuando se llama directo. */
         dst->vtype = VAL_OBJECT;
         dst->type = strdup("LAZY_ITER");
-        dst->value.object_value = (ObjectNode *)(intptr_t)value;
+        dst->value.object_value = value->extra
+            ? (ObjectNode *)value->extra
+            : (ObjectNode *)(intptr_t)value;
     } else if (strcmp(t, "NULL") == 0) {
         dst->vtype = VAL_OBJECT;
         dst->type = strdup("NULL");
@@ -2251,6 +2216,14 @@ static void te_value_to_variable(Variable *dst, ASTNode *value) {
         dst->vtype = VAL_FLOAT;
         dst->type = strdup("FLOAT");
         dst->value.float_value = value->str_value ? atof(value->str_value) : 0.0;
+    } else if (strcmp(t, "BOOL") == 0) {
+        /* #5: un literal/valor BOOL se almacena con payload entero (0|1) pero
+         * conserva el tag de tipo "BOOL" para que print/concat lo muestren como
+         * true/false. Sin esta rama caería al catch-all y se etiquetaría "INT",
+         * perdiendo el formato booleano (regresión bool_basic). */
+        dst->vtype = VAL_INT;
+        dst->type = strdup("BOOL");
+        dst->value.int_value = value->value;
     } else {
         /* Red de seguridad: lo que antes era el `else` silencioso. INT es el
          * destino legítimo para NUMBER/INT/BOOL y nodos de op ya evaluados,

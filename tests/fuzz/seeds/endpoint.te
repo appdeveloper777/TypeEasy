@@ -1,0 +1,5 @@
+endpoint HttpGet "/users/{id}" {
+    let id = request_param("id");
+    @auth
+    return json({ "id": id, "name": "ada" });
+}
