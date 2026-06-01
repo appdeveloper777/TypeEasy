@@ -99,3 +99,6 @@ test_dup_params.te
 
 # SQLite amalgamation descargada (plugin)
 plugins/sqlite/sqlite-amalgamation-*/
+
+# libFuzzer harness binary (build artifact of scripts/build_fuzzer.sh)
+src/fuzz_parser

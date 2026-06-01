@@ -4,6 +4,31 @@
     #include <stdio.h>
     #include <stdlib.h>
     #include <string.h>
+    #include <setjmp.h>
+
+    /* Recoverable flex fatal errors.
+     *
+     * flex's default YY_FATAL_ERROR prints to stderr and calls exit(2). That is
+     * acceptable for the one-shot CLI, but it is wrong for any long-lived host
+     * of the parser: the --api server (which parses request bodies in a loop)
+     * and the libFuzzer harness both must survive a scanner-internal error
+     * (e.g. "input buffer overflow" on a pathological single mega-token, or
+     * "end of buffer missed") triggered by adversarial input. A raw exit(2)
+     * there tears down the worker / aborts the whole fuzz run (libFuzzer reports
+     * "fuzz target exited", exit 77) instead of treating the input as a parse
+     * failure.
+     *
+     * te_lexer_fatal() reuses the same recovery point as te_runtime_fatal()
+     * (g_runtime_recovery, owned by ast.c): when a caller installed one it
+     * longjmp's back so the host can recover; otherwise it keeps the original
+     * print-and-exit behaviour, so CLI semantics are unchanged. */
+    extern jmp_buf *g_runtime_recovery;
+    static void te_lexer_fatal(const char *msg) {
+        fprintf(stderr, "[LEXER] fatal scanner error: %s\n", msg);
+        if (g_runtime_recovery) longjmp(*g_runtime_recovery, 1);
+        exit(2);
+    }
+    #define YY_FATAL_ERROR(msg) te_lexer_fatal(msg)
 
     // Include stack for imports
     #define MAX_INCLUDE_DEPTH 10

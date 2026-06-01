@@ -21,8 +21,20 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <setjmp.h>
 
 #include "ast.h"
+
+/* Runtime fatal-error recovery point, owned by ast.c. te_runtime_fatal()
+ * longjmp's here when set, otherwise it calls exit(1). The CLI leaves it NULL
+ * (a fatal ends the one-shot process); the API server installs one per request
+ * so a single bad request can't tear down the worker. The fuzzer is the same
+ * case as the server: constant-folding and other AST-build paths can reach a
+ * fatal on adversarial input, and a raw exit(1) makes libFuzzer report
+ * "fuzz target exited" and abort the whole run (exit 77) — not a real crash.
+ * Installing a recovery point turns those benign fatals into a clean longjmp so
+ * the fuzzer keeps hunting actual memory-safety bugs. */
+extern jmp_buf *g_runtime_recovery;
 
 /* parse_file lives in parser.y; prototype it here so LLP64 (Windows) would
  * never truncate the returned pointer — same rule the rest of the tree follows.
@@ -73,7 +85,18 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         return 0;
     }
 
-    ASTNode *root = parse_file(fp);
+    /* Install a recovery point so a parse-time fatal (te_runtime_fatal, e.g.
+     * from constant folding in an AST constructor) longjmp's back here instead
+     * of calling exit(1). On that path we skip free_ast (root is unset) and fall
+     * through to the per-run resets; the next parse_file() re-initialises the
+     * lexer via te_lexer_full_reset(), so an aborted parse leaves no residue. */
+    ASTNode *root = NULL;
+    jmp_buf recovery;
+    g_runtime_recovery = &recovery;
+    if (setjmp(recovery) == 0) {
+        root = parse_file(fp);
+    }
+    g_runtime_recovery = NULL;
     fclose(fp);
 
     if (root)

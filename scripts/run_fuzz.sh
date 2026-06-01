@@ -67,7 +67,21 @@ fi
 # corrida continúa, pero un crash REAL de ASan (UAF/overflow/SEGV) detiene la
 # corrida con exit != 0 y guarda el artefacto. Se fijan explícitos por robustez
 # entre versiones de libFuzzer.
-FORK_ARGS=(-fork=1 -ignore_ooms=1 -ignore_timeouts=1 -ignore_crashes=0 -rss_limit_mb=2048)
+#
+# rss_limit_mb se mantiene MUY por debajo del techo de memoria del contenedor de
+# CI como defensa secundaria: si el leak acumulado de un hijo creciera sin
+# control, libFuzzer lo recicla por su cuenta (OOM benigno, ignorado) antes de
+# que el OOM-killer del kernel lo mate con SIGKILL. Se puede sobrescribir desde
+# CI con TYPEEASY_FUZZ_RSS_MB para runners con menos RAM.
+#
+# NOTA histórica: un `exit 77` con `oom/timeout/crash: 0/0/0` NO siempre es un
+# OOM. La causa raíz observada fue flex llamando exit(2) desde YY_FATAL_ERROR
+# ("input in flex scanner failed") sobre entradas adversariales; libFuzzer lo
+# reporta como "fuzz target exited" y aborta. Se corrigió redefiniendo
+# YY_FATAL_ERROR en parser.l para hacer longjmp al punto de recuperación
+# (g_runtime_recovery) que el harness instala, en vez de matar el proceso.
+RSS_MB="${TYPEEASY_FUZZ_RSS_MB:-1024}"
+FORK_ARGS=(-fork=1 -ignore_ooms=1 -ignore_timeouts=1 -ignore_crashes=0 "-rss_limit_mb=$RSS_MB")
 
 # Mitigación ASLR vs ASan: en kernels host modernos (6.x bajo Docker
 # Desktop/WSL2) la entropía alta de mmap (vm.mmap_rnd_bits=32) hace que el
