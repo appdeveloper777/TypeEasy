@@ -223,7 +223,7 @@ static void child_execv_self(void) {
         execv(g_main_argv[0], g_main_argv);
         execl("/proc/self/exe", "typeeasy_api", (char*)NULL);
     }
-    fprintf(stderr, "[HOTRELOAD] execv falló — child saliendo\n");
+    fprintf(stderr, "[HOTRELOAD] execv failed — child exiting\n");
     fflush(stderr);
     _exit(1);
 }
@@ -308,20 +308,20 @@ void add_route_full(const char *route, const char *script, const char *func,
     entry->method_node = (void*)typeeasy_find_method(func); /* O(1) hot path */
     entry->next = global_routes;
     global_routes = entry;
-    printf("[LOG] Ruta registrada: %s %s -> %s() [%s, cache=%d]\n",
+    printf("[LOG] Route registered: %s %s -> %s() [%s, cache=%d]\n",
            entry->http_method, route, func, entry->response_type, cache_ttl);
 }
 
 // Función para cargar un script TypeEasy
 int load_typeeasy_script(const char *script_path) {
     if (!g_typeeasy_ctx) {
-        fprintf(stderr, "[ERROR] Contexto TypeEasy no inicializado\n");
+        fprintf(stderr, "[ERROR] TypeEasy context not initialized\n");
         return 0;
     }
     
     FILE *fp = fopen(script_path, "r");
     if (!fp) {
-        fprintf(stderr, "[ERROR] No se pudo abrir el script: %s\n", script_path);
+        fprintf(stderr, "[ERROR] Could not open script: %s\n", script_path);
         return 0;
     }
     
@@ -346,9 +346,9 @@ int load_typeeasy_script(const char *script_path) {
     free(script_content);
     
     if (result) {
-        printf("[LOG] Script cargado: %s\n", script_path);
+        printf("[LOG] Script loaded: %s\n", script_path);
     } else {
-        fprintf(stderr, "[ERROR] Error al cargar script: %s\n", script_path);
+        fprintf(stderr, "[ERROR] Failed to load script: %s\n", script_path);
     }
     
     return result;
@@ -356,12 +356,12 @@ int load_typeeasy_script(const char *script_path) {
 
 // Función para descubrir rutas al inicio
 void discover_routes() {
-    printf("[LOG] Iniciando descubrimiento de rutas...\n");
+    printf("[LOG] Starting route discovery...\n");
     
     // Inicializar contexto TypeEasy
     g_typeeasy_ctx = typeeasy_init();
     if (!g_typeeasy_ctx) {
-        fprintf(stderr, "[ERROR] No se pudo inicializar TypeEasy\n");
+        fprintf(stderr, "[ERROR] Could not initialize TypeEasy\n");
         return;
     }
     
@@ -373,19 +373,19 @@ void discover_routes() {
 
     /* Single-file mode: skip ls, feed one path directly to the loop. */
     if (g_single_api_file[0]) {
-        printf("[LOG] Escaneando endpoint unico: %s\n", g_single_api_file);
+        printf("[LOG] Scanning single endpoint: %s\n", g_single_api_file);
         fp = tmpfile();
-        if (!fp) { fprintf(stderr, "[ERROR] tmpfile() falló\n"); return; }
+        if (!fp) { fprintf(stderr, "[ERROR] tmpfile() failed\n"); return; }
         fprintf(fp, "%s\n", g_single_api_file);
         rewind(fp);
     } else {
         /* Build `ls` command using configured apis dir (CLI flag, env var, or default). */
         char ls_cmd[1280];
         snprintf(ls_cmd, sizeof(ls_cmd), "ls -1 %s/*.te 2>/dev/null", g_apis_dir);
-        printf("[LOG] Escaneando endpoints en: %s\n", g_apis_dir);
+        printf("[LOG] Scanning endpoints in: %s\n", g_apis_dir);
         fp = popen(ls_cmd, "r");
         if (fp == NULL) {
-            fprintf(stderr, "[ERROR] No se pudo listar el directorio: %s\n", g_apis_dir);
+            fprintf(stderr, "[ERROR] Could not list directory: %s\n", g_apis_dir);
             return;
         }
     }
@@ -395,7 +395,7 @@ void discover_routes() {
         path[strcspn(path, "\r\n")] = 0;
         files_total++;
 
-        printf("[LOG] Descubriendo rutas en: %s\n", path);
+        printf("[LOG] Discovering routes in: %s\n", path);
 
         // Cargar script en TypeEasy
         if (!load_typeeasy_script(path)) {
@@ -418,7 +418,7 @@ void discover_routes() {
             continue;
         }
         
-        printf("[LOG] Salida de --discover para %s: %s\n", path, discover_result);
+        printf("[LOG] --discover output for %s: %s\n", path, discover_result);
         
         // Parsear JSON simple (ej: [{"route": "/api/x", ...}])
         char *p = discover_result;
@@ -508,7 +508,7 @@ void discover_routes() {
 
     {
         int ok = files_total - files_failed_load - files_failed_discover;
-        printf("[LOG] discover_routes summary: %d/%d archivos OK (%d load-fail, %d discover-fail)\n",
+        printf("[LOG] discover_routes summary: %d/%d files OK (%d load-fail, %d discover-fail)\n",
                ok, files_total, files_failed_load, files_failed_discover);
     }
 }
@@ -1278,11 +1278,11 @@ static int run_worker_ext(int enable_debug) {
 
     ctx = mg_start(NULL, NULL, options);
     if (ctx == NULL) {
-        fprintf(stderr, "[WORKER %d] Error al iniciar civetweb (puerto en uso?)\n", (int)getpid());
+        fprintf(stderr, "[WORKER %d] Failed to start civetweb (port in use?)\n", (int)getpid());
         return 1;
     }
     g_mg_ctx = ctx;
-    printf("[WORKER %d] listo en %s%s\n", (int)getpid(), port_spec,
+    printf("[WORKER %d] ready on %s%s\n", (int)getpid(), port_spec,
            enable_debug ? " [DEBUG ON]" : ""); fflush(stdout);
 
     mg_set_request_handler(ctx, "/healthz", manejadorHealthz, NULL);
@@ -1295,7 +1295,7 @@ static int run_worker_ext(int enable_debug) {
 
     /* #9-12: todas las rutas cargadas y handlers listos => anunciar readiness. */
     g_ready = 1;
-    te_log("info", "worker listo en %s%s", port_spec, enable_debug ? " [DEBUG ON]" : "");
+    te_log("info", "worker ready on %s%s", port_spec, enable_debug ? " [DEBUG ON]" : "");
 
     while (exit_flag == 0) sleep(1);
 
@@ -1304,17 +1304,17 @@ static int run_worker_ext(int enable_debug) {
      * 503 de /readyz antes de cerrar el socket de escucha; luego mg_stop drena
      * las requests en vuelo y cierra limpio. */
     g_ready = 0;
-    te_log("info", "SIGTERM recibido: readiness=false, drenando (inflight=%ld)", g_inflight);
+    te_log("info", "SIGTERM received: readiness=false, draining (inflight=%ld)", g_inflight);
     {
         const char *ds = getenv("TYPEEASY_DRAIN_SECONDS");
         int drain = (ds && *ds) ? atoi(ds) : 0;
         if (drain > 0) {
-            te_log("info", "drain grace de %ds antes de mg_stop", drain);
+            te_log("info", "drain grace of %ds before mg_stop", drain);
             sleep(drain);
         }
     }
     mg_stop(ctx);
-    te_log("info", "server detenido limpio (req_total=%ld)", g_req_total);
+    te_log("info", "server stopped cleanly (req_total=%ld)", g_req_total);
     mg_exit_library();
     return 0;
 }
@@ -1443,7 +1443,7 @@ int main(int argc, char **argv) {
 
     /* --- Resolve single-file vs apis_dir --- */
     if (cli_api_file && cli_apis_dir) {
-        fprintf(stderr, "[ERROR] --api y --api-dir son mutuamente exclusivos.\n");
+        fprintf(stderr, "[ERROR] --api and --api-dir are mutually exclusive.\n");
         return 2;
     }
     if (cli_api_file) {
@@ -1512,7 +1512,7 @@ int main(int argc, char **argv) {
     }
 
     /* === SUPERVISOR === PID 1 del contenedor, nunca muere. */
-    printf("[SUPERVISOR %d] iniciado — workers=%d  hot-reload=%s\n",
+    printf("[SUPERVISOR %d] started — workers=%d  hot-reload=%s\n",
            (int)getpid(), g_num_workers, g_hotreload ? "ON" : "OFF");
     fflush(stdout);
 
@@ -1536,7 +1536,7 @@ int main(int argc, char **argv) {
             if (reaped <= 0) break;
             int slot = find_worker_slot(reaped);
             if (slot >= 0) {
-                fprintf(stderr, "[SUPERVISOR] worker %d (slot %d) murio (status=%d) — respawn\n",
+                fprintf(stderr, "[SUPERVISOR] worker %d (slot %d) died (status=%d) — respawn\n",
                         (int)reaped, slot, status);
                 fflush(stderr);
                 spawn_worker(slot);
@@ -1552,7 +1552,7 @@ int main(int argc, char **argv) {
          * 3) Esperar 2s para que liguen al puerto via SO_REUSEPORT.
          * 4) SIGTERM a los viejos, waitpid hasta drenar.
          * 5) Compactar slots: los nuevos pasan a las posiciones definitivas. */
-        printf("[SUPERVISOR] cambio en .te — rolling restart de %d workers\n", g_num_workers);
+        printf("[SUPERVISOR] .te change — rolling restart of %d workers\n", g_num_workers);
         fflush(stdout);
 
         pid_t old_pids[MAX_WORKERS];
@@ -1569,14 +1569,14 @@ int main(int argc, char **argv) {
             new_pids[i] = p;
         }
         if (spawn_failed) {
-            fprintf(stderr, "[SUPERVISOR] reload parcial — algunos forks fallaron\n");
+            fprintf(stderr, "[SUPERVISOR] partial reload — some forks failed\n");
             fflush(stderr);
         }
 
         /* Dejar que los nuevos bindeen y empiecen a aceptar. */
         sleep(2);
 
-        printf("[SUPERVISOR] SIGTERM a %d workers viejos (graceful drain)\n", old_n);
+        printf("[SUPERVISOR] SIGTERM to %d old workers (graceful drain)\n", old_n);
         fflush(stdout);
         for (int i = 0; i < old_n; i++) {
             if (old_pids[i] > 0) kill(old_pids[i], SIGTERM);
@@ -1589,7 +1589,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < g_num_workers; i++) g_worker_pids[i] = new_pids[i];
 
         supervisor_track_scripts(); /* baseline para el siguiente cambio */
-        printf("[SUPERVISOR] reload completo\n");
+        printf("[SUPERVISOR] reload complete\n");
         fflush(stdout);
     }
 }
