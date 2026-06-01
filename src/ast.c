@@ -209,6 +209,8 @@ extern int yylineno;
 /* Phase H: forward declaration so get_node_string / native_json can recursively
  * evaluate nested CALL_FUNC arguments (e.g. json(concat(...)), concat(a, request_param("id"), b)). */
 static void interpret_call_func(ASTNode *node);
+/* Gotcha #2: forward decl para invocar el resultado de una llamada — `make(10)(5)`. */
+static void interpret_call_expr(ASTNode *node);
 
 // Helper: Recursively evaluate arguments for native calls
 void evaluate_native_args(ASTNode *arg) {
@@ -1229,6 +1231,23 @@ ASTNode* create_call_node(const char* funcName, ASTNode* args) {
    // } else {
    //     printf("[DEBUG] create_call_node: func=%s, args=NULL\n", funcName);
     //}
+    return node;
+}
+
+/* Gotcha #2: `make(10)(5)` — llamada sobre el resultado de otra llamada.
+ * El callee (que evalúa a un LAMBDA) va en node->right; los argumentos en
+ * node->left (igual que CALL_FUNC). Se marca BC_NOT_COMPILABLE para que el
+ * compilador de bytecode no intente compilarlo. */
+ASTNode* create_call_on_expr_node(ASTNode* callee, ASTNode* args) {
+    ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
+    if (!node) return NULL;
+    node->type = strdup("CALL_EXPR");
+    node->id = NULL;
+    node->left = args;
+    node->right = callee;
+    node->str_value = NULL;
+    node->value = 0;
+    node->bc = BC_NOT_COMPILABLE;
     return node;
 }
 
@@ -3515,6 +3534,20 @@ ASTNode* build_item_from_value(ASTNode *value) {
 double evaluate_expression(ASTNode *node) {
     if (!node) return 0;
 
+    /* Gotcha #2: `let x = make(10)(5)` — CALL_EXPR dentro de una expresión.
+     * No está mapeado en NodeKind; se intercepta por nombre antes del
+     * fast-path de bytecode. interpret_call_expr deja el resultado en __ret__. */
+    if (node->type && node->type[0] == 'C' && strcmp(node->type, "CALL_EXPR") == 0) {
+        interpret_call_expr(node);
+        Variable *r = find_variable("__ret__");
+        if (!r) return 0;
+        if (r->vtype == VAL_INT)   return (double)r->value.int_value;
+        if (r->vtype == VAL_FLOAT) return r->value.float_value;
+        if (r->vtype == VAL_STRING && r->value.string_value)
+            return atof(r->value.string_value);
+        return 0;
+    }
+
     /* Fase 3 (perf): bytecode fast-path. Compile & cache on first hit;
      * on subsequent calls (loop bodies, conditions) skip the AST walker
      * entirely and run the flat opcode stream via computed goto. */
@@ -4425,6 +4458,13 @@ void interpret_ast(ASTNode *node) {
     if (return_flag) return;
     if (throw_flag) return;
 
+    /* Gotcha #2: `make(10)(5)` a nivel statement — CALL_EXPR no está mapeado
+     * en NodeKind, así que se intercepta por nombre antes del switch. */
+    if (node->type && node->type[0] == 'C' && strcmp(node->type, "CALL_EXPR") == 0) {
+        interpret_call_expr(node);
+        return;
+    }
+
     /* One-time registration of JSON eval hooks (Fase 1: te_json modularizado). */
     static int s_te_json_hooks_set = 0;
     if (!s_te_json_hooks_set) {
@@ -5074,6 +5114,25 @@ static void interpret_call_func(ASTNode *node) {
     } else {
         te_runtime_fatalf("Error: function '%s' not defined.", node->id);
     }
+}
+
+/* Gotcha #2: invoca el resultado de otra llamada — `make(10)(5)`.
+ * node->right = callee (debe evaluar a un LAMBDA), node->left = argumentos.
+ * Evalúa el callee, lee el LAMBDA de __ret__, lo invoca y deja el resultado
+ * de nuevo en __ret__. */
+static void interpret_call_expr(ASTNode *node) {
+    if (!node || !node->right) return;
+    interpret_ast(node->right);
+    Variable *r = find_variable("__ret__");
+    if (!r || r->vtype != VAL_OBJECT || !r->type || strcmp(r->type, "LAMBDA") != 0) {
+        te_runtime_fatalf("Error: la expresión no es invocable (se esperaba una función).");
+        return;
+    }
+    /* Capturar el puntero del lambda ANTES de invocar: call_lambda puede
+     * sobrescribir __ret__ (y el global FASTRET que lo sombrea). */
+    ASTNode *lambda = (ASTNode*)(intptr_t)r->value.object_value;
+    ASTNode *res = call_lambda(lambda, node->left);
+    if (res) add_or_update_variable("__ret__", res);
 }
 
 /* CSV/LINQ columnar cache + lambda specializer now live in te_colcache.{c,h}
@@ -6529,7 +6588,7 @@ static void interpret_var_decl(ASTNode *node) {
     }
 
     // 1. Si el valor es una llamada a función, ejecútala primero
-if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0 || strcmp(value_node->type, "FILTER_CALL") == 0 || strcmp(value_node->type, "CALL_FUNC") == 0)) {        
+if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0 || strcmp(value_node->type, "FILTER_CALL") == 0 || strcmp(value_node->type, "CALL_FUNC") == 0 || strcmp(value_node->type, "CALL_EXPR") == 0)) {        
         //printf("[DEBUG] interpret_var_decl: executing function call\n"); fflush(stdout);
         interpret_ast(value_node);
         //printf("[DEBUG] interpret_var_decl: function call returned\n"); fflush(stdout);

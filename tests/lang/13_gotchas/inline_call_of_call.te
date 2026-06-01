@@ -1,0 +1,6 @@
+// expect: 15
+// Llamada sobre el resultado de otra llamada (currying inline): make(10)(5).
+// Antes era error de parser `near '('`; ahora la gramática soporta
+// func_call_expr LPAREN args RPAREN de forma recursiva.
+var make = fn(n) => fn(x) => x + n;
+println(make(10)(5));

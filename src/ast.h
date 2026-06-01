@@ -245,6 +245,9 @@ ASTNode *create_lambda_node(const char *argName, ASTNode *body);
 ASTNode *create_lambda_multi_node(const char *paramsCsv, ASTNode *body);
 /* Invoca un lambda con argumentos (lista enlazada por ->right). */
 ASTNode *call_lambda(ASTNode *lambda, ASTNode *argsList);
+/* Gotcha #2: llamada sobre el resultado de otra llamada — `make(10)(5)`.
+ * callee = expresión que evalúa a un LAMBDA; args = lista de argumentos. */
+ASTNode *create_call_on_expr_node(ASTNode *callee, ASTNode *args);
 ASTNode* create_for_in_node(const char *var_name, ASTNode *list_expr, ASTNode *body);
 
 

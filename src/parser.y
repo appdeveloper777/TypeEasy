@@ -729,6 +729,11 @@ func_call_expr SEMICOLON { $$ = $1; }
 func_call_expr:
     IDENTIFIER LPAREN RPAREN { $$ = create_call_node($1, NULL); }
     | IDENTIFIER LPAREN expression_list RPAREN { $$ = create_call_node($1, $3); }
+    /* Gotcha #2: llamada sobre el resultado de otra llamada — `make(10)(5)`,
+     * `make(10)(5)(...)`. Left-recursivo sobre func_call_expr: el callee ya
+     * reducido se invoca con los nuevos argumentos. */
+    | func_call_expr LPAREN RPAREN { $$ = create_call_on_expr_node($1, NULL); }
+    | func_call_expr LPAREN expression_list RPAREN { $$ = create_call_on_expr_node($1, $3); }
     /* Fase 2: NEW IDENTIFIER (...) for non-class names is handled by the
      * `NEW IDENTIFIER LPAREN expression_list RPAREN` rule in `expression`
      * which falls back to create_call_node when find_class returns NULL. */
