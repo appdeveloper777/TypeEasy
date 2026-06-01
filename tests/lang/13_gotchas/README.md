@@ -26,11 +26,13 @@ Algunos gotchas históricos **ya funcionan**. Se dejan como test positivo
 
 | Test | Tipo | Gotcha / estado |
 |------|------|-----------------|
-| `string_split.te` | TRIPWIRE | `s.split(sep)` devuelve longitud 0 (deseado: 3) |
-| `inline_call_index.te` | TRIPWIRE | indexar llamada inline `f(x)[i]` da 0 (deseado: 20) |
-| `nested_closure_return.te` | xfail | retornar función desde función no preserva la captura |
+| `string_split.te` | regresión✓ | `s.split(sep)` — RESUELTO (`expect: 3`) |
+| `inline_call_index.te` | regresión✓ | indexar llamada inline `f(x)[i]` — RESUELTO (`expect: 20`) |
+| `inline_call_of_call.te` | regresión✓ | currying inline `make(10)(5)` — RESUELTO (`expect: 15`) |
+| `nested_closure_return.te` | regresión✓ | retornar función desde función preserva la captura — RESUELTO (`expect: 15`) |
 | `map_closure_capture.te` | regresión✓ | closure capturando var externa dentro de `.map()` — RESUELTO |
 | `string_plus_map_index.te` | regresión✓ | `"texto" + mapa["clave"]` — RESUELTO |
+| `out_of_range_index.te` | TRIPWIRE | índice fuera de rango `xs[99]` colapsa a 0 silencioso (deseado: null/vacío) |
 
 Al arreglar un TRIPWIRE: actualizá su `// expect:` al valor deseado.
 Al arreglar un `xfail`: quitá la directiva y agregá el `// expect:` correcto.
