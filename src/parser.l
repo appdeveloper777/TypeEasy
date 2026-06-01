@@ -55,7 +55,12 @@
 <INCL>[^"]+\"     {
     // Extract filename (remove trailing quote)
     char *fname = strdup(yytext);
-    fname[strlen(fname)-1] = '\0';
+    // Guard against an empty result: if the import path begins with an
+    // embedded NUL byte, strdup() truncates at that NUL and strlen() is 0, so
+    // fname[strlen(fname)-1] would underflow to fname[-1] and corrupt the heap
+    // (heap-buffer-overflow). Only strip the trailing quote when present.
+    size_t _flen = strlen(fname);
+    if (_flen > 0) fname[_flen - 1] = '\0';
 
     // Consume trailing semicolon and whitespace
     int c;

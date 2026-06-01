@@ -55,6 +55,20 @@ if [[ "$SECS" != "0" ]]; then
   TIME_ARG="-max_total_time=$SECS"
 fi
 
+# Fork mode (target con leaks por diseño). El parser de TypeEasy no libera los
+# tokens/nodos que ya lexó/construyó cuando una entrada malformada provoca un
+# error de sintaxis: en producción no importa (cada parse es un proceso efímero
+# que termina), pero el harness de libFuzzer alimenta millones de entradas
+# inválidas en un solo proceso y ese leak acumulado crece el RSS hasta que
+# libFuzzer reporta "out-of-memory" (falso positivo: no es un bug de seguridad).
+# `-fork=1` corre el fuzzing en procesos hijos que se reciclan, acotando el RSS;
+# bajo fork los defaults de libFuzzer son `-ignore_ooms=1 -ignore_timeouts=1
+# -ignore_crashes=0`, así que los OOM/timeouts benignos se registran y la
+# corrida continúa, pero un crash REAL de ASan (UAF/overflow/SEGV) detiene la
+# corrida con exit != 0 y guarda el artefacto. Se fijan explícitos por robustez
+# entre versiones de libFuzzer.
+FORK_ARGS=(-fork=1 -ignore_ooms=1 -ignore_timeouts=1 -ignore_crashes=0 -rss_limit_mb=2048)
+
 # Mitigación ASLR vs ASan: en kernels host modernos (6.x bajo Docker
 # Desktop/WSL2) la entropía alta de mmap (vm.mmap_rnd_bits=32) hace que el
 # allocator de ASan falle al reservar su shadow memory y el proceso reciba un
@@ -79,5 +93,6 @@ set -x
   "$CORPUS" \
   -dict="$DICT" \
   -artifact_prefix="$ARTIFACTS/" \
+  "${FORK_ARGS[@]}" \
   $MAXLEN_ARG $TIME_ARG \
   "$@"
