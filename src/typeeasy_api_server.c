@@ -27,6 +27,8 @@
 #include <ctype.h>
 #include <signal.h>
 #include <setjmp.h>
+#include <time.h>
+#include <stdarg.h>
 
 #ifdef _WIN32
   /* winsock2 must precede windows.h to avoid the legacy winsock.h clash. */
@@ -75,9 +77,75 @@ static void invoke_lock_release(void){ pthread_mutex_unlock(&g_invoke_lock); }
 
 static volatile sig_atomic_t g_stop_requested = 0;
 
+/* ---- Observability / operational state (items #9-12) ---------------------
+ * g_ready      : readiness gate. 0 until routes are registered and the
+ *                interpreter is loaded; flipped back to 0 on shutdown so
+ *                /readyz starts failing while in-flight requests drain.
+ * g_inflight   : number of requests currently executing (atomic).
+ * g_req_total  : total requests handled since start (atomic, monotonic).
+ * g_start_time : process start, for uptime reporting. */
+static volatile sig_atomic_t g_ready      = 0;
+static volatile long         g_inflight   = 0;
+static volatile long         g_req_total  = 0;
+static time_t                g_start_time = 0;
+
 static void on_signal(int sig) {
     (void)sig;
+    g_ready = 0;            /* stop advertising readiness immediately */
     g_stop_requested = 1;
+}
+
+/* JSON-escape `src` into `dst` (size `dstsz`, always NUL-terminated). Used by
+ * the structured logger so messages/URIs can't break the JSON line. */
+static void te_json_escape(char *dst, size_t dstsz, const char *src) {
+    size_t di = 0;
+    if (dstsz == 0) return;
+    for (; src && *src && di + 2 < dstsz; src++) {
+        unsigned char c = (unsigned char)*src;
+        if (c == '"' || c == '\\') { dst[di++] = '\\'; if (di + 1 < dstsz) dst[di++] = (char)c; }
+        else if (c == '\n')        { dst[di++] = '\\'; if (di + 1 < dstsz) dst[di++] = 'n'; }
+        else if (c == '\r')        { dst[di++] = '\\'; if (di + 1 < dstsz) dst[di++] = 'r'; }
+        else if (c == '\t')        { dst[di++] = '\\'; if (di + 1 < dstsz) dst[di++] = 't'; }
+        else if (c < 0x20)         { /* drop other control chars */ }
+        else                       { dst[di++] = (char)c; }
+    }
+    dst[di] = '\0';
+}
+
+/* Fill `buf` with the current UTC time in ISO-8601 (e.g. 2026-06-01T12:34:56Z). */
+static void te_iso_time(char *buf, size_t bufsz) {
+    time_t now = time(NULL);
+    struct tm tmv;
+#ifdef _WIN32
+    gmtime_s(&tmv, &now);
+#else
+    gmtime_r(&now, &tmv);
+#endif
+    strftime(buf, bufsz, "%Y-%m-%dT%H:%M:%SZ", &tmv);
+}
+
+/* Structured (JSON-per-line) log to stderr. level is "info"/"warn"/"error". */
+static void te_log(const char *level, const char *fmt, ...) {
+    char ts[32];   te_iso_time(ts, sizeof(ts));
+    char msg[512]; va_list ap; va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap); va_end(ap);
+    char esc[1024]; te_json_escape(esc, sizeof(esc), msg);
+    fprintf(stderr, "{\"ts\":\"%s\",\"level\":\"%s\",\"pid\":%ld,\"msg\":\"%s\"}\n",
+            ts, level, (long)getpid(), esc);
+    fflush(stderr);
+}
+
+/* Structured access-log line for one HTTP request. */
+static void te_log_request(const char *method, const char *uri, int status,
+                           double dur_ms) {
+    char ts[32]; te_iso_time(ts, sizeof(ts));
+    char em[256]; te_json_escape(em, sizeof(em), method ? method : "");
+    char eu[1024]; te_json_escape(eu, sizeof(eu), uri ? uri : "");
+    fprintf(stderr,
+            "{\"ts\":\"%s\",\"level\":\"info\",\"pid\":%ld,\"event\":\"request\","
+            "\"method\":\"%s\",\"uri\":\"%s\",\"status\":%d,\"dur_ms\":%.2f}\n",
+            ts, (long)getpid(), em, eu, status, dur_ms);
+    fflush(stderr);
 }
 
 /* CORS: value(s) allowed in Access-Control-Allow-Origin. Default "*" (any
@@ -271,10 +339,10 @@ static int serve_root_swagger_ui(struct mg_connection *conn) {
         "footer{text-align:center;padding:18px;color:#999;font-size:12px}"
         "</style></head><body>"
         "<header><h1>TypeEasy API <span class='embedded-badge'>Embedded</span></h1>"
-        "<div class='subtitle'>%d endpoint%s registrado%s</div></header>"
+        "<div class='subtitle'>%d endpoint%s registered</div></header>"
         "<main>"
         "<div class='toolbar'>"
-        "<input type='text' id='filter' placeholder='Filtrar por ruta o funcion' oninput='applyFilter()' autocomplete='off'>"
+        "<input type='text' id='filter' placeholder='Filter by route or function' oninput='applyFilter()' autocomplete='off'>"
         "<span class='pill active' data-m='all' onclick='togglePill(this)'>ALL</span>"
         "<span class='pill' data-m='get' onclick='togglePill(this)'>GET</span>"
         "<span class='pill' data-m='post' onclick='togglePill(this)'>POST</span>"
@@ -287,7 +355,7 @@ static int serve_root_swagger_ui(struct mg_connection *conn) {
     if (route_count == 0) {
         ENSURE_CAP(512);
         off += snprintf(html + off, cap - off,
-            "<div class='empty'>No hay rutas registradas. Define endpoints con <code>[HttpGet(\"/ruta\")]</code> en tus .te.</div>");
+            "<div class='empty'>No routes registered. Define endpoints with <code>[HttpGet(\"/path\")]</code> in your .te files.</div>");
     } else {
         int eid = 0;
         for (MethodNode *m = global_methods; m; m = m->next) {
@@ -351,7 +419,7 @@ static int serve_root_swagger_ui(struct mg_connection *conn) {
             } else {
                 ENSURE_CAP(256);
                 off += snprintf(html + off, cap - off,
-                    "<label>Query string (opcional)</label><input type='text' data-query placeholder='key=value&amp;k2=v2'>");
+                    "<label>Query string (optional)</label><input type='text' data-query placeholder='key=value&amp;k2=v2'>");
             }
 
             ENSURE_CAP(512);
@@ -463,6 +531,61 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
         return serve_root_swagger_ui(conn);
     }
 
+    /* ---- Operational probes (items #9-12) --------------------------------
+     * /healthz (liveness): the process is up and able to answer. Cheap, never
+     *                      touches the interpreter lock.
+     * /readyz  (readiness): the process is ready to serve traffic, i.e. routes
+     *                      are registered and we are not draining for shutdown.
+     * Both are GET-only, return JSON and are explicitly non-cacheable. */
+    if (strcmp(method, "GET") == 0 &&
+        (strcmp(uri, "/healthz") == 0 || strcmp(uri, "/readyz") == 0)) {
+        long uptime = (g_start_time > 0) ? (long)(time(NULL) - g_start_time) : 0;
+        char body[256];
+        int code; const char *reason;
+        if (strcmp(uri, "/healthz") == 0) {
+            code = 200; reason = "OK";
+            snprintf(body, sizeof(body),
+                     "{\"status\":\"ok\",\"uptime_s\":%ld}", uptime);
+        } else {
+            int routes_ok = (global_methods != NULL);
+            /* The embedded server only reaches this point after the caller has
+             * parsed and interpreted the script at global scope, so by
+             * construction the interpreter is initialized whenever we serve. */
+            int interp_ok = 1;
+            int ready = g_ready && routes_ok && interp_ok;
+            code = ready ? 200 : 503;
+            reason = ready ? "OK" : "Service Unavailable";
+            snprintf(body, sizeof(body),
+                     "{\"status\":\"%s\",\"ready\":%s,\"interpreter\":%s,\"routes\":%s,"
+                     "\"inflight\":%ld,\"req_total\":%ld,\"uptime_s\":%ld}",
+                     ready ? "ready" : "not_ready",
+                     ready ? "true" : "false",
+                     interp_ok ? "true" : "false",
+                     routes_ok ? "true" : "false",
+                     g_inflight, g_req_total, uptime);
+        }
+        int blen = (int)strlen(body);
+        mg_printf(conn,
+                  "HTTP/1.1 %d %s\r\n"
+                  "Content-Type: application/json\r\n"
+                  "Cache-Control: no-store\r\n"
+                  "Content-Length: %d\r\n"
+                  "Connection: close\r\n\r\n",
+                  code, reason, blen);
+        mg_write(conn, body, blen);
+        return 1;
+    }
+
+    /* Request instrumentation: count and time every routed request. */
+    clock_t _req_t0 = clock();
+    __atomic_add_fetch(&g_req_total, 1, __ATOMIC_SEQ_CST);
+    __atomic_add_fetch(&g_inflight, 1, __ATOMIC_SEQ_CST);
+#define TE_REQ_DONE(st) do { \
+        double _ms = (double)(clock() - _req_t0) * 1000.0 / CLOCKS_PER_SEC; \
+        __atomic_sub_fetch(&g_inflight, 1, __ATOMIC_SEQ_CST); \
+        te_log_request(method, uri, (st), _ms); \
+    } while (0)
+
     invoke_lock_acquire();
 
     typeeasy_http_reset();
@@ -472,7 +595,8 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
     MethodNode *m = find_route(uri, method);
     if (!m) {
         invoke_lock_release();
-        mg_send_http_error(conn, 404, "Endpoint no encontrado: %s %s", method, uri);
+        TE_REQ_DONE(404);
+        mg_send_http_error(conn, 404, "Endpoint not found: %s %s", method, uri);
         return 1;
     }
 
@@ -518,6 +642,7 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
     long long clen = req->content_length;
     if (clen > s_max_body) {
         invoke_lock_release();
+        TE_REQ_DONE(413);
         char cors_org[1024];
         cors_resolve_origin(conn, cors_org, sizeof(cors_org));
         const char *body413 = "{\"error\":\"payload_too_large\"}";
@@ -585,6 +710,7 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
         char cors_org[1024];
         cors_resolve_origin(conn, cors_org, sizeof(cors_org));
         invoke_lock_release();
+        TE_REQ_DONE(500);
         mg_printf(conn,
                   "HTTP/1.1 500 Internal Server Error\r\n"
                   "Content-Type: application/json\r\n"
@@ -644,13 +770,16 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
     if (len > 0) mg_write(conn, result, len);
 
     free(result);
+    TE_REQ_DONE(status);
     return 1;
 }
+#undef TE_REQ_DONE
 
 /* Run a single in-process civetweb server bound to host:port. When part of a
  * worker pool, `worker_index` >= 0 tweaks the banner; -1 means standalone. */
 static int run_single_server(const char *host, int port, int worker_index) {
     invoke_lock_init();
+    g_start_time = time(NULL);
 
     /* Banner: list registered routes. */
     int route_count = 0;
@@ -658,9 +787,8 @@ static int run_single_server(const char *host, int port, int worker_index) {
         if (m->route_path) route_count++;
     }
     if (route_count == 0) {
-        fprintf(stderr,
-                "[typeeasy --api] Aviso: el script no declara endpoints.\n"
-                "                 Usa `endpoint get \"/ruta\" func() { ... }` para definir uno.\n");
+        te_log("warn", "script declares no endpoints; use "
+                       "`endpoint get \"/path\" func() { ... }` to define one");
     }
 
     char port_spec[64];
@@ -700,7 +828,7 @@ static int run_single_server(const char *host, int port, int worker_index) {
 
     struct mg_context *ctx = mg_start(&callbacks, NULL, options);
     if (!ctx) {
-        fprintf(stderr, "[typeeasy --api] Error: no se pudo arrancar civetweb en %s\n", port_spec);
+        te_log("error", "failed to start civetweb on %s", port_spec);
         mg_exit_library();
         return 1;
     }
@@ -711,12 +839,15 @@ static int run_single_server(const char *host, int port, int worker_index) {
     /* Register native WebSocket handlers for any [WebSocket("/path")] methods. */
     te_ws_register_routes(ctx);
 
+    /* Routes and interpreter are wired: start advertising readiness. */
+    g_ready = 1;
+
     if (worker_index >= 0) {
-        printf("[typeeasy --api] worker #%d listo (pid %ld) en http://%s:%d\n",
+        printf("[typeeasy --api] worker #%d ready (pid %ld) at http://%s:%d\n",
                worker_index, (long)getpid(),
                (host && *host) ? host : "0.0.0.0", port);
     } else {
-        printf("[typeeasy --api] Escuchando en http://%s:%d (%d ruta%s)\n",
+        printf("[typeeasy --api] Listening on http://%s:%d (%d route%s)\n",
                (host && *host) ? host : "0.0.0.0", port,
                route_count, route_count == 1 ? "" : "s");
         for (MethodNode *m = global_methods; m; m = m->next) {
@@ -729,6 +860,7 @@ static int run_single_server(const char *host, int port, int worker_index) {
         }
     }
     fflush(stdout);
+    te_log("info", "server started on %s, %d route(s)", port_spec, route_count);
 
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
@@ -737,8 +869,22 @@ static int run_single_server(const char *host, int port, int worker_index) {
         te_sleep_ms(200);
     }
 
-    if (worker_index < 0) printf("\n[typeeasy --api] Detenido.\n");
+    /* Graceful shutdown (item #9-12): stop advertising readiness, then give
+     * in-flight requests a window to finish before tearing down civetweb.
+     * The drain window is configurable via TYPEEASY_DRAIN_SECONDS (default 0,
+     * i.e. stop immediately, preserving previous behavior). */
+    g_ready = 0;
+    te_log("info", "shutdown requested, draining (inflight=%ld)", g_inflight);
+    {
+        const char *e = getenv("TYPEEASY_DRAIN_SECONDS");
+        long drain = e ? strtol(e, NULL, 10) : 0;
+        if (drain < 0) drain = 0;
+        for (long i = 0; i < drain && g_inflight > 0; i++) {
+            te_sleep_ms(1000);
+        }
+    }
     mg_stop(ctx);
+    te_log("info", "server stopped (req_total=%ld)", g_req_total);
     mg_exit_library();
     return 0;
 }
@@ -840,14 +986,14 @@ static int run_windows_pool(const char *host, int port, int num_workers,
                             const char *script_path) {
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        fprintf(stderr, "[typeeasy --api] WSAStartup falló.\n");
+        fprintf(stderr, "[typeeasy --api] WSAStartup failed.\n");
         return 1;
     }
 
     char exe[MAX_PATH];
     DWORD elen = GetModuleFileNameA(NULL, exe, (DWORD)sizeof(exe));
     if (elen == 0 || elen >= sizeof(exe)) {
-        fprintf(stderr, "[typeeasy --api] no se pudo obtener la ruta del ejecutable.\n");
+        fprintf(stderr, "[typeeasy --api] failed to obtain the executable path.\n");
         WSACleanup();
         return 1;
     }
@@ -860,7 +1006,7 @@ static int run_windows_pool(const char *host, int port, int num_workers,
     unsigned long rr = 0;
     if (!wports || !procs) { free(wports); free(procs); WSACleanup(); return 1; }
 
-    printf("[typeeasy --api] Iniciando pool de %d workers (load-balancer) en http://%s:%d\n",
+    printf("[typeeasy --api] Starting pool of %d workers (load-balancer) at http://%s:%d\n",
            num_workers, (host && *host) ? host : "0.0.0.0", port);
     for (MethodNode *m = global_methods; m; m = m->next) {
         if (m->route_path) {
@@ -884,7 +1030,7 @@ static int run_windows_pool(const char *host, int port, int num_workers,
         si.cb = sizeof(si);
         if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL,
                             &si, &procs[i])) {
-            fprintf(stderr, "[typeeasy --api] CreateProcess del worker %d falló (err=%lu).\n",
+            fprintf(stderr, "[typeeasy --api] CreateProcess for worker %d failed (err=%lu).\n",
                     i, (unsigned long)GetLastError());
             for (int j = 0; j < i; j++) {
                 if (procs[j].hProcess) {
@@ -903,7 +1049,7 @@ static int run_windows_pool(const char *host, int port, int num_workers,
 
     lsock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (lsock == INVALID_SOCKET) {
-        fprintf(stderr, "[typeeasy --api] no se pudo crear el socket público.\n");
+        fprintf(stderr, "[typeeasy --api] failed to create the public socket.\n");
         goto kill_workers;
     }
     {
@@ -921,14 +1067,14 @@ static int run_windows_pool(const char *host, int port, int num_workers,
     }
     if (bind(lsock, (struct sockaddr *)&la, sizeof(la)) != 0 ||
         listen(lsock, SOMAXCONN) != 0) {
-        fprintf(stderr, "[typeeasy --api] no se pudo escuchar en %s:%d\n",
+        fprintf(stderr, "[typeeasy --api] failed to listen on %s:%d\n",
                 (host && *host) ? host : "0.0.0.0", port);
         closesocket(lsock);
         lsock = INVALID_SOCKET;
         goto kill_workers;
     }
 
-    printf("[typeeasy --api] Pool listo: balanceando hacia %d workers (puertos %d-%d).\n",
+    printf("[typeeasy --api] Pool ready: load-balancing to %d workers (ports %d-%d).\n",
            num_workers, wports[0], wports[num_workers - 1]);
     fflush(stdout);
 
@@ -960,7 +1106,7 @@ static int run_windows_pool(const char *host, int port, int num_workers,
     if (lsock != INVALID_SOCKET) closesocket(lsock);
 
 kill_workers:
-    printf("\n[typeeasy --api] Deteniendo pool de %d workers...\n", num_workers);
+    printf("\n[typeeasy --api] Stopping pool of %d workers...\n", num_workers);
     for (int i = 0; i < num_workers; i++) {
         if (procs[i].hProcess) {
             TerminateProcess(procs[i].hProcess, 0);
@@ -994,7 +1140,7 @@ int typeeasy_run_api_server_pool(const char *host, int port, int num_workers,
      * AST + interpreter globals), they execute scripts in true parallel without
      * sharing the non-thread-safe interpreter state. Mirrors gunicorn -w N. */
     (void)script_path; /* not needed on POSIX (children inherit via fork). */
-    printf("[typeeasy --api] Iniciando pool de %d workers en http://%s:%d\n",
+    printf("[typeeasy --api] Starting pool of %d workers at http://%s:%d\n",
            num_workers, (host && *host) ? host : "0.0.0.0", port);
     for (MethodNode *m = global_methods; m; m = m->next) {
         if (m->route_path) {
@@ -1040,13 +1186,13 @@ int typeeasy_run_api_server_pool(const char *host, int port, int num_workers,
         int status;
         pid_t gone = waitpid(-1, &status, WNOHANG);
         if (gone > 0) {
-            fprintf(stderr, "[typeeasy --api] worker pid %ld terminó; apagando pool.\n",
+            fprintf(stderr, "[typeeasy --api] worker pid %ld exited; shutting down pool.\n",
                     (long)gone);
             break;
         }
     }
 
-    printf("\n[typeeasy --api] Deteniendo pool de %d workers...\n", num_workers);
+    printf("\n[typeeasy --api] Stopping pool of %d workers...\n", num_workers);
     for (int i = 0; i < num_workers; i++) {
         if (pids[i] > 0) kill(pids[i], SIGTERM);
     }

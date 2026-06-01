@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <signal.h>
 #include <ctype.h>
 #include <time.h>
@@ -74,6 +75,17 @@ static char g_single_api_file[1024]  = ""; /* if non-empty, only this .te is ser
 static int  g_port                   = 8080; /* HTTP listen port */
 static char g_host[128]              = ""; /* bind address (empty => civetweb default = all) */
 
+/* === #9-12 Observabilidad / operación ===
+ * Estado de readiness y contadores en vivo. Los contadores se actualizan desde
+ * varios hilos worker de civetweb, por eso usan builtins atómicos de GCC
+ * (__atomic_*), disponibles tanto en gcc Linux (LP64) como en MinGW (LLP64).
+ * g_ready se escribe con valores 0/1 simples (sig_atomic_t) desde el handler de
+ * señal y el arranque. */
+static volatile sig_atomic_t g_ready = 0;   /* 1 = listo para tráfico; 0 = arrancando o drenando */
+static volatile long g_inflight  = 0;       /* requests /api en vuelo (atómico) */
+static volatile long g_req_total = 0;       /* requests /api totales atendidas (atómico) */
+static time_t        g_start_time = 0;      /* epoch de arranque del worker, para uptime */
+
 static void track_script(const char *path, time_t m) {
     ScriptFile *s = (ScriptFile*)malloc(sizeof(ScriptFile));
     s->path = strdup(path); s->mtime = m; s->next = g_scripts; g_scripts = s;
@@ -97,6 +109,74 @@ static void free_cache_list(void) {
     CacheEntry *c = g_cache;
     while (c) { CacheEntry *n = c->next; free(c->key); free(c->body); free(c->content_type); free(c); c = n; }
     g_cache = NULL;
+}
+
+/* === #9-12 Logging estructurado (JSON lines a stderr) ===
+ * Un objeto JSON por línea, apto para ingestar en cualquier colector
+ * (Loki/ELK/CloudWatch). Sin dependencias externas. */
+
+/* Escapa una cadena para incrustarla como valor JSON (comillas, backslash y
+ * caracteres de control). Trunca de forma segura si no cabe en out. */
+static void te_json_escape(const char *in, char *out, size_t outsz) {
+    size_t o = 0;
+    if (outsz == 0) return;
+    if (!in) { out[0] = '\0'; return; }
+    for (; *in && o + 2 < outsz; in++) {
+        unsigned char c = (unsigned char)*in;
+        switch (c) {
+            case '\"': out[o++] = '\\'; out[o++] = '\"'; break;
+            case '\\': out[o++] = '\\'; out[o++] = '\\'; break;
+            case '\n': out[o++] = '\\'; out[o++] = 'n';  break;
+            case '\r': out[o++] = '\\'; out[o++] = 'r';  break;
+            case '\t': out[o++] = '\\'; out[o++] = 't';  break;
+            default:
+                if (c < 0x20) {
+                    if (o + 6 < outsz) o += (size_t)snprintf(out + o, outsz - o, "\\u%04x", c);
+                } else {
+                    out[o++] = (char)c;
+                }
+        }
+    }
+    out[o] = '\0';
+}
+
+/* Timestamp ISO-8601 UTC (p.ej. 2025-06-01T01:22:03Z) en buf. */
+static void te_iso_time(char *buf, size_t n) {
+    time_t now = time(NULL);
+    struct tm tmv;
+#ifdef _WIN32
+    gmtime_s(&tmv, &now);
+#else
+    gmtime_r(&now, &tmv);
+#endif
+    strftime(buf, n, "%Y-%m-%dT%H:%M:%SZ", &tmv);
+}
+
+/* Log estructurado de propósito general: {ts,level,pid,msg}. */
+static void te_log(const char *level, const char *fmt, ...) {
+    char ts[32]; te_iso_time(ts, sizeof(ts));
+    char raw[1024];
+    va_list ap; va_start(ap, fmt);
+    vsnprintf(raw, sizeof(raw), fmt, ap);
+    va_end(ap);
+    char esc[2048]; te_json_escape(raw, esc, sizeof(esc));
+    fprintf(stderr, "{\"ts\":\"%s\",\"level\":\"%s\",\"pid\":%d,\"msg\":\"%s\"}\n",
+            ts, level, (int)getpid(), esc);
+    fflush(stderr);
+}
+
+/* Log de acceso estructurado: una línea por request /api completada. */
+static void te_log_request(const char *method, const char *uri, int status,
+                           double dur_ms, const char *cache) {
+    char ts[32]; te_iso_time(ts, sizeof(ts));
+    char m[64], u[1024];
+    te_json_escape(method ? method : "", m, sizeof(m));
+    te_json_escape(uri ? uri : "", u, sizeof(u));
+    fprintf(stderr,
+        "{\"ts\":\"%s\",\"level\":\"info\",\"pid\":%d,\"event\":\"request\","
+        "\"method\":\"%s\",\"uri\":\"%s\",\"status\":%d,\"dur_ms\":%.2f,\"cache\":\"%s\"}\n",
+        ts, (int)getpid(), m, u, status, dur_ms, cache ? cache : "none");
+    fflush(stderr);
 }
 
 void discover_routes(void); /* fwd */
@@ -501,7 +581,16 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
     const char *method = req_info->request_method ? req_info->request_method : "GET";
     const char *qs     = req_info->query_string;
 
-    fprintf(stderr, "[LOG] %s %s\n", method, uri); fflush(stderr);
+    /* #9-12: observabilidad. Contamos la request en vuelo y total (atómico,
+     * multi-hilo) y medimos su duración para el log de acceso estructurado. */
+    __atomic_add_fetch(&g_inflight,  1, __ATOMIC_SEQ_CST);
+    __atomic_add_fetch(&g_req_total, 1, __ATOMIC_SEQ_CST);
+    clock_t req_t0 = clock();
+#define TE_REQ_DONE(st, cache_tag) do { \
+        double _dur = (double)(clock() - req_t0) * 1000.0 / CLOCKS_PER_SEC; \
+        __atomic_sub_fetch(&g_inflight, 1, __ATOMIC_SEQ_CST); \
+        te_log_request(method, uri, (st), _dur, (cache_tag)); \
+    } while (0)
 
     /* Reset HTTP state. We always reset before matching: params get added
      * during the match attempt and we need a clean slate per try. */
@@ -525,7 +614,8 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
     }
     if (!match) {
         typeeasy_http_reset();
-        mg_send_http_error(conn, 404, "Endpoint no encontrado");
+        mg_send_http_error(conn, 404, "Endpoint not found");
+        TE_REQ_DONE(404, "none");
         return 1;
     }
 
@@ -585,6 +675,7 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
                       "X-Cache: HIT\r\n\r\n%s",
                       hit->status, hit->content_type,
                       (int)strlen(hit->body), hit->body);
+            TE_REQ_DONE(hit->status, "HIT");
             return 1;
         }
     }
@@ -603,7 +694,8 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
 
     if (!result) {
         typeeasy_http_reset();
-        mg_send_http_error(conn, 500, "Error interno al ejecutar funcion TypeEasy");
+        mg_send_http_error(conn, 500, "Internal error executing TypeEasy function");
+        TE_REQ_DONE(500, "none");
         return 1;
     }
 
@@ -643,8 +735,10 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
 
     typeeasy_http_reset();
     free(result);
+    TE_REQ_DONE(status, "MISS");
     return 1;
 }
+#undef TE_REQ_DONE
 
 // Variable global para indicar que debemos salir.
 volatile int exit_flag = 0;
@@ -652,6 +746,9 @@ volatile int exit_flag = 0;
 // Manejador de señales para detener el servidor de forma segura con Ctrl+C.
 void signal_handler(int sig_num) {
     signal(sig_num, signal_handler);
+    /* #9-12 graceful shutdown: dejar de anunciar readiness al instante para que
+     * el balanceador/k8s saque este pod del pool antes de que cerremos. */
+    g_ready = 0;
     exit_flag = 1;
 }
 
@@ -819,7 +916,7 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         "<body>"
         "<header>"
         "<h1>TypeEasy API <span class='embedded-badge'>Embedded</span></h1>"
-        "<div class='subtitle'>Endpoints auto-descubiertos desde <code>/app/apis/*.te</code></div>");
+        "<div class='subtitle'>Endpoints auto-discovered from <code>/app/apis/*.te</code></div>");
 
     /* Collect routes into a sortable array */
     int route_count = 0;
@@ -866,7 +963,7 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
     offset += snprintf(html + offset, cap - offset,
         "<main>"
         "<div class='toolbar'>"
-        "<input type='text' id='filter' placeholder='Filtrar por ruta o funcion (ej: mysql, usuario, GET)' oninput='applyFilter()' autocomplete='off'>"
+        "<input type='text' id='filter' placeholder='Filter by route or function (e.g. mysql, user, GET)' oninput='applyFilter()' autocomplete='off'>"
         "<div class='filter-pills'>"
         "<span class='pill active' data-m='all' onclick='togglePill(this)'>ALL</span>"
         "<span class='pill' data-m='get' onclick='togglePill(this)'>GET</span>"
@@ -882,7 +979,7 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
     if (route_count == 0) {
         ENSURE_CAP(512);
         offset += snprintf(html + offset, cap - offset,
-            "<div class='empty'>No hay rutas registradas. Crea archivos <code>.te</code> con bloques <code>endpoint { }</code> en <code>/app/apis/</code>.</div>");
+            "<div class='empty'>No routes registered. Create <code>.te</code> files with <code>endpoint { }</code> blocks in <code>/app/apis/</code>.</div>");
     } else {
         /* Render grouped by prefix. arr is already sorted by route_path so
          * routes that share a prefix come together. */
@@ -1076,7 +1173,7 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
         " const cbtn=document.getElementById('ep-'+id+'-copy');"
         " const status=document.getElementById('ep-'+id+'-status');"
         " btn.disabled=true;btn.textContent='Loading...';"
-        " resp.style.display='block';resp.classList.remove('error');resp.textContent='Ejecutando...';"
+        " resp.style.display='block';resp.classList.remove('error');resp.textContent='Running...';"
         " tspan.textContent='';cbtn.style.display='none';status.style.display='none';"
         " const bodyEl=document.getElementById('ep-'+id+'-body');"
         " const opts={method:method,headers:{}};"
@@ -1105,11 +1202,59 @@ static int manejadorRaiz(struct mg_connection *conn, void *cbdata) {
     return 1;
 }
 
+/* === #9-12 Endpoints operacionales para orquestadores (k8s, Compose, LB) === */
+
+/* GET /healthz — liveness. Devuelve 200 mientras el proceso esté vivo y el
+ * intérprete TypeEasy esté inicializado. NO comprueba dependencias externas;
+ * eso es trabajo de /readyz. Un fallo aquí debe provocar reinicio del pod. */
+static int manejadorHealthz(struct mg_connection *conn, void *cbdata) {
+    (void)cbdata;
+    int alive = (g_typeeasy_ctx != NULL);
+    int status = alive ? 200 : 503;
+    char body[256];
+    int n = snprintf(body, sizeof(body),
+        "{\"status\":\"%s\",\"uptime_s\":%ld}\n",
+        alive ? "ok" : "down", (long)(time(NULL) - g_start_time));
+    mg_printf(conn,
+        "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\n"
+        "Content-Length: %d\r\nCache-Control: no-store\r\n"
+        "Access-Control-Allow-Origin: *\r\n\r\n%s",
+        status, alive ? "OK" : "Service Unavailable", n, body);
+    return 1;
+}
+
+/* GET /readyz — readiness. Devuelve 200 sólo si el server terminó de cargar
+ * rutas y NO está drenando. En SIGTERM g_ready pasa a 0, por lo que este
+ * endpoint responde 503 y el balanceador deja de enviar tráfico nuevo antes
+ * del apagado. Incluye contadores en vivo para observabilidad. */
+static int manejadorReadyz(struct mg_connection *conn, void *cbdata) {
+    (void)cbdata;
+    int routes_ok = (global_routes != NULL);
+    int ready = g_ready && (g_typeeasy_ctx != NULL) && routes_ok;
+    int status = ready ? 200 : 503;
+    char body[320];
+    int n = snprintf(body, sizeof(body),
+        "{\"status\":\"%s\",\"ready\":%s,\"interpreter\":%s,\"routes\":%s,"
+        "\"inflight\":%ld,\"req_total\":%ld,\"uptime_s\":%ld}\n",
+        ready ? "ready" : "not_ready",
+        g_ready ? "true" : "false",
+        g_typeeasy_ctx ? "true" : "false",
+        routes_ok ? "true" : "false",
+        g_inflight, g_req_total, (long)(time(NULL) - g_start_time));
+    mg_printf(conn,
+        "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\n"
+        "Content-Length: %d\r\nCache-Control: no-store\r\n"
+        "Access-Control-Allow-Origin: *\r\n\r\n%s",
+        status, ready ? "OK" : "Service Unavailable", n, body);
+    return 1;
+}
+
 /* === Worker: serves HTTP. Same as old main(). On SIGTERM/SIGINT it drains
  * via mg_stop and exits. Supervisor spawns one of these. ===
  * If enable_debug != 0, opens the debugger listener (only slot 0). */
 static int run_worker_ext(int enable_debug) {
     struct mg_context *ctx;
+    g_start_time = time(NULL);   /* #9-12: base para uptime en /healthz y /readyz */
     /* Build civetweb listening_ports spec: "HOST:PORT" or just "PORT". */
     char port_spec[160];
     if (g_host[0]) snprintf(port_spec, sizeof(port_spec), "%s:%d", g_host, g_port);
@@ -1140,16 +1285,36 @@ static int run_worker_ext(int enable_debug) {
     printf("[WORKER %d] listo en %s%s\n", (int)getpid(), port_spec,
            enable_debug ? " [DEBUG ON]" : ""); fflush(stdout);
 
+    mg_set_request_handler(ctx, "/healthz", manejadorHealthz, NULL);
+    mg_set_request_handler(ctx, "/readyz",  manejadorReadyz,  NULL);
     mg_set_request_handler(ctx, "/",      manejadorRaiz,        NULL);
     mg_set_request_handler(ctx, "/api/**", manejadorApiDinamico, NULL);
 
     /* Register native WebSocket handlers for any [WebSocket("/path")] methods. */
     te_ws_register_routes(ctx);
 
+    /* #9-12: todas las rutas cargadas y handlers listos => anunciar readiness. */
+    g_ready = 1;
+    te_log("info", "worker listo en %s%s", port_spec, enable_debug ? " [DEBUG ON]" : "");
+
     while (exit_flag == 0) sleep(1);
 
-    printf("[WORKER %d] SIGTERM recibido — drenando + saliendo\n", (int)getpid()); fflush(stdout);
+    /* #9-12 graceful shutdown: readiness ya es false (signal_handler). Damos un
+     * margen opcional (TYPEEASY_DRAIN_SECONDS) para que el balanceador note el
+     * 503 de /readyz antes de cerrar el socket de escucha; luego mg_stop drena
+     * las requests en vuelo y cierra limpio. */
+    g_ready = 0;
+    te_log("info", "SIGTERM recibido: readiness=false, drenando (inflight=%ld)", g_inflight);
+    {
+        const char *ds = getenv("TYPEEASY_DRAIN_SECONDS");
+        int drain = (ds && *ds) ? atoi(ds) : 0;
+        if (drain > 0) {
+            te_log("info", "drain grace de %ds antes de mg_stop", drain);
+            sleep(drain);
+        }
+    }
     mg_stop(ctx);
+    te_log("info", "server detenido limpio (req_total=%ld)", g_req_total);
     mg_exit_library();
     return 0;
 }

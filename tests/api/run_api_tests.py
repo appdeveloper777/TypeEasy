@@ -299,6 +299,30 @@ def run_tests(port: int) -> tuple[int, int, int]:
         expect('"sub":"ana"' in b or data.get("claims", {}).get("sub") == "ana",
                f"claims did not carry sub=ana: {b!r}")
 
+    # ---- operational endpoints (#9-12): liveness + readiness -----------
+
+    def t_healthz():
+        # /healthz is liveness: 200 + JSON {status:ok, uptime_s:N} while the
+        # interpreter context is initialized. Must not be shadowed by the
+        # root UI handler (civetweb longest-prefix match).
+        s, b = http_get(port, "/healthz")
+        expect(s == 200, f"healthz status {s}: {b!r}")
+        data = jsonlib.loads(b)
+        expect(data.get("status") == "ok", f"healthz status field: {data}")
+        expect("uptime_s" in data, f"healthz missing uptime_s: {data}")
+
+    def t_readyz():
+        # /readyz is readiness: 200 + JSON once routes are loaded and the
+        # server is not draining. Exposes live counters for observability.
+        s, b = http_get(port, "/readyz")
+        expect(s == 200, f"readyz status {s}: {b!r}")
+        data = jsonlib.loads(b)
+        expect(data.get("ready") is True, f"readyz not ready: {data}")
+        expect(data.get("interpreter") is True, f"readyz interpreter false: {data}")
+        expect(data.get("routes") is True, f"readyz routes false: {data}")
+        expect("inflight" in data and "req_total" in data,
+               f"readyz missing counters: {data}")
+
     case("GET /", t_root)
     case("GET /ping", t_ping)
     case("GET /users/{id}", t_users_id)
@@ -317,6 +341,8 @@ def run_tests(port: int) -> tuple[int, int, int]:
     case("GET /api/perfil no token (401)", t_perfil_no_token)
     case("GET /api/perfil bad token (401)", t_perfil_bad_token)
     case("GET /api/perfil valid token (200)", t_perfil_with_token)
+    case("GET /healthz (liveness)", t_healthz)
+    case("GET /readyz (readiness)", t_readyz)
 
     passed = failed = warned = 0
     for name, fn in cases:
