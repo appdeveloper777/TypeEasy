@@ -94,6 +94,17 @@ void te_runtime_fatalf(const char *fmt, ...) {
     te_runtime_fatal();
 }
 
+/* Out-of-memory choke point. Node constructors and other allocations used to
+ * `exit(1)` directly on a NULL malloc/calloc; in --api server mode that tore
+ * down every in-flight request on a single OOM. Route them here instead so an
+ * allocation failure during a request longjmp's back to the recovery point
+ * (HTTP 500) while CLI semantics stay identical (no recovery point -> exit(1)).
+ * `what` is a short tag for the failed allocation, surfaced in dev-mode 500s. */
+void te_oom_fatal(const char *what) {
+    te_runtime_fatalf("Fatal: out of memory allocating %s",
+                      what ? what : "node");
+}
+
 /* Headers POSIX/sockets disponibles en todas las plataformas (MSYS2 / Linux / macOS).
  * En Windows usamos winsock; en POSIX, sockets BSD. */
 #ifdef _WIN32
@@ -1653,7 +1664,7 @@ int te_attr_access_ok(ClassNode *cls, int idx, ASTNode *obj_ref) {
 
 void add_method_to_class(ClassNode *cls, char *method, ParameterNode *params, ASTNode *body, char *return_type) {
     MethodNode *m = malloc(sizeof(MethodNode));
-    if (!m) exit(1);
+    if (!m) te_oom_fatal("method node");
     m->name = strdup(method);
     m->params = params;
     m->body = body;
@@ -1669,7 +1680,7 @@ ObjectNode* clone_object(ObjectNode *original);
 
 void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *body) {
     MethodNode *ctor = malloc(sizeof(MethodNode));
-    if (!ctor) exit(1);
+    if (!ctor) te_oom_fatal("constructor node");
     ctor->name = strdup("__constructor");
     ctor->params = params;
     ctor->body = body;
@@ -1825,7 +1836,7 @@ ASTNode *create_agent_node(char *name, ASTNode *body) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para AGENT node.\n");
-        exit(1);
+        te_runtime_fatal();
     }
     node->type = strdup("AGENT");
     node->id = strdup(name);
@@ -1842,7 +1853,7 @@ ASTNode *create_listener_node(ASTNode *event_expr, ASTNode *body) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para LISTENER node.\n");
-        exit(1);
+        te_runtime_fatal();
     }
     node->type = strdup("LISTENER");
     node->left = event_expr; // La expresión p.ej. Chat.onMessage(mensaje)
@@ -2557,7 +2568,7 @@ ASTNode *create_var_decl_node(char *id, ASTNode *value) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para VAR_DECL node.\n");
-        exit(1);
+        te_runtime_fatal();
     }
     node->type = strdup("VAR_DECL");
     node->id = strdup(id);
@@ -2731,7 +2742,7 @@ ASTNode* create_if_node(ASTNode* condition, ASTNode* if_branch, ASTNode* else_br
     ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error: No se pudo asignar memoria para el nodo if\n");
-        exit(1);
+        te_runtime_fatal();
     }
     node->type = strdup("IF");
     node->id = NULL;
@@ -2747,7 +2758,7 @@ ASTNode* create_match_node(ASTNode* condition, ASTNode* case_list) {
     ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error: No se pudo asignar memoria para el nodo match\n");
-        exit(1);
+        te_runtime_fatal();
     }
     node->type = strdup("MATCH");
     node->id = NULL;
@@ -2763,7 +2774,7 @@ ASTNode* create_case_node(ASTNode* condition, ASTNode* body) {
     ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error: No se pudo asignar memoria para el nodo case\n");
-        exit(1);    }
+        te_runtime_fatal();    }
     node->type = strdup("CASE");
     node->id = NULL;
     node->value = 0;
@@ -4371,7 +4382,7 @@ ASTNode *create_bridge_node(char *name, ASTNode *call_expr_node) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para BRIDGE node.\n");
-        exit(1);
+        te_runtime_fatal();
     }
     node->type = strdup("BRIDGE_DECL");
     node->id = strdup(name);
@@ -4392,7 +4403,7 @@ ASTNode *create_access_node(ASTNode *base, ASTNode *index_expr) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
         fprintf(stderr, "Error fatal: No se pudo asignar memoria para ACCESS_EXPR node.\n");
-        exit(1);
+        te_runtime_fatal();
     }
     node->type = strdup("ACCESS_EXPR");
     node->left = base;
