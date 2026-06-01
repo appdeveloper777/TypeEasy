@@ -245,6 +245,9 @@
     while (*s != '\0' && !(*s == '"' && *(s-1) != '\\')) {
         if (*s == '\\') {
             s++;
+            /* Dangling backslash at end of token (e.g. embedded NUL byte):
+             * stop here so the trailing s++ below cannot read past the buffer. */
+            if (*s == '\0') break;
             switch (*s) {
                 case 'n': *w++ = '\n'; break;
                 case 't': *w++ = '\t'; break;
@@ -274,6 +277,9 @@
     while (*s != '\0' && !(*s == '"' && *(s-1) != '\\')) {
         if (*s == '\\') {
             s++; // Avanzar al carácter escapado
+            /* Dangling backslash at end of token (e.g. embedded NUL byte):
+             * stop here so the trailing s++ below cannot read past the buffer. */
+            if (*s == '\0') break;
             switch (*s) {
                 case 'n': *w++ = '\n'; break;
                 case 't': *w++ = '\t'; break;
