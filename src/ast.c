@@ -2145,6 +2145,11 @@ void add_or_update_variable(char *id, ASTNode *value) {
             __ret_var.vtype = VAL_OBJECT;
             __ret_var.type = strdup("LIST");
             __ret_var.value.object_value = (ObjectNode *)value;
+        } else if (strcmp(value->type, "LAMBDA") == 0) {
+            /* gotcha closure-return: una función puede devolver un lambda capturado */
+            __ret_var.vtype = VAL_OBJECT;
+            __ret_var.type = strdup("LAMBDA");
+            __ret_var.value.object_value = (ObjectNode *)value;
         } else if (strcmp(value->type, "LAZY_ITER") == 0) {
             /* v0.0.12 #8: lazy iterator carries pointer to LAZY_ITER ASTNode */
             __ret_var.vtype = VAL_OBJECT;
@@ -3095,6 +3100,23 @@ ASTNode* resolve_to_list(ASTNode *node) {
         Variable *v = find_variable(node->id);
         if (!v || !v->type || strcmp(v->type, "LIST") != 0) return NULL;
         return (ASTNode*)(intptr_t)v->value.object_value;
+    }
+    /* gotcha inline-index: indexar el resultado de una llamada inline
+     * `f(x)[i]` / `xs.split(",")[i]`. Antes resolve_to_list solo conocía
+     * literales LIST y variables; una llamada (CALL_FUNC/CALL_METHOD/...) que
+     * retorna lista no se resolvía -> "Error: no es lista" o 0. Ejecutamos la
+     * llamada y leemos el resultado tipado LIST desde __ret__. */
+    if (node->type && (strcmp(node->type, "CALL_FUNC") == 0
+                       || strcmp(node->type, "CALL_METHOD") == 0
+                       || strcmp(node->type, "FILTER_CALL") == 0
+                       || strcmp(node->type, "LIST_FUNC_CALL") == 0
+                       || strcmp(node->type, "PREDICT") == 0)) {
+        interpret_ast(node);
+        Variable *r = find_variable("__ret__");
+        if (r && r->type && strcmp(r->type, "LIST") == 0 && r->vtype == VAL_OBJECT) {
+            return (ASTNode*)(intptr_t)r->value.object_value;
+        }
+        return NULL;
     }
     return NULL;
 }
@@ -6788,6 +6810,28 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 return_flag = 0;
                 return_node = NULL;
                 return;
+            } else if (strcmp(evaluated_value_var->type, "LAMBDA") == 0) {
+                /* gotcha closure-return: una función/lambda devolvió un lambda
+                 * (currying). Lo almacenamos como first-class value, igual que
+                 * LIST/MAP: object_value apunta al nodo LAMBDA (ya capturado por
+                 * te_capture_lambda con sus variables libres sustituidas). */
+                Variable *var = malloc(sizeof(Variable));
+                var->id = strdup(node->id);
+                var->is_const = is_const_flag;
+                var->vtype = VAL_OBJECT;
+                var->type = strdup("LAMBDA");
+                var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value;
+                vars[var_count++] = *var;
+                free(var);
+                if (__ret_var_active) {
+                    if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
+                    if (__ret_var.id) free(__ret_var.id);
+                    if (__ret_var.type) free(__ret_var.type);
+                    memset(&__ret_var, 0, sizeof(Variable));
+                }
+                return_flag = 0;
+                return_node = NULL;
+                return;
             } else {
                 value_to_assign_node = calloc(1, sizeof(ASTNode));
                 value_to_assign_node->type = strdup(evaluated_value_var->type);
@@ -7039,6 +7083,113 @@ ASTNode* create_lambda_multi_node(const char *paramsCsv, ASTNode *body) {
  * Setea cada parámetro en el scope global, evalúa el body y devuelve el ASTNode*
  * con el resultado. Si body es expresión, retorna su valor evaluado.
  * Si body es STATEMENT_LIST, ejecuta y lee return_node / __ret__. */
+
+/* ============================================================
+ * gotcha closure-return: captura de variables libres al RETORNAR un lambda
+ * desde otro lambda/función (p.ej. `fn(n) => fn(x) => x + n`).
+ * Cuando `make(10)` retorna el lambda interno, `n` ya no estará en scope al
+ * invocar `add10(5)`. Capturamos por VALOR: clonamos el lambda y sustituimos
+ * cada identificador libre (no sombreado por un parámetro de lambda) por un
+ * leaf con su valor concreto actual. Es semántica de closure-by-value.
+ * ============================================================ */
+
+/* ¿`name` aparece en el set '\1'-separado `shadow`? */
+static int te_name_in_shadow(const char *shadow, const char *name) {
+    if (!shadow || !name) return 0;
+    size_t nl = strlen(name);
+    const char *p = shadow;
+    while (*p) {
+        const char *e = p; while (*e && *e != '\1') e++;
+        if ((size_t)(e - p) == nl && strncmp(p, name, nl) == 0) return 1;
+        if (*e == '\1') p = e + 1; else p = e;
+    }
+    return 0;
+}
+
+/* Clona `n` recursivamente; sustituye identificadores libres por su valor.
+ * `shadow` lista (separada por '\1') los nombres ligados por parámetros de
+ * lambdas anidados, que NO deben sustituirse. */
+static ASTNode *te_clone_capture(ASTNode *n, const char *shadow) {
+    if (!n) return NULL;
+    /* Identificador libre -> sustituir por su valor concreto actual. */
+    if (n->type && (strcmp(n->type, "IDENTIFIER") == 0 || strcmp(n->type, "ID") == 0)
+        && n->id && !te_name_in_shadow(shadow, n->id)) {
+        Variable *v = find_variable(n->id);
+        if (v) {
+            if (v->vtype == VAL_INT) {
+                const char *t = (v->type && strcmp(v->type, "BOOL") == 0) ? "BOOL" : "NUMBER";
+                ASTNode *r = create_ast_leaf_number((char*)t, v->value.int_value, NULL, NULL);
+                if (r) r->bc = BC_NOT_COMPILABLE;
+                return r;
+            }
+            if (v->vtype == VAL_FLOAT) {
+                char buf[64]; snprintf(buf, sizeof(buf), "%g", v->value.float_value);
+                ASTNode *r = create_ast_leaf("FLOAT", 0, buf, NULL);
+                if (r) r->bc = BC_NOT_COMPILABLE;
+                return r;
+            }
+            if (v->vtype == VAL_STRING) {
+                ASTNode *r = create_ast_leaf("STRING", 0,
+                    v->value.string_value ? v->value.string_value : "", NULL);
+                if (r) r->bc = BC_NOT_COMPILABLE;
+                return r;
+            }
+            /* OBJECT/LIST/MAP/etc.: no inlineable como leaf simple; se deja el
+             * identificador (puede ser global/persistente). */
+        }
+        /* No resuelto: copiar el identificador tal cual. */
+    }
+    /* Copia genérica del nodo. */
+    ASTNode *c = (ASTNode*)calloc(1, sizeof(ASTNode));
+    if (!c) return NULL;
+    c->type = n->type ? strdup(n->type) : NULL;
+    c->kind = n->kind;
+    c->id = n->id ? strdup(n->id) : NULL;
+    c->value = n->value;
+    c->str_value = n->str_value ? strdup(n->str_value) : NULL;
+    c->str_interned = 0;
+    c->line = n->line;
+    c->bc = BC_NOT_COMPILABLE;
+    /* Al descender en un LAMBDA anidado, sus parámetros sombrean. */
+    if (n->type && strcmp(n->type, "LAMBDA") == 0 && n->id && n->id[0]) {
+        size_t sl = shadow ? strlen(shadow) : 0;
+        size_t pl = strlen(n->id);
+        char *ns = (char*)malloc(sl + 1 + pl + 1);
+        if (ns) {
+            if (sl) { memcpy(ns, shadow, sl); ns[sl] = '\1'; memcpy(ns + sl + 1, n->id, pl + 1); }
+            else    { memcpy(ns, n->id, pl + 1); }
+            c->left  = te_clone_capture(n->left,  ns);
+            c->right = te_clone_capture(n->right, ns);
+            c->next  = te_clone_capture(n->next,  shadow);
+            c->extra = te_clone_capture(n->extra, ns);
+            free(ns);
+            return c;
+        }
+    }
+    c->left  = te_clone_capture(n->left,  shadow);
+    c->right = te_clone_capture(n->right, shadow);
+    c->next  = te_clone_capture(n->next,  shadow);
+    c->extra = te_clone_capture(n->extra, shadow);
+    return c;
+}
+
+/* Captura un lambda que será retornado: clona el body sustituyendo las
+ * variables libres por su valor actual. Los parámetros del propio lambda
+ * (lam->id) se mantienen como variables. */
+static ASTNode *te_capture_lambda(ASTNode *lam) {
+    if (!lam) return NULL;
+    ASTNode *c = (ASTNode*)calloc(1, sizeof(ASTNode));
+    if (!c) return lam;
+    c->type = strdup("LAMBDA");
+    c->kind = lam->kind;
+    c->id = lam->id ? strdup(lam->id) : strdup("");
+    c->line = lam->line;
+    c->bc = BC_NOT_COMPILABLE;
+    /* El body se clona con los parámetros propios sombreados. */
+    c->left = te_clone_capture(lam->left, c->id);
+    return c;
+}
+
 ASTNode* call_lambda(ASTNode *lambda, ASTNode *argsList) {
     if (!lambda || !lambda->id) {
         return create_ast_leaf("NULL", 0, NULL, NULL);
@@ -7160,6 +7311,12 @@ ASTNode* call_lambda(ASTNode *lambda, ASTNode *argsList) {
         return create_ast_leaf("FLOAT", 0, buf, NULL);
     }
     /* body es expresión. Si produce string, devolver STRING; si numérica, NUMBER/FLOAT. */
+    /* gotcha closure-return: el body es OTRO lambda (currying:
+     * `fn(n) => fn(x) => x + n`). Capturamos por valor las variables libres
+     * (p.ej. n) y devolvemos el lambda resultante como first-class value. */
+    if (body->type && strcmp(body->type, "LAMBDA") == 0) {
+        return te_capture_lambda(body);
+    }
     if (is_string_type(body)) {
         char *s = get_node_string(body);
         ASTNode *r = create_ast_leaf("STRING", 0, s, NULL);

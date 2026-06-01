@@ -593,13 +593,12 @@ var_decl:
   | INT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("INT"); $$ = decl; }
   | IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
   | THIS DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,"this"); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
-  /* v0.0.x: acceso a atributo como RHS de let/var/const (gotcha A).
-   * Reglas explícitas para evitar el conflicto shift/reduce introducido por
-   * las reglas especiales de method-call (LET ... IDENTIFIER DOT IDENTIFIER LPAREN ...),
-   * que dejan el IDENTIFIER sin reducir y rompen el caso terminado en ';'. */
-  | LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$4); ASTNode *attr = create_ast_leaf("ID",0,NULL,$6); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); ASTNode* d = create_var_decl_node($2, access); d->value = 1; /* let = immutable */ $$ = d; }
-  | VAR IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$4); ASTNode *attr = create_ast_leaf("ID",0,NULL,$6); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_var_decl_node($2, access); }
-  | CONST IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$4); ASTNode *attr = create_ast_leaf("ID",0,NULL,$6); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); ASTNode* d = create_var_decl_node($2, access); d->value = 1; $$ = d; }
+  /* gotcha chaining: las reglas especiales `LET/VAR/CONST IDENTIFIER ASSIGN
+   * IDENTIFIER DOT IDENTIFIER SEMICOLON` (acceso a atributo) se ELIMINARON. Forzaban
+   * un shift sobre DOT que comprometía al parser a una ruta terminada en ';' tras un
+   * solo `.IDENTIFIER`, rompiendo el encadenamiento `xs.a().b()` (error 'near ('').
+   * El camino genérico `... ASSIGN expression SEMICOLON` cubre el acceso a atributo
+   * vía `expression DOT IDENTIFIER` (ACCESS_ATTR) y permite chaining recursivo. */
 ;
 
 type_name:
@@ -623,10 +622,11 @@ func_call_expr SEMICOLON { $$ = $1; }
     | WHILE LPAREN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_ast_node("WHILE", $3, $6); }
     | BREAK SEMICOLON     { $$ = create_ast_leaf("BREAK", 0, NULL, NULL); }
     | CONTINUE SEMICOLON  { $$ = create_ast_leaf("CONTINUE", 0, NULL, NULL); }
-    | LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$4); ASTNode *call = create_method_call_node(obj, $6, NULL); ASTNode* d = create_var_decl_node($2, call); d->value = 1; /* let = immutable */ $$ = d; }
-    | LET IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$4); ASTNode *call = create_method_call_node(obj, $6, $8); ASTNode* d = create_var_decl_node($2, call); d->value = 1; $$ = d; }
-    | VAR IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$4); ASTNode *call = create_method_call_node(obj, $6, NULL); $$ = create_var_decl_node($2, call); }
-    | VAR IDENTIFIER ASSIGN IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$4); ASTNode *call = create_method_call_node(obj, $6, $8); $$ = create_var_decl_node($2, call); }
+    /* gotcha chaining: las reglas especializadas `LET/VAR IDENTIFIER ASSIGN
+     * IDENTIFIER DOT IDENTIFIER LPAREN ... RPAREN SEMICOLON` se ELIMINARON porque
+     * solo admitían UNA llamada antes del ';' (rompían `xs.orderBy(..).take(2)`).
+     * El camino genérico `LET IDENTIFIER ASSIGN expression SEMICOLON` + la recursión
+     * `expression DOT IDENTIFIER LPAREN expression_list RPAREN` soporta encadenamiento. */
     | RETURN func_call_expr SEMICOLON { $$ = create_return_node($2); }
     | RETURN expression SEMICOLON  { $$ = create_return_node($2); }
     | THROW expression SEMICOLON   { $$ = create_ast_node("THROW", $2, NULL); }

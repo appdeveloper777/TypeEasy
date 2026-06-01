@@ -83,8 +83,9 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
             memset(item, 0, sizeof(ASTNode));
             item->type = strdup("STRING");
             item->str_value = part;
-            if (!list->left) list->left = item;
-            else { ASTNode *t = list->left; while (t->next) t = t->next; t->next = item; }
+            /* gotcha: usar te_list_append mantiene el índice lateral (TEListIdx)
+             * sincronizado para que .length / list_length devuelvan el valor real. */
+            te_list_append(list, item);
             if (!next) break;
             cur = next + seplen;
         }

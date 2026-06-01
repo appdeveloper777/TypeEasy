@@ -1,8 +1,6 @@
-// expect: 0
-// TRIPWIRE (bug conocido): indexar el resultado de una llamada inline
-// f(x)[i] no resuelve -> imprime 0 en vez de 20 (exit 0, sin error).
-// Workaround actual: asignar a una variable intermedia y luego indexar.
-// Salida DESEADA: 20. Cuando este test empiece a FALLAR el bug se arregló:
-//   -> actualizá el expect a 20 y borrá este aviso.
+// expect: 20
+// Gotcha ARREGLADO: indexar el resultado de una llamada inline f(x)[i] ahora
+// resuelve. El fix extiende resolve_to_list (ast.c) para ejecutar la llamada
+// (CALL_FUNC/CALL_METHOD/...) y leer el resultado LIST desde __ret__.
 let v = json_parse("[10,20,30]")[1];
 println(v);

@@ -1,8 +1,7 @@
-// expect: 0
-// TRIPWIRE (bug conocido): s.split(sep) devuelve longitud 0 en vez de 3.
-// Salida DESEADA: 3. Hoy el intérprete imprime 0 (exit 0, sin error).
-// Cuando este test empiece a FALLAR significa que el bug se arregló:
-//   -> actualizá el expect a 3 y borrá este aviso.
+// expect: 3
+// Gotcha ARREGLADO: s.split(sep) ahora devuelve la longitud real (3).
+// El fix usa te_list_append en te_string.c para mantener el índice lateral
+// (TEListIdx) sincronizado, de modo que .length / list_length reflejan el real.
 let s = "a,b,c";
 let parts = s.split(",");
 println(parts.length);
