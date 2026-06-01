@@ -278,6 +278,8 @@ void add_method_to_class(ClassNode *class,
                              ASTNode *body,
                              char *return_type);
 ObjectNode *create_object(ClassNode *class);
+/* item #6 (leak audit): libera un ObjectNode malloc'd por create_object. */
+void free_object_node(ObjectNode *obj);
 /* Bulk arena allocation of N ObjectNodes (DataFrame.toList fast path).
  * Returns a pointer to N contiguous ObjectNodes; objects are arena-owned
  * and must NOT be passed to free_object(). Caller fills value fields. */

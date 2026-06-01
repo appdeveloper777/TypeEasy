@@ -2477,6 +2477,16 @@ static InternEntry *g_intern_table[INTERN_BUCKETS];
 static int g_intern_init = 0;
 static int g_intern_enabled = 1;
 
+/* When >0 we are inside per-request handling on the long-lived API server.
+ * Runtime-generated STRING leaves (request_param/header/body, concat, json,
+ * jwt outputs, te_set_ret_string, ...) are UNIQUE per request; interning them
+ * into the immortal g_intern_table would grow it without bound == a memory
+ * leak (~hundreds of bytes/request). While active, create_ast_leaf() strdup()s
+ * STRING leaves and marks them non-interned so free_ast() and
+ * runtime_reset_vars_to_initial_state() reclaim them. Parse/init-time literals
+ * (flag == 0) are still interned (bounded by program size, dedup + fast ==). */
+int g_te_request_active = 0;
+
 static inline uint32_t intern_hash(const char *s, size_t len) {
     /* FNV-1a */
     uint32_t h = 2166136261u;
@@ -2525,11 +2535,18 @@ ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
     node->left = NULL;
     node->right = NULL;
     node->value = value;
-    /* Ola 3 Fase A: intern STRING literals so equality can be pointer-compared. */
+    /* Ola 3 Fase A: intern STRING literals so equality can be pointer-compared.
+     * BUT only at parse/init time: runtime (per-request) strings are unique and
+     * interning them leaks (immortal table grows). See g_te_request_active. */
     if (str_value) {
         if (node->kind == NK_STRING) {
-            node->str_value    = (char*)tee_intern(str_value);
-            node->str_interned = g_intern_enabled ? 1 : 0;
+            if (g_intern_enabled && !g_te_request_active) {
+                node->str_value    = (char*)tee_intern(str_value);
+                node->str_interned = 1;
+            } else {
+                node->str_value    = strdup(str_value);
+                node->str_interned = 0;
+            }
         } else {
             node->str_value = strdup(str_value);
         }
@@ -5111,8 +5128,29 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
             break;
         }
     }
-    /* Note: leaking `root` AST here for simplicity (per-request lifetime). */
+    /* item #6 (leak audit): los valores ya se copiaron a `obj` con strdup,
+     * así que el AST JSON temporal puede liberarse aquí en vez de leakear
+     * en cada request con model binding. */
+    if (root) free_ast(root);
     return obj;
+}
+
+/* item #6 (leak audit): libera un ObjectNode creado por create_object/
+ * te_object_from_json. Solo libera los slots primitivos (id, type, string).
+ * NO hace deep-free de atributos VAL_OBJECT anidados para evitar double-free
+ * por aliasing — coincide con la política de runtime_reset_vars_to_initial_state. */
+void free_object_node(ObjectNode *obj) {
+    if (!obj) return;
+    if (obj->attributes && obj->class) {
+        for (int i = 0; i < obj->class->attr_count; i++) {
+            Variable *a = &obj->attributes[i];
+            if (a->id) free(a->id);
+            if (a->type) free(a->type);
+            if (a->vtype == VAL_STRING && a->value.string_value) free(a->value.string_value);
+        }
+    }
+    if (obj->attributes) free(obj->attributes);
+    free(obj);
 }
 
 /* Lookup a path-param value by name (returns NULL if not bound). */
@@ -6902,13 +6940,19 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         
         // Crea un nuevo nodo AST persistente para almacenar el valor
         if (evaluated_value_var->vtype == VAL_STRING) {
-            value_to_assign_node = create_ast_leaf("STRING", 0, strdup(evaluated_value_var->value.string_value), NULL);
+            /* create_ast_leaf copia el string -> pasar el puntero directo.
+             * El strdup() previo quedaba huerfano (fuga por cada `let x=func()`
+             * que devuelve string: request_param, concat, jwt_sign, etc.). */
+            value_to_assign_node = create_ast_leaf("STRING", 0, evaluated_value_var->value.string_value, NULL);
         } else if (evaluated_value_var->vtype == VAL_INT) {
             //printf("[DEBUG] interpret_var_decl: creating INT node\n"); fflush(stdout);
             value_to_assign_node = create_ast_leaf_number("INT", evaluated_value_var->value.int_value, NULL, NULL);
             //printf("[DEBUG] interpret_var_decl: created INT node\n"); fflush(stdout);
         } else if (evaluated_value_var->vtype == VAL_FLOAT) {
-            value_to_assign_node = create_ast_leaf("FLOAT", 0, double_to_string(evaluated_value_var->value.float_value), NULL);
+            /* double_to_string() devuelve malloc; create_ast_leaf copia -> liberar. */
+            char *fs = double_to_string(evaluated_value_var->value.float_value);
+            value_to_assign_node = create_ast_leaf("FLOAT", 0, fs, NULL);
+            free(fs);
         } else if (evaluated_value_var->vtype == VAL_OBJECT) {
             // Si es LIST, asignar como VAL_OBJECT y type LIST, y value.object_value apunta al nodo LIST
             if (strcmp(evaluated_value_var->type, "LIST") == 0) {
@@ -6990,11 +7034,17 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         //printf("[DEBUG] interpret_var_decl: declaring variable %s\n", node->id); fflush(stdout);
         declare_variable(node->id, value_to_assign_node, is_const_flag);
        // printf("[DEBUG] interpret_var_decl: declared variable\n"); fflush(stdout);
-        
-    // NOTE: Do NOT free 'value_to_assign_node' here. The declared variable
-    // stores pointers into the node (or copies them) and freeing it here
-    // caused a use-after-free and intermittent segfaults (exit code 139).
-    // free_ast(value_to_assign_node); // removed intentionally
+
+    /* Liberar el nodo transitorio. declare_variable COPIA el valor:
+     *   - STRING/INT/FLOAT: strdup del payload -> el leaf es desechable.
+     *   - OBJECT: vars[].object_value = value->extra (alias); free_ast NUNCA
+     *     toca ->extra, asi que liberar el shell no afecta al objeto.
+     * Las ramas LIST/MAP/LAMBDA ya hicieron `return` antes de llegar aqui.
+     * El bloque constructor de mas abajo solo usa value_to_assign_node cuando
+     * node->left->type=="OBJECT", imposible en esta rama (es un CALL_*), por lo
+     * que liberarlo aca no produce use-after-free. Antes se omitia el free y
+     * el nodo + su copia de string se fugaban en cada `let x = call()`. */
+        if (value_to_assign_node) { free_ast(value_to_assign_node); value_to_assign_node = NULL; }
         
         // Limpia la variable de retorno
        // printf("[DEBUG] interpret_var_decl: cleaning __ret_var\n"); fflush(stdout);
@@ -7770,11 +7820,16 @@ static void interpret_assign(ASTNode *node) {
         // 3. Crear un nodo temporal para el valor
         ASTNode *temp_node = NULL;
         if (ret_val->vtype == VAL_STRING) {
-            temp_node = create_ast_leaf("STRING", 0, strdup(ret_val->value.string_value), NULL);
+            /* create_ast_leaf interna/copia el string: pasar el puntero directo.
+             * El strdup() previo quedaba huerfano (fuga por cada `var x=func()`). */
+            temp_node = create_ast_leaf("STRING", 0, ret_val->value.string_value, NULL);
         } else if (ret_val->vtype == VAL_INT) {
             temp_node = create_ast_leaf_number("INT", ret_val->value.int_value, NULL, NULL);
         } else if (ret_val->vtype == VAL_FLOAT) {
-            temp_node = create_ast_leaf("FLOAT", 0, double_to_string(ret_val->value.float_value), NULL);
+            /* double_to_string() devuelve malloc; create_ast_leaf copia -> liberar. */
+            char *fs = double_to_string(ret_val->value.float_value);
+            temp_node = create_ast_leaf("FLOAT", 0, fs, NULL);
+            free(fs);
         } else if (ret_val->vtype == VAL_OBJECT) {
             temp_node = calloc(1, sizeof(ASTNode));
             memset(temp_node, 0, sizeof(ASTNode));

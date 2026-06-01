@@ -348,6 +348,25 @@ extern ASTNode    *create_ast_leaf(char *type, int value, char *str_value, char 
 extern ASTNode    *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
 extern void        add_or_update_variable(char *id, ASTNode *value);
 extern void        free_ast(ASTNode *node);
+extern void        free_object_node(ObjectNode *obj);
+
+/* item #6 (leak audit): registro de ObjectNodes creados por model binding en
+ * el request actual. Se liberan una sola vez en typeeasy_embedded_invoke_method
+ * tras el reset, evitando el double-free por aliasing (un entry por objeto
+ * creado, no por variable). */
+#define TE_REQ_OWNED_MAX 64
+static ObjectNode *g_req_owned_objects[TE_REQ_OWNED_MAX];
+static int         g_req_owned_count = 0;
+
+static void te_req_owned_register(ObjectNode *obj) {
+    if (obj && g_req_owned_count < TE_REQ_OWNED_MAX)
+        g_req_owned_objects[g_req_owned_count++] = obj;
+}
+
+static void te_req_owned_free_all(void) {
+    for (int i = 0; i < g_req_owned_count; i++) free_object_node(g_req_owned_objects[i]);
+    g_req_owned_count = 0;
+}
 
 /* v0.0.16 — @auth decorator helpers. */
 extern char       *te_jwt_verify_alloc(const char *token, const char *secret);
@@ -384,6 +403,7 @@ static void te_bind_param(ParameterNode *p) {
             }
             ObjectNode *obj = te_object_from_json(cls, body ? body : "");
             if (obj) {
+                te_req_owned_register(obj);
                 ASTNode *wrap = (ASTNode*)calloc(1, sizeof(ASTNode));
                 wrap->type  = strdup("OBJECT");
                 wrap->id    = strdup(cls->name);
@@ -421,6 +441,13 @@ static void te_bind_param(ParameterNode *p) {
 char* typeeasy_embedded_invoke_method(MethodNode* m) {
     if (!m || !m->body) return NULL;
 
+    /* Mark that we are inside per-request handling so create_ast_leaf() does
+     * NOT intern runtime-generated STRING leaves (they are unique per request
+     * and would grow the immortal intern table without bound == memory leak).
+     * Cleared at every return below. */
+    extern int g_te_request_active;
+    g_te_request_active++;
+
     if (!__ret_var_active) {
         memset(&__ret_var, 0, sizeof(Variable));
         __ret_var_active = 1;
@@ -450,6 +477,8 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
             if (claims) free(claims);
             typeeasy_http_set_status(401);
             runtime_reset_vars_to_initial_state();
+            te_req_owned_free_all();
+            g_te_request_active--;
             return strdup("{\"error\":\"unauthorized\"}");
         }
         typeeasy_set_current_claims(claims);
@@ -467,6 +496,8 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
         char *err = g_param_validation_error;
         g_param_validation_error = NULL;
         runtime_reset_vars_to_initial_state();
+        te_req_owned_free_all();
+        g_te_request_active--;
         return err;
     }
 
@@ -480,6 +511,8 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
         result = strdup(ret_var->value.string_value);
     }
     runtime_reset_vars_to_initial_state();
+    te_req_owned_free_all();
+    g_te_request_active--;
     if (!result) result = strdup("");
     return result;
 }

@@ -617,6 +617,7 @@ int te_builtin_dispatch(ASTNode *node) {
         free(token); free(s64); free(signing); free(p64); free(h64);
         if (payload) free(payload); if (secret) free(secret);
         add_or_update_variable("__ret__", r);
+        free_ast(r); /* __ret__ copia el valor; el nodo temporal no se reusa */
         return 1;
     }
     if (strcmp(fn, "jwt_verify") == 0) {
@@ -627,6 +628,7 @@ int te_builtin_dispatch(ASTNode *node) {
         free(result);
         if (token) free(token); if (secret) free(secret);
         add_or_update_variable("__ret__", r);
+        free_ast(r); /* __ret__ copia el valor; el nodo temporal no se reusa */
         return 1;
     }
 

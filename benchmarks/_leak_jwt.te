@@ -1,0 +1,15 @@
+// Leak-hunt harness: call jwt_sign in a tight loop so LeakSanitizer (ASan)
+// reports per-call leaks aggregated by allocation stack. The leaked bytes
+// scale with the iteration count, pinpointing the exact malloc site.
+// NOTE: declare vars ONCE outside the loop and reassign inside; re-declaring
+// `var` each iteration grows vars[] until MAX_VARS in CLI mode (no per-request
+// reset) and floods "too many declared variables".
+var secret = "supersecretvalue1234567890";
+var payload = "{\"sub\":\"ana\",\"age\":30,\"exp\":1900000000}";
+var token = "";
+var i = 0;
+while (i < 5000) {
+    token = jwt_sign(payload, secret);
+    i = i + 1;
+}
+println("done jwt_sign x5000");
