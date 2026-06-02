@@ -102,3 +102,6 @@ plugins/sqlite/sqlite-amalgamation-*/
 
 # libFuzzer harness binary (build artifact of scripts/build_fuzzer.sh)
 src/fuzz_parser
+
+# App privada (no es parte del core TypeEasy, repo aparte)
+ERP/

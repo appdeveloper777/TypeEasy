@@ -1,0 +1,46 @@
+// =====================================================================
+// MySQL TLS - Modo 4 de 4: CA propia / insecure  (tls_ca / tls_insecure)
+// ---------------------------------------------------------------------
+// Dos variantes para certs self-signed cuando no quieres usar tls_fp:
+//
+//  (a) tls_ca: ruta a un PEM con la CA (o cadena) del server. Cifra el
+//      canal y valida la cadena contra ESA CA, sin tocar el trust store
+//      del sistema. Seguro. El cert auto-generado de MySQL suele tener un
+//      CN generico (no la IP), por eso no se valida el hostname.
+//
+//  (b) tls_insecure: 1  -> desactiva la verificacion de hostname. OJO:
+//      en MariaDB Connector/C la cadena se sigue validando contra el store
+//      del sistema, asi que con backend estricto puede rechazar el
+//      self-signed igualmente. Es best-effort; preferir tls_fp o tls_ca.
+//      NO usar en produccion contra hosts no confiables (MITM).
+//
+// Alias aceptados: tls_no_verify, insecure, tls_skip_verify.
+// =====================================================================
+
+// --- Variante (a): CA propia en un PEM -------------------------------
+let conn_ca = mysql_connect(
+    "74.50.98.121", "FernandoI", "***", "fernandoi_developer", 3306,
+    { tls: 1, tls_ca: "config/chain.pem" }   // ruta al PEM con la CA
+);
+if (conn_ca < 0) {
+    println("[tls_ca] no se pudo conectar");
+} else {
+    let r = mysql_query(conn_ca, "SELECT VERSION() AS v", "json");
+    print("[tls_ca] ok: ");
+    println(r);
+    mysql_close(conn_ca);
+}
+
+// --- Variante (b): insecure (sin verificar hostname) -----------------
+let conn_ins = mysql_connect(
+    "74.50.98.121", "FernandoI", "***", "fernandoi_developer", 3306,
+    { tls: 1, tls_insecure: 1 }   // canal cifrado, sin verificar hostname
+);
+if (conn_ins < 0) {
+    println("[tls_insecure] no se pudo conectar");
+} else {
+    let r2 = mysql_query(conn_ins, "SELECT VERSION() AS v", "json");
+    print("[tls_insecure] ok: ");
+    println(r2);
+    mysql_close(conn_ins);
+}

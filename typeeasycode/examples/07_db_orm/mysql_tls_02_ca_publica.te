@@ -1,0 +1,31 @@
+// =====================================================================
+// MySQL TLS - Modo 2 de 4: TLS contra CA publica (tls: 1)
+// ---------------------------------------------------------------------
+// { tls: 1 } habilita TLS y valida la cadena del certificado del server
+// contra el trust store del sistema. Funciona "out of the box" con
+// servicios cloud cuyo cert esta firmado por una CA publica y cuyo CN
+// coincide con el hostname (TiDB Cloud, PlanetScale, Aiven, RDS, etc.).
+//
+// NO sirve para un MySQL con cert self-signed: ese cert no esta en el
+// trust store y sera rechazado (ver modos 3 y 4).
+//
+// Usar cuando: te conectas a un MySQL/MariaDB gestionado en la nube.
+// =====================================================================
+
+let conn = mysql_connect(
+    "gateway01.us-east-1.prod.aws.tidbcloud.com", // host (TiDB Cloud)
+    "2XCY4FHDYiMMcdi.root",                        // user
+    "dMal8ex6FlLgprno",                            // pass
+    "test",                                        // db
+    4000,                                          // port
+    { tls: 1 }                                     // TLS con CA publica
+);
+
+if (conn < 0) {
+    println("[ca-publica] no se pudo conectar");
+} else {
+    let r = mysql_query(conn, "SELECT VERSION() AS version, DATABASE() AS db", "json");
+    print("[ca-publica] ok: ");
+    println(r);
+    mysql_close(conn);
+}

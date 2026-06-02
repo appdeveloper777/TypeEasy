@@ -1,0 +1,29 @@
+// =====================================================================
+// MySQL TLS - Modo 1 de 4: SIN TLS (texto plano)
+// ---------------------------------------------------------------------
+// Cuando NO se pasa la opcion tls (o tls: 0) la conexion va en texto
+// plano. Para MySQL 8 con caching_sha2_password, TypeEasy pide la clave
+// publica RSA del servidor y cifra SOLO el password sobre el canal TCP
+// (igual que hacen PHP mysqlnd / pymysql). No requiere certificados.
+//
+// Usar cuando: el server esta en una red privada/confiable (VPN, mismo
+// host, LAN) y no necesitas cifrar todo el trafico.
+// =====================================================================
+
+let conn = mysql_connect(
+    "74.50.98.121",      // host
+    "FernandoI",         // user
+    "***",               // pass  (reemplazar)
+    "fernandoi_developer", // db
+    3306                 // port
+    // sin 6º argumento => sin TLS
+);
+
+if (conn < 0) {
+    println("[plano] no se pudo conectar");
+} else {
+    let r = mysql_query(conn, "SELECT VERSION() AS version, DATABASE() AS db", "json");
+    print("[plano] ok: ");
+    println(r);
+    mysql_close(conn);
+}

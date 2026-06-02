@@ -1,0 +1,35 @@
+// =====================================================================
+// MySQL TLS - Modo 3 de 4: PIN por huella SHA1 (tls_fp)  [RECOMENDADO]
+// ---------------------------------------------------------------------
+// { tls: 1, tls_fp: "<sha1>" } cifra el canal y, en lugar de validar la
+// cadena contra una CA, compara la huella SHA1 del certificado que
+// presenta el server con la que fijas aqui. Es EL mecanismo de MariaDB
+// Connector/C para certs self-signed: seguro (detecta MITM) y sin tener
+// que instalar la CA en el trust store del sistema ni del proyecto.
+//
+// Como obtener la huella del server:
+//   openssl s_client -connect HOST:3306 -starttls mysql </dev/null \
+//     2>/dev/null | openssl x509 -noout -fingerprint -sha1
+//   (quitar los ':' y pasar en minusculas)
+//
+// Usar cuando: MySQL 8 con cert auto-generado self-signed (caso tipico
+// de FacturaScripts / hosting compartido). ESTE ES EL MODO RECOMENDADO.
+// =====================================================================
+
+let conn = mysql_connect(
+    "74.50.98.121",        // host
+    "FernandoI",           // user
+    "***",                 // pass (reemplazar)
+    "fernandoi_developer", // db
+    3306,                  // port
+    { tls: 1, tls_fp: "5ff1330b35b36db1cbeafeb890294ec054d4f74c" } // pin SHA1
+);
+
+if (conn < 0) {
+    println("[tls_fp] no se pudo conectar (huella no coincide?)");
+} else {
+    let r = mysql_query(conn, "SELECT VERSION() AS version, DATABASE() AS db", "json");
+    print("[tls_fp] ok: ");
+    println(r);
+    mysql_close(conn);
+}
