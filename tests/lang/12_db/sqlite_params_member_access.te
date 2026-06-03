@@ -1,0 +1,45 @@
+// expect: ins=1 name=Ada price=42 found=1 like=1
+// Regresión: acceso a miembro (`obj.campo`) usado como VALOR dentro de un
+// mapa de parámetros Dapper. Antes, un valor `c.name` / `c.price` en el mapa
+// no se resolvía (te_arg_string sólo cubría STRING/IDENTIFIER) y terminaba
+// insertando NULL/cadena vacía. El fix hace que los wrappers del host
+// (arg_string/arg_int de la ABI de plugins) resuelvan ACCESS_ATTR vía
+// get_node_string/evaluate_expression, así `obj.campo` funciona como valor
+// de parámetro en CUALQUIER bridge DB (mysql/postgres/sqlserver/sqlite/...).
+//
+// El plugin SQLite va embebido (no requiere servidor) → corre en CI.
+load_native("sqlite");
+
+class Contact {
+    public string name = "";
+    public int price = 0;
+}
+
+let c = new Contact();
+c.name = "Ada";
+c.price = 42;
+
+let db = sqlite_connect(":memory:");
+sqlite_exec(db, "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price INTEGER)");
+
+// INSERT con miembros del objeto como parámetros.
+let ins = sqlite_exec(db, "INSERT INTO t (name, price) VALUES (@n, @p)", { "@n": c.name, "@p": c.price });
+print("ins="); print(ins);
+
+let rows = json_parse(sqlite_query(db, "SELECT name, price FROM t", "json"));
+let r0 = rows[0];
+print(" name="); print(r0["name"]);
+print(" price="); print(r0["price"]);
+
+// SELECT con miembro del objeto como parámetro (igualdad exacta).
+let foundRows = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c FROM t WHERE name = @n", { "@n": c.name }, "json"));
+let f0 = foundRows[0];
+print(" found="); print(f0["c"]);
+
+// SELECT con miembro del objeto como parámetro (LIKE) — verifica que el
+// quoting/escape sigue siendo seguro y el valor llega íntegro.
+let likeRows = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c FROM t WHERE name LIKE @n", { "@n": c.name }, "json"));
+let l0 = likeRows[0];
+print(" like="); println(l0["c"]);
+
+sqlite_close(db);

@@ -1083,9 +1083,25 @@ void te_register_ast_builtins(void) {
  * unit, so plugins get a stable surface without linking the host binary. */
 static char  *host_arg_string_dup(ASTNode *arg) {
     const char *s = te_arg_string(arg);
-    return s ? strdup(s) : NULL;
+    if (s) return strdup(s);
+    /* Fallback: te_arg_string sólo cubre STRING literal e IDENTIFIER->string.
+     * Para expresiones (ACCESS_ATTR `obj.campo`, CALL_FUNC, concatenaciones)
+     * delegamos en get_node_string, que evalúa el nodo y devuelve memoria
+     * propia. Esto permite usar `obj.campo` como valor en un mapa de
+     * parámetros Dapper de cualquier bridge DB (mysql/postgres/sqlite/...). */
+    if (arg) return get_node_string(arg);
+    return NULL;
 }
-static int    host_arg_int(ASTNode *arg, int defv) { return te_arg_int(arg, defv); }
+static int    host_arg_int(ASTNode *arg, int defv) {
+    if (!arg) return defv;
+    /* Tipos directos (NUMBER/INT o IDENTIFIER->int) por la vía rápida. */
+    if (arg->type &&
+        (strcmp(arg->type, "NUMBER") == 0 || strcmp(arg->type, "INT") == 0 ||
+         strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0))
+        return te_arg_int(arg, defv);
+    /* Fallback para ACCESS_ATTR numérico (`obj.campo`) y otras expresiones. */
+    return (int)evaluate_expression(arg);
+}
 static double host_arg_float(ASTNode *arg, double defv) {
     if (!arg) return defv;
     return evaluate_expression(arg);

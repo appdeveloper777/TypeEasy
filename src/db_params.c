@@ -118,6 +118,32 @@ static int append_value(char** buf, size_t* len, size_t* cap,
         else if (v->vtype == VAL_FLOAT) { kind = 2; vf = v->value.float_value; }
         else if (v->vtype == VAL_STRING) { kind = 3; vs = v->value.string_value ? v->value.string_value : ""; }
         else { kind = 4; }
+    } else if (strcmp(tipo, "ACCESS_ATTR") == 0 && val->left && val->right) {
+        /* Acceso a miembro `obj.attr` (p.ej. body.codcontacto en un INSERT).
+         * Sin esto el valor se ignoraba (kind=4 -> NULL) y la fila se insertaba
+         * vacia. Resolvemos la variable OBJECT y leemos el atributo por su id,
+         * usando su vtype para decidir el formato (con/sin comillas). */
+        ASTNode* o = val->left;
+        ASTNode* a = val->right;
+        const char* attr_name = a->id ? a->id : a->str_value;
+        kind = 4;
+        if (o->id && attr_name) {
+            Variable* ov = find_variable(o->id);
+            if (ov && ov->vtype == VAL_OBJECT && ov->value.object_value &&
+                ov->value.object_value->class) {
+                ObjectNode* obj = ov->value.object_value;
+                for (int i = 0; i < obj->class->attr_count; i++) {
+                    if (obj->class->attributes[i].id &&
+                        strcmp(obj->class->attributes[i].id, attr_name) == 0) {
+                        Variable* attr = &obj->attributes[i];
+                        if (attr->vtype == VAL_INT) { kind = 1; vi = attr->value.int_value; }
+                        else if (attr->vtype == VAL_FLOAT) { kind = 2; vf = attr->value.float_value; }
+                        else if (attr->vtype == VAL_STRING) { kind = 3; vs = attr->value.string_value ? attr->value.string_value : ""; }
+                        break;
+                    }
+                }
+            }
+        }
     } else {
         kind = 4;
     }
