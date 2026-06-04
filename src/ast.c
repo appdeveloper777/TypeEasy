@@ -1035,6 +1035,42 @@ static void native_request_query (ASTNode *arg) { const char *k = te_arg_string(
 static void native_request_header(ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_headers, k); te_set_ret_string(v ? v : ""); }
 static void native_request_param (ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_params,  k); te_set_ret_string(v ? v : ""); }
 
+/* request_cookie(name): parse the "Cookie" request header and return the value
+ * of the named cookie ("" if absent). The header looks like
+ *   "user=admin; logkey=abc123; PHPSESSID=xyz"
+ * Self-contained parser: split on ';', trim spaces, match "<name>=" exactly.
+ * Cross-platform (pure C stdlib, no POSIX-only calls). */
+static void native_request_cookie(ASTNode *arg) {
+    const char *name = te_arg_string(arg);
+    const char *hdr  = te_kv_find(g_req_headers, "Cookie");
+    if (!name || !*name || !hdr) { te_set_ret_string(""); return; }
+    size_t nlen = strlen(name);
+    const char *p = hdr;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == ';') p++;   /* skip separators */
+        if (!*p) break;
+        const char *key = p;
+        const char *eq  = key;
+        while (*eq && *eq != '=' && *eq != ';') eq++;        /* find '=' */
+        size_t klen = (size_t)(eq - key);
+        if (*eq == '=' && klen == nlen && strncmp(key, name, nlen) == 0) {
+            const char *val = eq + 1;
+            const char *end = val;
+            while (*end && *end != ';') end++;               /* value until ';' */
+            char buf[1024];
+            size_t vlen = (size_t)(end - val);
+            if (vlen >= sizeof(buf)) vlen = sizeof(buf) - 1;
+            memcpy(buf, val, vlen);
+            buf[vlen] = '\0';
+            te_set_ret_string(buf);
+            return;
+        }
+        /* advance past this pair */
+        while (*p && *p != ';') p++;
+    }
+    te_set_ret_string("");
+}
+
 /* v0.0.16: @auth decorator support. g_current_claims holds the validated JWT
  * payload (JSON) for the current request; set by the API dispatch when an
  * @auth endpoint passes verification, exposed to handlers via current_claims(). */
@@ -1175,6 +1211,7 @@ int call_native_function(const char *name, ASTNode *arg) {
     if (strcmp(name, "request_query")  == 0) { native_request_query(arg);  return 1; }
     if (strcmp(name, "request_header") == 0) { native_request_header(arg); return 1; }
     if (strcmp(name, "request_param")  == 0) { native_request_param(arg);  return 1; }
+    if (strcmp(name, "request_cookie") == 0) { native_request_cookie(arg); return 1; }
     if (strcmp(name, "current_claims") == 0) { native_current_claims(arg); return 1; }
     if (strcmp(name, "request_headers")== 0) { native_request_headers(arg);return 1; }
     if (strcmp(name, "request_queries")== 0) { native_request_queries(arg);return 1; }

@@ -18,6 +18,7 @@ Categorias organizadas por concepto. Cada carpeta tiene su propio README.
 | `16_websocket/`  | Endpoints WebSocket nativos (`[WebSocket(...)]`)   |
 | `17_jwt/`        | Autenticación con JWT HS256 (`jwt_sign`/`jwt_verify`) |
 | `18_cors/`       | CORS: consumir la API desde otro dominio (`--cors-origin`) |
+| `21_cookies/`    | Sesión con cookies (`request_cookie` + `Set-Cookie`) |
 | `_scratch/`      | Tests de debug / temporales (no en regression)     |
 
 ## Como correr un test

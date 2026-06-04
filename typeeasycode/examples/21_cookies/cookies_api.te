@@ -1,0 +1,82 @@
+// =============================================================
+// apis/cookies_api — manejo de sesión con cookies (request_cookie)
+//
+// Demuestra el builtin request_cookie(nombre), que parsea el header
+// "Cookie" de la petición y devuelve el valor de la cookie pedida
+// ("" si no existe).
+//
+// Flujo típico:
+//   1) POST /api/login   -> valida credenciales y emite la cookie de
+//                           sesión vía response_header("Set-Cookie", ...).
+//   2) GET  /api/perfil  -> protegido; lee request_cookie("user") y
+//                           request_cookie("logkey") para autorizar.
+//   3) POST /api/logout  -> borra la cookie (Max-Age=0).
+//
+// Ejecutar:
+//   typeeasy --api examples/21_cookies/cookies_api.te --port 9103
+//
+// Probar (guardando las cookies en un archivo con curl -c / -b):
+//   # 1) login -> el servidor responde con Set-Cookie y curl las guarda
+//   curl -s -c cookies.txt -X POST \
+//        -d '{"user":"ana","pass":"1234"}' \
+//        http://localhost:9103/api/login
+//
+//   # 2) acceso protegido reenviando las cookies guardadas
+//   curl -s -b cookies.txt http://localhost:9103/api/perfil
+//
+//   # 3) sin cookie -> 401
+//   curl -s -i http://localhost:9103/api/perfil
+//
+//   # 4) logout -> invalida la cookie
+//   curl -s -b cookies.txt -X POST http://localhost:9103/api/logout
+// =============================================================
+
+endpoint {
+    // --- Login: valida y setea la cookie de sesión --------------
+    [HttpPost("/api/login")]
+    login() {
+        let body = request_body();
+        // Demo: credencial fija. En producción valida contra tu BD.
+        if (body != "{\"user\":\"ana\",\"pass\":\"1234\"}") {
+            response_status(401);
+            return json("{\"error\":\"credenciales_invalidas\"}");
+        }
+
+        // Emite dos cookies: el usuario y una clave de sesión.
+        // HttpOnly evita que JavaScript del navegador las lea (anti-XSS).
+        // Path=/ las envía en todas las rutas; SameSite=Lax mitiga CSRF.
+        response_header("Set-Cookie", "user=ana; Path=/; HttpOnly; SameSite=Lax");
+        response_header("Set-Cookie", "logkey=abc123; Path=/; HttpOnly; SameSite=Lax");
+        return json("{\"ok\":true}");
+    }
+
+    // --- Endpoint protegido: lee las cookies con request_cookie -
+    [HttpGet("/api/perfil")]
+    perfil() {
+        let user   = request_cookie("user");
+        let logkey = request_cookie("logkey");
+
+        // Sin cookie de usuario -> no hay sesión.
+        if (user == "") {
+            response_status(401);
+            return json("{\"error\":\"no_session\"}");
+        }
+
+        // Demo: validación fija de la clave de sesión.
+        // En producción se compara contra la guardada en la BD.
+        if (logkey != "abc123") {
+            response_status(401);
+            return json("{\"error\":\"invalid_session\"}");
+        }
+
+        return json("{\"perfil\":{\"user\":\"" + user + "\"}}");
+    }
+
+    // --- Logout: borra la cookie (Max-Age=0) --------------------
+    [HttpPost("/api/logout")]
+    logout() {
+        response_header("Set-Cookie", "user=; Path=/; Max-Age=0");
+        response_header("Set-Cookie", "logkey=; Path=/; Max-Age=0");
+        return json("{\"ok\":true}");
+    }
+}
