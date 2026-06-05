@@ -33,6 +33,21 @@
 /* Minimal HTTP/1.0 client over plain TCP. Returns body as malloc'd string (caller frees), or NULL. */
 static char* te_http_request(const char *method, const char *url, const char *body) {
     if (!url) return NULL;
+#ifdef _WIN32
+    /* En Windows toda llamada a sockets requiere WSAStartup previo. El servidor
+     * --api lo inicializa, pero en modo script (typeeasy archivo.te) nadie lo
+     * hace, así que http_get/http_post devolvían cadena vacía. Inicializamos
+     * winsock de forma perezosa una sola vez; WSAStartup es refcounted, así que
+     * coexiste sin problema con el WSAStartup del servidor API. */
+    {
+        static int wsa_ready = 0;
+        if (!wsa_ready) {
+            WSADATA wsa;
+            if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return NULL;
+            wsa_ready = 1;
+        }
+    }
+#endif
     /* Parse http://host[:port]/path */
     const char *u = url;
     if (strncmp(u, "http://", 7) == 0) u += 7;

@@ -164,6 +164,32 @@
     .page { padding: 22px 18px 80px; }
     .hero h1 { font-size: 30px; }
   }
+
+  /* ---- Topbar toggle buttons (theme + language) ---- */
+  .topbar .iconbtn {
+    background: rgba(255,255,255,.16); color: #fff; border: 1px solid rgba(255,255,255,.32);
+    border-radius: 8px; padding: 5px 10px; font-size: 13px; font-weight: 700; cursor: pointer;
+    line-height: 1; margin-left: 8px;
+  }
+  .topbar .iconbtn:hover { background: rgba(255,255,255,.30); }
+
+  /* ---- Dark theme ---- */
+  html[data-theme="dark"] {
+    --ink: #e6edf3;
+    --ink-soft: #9aa6b8;
+    --bg: #0d1117;
+    --sidebar: #161b22;
+    --border: #283039;
+    --green-soft: #102218;
+  }
+  html[data-theme="dark"] a { color: #4ad07f; }
+  html[data-theme="dark"] code.inline { background: #21262d; color: #ff9ec4; }
+  html[data-theme="dark"] .sidebar a.navlink:hover { background: #1c2530; }
+  html[data-theme="dark"] table.ref code { background: #21262d; color: #ff9ec4; }
+  html[data-theme="dark"] .note { background: #11203a; }
+  html[data-theme="dark"] .warn { background: #2a2410; }
+  html[data-theme="dark"] .output { border-color: #1f5236; }
+  html[data-theme="dark"] .pager a.prev { background: #1c2530; color: var(--ink); }
 </style>
 </head>
 <body>
@@ -173,11 +199,13 @@
     <span class="ver" id="verBadge">v0.0.18</span>
     <span class="spacer"></span>
     <nav class="tnav">
-      <a href="#/home">Inicio</a>
-      <a href="#/quickstart">Quickstart</a>
-      <a href="#/first-api">APIs</a>
+      <a href="#/home" data-i18n="nav_home">Inicio</a>
+      <a href="#/quickstart" data-i18n="nav_quick">Quickstart</a>
+      <a href="#/first-api" data-i18n="nav_apis">APIs</a>
       <a href="https://github.com/appdeveloper777/TypeEasy" target="_blank" rel="noopener">GitHub</a>
     </nav>
+    <button class="iconbtn" id="langToggle" title="Idioma / Language">ES</button>
+    <button class="iconbtn" id="themeToggle" title="Tema / Theme">🌙</button>
   </header>
 
   <div class="layout">
@@ -259,32 +287,45 @@ function highlightTE(src){
 /* ---------- Code block builders ---------- */
 function te(code, label){
   label = label || "typeeasy";
+  const cp = (window.I18N && window.LANG) ? window.I18N[window.LANG].copy : "Copiar";
   return `<div class="code-wrap"><span class="lbl">${label}</span>`
-    + `<button class="copy" onclick="copyCode(this)">Copiar</button>`
+    + `<button class="copy" onclick="copyCode(this)">${cp}</button>`
     + `<pre data-raw="${encodeURIComponent(code)}">${highlightTE(code)}</pre></div>`;
 }
 function sh(code){
+  const cp = (window.I18N && window.LANG) ? window.I18N[window.LANG].copy : "Copiar";
   return `<div class="code-wrap"><span class="lbl">shell</span>`
-    + `<button class="copy" onclick="copyCode(this)">Copiar</button>`
+    + `<button class="copy" onclick="copyCode(this)">${cp}</button>`
     + `<pre class="shell" data-raw="${encodeURIComponent(code)}">${escapeHtml(code)}</pre></div>`;
 }
 function out(text){ return `<div class="output">${escapeHtml(text)}</div>`; }
 function copyCode(btn){
   const pre = btn.parentElement.querySelector("pre");
   const raw = decodeURIComponent(pre.getAttribute("data-raw"));
-  navigator.clipboard.writeText(raw).then(()=>{ const t=btn.textContent; btn.textContent="✓ Copiado"; setTimeout(()=>btn.textContent=t,1200); });
+  const done = (window.I18N && window.LANG) ? window.I18N[window.LANG].copied : "✓ Copiado";
+  navigator.clipboard.writeText(raw).then(()=>{ const t=btn.textContent; btn.textContent=done; setTimeout(()=>btn.textContent=t,1200); });
 }
 
 /* ---------- Content pages registered below in pages.js-style object ---------- */
-window.PAGES = {};
+window.PAGES_ES = {};
+window.PAGES_EN = {};
+// During the ES content script blocks, PAGES aliases the Spanish dictionary.
+window.PAGES = window.PAGES_ES;
 window.NAV = [];
+
+/* ---------- UI strings (topbar/pager labels) ---------- */
+window.I18N = {
+  es: { nav_home: "Inicio", nav_quick: "Quickstart", nav_apis: "APIs", copy: "Copiar", copied: "✓ Copiado" },
+  en: { nav_home: "Home", nav_quick: "Quickstart", nav_apis: "APIs", copy: "Copy", copied: "✓ Copied" }
+};
+window.LANG = "es";
 </script>
 
 <script>
 /* ============================================================
    NAVIGATION STRUCTURE
    ============================================================ */
-NAV = [
+window.NAV_ES = [
   { group: "Empezar", items: [
     ["home", "Inicio"],
     ["intro", "Introducción"],
@@ -336,6 +377,62 @@ NAV = [
     ["ex-auth", "API con login JWT"],
   ]},
 ];
+
+window.NAV_EN = [
+  { group: "Get started", items: [
+    ["home", "Home"],
+    ["intro", "Introduction"],
+    ["quickstart", "Install / Quickstart"],
+  ]},
+  { group: "Fundamentals", items: [
+    ["syntax", "Syntax"],
+    ["variables", "Variables"],
+    ["types", "Types"],
+    ["operators", "Operators"],
+    ["strings", "Strings"],
+    ["if", "Conditionals"],
+    ["loops", "Loops"],
+  ]},
+  { group: "Collections", items: [
+    ["lists", "Lists"],
+    ["maps", "Maps"],
+  ]},
+  { group: "Functions & OOP", items: [
+    ["functions", "Functions & lambdas"],
+    ["higher-order", "map / filter / reduce"],
+    ["classes", "Classes"],
+    ["inheritance", "Inheritance"],
+  ]},
+  { group: "Data & queries", items: [
+    ["linq", "LINQ (queries)"],
+    ["csv", "Read CSV"],
+    ["mysql", "MySQL"],
+  ]},
+  { group: "Advanced", items: [
+    ["errors", "Error handling"],
+    ["modules", "Modules (import)"],
+    ["stdlib", "Stdlib"],
+    ["bridge", "Bridge (other languages)"],
+    ["async", "Async / concurrency"],
+  ]},
+  { group: "Build APIs", items: [
+    ["first-api", "Your first API"],
+    ["routing", "Routes & parameters"],
+    ["json", "JSON responses"],
+    ["binding", "Model binding"],
+    ["jwt", "JWT authentication"],
+    ["cookies", "Cookies & session"],
+    ["cors", "CORS"],
+    ["database", "Databases"],
+  ]},
+  { group: "Full examples", items: [
+    ["ex-crud", "CRUD with SQLite"],
+    ["ex-auth", "API with JWT login"],
+  ]},
+];
+
+// NAV used by the active language (router swaps it)
+window.NAV = window.NAV_ES;
 </script>
 
 <script>
@@ -1219,6 +1316,31 @@ ${te(`let respuesta = http_get("http://api.ejemplo.com/datos");
 let r = http_post("http://api.ejemplo.com", "{\\"x\\":1}");`)}
 <div class="note"><strong>Nota.</strong> El cliente HTTP integrado es HTTP/1.0 plano (sin HTTPS). Para HTTPS usa un plugin externo.</div>
 
+<h2>Consumir un API dentro de un endpoint</h2>
+<p>Un caso típico: tu endpoint llama a otro servicio, parsea el JSON de respuesta y devuelve un resultado propio. El patrón es <code class="inline">http_get</code> &rarr; <code class="inline">json_parse</code> &rarr; <strong>guardar cada campo en una variable</strong> &rarr; <code class="inline">json(...)</code>.</p>
+${te(`endpoint {
+    [HttpGet("/clima/{ciudad}")]
+    obtenerClima() {
+        let ciudad = request_param("ciudad");
+
+        // 1. Llama al API externo
+        let texto = http_get("http://api.ejemplo.com/clima/" + ciudad);
+
+        // 2. Parsea la respuesta JSON
+        let datos = json_parse(texto);
+
+        // 3. Guarda cada campo en una variable
+        let nombre = datos["ciudad"];
+        let grados = datos["temp"];
+
+        // 4. Devuelve tu propia respuesta
+        return json({ origen: nombre, grados: grados });
+    }
+}`)}
+${sh(`curl http://localhost:9000/clima/Lima`)}
+${out('{"origen":"Lima","grados":21}')}
+<div class="note"><strong>Importante.</strong> Extrae los campos del mapa en variables (<code class="inline">let nombre = datos["ciudad"];</code>) <em>antes</em> de pasarlos a <code class="inline">json(...)</code>. Indexar el mapa en línea dentro de <code class="inline">json({ ciudad: datos["ciudad"] })</code> no resuelve el valor.</div>
+
 <div class="pager">
   <a class="prev" href="#/modules">&larr; Módulos</a>
   <a href="#/bridge">Bridge &rarr;</a>
@@ -2085,7 +2207,1754 @@ curl -i http://localhost:9000/api/perfil`)}
 
 <script>
 /* ============================================================
-   ROUTER + SIDEBAR
+   PAGES (EN) — English translation
+   ============================================================ */
+PAGES = window.PAGES_EN;   // assignments below populate the English dict
+
+PAGES.home = `
+<div class="hero">
+  <h1>Learn TypeEasy</h1>
+  <p>The language to build and ship APIs as <strong>a single binary</strong>. No runtime, no Docker, no <code style="color:#fff">npm install</code>.</p>
+  <div class="cta">
+    <a href="#/quickstart">Get started &rarr;</a>
+    <a class="alt" href="#/first-api">Build an API</a>
+  </div>
+</div>
+<p class="lead">This tutorial covers the language end to end: variables, types, functions, classes, and how to build a complete REST API with JSON, JWT, cookies and a database.</p>
+
+<h2>Why TypeEasy?</h2>
+<div class="cards">
+  <div class="card"><h3>⚡ Fast to write</h3><p>Familiar C# / TypeScript-like syntax. Define an endpoint in 4 lines.</p></div>
+  <div class="card"><h3>📦 A single binary</h3><p>Compiles to a native executable. Copy it to the server and run. No dependencies.</p></div>
+  <div class="card"><h3>🔋 Batteries included</h3><p>JSON, JWT, CORS, cookies, MySQL/Postgres/SQLite, WebSockets — in the core.</p></div>
+  <div class="card"><h3>🚀 Production ready</h3><p>Health checks, structured logging, multi-worker prefork and graceful shutdown.</p></div>
+</div>
+
+<h2>Your first endpoint</h2>
+${te(`endpoint {
+    [HttpGet("/api/hello/{name}")]
+    greet() {
+        let name = request_param("name");
+        return json({ message: "Hello " + name });
+    }
+}`)}
+${sh(`typeeasy --api hello.te --port 9000
+curl http://localhost:9000/api/hello/Ann`)}
+${out('{"message":"Hello Ann"}')}
+
+<div class="pager">
+  <span></span>
+  <a href="#/intro">Introduction &rarr;</a>
+</div>
+`;
+
+PAGES.intro = `
+<h1>Introduction to TypeEasy</h1>
+<p class="lead">TypeEasy is an interpreted language with optional typing, designed with a single goal: <strong>be the fastest way to write and deploy an HTTP API</strong>.</p>
+
+<h2>The problem it solves</h2>
+<p>Standing up an API today usually means installing a runtime (Node, Python, JVM), a package manager, dozens of dependencies and, almost always, Docker so it "works everywhere". TypeEasy removes all of that: the interpreter is a <strong>single native binary</strong> (Windows and Linux) that runs your <code class="inline">.te</code> files directly.</p>
+
+<h2>What the language looks like</h2>
+${te(`// Variables with type inference
+let name = "Ann";
+var age = 30;
+const PI = 3.1416;
+
+// Function / lambda
+var double = fn(x) => x * 2;
+println(double(21));        // 42
+
+// Class
+class Person {
+    name : string;
+    greet() : string {
+        return "Hi, I'm " + this.name;
+    }
+}`)}
+
+<h2>What you'll learn</h2>
+<ul>
+  <li><strong>Fundamentals</strong>: variables, types, operators, control flow.</li>
+  <li><strong>Structures</strong>: lists, maps, higher-order functions.</li>
+  <li><strong>OOP</strong>: classes, inheritance, methods.</li>
+  <li><strong>APIs</strong>: endpoints, JSON, JWT authentication, cookies, CORS and databases.</li>
+</ul>
+
+<div class="note"><strong>Note.</strong> <code class="inline">.te</code> files must be ASCII outside of string literals. Use only ASCII characters in comments and identifiers.</div>
+
+<div class="pager">
+  <a class="prev" href="#/home">&larr; Home</a>
+  <a href="#/quickstart">Quickstart &rarr;</a>
+</div>
+`;
+
+PAGES.quickstart = `
+<h1>Installation and Quickstart</h1>
+<p class="lead">From zero to a running API in under 5 minutes.</p>
+
+<h2>1. Install</h2>
+<p>Download the binary for your system from the releases page:</p>
+<ul>
+  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.0.18.exe</code> (installer) or the portable <code class="inline">.zip</code>.</li>
+  <li><strong>Linux</strong>: <code class="inline">.deb</code> (Debian/Ubuntu/Mint) or the portable <code class="inline">.tar.gz</code>.</li>
+</ul>
+<p><a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">Releases on GitHub &rarr;</a></p>
+
+<h2>2. Create a project (Rails-style)</h2>
+${sh(`te new shop
+cd shop
+te gen resource product`)}
+<p>This generates the project structure: <code class="inline">apis/</code>, <code class="inline">migrations/</code>, <code class="inline">typeeasy.toml</code> and a ready-made CRUD endpoint.</p>
+
+<h2>3. Start the server</h2>
+${sh(`te serve --dev      # http://127.0.0.1:8080  (1 worker, hot-reload)
+te serve --prod     # 0.0.0.0, workers=auto, watchdog`)}
+
+<h2>4. Or run a single file</h2>
+<p>You don't need a full project. Any <code class="inline">.te</code> with an <code class="inline">endpoint</code> block is served directly:</p>
+${sh(`typeeasy --api my_api.te --port 9000 --host 127.0.0.1`)}
+
+<div class="note"><strong>Tip.</strong> Open <code class="inline">http://localhost:9000/</code> in the browser: TypeEasy automatically generates a <strong>Swagger UI</strong> with all your endpoints so you can test them without writing <code class="inline">curl</code>.</div>
+
+<h2>Run a script (no server)</h2>
+<p>TypeEasy also runs plain scripts, not just APIs:</p>
+${sh(`typeeasy hello.te`)}
+${te(`println("Hello, world!");`, "hello.te")}
+${out("Hello, world!")}
+
+<div class="pager">
+  <a class="prev" href="#/intro">&larr; Introduction</a>
+  <a href="#/syntax">Syntax &rarr;</a>
+</div>
+`;
+
+PAGES.syntax = `
+<h1>Syntax</h1>
+<p class="lead">The basic rules of a TypeEasy program.</p>
+
+<h2>Statements</h2>
+<p>Every statement ends with a semicolon <code class="inline">;</code>. Blocks are delimited with braces <code class="inline">{ }</code>.</p>
+${te(`let x = 10;
+let y = 20;
+println(x + y);   // 30`)}
+
+<h2>Comments</h2>
+${te(`// Single-line comment
+
+/* Multi-line
+   comment */`)}
+
+<h2>Print to console</h2>
+<table class="ref">
+  <tr><th>Builtin</th><th>Description</th></tr>
+  <tr><td><code>print(x)</code></td><td>Prints without a newline.</td></tr>
+  <tr><td><code>println(x)</code></td><td>Prints with a newline.</td></tr>
+</table>
+${te(`print("Hello ");
+println("world");    // Hello world`)}
+
+<h2>Identifiers</h2>
+<p>Start with a letter or <code class="inline">_</code>, followed by letters, digits or <code class="inline">_</code>. They are case-sensitive: <code class="inline">age</code> and <code class="inline">Age</code> are different.</p>
+
+<h2>Reserved words</h2>
+${te(`let var const class extends new this return
+if else while for in break continue
+true false null try catch finally throw
+fn import dynamic
+int string float bool datetime uuid void`)}
+
+<div class="pager">
+  <a class="prev" href="#/quickstart">&larr; Quickstart</a>
+  <a href="#/variables">Variables &rarr;</a>
+</div>
+`;
+
+PAGES.variables = `
+<h1>Variables</h1>
+<p class="lead">TypeEasy has three ways to declare variables: <code class="inline">let</code>, <code class="inline">var</code> and <code class="inline">const</code>.</p>
+
+<h2>The three declarations</h2>
+<table class="ref">
+  <tr><th>Keyword</th><th>Reassignable?</th><th>Mutate attributes?</th><th>Allowed value</th></tr>
+  <tr><td><code>const</code></td><td>❌ No</td><td>n/a</td><td>Compile-time literal</td></tr>
+  <tr><td><code>let</code></td><td>❌ No</td><td>✅ Yes (freezes the reference)</td><td>Any expression</td></tr>
+  <tr><td><code>var</code></td><td>✅ Yes</td><td>✅ Yes</td><td>Any expression</td></tr>
+</table>
+
+${te(`const MAX = 100;     // constant: cannot be reassigned
+let name = "Ann";    // immutable reference
+var counter = 0;     // mutable
+
+counter = counter + 1;     // OK
+// name = "Bob";           // ERROR: 'name' is let
+// MAX = 200;              // ERROR: 'MAX' is const`)}
+
+<h2>Type inference</h2>
+<p>If you don't annotate the type, it's inferred from the initial value:</p>
+${te(`var n = 7;          // int
+var f = 3.14;       // float
+var s = "text";     // string
+var b = true;       // bool`)}
+
+<div class="warn"><strong>Important.</strong> Type annotations (<code class="inline">: int</code>) are <em>not</em> allowed on <code class="inline">let</code>/<code class="inline">var</code>/<code class="inline">const</code>. They are only used on class attributes, parameters and method return types. For variables, use inference.</div>
+
+<h2>Compound assignment</h2>
+${te(`var x = 10;
+x += 5;    // 15
+x -= 3;    // 12
+x *= 2;    // 24
+x /= 4;    // 6
+x++;       // 7
+x--;       // 6`)}
+
+<div class="pager">
+  <a class="prev" href="#/syntax">&larr; Syntax</a>
+  <a href="#/types">Types &rarr;</a>
+</div>
+`;
+
+PAGES.types = `
+<h1>Types</h1>
+<p class="lead">TypeEasy has primitive types and optional typing with <code class="inline">: Type</code> annotations.</p>
+
+<h2>Primitive types</h2>
+<table class="ref">
+  <tr><th>Type</th><th>Example</th><th>Notes</th></tr>
+  <tr><td><code>int</code></td><td><code>42</code>, <code>0xFF</code>, <code>0b1010</code>, <code>1_000_000</code></td><td>64-bit integer.</td></tr>
+  <tr><td><code>float</code></td><td><code>3.14</code></td><td>Double precision. No exponent notation.</td></tr>
+  <tr><td><code>string</code></td><td><code>"hi"</code></td><td>UTF-8. Concatenation with <code>+</code>.</td></tr>
+  <tr><td><code>bool</code></td><td><code>true</code>, <code>false</code></td><td>True / false.</td></tr>
+  <tr><td><code>datetime</code></td><td><code>now()</code></td><td>ISO string <code>YYYY-MM-DDTHH:MM:SSZ</code>.</td></tr>
+  <tr><td><code>uuid</code></td><td><code>uuid_v4()</code></td><td>Canonical 36-character UUID.</td></tr>
+</table>
+
+<h2>Numeric literals</h2>
+${te(`let dec = 1_000_000;     // separator with _
+let hex = 0xDEAD_BEEF;   // hexadecimal
+let bin = 0b1010;        // binary
+let f   = 2.5;           // float`)}
+
+<h2>Type annotations</h2>
+<p>Used on classes, parameters and method returns:</p>
+${te(`class Product {
+    name  : string;
+    price : float;
+    stock : int;
+
+    discount(pct : float) : float {
+        return this.price * (1.0 - pct);
+    }
+}`)}
+
+<h2>Nullable types</h2>
+<p>A <code class="inline">?</code> after the type allows the <code class="inline">null</code> value:</p>
+${te(`class User {
+    name     : string;
+    nickname : string?;   // can be null
+}`)}
+
+<h2>datetime and uuid</h2>
+${te(`let now_ts = now();          // "2026-06-04T12:30:00Z"
+let id     = uuid_v4();      // "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+let valid  = uuid_valid(id);  // 1`)}
+
+<div class="pager">
+  <a class="prev" href="#/variables">&larr; Variables</a>
+  <a href="#/operators">Operators &rarr;</a>
+</div>
+`;
+
+PAGES.operators = `
+<h1>Operators</h1>
+
+<h2>Arithmetic</h2>
+${te(`println(10 + 3);   // 13
+println(10 - 3);   // 7
+println(10 * 3);   // 30
+println(10 / 3);   // 3.3333...  (division yields float)
+println(10 % 3);   // 1  (modulo)`)}
+
+<h2>Relational and logical</h2>
+${te(`println(5 > 3);            // true
+println(5 == 5);          // true
+println(5 != 3);          // true
+println(true && false);   // false
+println(true || false);   // true
+println(!true);           // false`)}
+<p>The <code class="inline">&&</code>, <code class="inline">||</code> and <code class="inline">??</code> operators <strong>short-circuit</strong>: they don't evaluate the right side if the left already decides the result.</p>
+
+<h2>Bitwise</h2>
+${te(`println(6 & 3);    // 2
+println(6 | 1);    // 7
+println(6 ^ 3);    // 5
+println(~5);       // -6
+println(1 << 4);   // 16
+println(32 >> 2);  // 8`)}
+
+<h2>Null-aware</h2>
+${te(`let nickname = user.nickname ?? "no nickname";   // ?? = coalescing
+let x = obj?.field;                               // ?. safe access`)}
+
+<h2>The <code class="inline">in</code> operator</h2>
+${te(`let nums = [1, 2, 3];
+println(2 in nums);        // true (membership in a list)
+
+let m = {"a": 1, "b": 2};
+println("a" in m);         // true (key membership in a map)`)}
+
+<h2>Precedence (highest to lowest)</h2>
+<ol>
+  <li>unary <code class="inline">-</code>, <code class="inline">~</code>, <code class="inline">!</code></li>
+  <li><code class="inline">* / %</code></li>
+  <li><code class="inline">+ -</code></li>
+  <li><code class="inline">&lt;&lt; &gt;&gt;</code> &rarr; <code class="inline">&amp;</code> &rarr; <code class="inline">^</code> &rarr; <code class="inline">|</code></li>
+  <li><code class="inline">in</code></li>
+  <li><code class="inline">&lt; &lt;= &gt; &gt;=</code></li>
+  <li><code class="inline">== !=</code></li>
+  <li><code class="inline">&amp;&amp;</code> &rarr; <code class="inline">||</code> &rarr; <code class="inline">??</code></li>
+</ol>
+
+<div class="pager">
+  <a class="prev" href="#/types">&larr; Types</a>
+  <a href="#/strings">Strings &rarr;</a>
+</div>
+`;
+
+PAGES.strings = `
+<h1>Strings</h1>
+
+<h2>Concatenation</h2>
+${te(`let name = "Ann";
+let greeting = "Hello, " + name + "!";
+println(greeting);    // Hello, Ann!`)}
+
+<h2>Interpolation with <code class="inline">$"..."</code></h2>
+<p>Inside an interpolated string, <code class="inline">{expr}</code> is replaced by the value of the expression:</p>
+${te(`let name = "Ann";
+let age = 30;
+println($"{name} is {age} years old");   // Ann is 30 years old
+
+// expressions are allowed too
+println($"Double is {age * 2}");          // Double is 60`)}
+<p>For a literal brace, escape it: <code class="inline">\\{</code> and <code class="inline">\\}</code>.</p>
+
+<h2>String methods</h2>
+<table class="ref">
+  <tr><th>Method</th><th>Result</th></tr>
+  <tr><td><code>"abc".upper()</code></td><td><code>"ABC"</code></td></tr>
+  <tr><td><code>"ABC".lower()</code></td><td><code>"abc"</code></td></tr>
+  <tr><td><code>"  hi  ".trim()</code></td><td><code>"hi"</code></td></tr>
+  <tr><td><code>"hello".contains("ell")</code></td><td><code>true</code></td></tr>
+  <tr><td><code>"a,b,c".split(",")</code></td><td><code>["a","b","c"]</code></td></tr>
+  <tr><td><code>"hello".length</code></td><td><code>5</code></td></tr>
+</table>
+
+${te(`let csv = "red,green,blue";
+let parts = csv.split(",");
+println(parts.length);     // 3
+println(parts[1]);         // green`)}
+
+<h2>Convert text to number</h2>
+${te(`let n = to_int("42");        // 42
+let f = to_float("3.14");    // 3.14
+let s = to_str(99);          // "99"`)}
+
+<div class="pager">
+  <a class="prev" href="#/operators">&larr; Operators</a>
+  <a href="#/if">Conditionals &rarr;</a>
+</div>
+`;
+
+PAGES.if = `
+<h1>Conditionals</h1>
+
+<h2>if / else</h2>
+${te(`let age = 20;
+
+if (age >= 18) {
+    println("Adult");
+} else {
+    println("Minor");
+}`)}
+
+<h2>else if</h2>
+${te(`let grade = 85;
+
+if (grade >= 90) {
+    println("A");
+} else if (grade >= 80) {
+    println("B");
+} else if (grade >= 70) {
+    println("C");
+} else {
+    println("Failed");
+}`)}
+${out("B")}
+
+<h2>Combined conditions</h2>
+${te(`let age = 25;
+let hasLicense = true;
+
+if (age >= 18 && hasLicense) {
+    println("Can drive");
+}`)}
+
+<div class="note"><strong>Note.</strong> TypeEasy has no ternary operator <code class="inline">? :</code>. Use <code class="inline">if</code>/<code class="inline">else</code> or the coalescing operator <code class="inline">??</code> for default values.</div>
+
+<div class="pager">
+  <a class="prev" href="#/strings">&larr; Strings</a>
+  <a href="#/loops">Loops &rarr;</a>
+</div>
+`;
+
+PAGES.loops = `
+<h1>Loops</h1>
+
+<h2>while</h2>
+${te(`var i = 0;
+while (i < 5) {
+    println(i);
+    i++;
+}`)}
+${out("0\\n1\\n2\\n3\\n4")}
+
+<h2>for ... in (iterate a list)</h2>
+${te(`let fruits = ["apple", "pear", "grape"];
+for (let f in fruits) {
+    println(f);
+}`)}
+${out("apple\\npear\\ngrape")}
+
+<h2>Accumulate inside a for</h2>
+<p>You can mutate variables declared outside the loop from inside the <code class="inline">for</code>:</p>
+${te(`let nums = [10, 20, 30, 40];
+var total = 0;
+var i = 0;
+for (let x in nums) {
+    total = total + x;   // accumulate
+    i = i + 1;           // count
+}
+println("sum = " + total);    // sum = 100
+println("items = " + i);      // items = 4`)}
+
+<h2>for with index (iterate by position)</h2>
+${te(`let colors = ["red", "green", "blue"];
+var i = 0;
+while (i < colors.length) {
+    println(i + ": " + colors[i]);
+    i = i + 1;
+}`)}
+${out("0: red\\n1: green\\n2: blue")}
+
+<h2>Numeric for (count from start to limit)</h2>
+<p>TypeEasy has a numeric <code class="inline">for</code> of the form
+<code class="inline">for (variable = start; limit; step)</code>. The <strong>second number is the limit (exclusive)</strong>
+and the <strong>third is the step</strong> — it is not a condition like in C/JavaScript.</p>
+${te(`// count from 0 to 4 (limit 5, step 1)
+for (i = 0; 5; 1) {
+    println(i);
+}`)}
+${out("0\\n1\\n2\\n3\\n4")}
+
+<p>With a step of 2:</p>
+${te(`for (i = 0; 10; 2) {
+    println(i);
+}`)}
+${out("0\\n2\\n4\\n6\\n8")}
+
+<p>Accumulate into an external variable:</p>
+${te(`var sum = 0;
+for (i = 1; 5; 1) {
+    sum = sum + i;
+}
+println("sum 1..4 = " + sum);   // 10`)}
+${out("sum 1..4 = 10")}
+
+<p>The <strong>limit and step can be variables or expressions</strong> (evaluated once when entering the loop):</p>
+${te(`let lim = 4;
+let step = 2;
+for (i = 0; lim; step) {
+    println(i);
+}`)}
+${out("0\\n2")}
+
+<p>The body can have <strong>several statements</strong>; each runs once per iteration:</p>
+${te(`for (i = 0; 3; 1) {
+    println("A=" + i);
+    println("B=" + i);
+}`)}
+${out("A=0\\nB=0\\nA=1\\nB=1\\nA=2\\nB=2")}
+
+<p>They can also be nested:</p>
+${te(`for (i = 0; 2; 1) {
+    for (j = 0; 2; 1) {
+        println(i + "," + j);
+    }
+}`)}
+${out("0,0\\n0,1\\n1,0\\n1,1")}
+
+<p>If you need to <strong>start from a variable</strong>, don't put it in the start of the <code class="inline">for</code>
+(it would be a syntax error). Initialize it first with <code class="inline">var</code> and use <code class="inline">while</code>:</p>
+${te(`let start = 2;
+var i = start;          // var (mutable), not let
+while (i < 5) {
+    println(i);
+    i = i + 1;
+}`)}
+${out("2\\n3\\n4")}
+
+<div class="note"><strong>Numeric for rule.</strong>
+<ul>
+<li>The <strong>start must be a numeric literal</strong> (<code class="inline">for (i = 0; ...)</code>); a variable in the start is a syntax error. If you need to start at a variable, initialize it first with <code class="inline">var</code> and use <code class="inline">while</code> (see example above).</li>
+</ul>
+The <strong>limit</strong> and <strong>step</strong> do accept variables/expressions, and the body accepts multiple statements.</div>
+
+<h2>break and continue</h2>
+${te(`var i = 0;
+while (i < 10) {
+    i++;
+    if (i == 3) { continue; }   // skip 3
+    if (i == 6) { break; }      // stop at 6
+    println(i);
+}`)}
+${out("1\\n2\\n4\\n5")}
+
+<div class="note"><strong>Tip.</strong> To sum, average or filter lists of objects, the idiomatic way in TypeEasy is <a href="#/linq">LINQ</a> (<code class="inline">.sumBy()</code>, <code class="inline">.where()</code>, etc.) instead of a manual loop.</div>
+
+<div class="pager">
+  <a class="prev" href="#/if">&larr; Conditionals</a>
+  <a href="#/lists">Lists &rarr;</a>
+</div>
+`;
+
+PAGES.lists = `
+<h1>Lists</h1>
+<p class="lead">Ordered collections declared with brackets <code class="inline">[ ]</code>.</p>
+
+<h2>Create and access</h2>
+${te(`let nums = [10, 20, 30];
+println(nums[0]);        // 10
+println(nums.length);    // 3`)}
+
+<h2>Modify</h2>
+${te(`var list = [1, 2, 3];
+list.push(4);        // [1, 2, 3, 4]
+let last = list.pop();   // 4 -> [1, 2, 3]
+list[0] = 99;        // [99, 2, 3]`)}
+
+<h2>Iterate</h2>
+${te(`let colors = ["red", "green", "blue"];
+for (let c in colors) {
+    println(c);
+}`)}
+
+<h2>Available methods</h2>
+<table class="ref">
+  <tr><th>Method</th><th>Description</th></tr>
+  <tr><td><code>.length</code></td><td>Number of elements.</td></tr>
+  <tr><td><code>.push(x)</code></td><td>Append to the end.</td></tr>
+  <tr><td><code>.pop()</code></td><td>Remove and return the last.</td></tr>
+  <tr><td><code>.map(fn)</code></td><td>Transform each element.</td></tr>
+  <tr><td><code>.filter(fn)</code></td><td>Filter by condition.</td></tr>
+  <tr><td><code>.reduce(fn, init)</code></td><td>Reduce to a single value.</td></tr>
+  <tr><td><code>.find(fn)</code></td><td>First element that matches.</td></tr>
+  <tr><td><code>.any(fn)</code> / <code>.every(fn)</code></td><td>Any / all match?</td></tr>
+</table>
+
+<div class="pager">
+  <a class="prev" href="#/loops">&larr; Loops</a>
+  <a href="#/maps">Maps &rarr;</a>
+</div>
+`;
+
+PAGES.maps = `
+<h1>Maps</h1>
+<p class="lead">Key-value pairs declared with braces <code class="inline">{ }</code>. Keys are strings.</p>
+
+<h2>Create and access</h2>
+${te(`let person = {"name": "Ann", "age": 30};
+println(person["name"]);   // Ann
+println(person["age"]);    // 30`)}
+
+<h2>Modify</h2>
+${te(`var config = {"theme": "light"};
+config["lang"] = "en";            // add key
+config["theme"] = "dark";         // update`)}
+
+<h2>Available methods</h2>
+<table class="ref">
+  <tr><th>Method</th><th>Description</th></tr>
+  <tr><td><code>.keys()</code></td><td>List of keys.</td></tr>
+  <tr><td><code>.values()</code></td><td>List of values.</td></tr>
+  <tr><td><code>.has(k)</code></td><td>Does the key exist?</td></tr>
+  <tr><td><code>.remove(k)</code></td><td>Remove the key.</td></tr>
+</table>
+
+${te(`let m = {"a": 1, "b": 2};
+println("a" in m);       // true
+println(m.has("c"));     // false`)}
+
+<div class="pager">
+  <a class="prev" href="#/lists">&larr; Lists</a>
+  <a href="#/functions">Functions &rarr;</a>
+</div>
+`;
+
+PAGES.functions = `
+<h1>Functions and lambdas</h1>
+<p class="lead">Functions are written with the <code class="inline">fn</code> keyword and assigned to variables.</p>
+
+<h2>Syntax</h2>
+${te(`// Expression body
+var double = fn(x) => x * 2;
+println(double(21));   // 42
+
+// Multiple parameters
+var add = fn(a, b) => a + b;
+println(add(3, 4));    // 7
+
+// No parameters
+var greet = fn() => "Hi!";
+println(greet());      // Hi!`)}
+
+<h2>Block body</h2>
+${te(`var factorial = fn(n) => {
+    var result = 1;
+    var i = 1;
+    while (i <= n) {
+        result *= i;
+        i++;
+    }
+    return result;
+};
+println(factorial(5));   // 120`)}
+
+<h2>Closures (capturing variables)</h2>
+${te(`var make = fn(n) => fn(x) => x + n;
+let add10 = make(10);
+println(add10(5));     // 15
+
+// also works inline (currying):
+println(make(100)(23));   // 123`)}
+
+<div class="pager">
+  <a class="prev" href="#/maps">&larr; Maps</a>
+  <a href="#/higher-order">map / filter / reduce &rarr;</a>
+</div>
+`;
+
+PAGES["higher-order"] = `
+<h1>map / filter / reduce</h1>
+<p class="lead">Lists have higher-order methods that take a lambda.</p>
+
+<h2>map — transform</h2>
+${te(`let nums = [1, 2, 3, 4];
+let doubles = nums.map(fn(x) => x * 2);
+println(doubles);    // [2, 4, 6, 8]`)}
+
+<h2>filter — select</h2>
+${te(`let nums = [1, 2, 3, 4, 5, 6];
+let evens = nums.filter(fn(x) => x % 2 == 0);
+println(evens);     // [2, 4, 6]`)}
+
+<h2>reduce — accumulate</h2>
+${te(`let nums = [10, 20, 30];
+let total = nums.reduce(fn(acc, x) => acc + x, 0);
+println(total);     // 60`)}
+
+<h2>find / any / every</h2>
+${te(`let nums = [3, 8, 15, 22];
+
+let first = nums.find(fn(x) => x > 10);    // 15
+let hasBig = nums.any(fn(x) => x > 20);    // true
+let allPos = nums.every(fn(x) => x > 0);   // true`)}
+
+<div class="warn"><strong>Chaining.</strong> Chaining methods directly (<code class="inline">nums.map(...).filter(...)</code>) can fail in the parser. Use intermediate variables between each step.</div>
+
+<div class="pager">
+  <a class="prev" href="#/functions">&larr; Functions</a>
+  <a href="#/classes">Classes &rarr;</a>
+</div>
+`;
+
+PAGES.classes = `
+<h1>Classes</h1>
+<p class="lead">TypeEasy supports object-oriented programming with classes, attributes and methods.</p>
+
+<h2>Define a class</h2>
+${te(`class Person {
+    name : string;
+    age  : int;
+
+    greet() : string {
+        return "Hi, I'm " + this.name;
+    }
+
+    isAdult() : bool {
+        return this.age >= 18;
+    }
+}`)}
+
+<div class="warn"><strong>Methods require a return type.</strong> Always write <code class="inline">: type</code> before the opening brace (<code class="inline">int</code>, <code class="inline">string</code>, <code class="inline">float</code>, <code class="inline">bool</code>, <code class="inline">void</code> or <code class="inline">dynamic</code>).</div>
+
+<h2>Create instances</h2>
+${te(`let p = new Person();
+p.name = "Ann";
+p.age = 30;
+
+println(p.greet());      // Hi, I'm Ann
+println(p.isAdult());    // true`)}
+
+<h2>Constructor</h2>
+${te(`class Point {
+    x : int;
+    y : int;
+
+    __constructor(x : int, y : int) {
+        this.x = x;
+        this.y = y;
+    }
+
+    distance() : float {
+        return Math.sqrt(this.x * this.x + this.y * this.y);
+    }
+}
+
+let point = new Point(3, 4);
+println(point.distance());   // 5`)}
+
+<div class="pager">
+  <a class="prev" href="#/higher-order">&larr; map / filter / reduce</a>
+  <a href="#/inheritance">Inheritance &rarr;</a>
+</div>
+`;
+
+PAGES.inheritance = `
+<h1>Inheritance</h1>
+<p class="lead">A class can inherit attributes and methods from another with <code class="inline">extends</code>.</p>
+
+${te(`class Animal {
+    name : string;
+
+    describe() : string {
+        return "I'm an animal";
+    }
+
+    makeSound() : string {
+        return "...";
+    }
+}
+
+class Dog extends Animal {
+    // inherits 'name' and 'describe'
+    // overrides makeSound
+    makeSound() : string {
+        return "Woof!";
+    }
+}`)}
+
+${te(`let d = new Dog();
+d.name = "Rex";
+println(d.describe());      // I'm an animal  (inherited)
+println(d.makeSound());     // Woof!          (overridden)`)}
+
+<div class="warn"><strong>Current limitations.</strong> There is no <code class="inline">super</code>: the child constructor must re-assign inherited attributes explicitly with <code class="inline">this.x = ...</code>.</div>
+
+<div class="pager">
+  <a class="prev" href="#/classes">&larr; Classes</a>
+  <a href="#/errors">Error handling &rarr;</a>
+</div>
+`;
+
+PAGES.errors = `
+<h1>Error handling</h1>
+<p class="lead">TypeEasy uses <code class="inline">try</code> / <code class="inline">catch</code> / <code class="inline">finally</code> and <code class="inline">throw</code>.</p>
+
+${te(`try {
+    let x = risky();
+    println(x);
+} catch (e) {
+    println("Caught: " + e);
+} finally {
+    println("This always runs");
+}`)}
+
+<h2>Throwing errors</h2>
+${te(`var divide = fn(a, b) => {
+    if (b == 0) {
+        throw "division by zero";
+    }
+    return a / b;
+};
+
+try {
+    divide(10, 0);
+} catch (e) {
+    println("Error: " + e);   // Error: division by zero
+}`)}
+
+<ul>
+  <li><code class="inline">throw expr;</code> raises an exception; the value is converted to a string.</li>
+  <li><code class="inline">catch (e)</code> receives the message in <code class="inline">e</code>.</li>
+  <li><code class="inline">finally</code> always runs, even after a <code class="inline">return</code>.</li>
+</ul>
+
+<div class="pager">
+  <a class="prev" href="#/inheritance">&larr; Inheritance</a>
+  <a href="#/modules">Modules &rarr;</a>
+</div>
+`;
+
+PAGES.modules = `
+<h1>Modules (import)</h1>
+<p class="lead">Split your code across several <code class="inline">.te</code> files with <code class="inline">import</code>.</p>
+
+${te(`// math.te
+class Calc {
+    add(a : int, b : int) : int {
+        return a + b;
+    }
+}
+const VERSION = "1.0";`, "math.te")}
+
+${te(`// main.te
+import "math.te";
+
+let c = new Calc();
+println(c.add(2, 3));     // 5
+println(VERSION);         // 1.0`, "main.te")}
+
+<div class="note"><strong>No namespacing.</strong> All top-level classes, functions and variables of the imported module enter the global scope. Make sure not to repeat class names across files.</div>
+
+<h2>Path resolution</h2>
+<ol>
+  <li>Absolute path (starts with <code class="inline">/</code>).</li>
+  <li>Relative to the current directory.</li>
+  <li>Docker mount (<code class="inline">/code/&lt;name&gt;</code>).</li>
+</ol>
+
+<div class="pager">
+  <a class="prev" href="#/errors">&larr; Error handling</a>
+  <a href="#/stdlib">Stdlib &rarr;</a>
+</div>
+`;
+
+PAGES.stdlib = `
+<h1>Standard library</h1>
+<p class="lead">Builtins available in any TypeEasy script.</p>
+
+<h2>Math</h2>
+${te(`Math.abs(-5);      // 5
+Math.floor(3.7);   // 3
+Math.ceil(3.2);    // 4
+Math.round(3.5);   // 4
+Math.sqrt(16);     // 4
+Math.pow(2, 10);   // 1024
+Math.min(3, 8);    // 3
+Math.max(3, 8);    // 8`)}
+
+<h2>JSON</h2>
+${te(`let m = {"name": "Ann", "age": 30};
+let text = json_stringify(m);
+// {"name":"Ann","age":30}
+
+let obj = json_parse(text);
+println(obj["name"]);    // Ann`)}
+
+<h2>Date and UUID</h2>
+${te(`now();          // "2026-06-04T12:00:00Z"
+now_epoch();    // 1780000000
+uuid_v4();      // generates a UUID
+uuid_valid(s);  // 1 if valid`)}
+
+<h2>Files and environment</h2>
+${te(`read_file("data.txt");
+write_file("out.txt", "content");
+file_exists("config.json");
+
+env("PORT", "8080");         // value or default
+env_required("API_KEY");     // throws if missing`)}
+
+<h2>HTTP client</h2>
+${te(`let response = http_get("http://api.example.com/data");
+let r = http_post("http://api.example.com", "{\\"x\\":1}");`)}
+<div class="note"><strong>Note.</strong> The built-in HTTP client is plain HTTP/1.0 (no HTTPS). For HTTPS use an external plugin.</div>
+
+<h2>Consuming an API inside an endpoint</h2>
+<p>A typical case: your endpoint calls another service, parses the response JSON and returns its own result. The pattern is <code class="inline">http_get</code> &rarr; <code class="inline">json_parse</code> &rarr; <strong>store each field in a variable</strong> &rarr; <code class="inline">json(...)</code>.</p>
+${te(`endpoint {
+    [HttpGet("/weather/{city}")]
+    getWeather() {
+        let city = request_param("city");
+
+        // 1. Call the external API
+        let text = http_get("http://api.example.com/weather/" + city);
+
+        // 2. Parse the JSON response
+        let data = json_parse(text);
+
+        // 3. Store each field in a variable
+        let name = data["city"];
+        let degrees = data["temp"];
+
+        // 4. Return your own response
+        return json({ source: name, degrees: degrees });
+    }
+}`)}
+${sh(`curl http://localhost:9000/weather/Lima`)}
+${out('{"source":"Lima","degrees":21}')}
+<div class="note"><strong>Important.</strong> Extract the map fields into variables (<code class="inline">let name = data["city"];</code>) <em>before</em> passing them to <code class="inline">json(...)</code>. Indexing the map inline inside <code class="inline">json({ city: data["city"] })</code> does not resolve the value.</div>
+
+<div class="pager">
+  <a class="prev" href="#/modules">&larr; Modules</a>
+  <a href="#/bridge">Bridge &rarr;</a>
+</div>
+`;
+
+PAGES.bridge = `
+<h1>Bridge to other languages</h1>
+<p class="lead">TypeEasy can launch an external program (Python, Node, Java, Rust...) and talk to it over a JSON-lines protocol. This lets you reuse libraries that don't exist in TypeEasy.</p>
+
+<h2>The protocol</h2>
+<ul>
+<li><code class="inline">lang_spawn(cmd)</code> — opens the process, returns a <em>slot</em> (int). Negative if it fails.</li>
+<li><code class="inline">lang_call(slot, line)</code> — sends a line and waits for <strong>one</strong> response line.</li>
+<li><code class="inline">lang_send</code> / <code class="inline">lang_recv</code> — separate send and receive.</li>
+<li><code class="inline">lang_close(slot)</code> — closes the process.</li>
+</ul>
+<p>The worker reads JSON from <code class="inline">stdin</code> and replies with JSON on <code class="inline">stdout</code>, one line per message.</p>
+
+<h2>TypeEasy side</h2>
+${te(`let py = lang_spawn("python worker.py");
+
+if (py < 0) {
+    println("Could not launch the worker.");
+} else {
+    // ask the worker to uppercase some text
+    let req = json_stringify({ "op": "upper", "text": "hello world" });
+    let resp = json_parse(lang_call(py, req));
+    println(resp["result"]);          // HELLO WORLD
+
+    // add two numbers in the other language
+    let req2 = json_stringify({ "op": "add", "a": 7, "b": 35 });
+    let resp2 = json_parse(lang_call(py, req2));
+    println(resp2["result"]);         // 42
+
+    lang_close(py);
+}`)}
+
+<h2>Worker side (Python)</h2>
+${te(`import sys, json
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    op = msg.get("op")
+    if op == "upper":
+        out = {"result": msg["text"].upper()}
+    elif op == "add":
+        out = {"result": msg["a"] + msg["b"]}
+    else:
+        out = {"error": "unknown op"}
+    sys.stdout.write(json.dumps(out) + "\\n")
+    sys.stdout.flush()`, "worker.py")}
+
+<div class="note"><strong>Key.</strong> The worker must <code class="inline">flush()</code> after each response, or <code class="inline">lang_call</code> blocks forever. Use <code class="inline">python3</code> instead of <code class="inline">python</code> depending on your system.</div>
+
+<div class="pager">
+  <a class="prev" href="#/stdlib">&larr; Stdlib</a>
+  <a href="#/async">Async &rarr;</a>
+</div>
+`;
+
+PAGES.async = `
+<h1>Async / concurrency</h1>
+<p class="lead">TypeEasy has a cooperative async runtime: you can launch several slow I/O tasks and await them <strong>at once</strong>, not one after another.</p>
+
+<h2>The pattern</h2>
+<ul>
+<li><code class="inline">lang_call_async(slot, line)</code> — writes the request and returns a task <em>handle</em> (int) without blocking.</li>
+<li><code class="inline">await_all(a, b, c)</code> — runs the event loop until all responses arrive; returns a list of the results.</li>
+<li><code class="inline">now_ms()</code> — current milliseconds, useful for measuring.</li>
+</ul>
+
+<h2>Three tasks in parallel</h2>
+<p>Three workers that "sleep" 500 ms each: sequentially that would be ~1500 ms; concurrently, ~500 ms.</p>
+${te(`let cmd = "python worker_slow.py";
+let py1 = lang_spawn(cmd);
+let py2 = lang_spawn(cmd);
+let py3 = lang_spawn(cmd);
+
+let t0 = now_ms();
+
+// each call returns immediately with a handle
+let a = lang_call_async(py1, json_stringify({ "op": "sleep", "ms": 500 }));
+let b = lang_call_async(py2, json_stringify({ "op": "sleep", "ms": 500 }));
+let c = lang_call_async(py3, json_stringify({ "op": "sleep", "ms": 500 }));
+
+// wait for all three at once
+let rs = await_all(a, b, c);
+
+let t1 = now_ms();
+println("Total time (ms): " + (t1 - t0));   // ~500, not ~1500
+
+lang_close(py1);
+lang_close(py2);
+lang_close(py3);`)}
+${out("Total time (ms): 512\\nIf it were sequential it would be ~1500 ms; concurrent is ~500 ms.")}
+
+<div class="note"><strong>Why it matters.</strong> The difference from ~1500 ms to ~500 ms proves the concurrency is real: the event loop polls the three processes at the same time instead of blocking on each one.</div>
+
+<div class="pager">
+  <a class="prev" href="#/bridge">&larr; Bridge</a>
+  <a href="#/first-api">Your first API &rarr;</a>
+</div>
+`;
+
+PAGES.linq = `
+<h1>LINQ — queries over collections</h1>
+<p class="lead">TypeEasy ships LINQ-style methods to query lists of objects: filter, project, sort and aggregate — all with lambdas.</p>
+
+<h2>Sample data</h2>
+${te(`class Product {
+    id : int;
+    name : string;
+    price : int;
+    stock : int;
+    __constructor(_id : int, _name : string, _price : int, _stock : int) {
+        this.id = _id;
+        this.name = _name;
+        this.price = _price;
+        this.stock = _stock;
+    }
+}
+
+let products = [
+    new Product(1, "apple", 10, 30),
+    new Product(2, "pear",  15, 10),
+    new Product(3, "grape",  8, 50),
+    new Product(4, "mango", 20,  5)
+];`)}
+
+<h2>Filter and project</h2>
+${te(`// where: filter by condition
+let expensive = products.where(fn(p) => p.price >= 12);
+println("expensive = " + expensive.length);    // expensive = 2
+
+// select: extract a field
+let names = products.select(fn(p) => p.name);
+println(names.join(","));                       // apple,pear,grape,mango`)}
+
+<h2>Aggregates</h2>
+${te(`println("sumStock = "  + products.sumBy(fn(p) => p.stock));    // 95
+println("avgPrice = "  + products.avgBy(fn(p) => p.price));    // 13.25
+println("countExpensive = " + products.countWhere(fn(p) => p.price > 10)); // 2
+
+let cheapest = products.minBy(fn(p) => p.price);
+println("cheapest = " + cheapest.name);        // grape
+
+let priciest = products.maxBy(fn(p) => p.price);
+println("priciest = " + priciest.name);        // mango`)}
+
+<h2>Sort</h2>
+${te(`let asc = products.orderBy(fn(p) => p.price);
+let first = asc.first();
+println("cheapest = " + first.name);           // grape
+
+let desc = products.orderByDescending(fn(p) => p.stock);
+let mostStock = desc.first();
+println("most stock = " + mostStock.name);     // grape`)}
+
+<h2>Search and check</h2>
+${te(`let p3 = products.firstWhere(fn(p) => p.id == 3);
+println(p3.name);                              // grape
+
+println(products.all(fn(p) => p.stock > 0));   // true (all)
+println(products.none(fn(p) => p.price == 0)); // true (none)`)}
+
+<h2>Chain queries</h2>
+<p>Chain with intermediate variables (one step per line):</p>
+${te(`let q1 = products.where(fn(p) => p.stock >= 10);
+let q2 = q1.orderByDescending(fn(p) => p.price);
+let top = q2.first();
+println("top = " + top.name);                  // pear`)}
+
+<h2>Available methods</h2>
+<table class="ref">
+  <tr><th>Method</th><th>Returns</th></tr>
+  <tr><td><code>.where(fn)</code></td><td>Filtered list.</td></tr>
+  <tr><td><code>.select(fn)</code></td><td>Projected list.</td></tr>
+  <tr><td><code>.orderBy(fn)</code> / <code>.orderByDescending(fn)</code></td><td>Sorted list.</td></tr>
+  <tr><td><code>.sumBy(fn)</code> / <code>.avgBy(fn)</code></td><td>Number.</td></tr>
+  <tr><td><code>.minBy(fn)</code> / <code>.maxBy(fn)</code></td><td>The min / max element.</td></tr>
+  <tr><td><code>.countWhere(fn)</code></td><td>Count that matches.</td></tr>
+  <tr><td><code>.first()</code> / <code>.last()</code></td><td>First / last element.</td></tr>
+  <tr><td><code>.firstWhere(fn)</code></td><td>First that matches.</td></tr>
+  <tr><td><code>.all(fn)</code> / <code>.none(fn)</code></td><td>Bool.</td></tr>
+  <tr><td><code>.join(sep)</code></td><td>Join a list of strings.</td></tr>
+</table>
+
+<div class="pager">
+  <a class="prev" href="#/stdlib">&larr; Stdlib</a>
+  <a href="#/csv">Read CSV &rarr;</a>
+</div>
+`;
+
+PAGES.csv = `
+<h1>Read CSV</h1>
+<p class="lead">Load a CSV file straight into a list of objects with the <code class="inline">from "file.csv", Class</code> syntax.</p>
+
+<h2>The CSV file</h2>
+${te(`name,price
+apple,10
+pear,15
+grape,8`, "products.csv")}
+
+<h2>Load it into objects</h2>
+<p>No constructor needed: TypeEasy maps each column to the matching attribute <strong>by declaration order</strong>.</p>
+${te(`class Product {
+    name : string;
+    price : int;
+}
+
+let products = from "products.csv", Product;
+println(products.length);     // 3
+
+for (let p in products) {
+    println(p.name + " = " + p.price);
+}`)}
+${out("3\\napple = 10\\npear = 15\\ngrape = 8")}
+
+<h2>Combine with LINQ</h2>
+<p>Once loaded, it's a normal list: apply <a href="#/linq">LINQ</a> to it:</p>
+${te(`let products = from "products.csv", Product;
+
+let expensive = products.where(fn(p) => p.price > 9);
+println("expensive = " + expensive.length);    // 2
+
+let total = products.sumBy(fn(p) => p.price);
+println("total = " + total);                    // 33`)}
+
+<div class="note"><strong>Scope.</strong> CSV is a utility to move data <em>inside</em> your endpoints (load a dataset and return it as JSON). It is not meant to replace pandas or an analytics engine.</div>
+
+<div class="pager">
+  <a class="prev" href="#/linq">&larr; LINQ</a>
+  <a href="#/mysql">MySQL &rarr;</a>
+</div>
+`;
+
+PAGES.mysql = `
+<h1>MySQL</h1>
+<p class="lead">TypeEasy talks to MySQL (and compatibles like TiDB or MariaDB) with a Dapper-like style: parameterized queries with named parameters.</p>
+
+<h2>Connect</h2>
+<p>The signature is <code class="inline">mysql_connect(host, user, password, db, port)</code> and returns a connection.</p>
+${te(`let conn = mysql_connect("127.0.0.1", "root", "secret", "shop", 3306);`)}
+
+<h2>SELECT with named parameters</h2>
+<p>Parameters start with <code class="inline">@</code> and are passed in a map. The last argument <code class="inline">"json"</code> sets the result format.</p>
+${te(`let rows = mysql_query(
+    conn,
+    "SELECT name, price FROM products WHERE price > @min AND name LIKE @pat",
+    { "@min": 1, "@pat": "%a%" },
+    "json"
+);
+println(rows);`)}
+
+<h2>Parameterized INSERT / UPDATE</h2>
+<p>Without the format argument the statement is executed (quotes are escaped automatically):</p>
+${te(`mysql_query(
+    conn,
+    "INSERT INTO products (name, price) VALUES (@name, @price)",
+    { "@name": "O'Reilly Book", "@price": 19.9 }
+);
+
+mysql_query(
+    conn,
+    "UPDATE products SET price = @new WHERE name = @name",
+    { "@new": 25, "@name": "O'Reilly Book" }
+);`)}
+
+<h2>Use an object as the parameter container</h2>
+<p>You can pass an object instead of the map: its attributes are exposed as <code class="inline">@id</code>, <code class="inline">@name</code>, etc.</p>
+${te(`class ProductFilter {
+    id: int;
+    name: string;
+    price: float;
+    __constructor(_id: int, _name: string, _price: float) {
+        this.id = _id;
+        this.name = _name;
+        this.price = _price;
+    }
+}
+
+let filter = new ProductFilter(1, "O'Reilly Book", 19.9);
+
+let r = mysql_query(
+    conn,
+    "SELECT * FROM products WHERE id = @id OR name = @name",
+    filter,
+    "json"
+);
+println(r);`)}
+
+<h2>Close</h2>
+${te(`mysql_close(conn);`)}
+
+<div class="note"><strong>TLS.</strong> <code class="inline">mysql_connect</code> accepts an optional 6th argument (map) for TLS options — useful for managed services like TiDB Cloud. Never put real credentials in code: read them from environment variables with <code class="inline">env_required("DB_PASS")</code>.</div>
+
+<div class="pager">
+  <a class="prev" href="#/csv">&larr; Read CSV</a>
+  <a href="#/errors">Error handling &rarr;</a>
+</div>
+`;
+
+PAGES["first-api"] = `
+<h1>Your first API</h1>
+<p class="lead">This is where TypeEasy shines: defining and deploying an HTTP API is trivial.</p>
+
+<h2>The <code class="inline">endpoint</code> block</h2>
+<p>Endpoints are declared inside an <code class="inline">endpoint { }</code> block. Each method is annotated with its HTTP verb and route:</p>
+${te(`endpoint {
+    [HttpGet("/api/ping")]
+    ping() {
+        return json({ status: "ok" });
+    }
+}`, "ping.te")}
+
+<h2>Run it</h2>
+${sh(`typeeasy --api ping.te --port 9000`)}
+${sh(`curl http://localhost:9000/api/ping`)}
+${out('{"status":"ok"}')}
+
+<h2>HTTP verbs</h2>
+<table class="ref">
+  <tr><th>Attribute</th><th>Use</th></tr>
+  <tr><td><code>[HttpGet("/route")]</code></td><td>Read resources.</td></tr>
+  <tr><td><code>[HttpPost("/route")]</code></td><td>Create resources.</td></tr>
+  <tr><td><code>[HttpPut("/route")]</code></td><td>Update.</td></tr>
+  <tr><td><code>[HttpDelete("/route")]</code></td><td>Delete.</td></tr>
+</table>
+
+<div class="note"><strong>Free Swagger.</strong> Open <code class="inline">http://localhost:9000/</code> and TypeEasy generates an interactive UI with all your endpoints.</div>
+
+<div class="warn"><strong>Important.</strong> Only <code class="inline">return json(...)</code> and <code class="inline">return xml(...)</code> fill the response body. A plain <code class="inline">return "text"</code> comes out empty.</div>
+
+<div class="pager">
+  <a class="prev" href="#/stdlib">&larr; Stdlib</a>
+  <a href="#/routing">Routes & parameters &rarr;</a>
+</div>
+`;
+
+PAGES.routing = `
+<h1>Routes and parameters</h1>
+
+<h2>Route parameters</h2>
+<p>Use <code class="inline">{name}</code> in the route and read it with <code class="inline">request_param</code>:</p>
+${te(`endpoint {
+    [HttpGet("/api/users/{id}")]
+    get() {
+        let id = request_param("id");
+        return json({ id: id });
+    }
+}`)}
+${sh(`curl http://localhost:9000/api/users/42`)}
+${out('{"id":"42"}')}
+
+<h2>Query string</h2>
+${te(`[HttpGet("/api/search")]
+search() {
+    let q = request_query("q");
+    let page = request_query("page");
+    return json({ searching: q, page: page });
+}`)}
+${sh(`curl "http://localhost:9000/api/search?q=shoes&page=2"`)}
+${out('{"searching":"shoes","page":"2"}')}
+
+<h2>Request body</h2>
+${te(`[HttpPost("/api/echo")]
+echo() {
+    let body = request_body();
+    return json(body);
+}`)}
+
+<h2>Headers</h2>
+${te(`[HttpGet("/api/info")]
+info() {
+    let agent = request_header("User-Agent");
+    return json({ agent: agent });
+}`)}
+
+<table class="ref">
+  <tr><th>Builtin</th><th>Reads...</th></tr>
+  <tr><td><code>request_param("id")</code></td><td>Route parameter <code>{id}</code>.</td></tr>
+  <tr><td><code>request_query("q")</code></td><td>Query string <code>?q=</code>.</td></tr>
+  <tr><td><code>request_body()</code></td><td>Raw request body.</td></tr>
+  <tr><td><code>request_header("X")</code></td><td>A request header.</td></tr>
+  <tr><td><code>request_cookie("c")</code></td><td>A request cookie.</td></tr>
+</table>
+
+<div class="pager">
+  <a class="prev" href="#/first-api">&larr; Your first API</a>
+  <a href="#/json">JSON responses &rarr;</a>
+</div>
+`;
+
+PAGES.json = `
+<h1>JSON responses</h1>
+<p class="lead">The <code class="inline">json(...)</code> builtin is the canonical way to respond. It accepts <strong>four</strong> kinds of value.</p>
+
+<h2>Form 1 — object literal (recommended)</h2>
+<p>The most readable: pass an inline object. Keys go <strong>without quotes</strong>:</p>
+${te(`[HttpGet("/api/status")]
+status() {
+    return json({ ok: true, version: "0.0.18" });
+}`)}
+${out('{"ok":true,"version":"0.0.18"}')}
+
+<h2>Form 2 — object literal with interpolation</h2>
+<p>Inside a value you can use <code class="inline">$"...{expr}..."</code>:</p>
+${te(`[HttpGet("/api/double/{n}")]
+double() {
+    var n = to_int(request_param("n"));
+    return json({ result: $"{n * 2}" });
+}`)}
+${sh(`curl http://localhost:9000/api/double/21`)}
+${out('{"result":"42"}')}
+
+<h2>Form 3 — literal JSON string</h2>
+<p>Useful for fixed responses. Remember to escape quotes with <code class="inline">\\\\"</code>:</p>
+${te(`[HttpGet("/api/ping")]
+ping() {
+    return json("{\\"pong\\": 1}");
+}`)}
+
+<h2>Form 4 — concat (dynamic building)</h2>
+<p>To build JSON with variables safely, use <code class="inline">concat(...)</code> instead of <code class="inline">+</code>:</p>
+${te(`[HttpGet("/api/user/{id}")]
+user() {
+    let id = request_param("id");
+    let body = concat("{\\"id\\":\\"", id, "\\",\\"name\\":\\"Demo\\"}");
+    return json(body);
+}`)}
+${out('{"id":"42","name":"Demo"}')}
+
+<h2>Also: a variable (map or class instance)</h2>
+${te(`[HttpPost("/api/users")]
+create(u : User) {
+    return json(u);   // serializes the whole object
+}`)}
+
+<h2>Status codes and headers</h2>
+${te(`[HttpGet("/api/resource/{id}")]
+get() {
+    let id = request_param("id");
+    if (id == "0") {
+        response_status(404);
+        return json({ error: "not found" });
+    }
+    response_header("X-Custom", "value");
+    return json({ id: id });
+}`)}
+
+<table class="ref">
+  <tr><th>Builtin</th><th>Does...</th></tr>
+  <tr><td><code>json(value)</code></td><td>Responds JSON. Accepts object literal, string, concat or variable.</td></tr>
+  <tr><td><code>xml(value)</code></td><td>Responds XML.</td></tr>
+  <tr><td><code>concat(a, b, ...)</code></td><td>Concatenates strings safely for the body.</td></tr>
+  <tr><td><code>response_status(n)</code></td><td>Sets the HTTP code.</td></tr>
+  <tr><td><code>response_header(k, v)</code></td><td>Adds a response header.</td></tr>
+</table>
+
+<div class="warn"><strong>Only <code class="inline">json(...)</code> and <code class="inline">xml(...)</code> fill the body.</strong> A plain <code class="inline">return "text"</code> produces an empty response.</div>
+
+<div class="pager">
+  <a class="prev" href="#/routing">&larr; Routes & parameters</a>
+  <a href="#/binding">Model binding &rarr;</a>
+</div>
+`;
+
+PAGES.binding = `
+<h1>Model binding and validation</h1>
+<p class="lead">Type a parameter with a class and TypeEasy parses and validates the request body JSON automatically.</p>
+
+${te(`class User {
+    name : string;
+    age  : int;
+}
+
+endpoint {
+    [HttpPost("/api/users")]
+    create(u : User) {
+        // if we reach here, the body was already validated against User
+        return json({ created: u.name });
+    }
+}`)}
+
+<h2>Valid request</h2>
+${sh(`curl -X POST http://localhost:9000/api/users \\
+  -H "Content-Type: application/json" \\
+  -d '{"name":"Ann","age":30}'`)}
+${out('{"created":"Ann"}')}
+
+<h2>Invalid request &rarr; automatic 422</h2>
+<p>If a field is missing or the type doesn't match, TypeEasy responds <strong>422</strong> without running your handler:</p>
+${sh(`curl -X POST http://localhost:9000/api/users \\
+  -H "Content-Type: application/json" \\
+  -d '{"name":"Ann"}'`)}
+${out('{"error":"validation_failed"}')}
+
+<div class="note"><strong>Requirement.</strong> The client must send <code class="inline">Content-Type: application/json</code> and a body that starts with <code class="inline">{</code>. Every class attribute is required unless it is <code class="inline">type?</code> (nullable).</div>
+
+<div class="pager">
+  <a class="prev" href="#/json">&larr; JSON responses</a>
+  <a href="#/jwt">JWT authentication &rarr;</a>
+</div>
+`;
+
+PAGES.jwt = `
+<h1>JWT authentication</h1>
+<p class="lead">TypeEasy ships HS256 JWT in the core: signing, verification and the <code class="inline">@auth</code> decorator.</p>
+
+<h2>Sign a token (login)</h2>
+${te(`class User { name : string; age : int; }
+
+endpoint {
+    [HttpPost("/api/login")]
+    login(u : User) {
+        let secret = env("JWT_SECRET");
+        let payload = concat("{\\"sub\\":\\"", u.name, "\\",\\"exp\\":1900000000}");
+        let token = jwt_sign(payload, secret);
+        return json({ token: token });
+    }
+}`)}
+
+<h2>Protect an endpoint with <code class="inline">@auth</code></h2>
+<p>Put <code class="inline">@auth</code> before the HTTP attribute. The server requires a valid <code class="inline">Authorization: Bearer &lt;token&gt;</code> header <em>before</em> running the handler:</p>
+${te(`@auth
+[HttpGet("/api/profile")]
+profile() {
+    // current_claims() returns the validated payload (JSON string)
+    return json(concat("{\\"ok\\":true,\\"claims\\":", current_claims(), "}"));
+}`)}
+
+<h2>Test it</h2>
+${sh(`# login -> you get a token
+curl -X POST http://localhost:9000/api/login \\
+  -H "Content-Type: application/json" \\
+  -d '{"name":"ann","age":30}'
+
+# use the token
+curl http://localhost:9000/api/profile \\
+  -H "Authorization: Bearer <TOKEN>"
+
+# without a token -> automatic 401
+curl -i http://localhost:9000/api/profile`)}
+${out('{"error":"unauthorized"}')}
+
+<div class="note"><strong>Secret.</strong> The secret is read from the <code class="inline">JWT_SECRET</code> environment variable (the same one to sign and for <code class="inline">@auth</code>). Generate one with <code class="inline">openssl rand -base64 48</code> and never put it in code.</div>
+
+<div class="pager">
+  <a class="prev" href="#/binding">&larr; Model binding</a>
+  <a href="#/cookies">Cookies & session &rarr;</a>
+</div>
+`;
+
+PAGES.cookies = `
+<h1>Cookies and session</h1>
+<p class="lead">Read cookies with <code class="inline">request_cookie</code> and write them with <code class="inline">response_header("Set-Cookie", ...)</code>.</p>
+
+<h2>Login: set the cookie</h2>
+${te(`[HttpPost("/api/login")]
+login() {
+    let body = request_body();
+    // ... validate credentials ...
+    response_header("Set-Cookie", "user=ann; Path=/; HttpOnly; SameSite=Lax");
+    return json({ ok: true });
+}`)}
+
+<h2>Protected endpoint: read the cookie</h2>
+${te(`[HttpGet("/api/profile")]
+profile() {
+    let user = request_cookie("user");
+    if (user == "") {
+        response_status(401);
+        return json({ error: "no_session" });
+    }
+    return json({ user: user });
+}`)}
+
+<h2>Logout: clear the cookie</h2>
+${te(`[HttpPost("/api/logout")]
+logout() {
+    response_header("Set-Cookie", "user=; Path=/; Max-Age=0");
+    return json({ ok: true });
+}`)}
+
+<h2>Test with curl</h2>
+${sh(`# login saves the cookie to cookies.txt
+curl -c cookies.txt -X POST http://localhost:9000/api/login
+
+# profile resends the cookie
+curl -b cookies.txt http://localhost:9000/api/profile
+
+# without a cookie -> 401
+curl -i http://localhost:9000/api/profile`)}
+
+<div class="note"><strong>Security.</strong> Use <code class="inline">HttpOnly</code> (JS can't read the cookie, anti-XSS), <code class="inline">SameSite=Lax</code> (mitigates CSRF) and <code class="inline">Secure</code> in production (HTTPS only).</div>
+
+<div class="pager">
+  <a class="prev" href="#/jwt">&larr; JWT authentication</a>
+  <a href="#/cors">CORS &rarr;</a>
+</div>
+`;
+
+PAGES.cors = `
+<h1>CORS</h1>
+<p class="lead">Allow your API to be consumed from another domain (for example, an SPA frontend). The server adds the CORS headers and answers the <code class="inline">OPTIONS</code> preflight automatically.</p>
+
+<h2>Configure multiple origins with <code class="inline">.env</code></h2>
+<p>The typical way in Docker or deployments: set <code class="inline">TYPEEASY_CORS_ORIGIN</code> with a <strong>comma-separated list</strong>. The server reflects each request's <code class="inline">Origin</code> if it matches the list:</p>
+${te(`# .env
+TYPEEASY_CORS_ORIGIN=https://app.com, https://admin.app.com, http://localhost:3000`, ".env")}
+${sh(`# load the .env and start
+export $(cat .env | xargs)
+typeeasy --api my_api.te --port 9000`)}
+
+<h2>Or via command line</h2>
+${sh(`# a single origin
+typeeasy --api my_api.te --cors-origin "https://app.com"
+
+# multiple origins (comma-separated list)
+typeeasy --api my_api.te --cors-origin "https://a.com, https://b.com"
+
+# any origin (default)
+typeeasy --api my_api.te --cors-origin "*"`)}
+
+<h2>Precedence (higher wins)</h2>
+<table class="ref">
+  <tr><th>Form</th><th>Example</th><th>When</th></tr>
+  <tr><td>CLI flag</td><td><code>--cors-origin "https://app.com"</code></td><td>One-off override.</td></tr>
+  <tr><td>Environment variable</td><td><code>TYPEEASY_CORS_ORIGIN=https://app.com</code></td><td>Docker / <code>.env</code>.</td></tr>
+  <tr><td><code>typeeasy.toml</code></td><td><code>cors_origin = "https://app.com"</code></td><td>Project config.</td></tr>
+  <tr><td>(default)</td><td><code>*</code></td><td>Any domain.</td></tr>
+</table>
+
+<h2>Value modes</h2>
+<table class="ref">
+  <tr><th>Value</th><th>Behavior</th></tr>
+  <tr><td><code>*</code></td><td>Any domain (default).</td></tr>
+  <tr><td>one origin</td><td><code>https://app.com</code> — that domain only.</td></tr>
+  <tr><td><strong>comma list</strong></td><td><code>https://a.com, https://b.com</code> — reflects the <code>Origin</code> if it's in the list; otherwise blocks it.</td></tr>
+</table>
+
+<p>Headers it sends automatically: <code class="inline">Access-Control-Allow-Origin</code>, <code class="inline">Access-Control-Allow-Methods</code> (<code class="inline">GET, POST, PUT, DELETE, PATCH, OPTIONS</code>) and <code class="inline">Access-Control-Allow-Headers</code> (<code class="inline">Content-Type, Authorization</code>).</p>
+
+<div class="pager">
+  <a class="prev" href="#/cookies">&larr; Cookies & session</a>
+  <a href="#/database">Databases &rarr;</a>
+</div>
+`;
+
+PAGES.database = `
+<h1>Databases</h1>
+<p class="lead">TypeEasy includes Dapper-style connectors for SQLite, MySQL and PostgreSQL. Named parameters <code class="inline">@name</code> are bound natively (immune to SQL injection).</p>
+
+<h2>SQLite (embedded plugin)</h2>
+${te(`load_native("sqlite");
+
+let db = sqlite_connect("shop.db");     // or ":memory:"
+sqlite_exec(db, "CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price REAL)");
+
+// parameterized INSERT: the params map goes as the 3rd argument
+sqlite_exec(db,
+    "INSERT INTO products(name, price) VALUES(@name, @price)",
+    { "@name": "Keyboard", "@price": 29.9 });
+
+// SELECT: with params, the "json" format goes as the LAST argument
+let rows = sqlite_query(db,
+    "SELECT * FROM products WHERE price > @min",
+    { "@min": 10 },
+    "json");
+println(rows);
+
+// SELECT without params: "json" format as the 3rd argument
+let all = sqlite_query(db, "SELECT * FROM products", "json");
+
+let id = sqlite_last_id(db);
+sqlite_close(db);`)}
+
+<h2>MySQL</h2>
+${te(`let conn = mysql_connect("host", "user", "pass", "database", 3306);
+
+let rows = mysql_query(conn,
+    "SELECT * FROM users WHERE id = @id",
+    { "@id": 5 },
+    "json");
+println(rows);
+
+mysql_close(conn);`)}
+
+<h2>PostgreSQL</h2>
+${te(`let conn = postgres_connect("host", "user", "pass", "database", 5432);
+let rows = postgres_query(conn, "SELECT * FROM customers", "json");
+postgres_close(conn);`)}
+
+<h2>Signatures</h2>
+<table class="ref">
+  <tr><th>Function</th><th>Signature</th></tr>
+  <tr><td>Connect</td><td><code>sqlite_connect(path)</code> · <code>mysql_connect(host, user, pass, db, port)</code></td></tr>
+  <tr><td>Execute</td><td><code>sqlite_exec(db, sql)</code> · <code>sqlite_exec(db, sql, {params})</code></td></tr>
+  <tr><td>Query</td><td><code>sqlite_query(db, sql, "json")</code> · <code>sqlite_query(db, sql, {params}, "json")</code></td></tr>
+  <tr><td>Last id</td><td><code>sqlite_last_id(db)</code></td></tr>
+  <tr><td>Close</td><td><code>sqlite_close(db)</code> · <code>mysql_close(conn)</code></td></tr>
+</table>
+
+<div class="note"><strong>Safe parameters.</strong> The map keys can go with or without <code class="inline">@</code> (<code class="inline">{ "@id": 1 }</code> or <code class="inline">{ "id": 1 }</code>). Never concatenate values directly into the SQL.</div>
+
+<div class="pager">
+  <a class="prev" href="#/cors">&larr; CORS</a>
+  <a href="#/ex-crud">Example: CRUD &rarr;</a>
+</div>
+`;
+
+PAGES["ex-crud"] = `
+<h1>Example: full CRUD with SQLite</h1>
+<p class="lead">A working REST API for products, ready to copy and run.</p>
+
+${te(`load_native("sqlite");
+
+// bootstrap: products table
+let db = sqlite_connect("shop.db");
+sqlite_exec(db, "CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price REAL)");
+
+class Product {
+    name  : string;
+    price : float;
+}
+
+endpoint {
+    // LIST
+    [HttpGet("/api/products")]
+    list() {
+        let rows = sqlite_query(db, "SELECT * FROM products", "json");
+        return json(rows);
+    }
+
+    // GET ONE (named parameter @id)
+    [HttpGet("/api/products/{id}")]
+    get() {
+        let id = request_param("id");
+        let rows = sqlite_query(db,
+            "SELECT * FROM products WHERE id = @id",
+            { "@id": id },
+            "json");
+        return json(rows);
+    }
+
+    // CREATE (model binding validates the body against Product)
+    [HttpPost("/api/products")]
+    create(p : Product) {
+        sqlite_exec(db,
+            "INSERT INTO products(name, price) VALUES(@n, @pr)",
+            { "@n": p.name, "@pr": p.price });
+        let id = sqlite_last_id(db);
+        response_status(201);
+        return json({ id: id });
+    }
+
+    // DELETE
+    [HttpDelete("/api/products/{id}")]
+    remove() {
+        let id = request_param("id");
+        sqlite_exec(db, "DELETE FROM products WHERE id = @id", { "@id": id });
+        return json({ ok: true });
+    }
+}`, "products_api.te")}
+
+<h2>Try it</h2>
+${sh(`typeeasy --api products_api.te --port 9000
+
+# create
+curl -X POST http://localhost:9000/api/products \\
+  -H "Content-Type: application/json" \\
+  -d '{"name":"Keyboard","price":29.9}'
+
+# list
+curl http://localhost:9000/api/products
+
+# delete
+curl -X DELETE http://localhost:9000/api/products/1`)}
+
+<div class="note"><strong>Remember.</strong> In <code class="inline">sqlite_query</code>, the <code class="inline">"json"</code> format is the <em>last</em> argument; if there are parameters, the map goes before the format.</div>
+
+<div class="pager">
+  <a class="prev" href="#/database">&larr; Databases</a>
+  <a href="#/ex-auth">Example: JWT login &rarr;</a>
+</div>
+`;
+
+PAGES["ex-auth"] = `
+<h1>Example: API with JWT login</h1>
+<p class="lead">A login that issues a token and an endpoint protected with <code class="inline">@auth</code>.</p>
+
+${te(`class Login { user : string; pass : string; }
+
+endpoint {
+    // LOGIN: validates and issues a JWT
+    [HttpPost("/api/login")]
+    login(c : Login) {
+        if (c.user != "ann" || c.pass != "1234") {
+            response_status(401);
+            return json({ error: "invalid_credentials" });
+        }
+        let secret = env("JWT_SECRET");
+        let payload = concat("{\\"sub\\":\\"", c.user, "\\",\\"exp\\":1900000000}");
+        let token = jwt_sign(payload, secret);
+        return json({ token: token });
+    }
+
+    // PROFILE: protected, requires a Bearer token
+    @auth
+    [HttpGet("/api/profile")]
+    profile() {
+        return json(concat("{\\"ok\\":true,\\"claims\\":", current_claims(), "}"));
+    }
+}`, "auth_api.te")}
+
+<h2>Try it</h2>
+${sh(`export JWT_SECRET=$(openssl rand -base64 48)
+typeeasy --api auth_api.te --port 9000
+
+# 1) login -> you get a token
+curl -X POST http://localhost:9000/api/login \\
+  -H "Content-Type: application/json" \\
+  -d '{"user":"ann","pass":"1234"}'
+
+# 2) use the token
+curl http://localhost:9000/api/profile \\
+  -H "Authorization: Bearer <TOKEN_HERE>"
+
+# 3) without a token -> 401
+curl -i http://localhost:9000/api/profile`)}
+
+<h2>What did you learn?</h2>
+<ul>
+  <li>Validate the body automatically with <strong>model binding</strong> (<code class="inline">login(c : Login)</code>).</li>
+  <li>Issue a JWT signed with <code class="inline">jwt_sign</code> and an environment secret.</li>
+  <li>Protect routes with <code class="inline">@auth</code> and read the payload with <code class="inline">current_claims()</code>.</li>
+</ul>
+
+<div class="pager">
+  <a class="prev" href="#/ex-crud">&larr; Example: CRUD</a>
+  <a href="#/home">Back to home &rarr;</a>
+</div>
+`;
+</script>
+
+<script>
+/* ============================================================
+   ROUTER + SIDEBAR + i18n + THEME
    ============================================================ */
 function buildSidebar(){
   const sb = document.getElementById("sidebar");
@@ -2105,27 +3974,76 @@ function currentSlug(){
   return h || "home";
 }
 
+function activePages(){
+  return LANG === "en" ? window.PAGES_EN : window.PAGES_ES;
+}
+
 function render(){
   const slug = currentSlug();
   const page = document.getElementById("page");
-  page.innerHTML = PAGES[slug] || PAGES.home;
+  const dict = activePages();
+  // fall back to ES if a page isn't translated yet, then to home
+  page.innerHTML = dict[slug] || window.PAGES_ES[slug] || dict.home || window.PAGES_ES.home;
   // active link
   document.querySelectorAll(".navlink").forEach(a=>{
     a.classList.toggle("active", a.getAttribute("data-slug") === slug);
   });
   document.body.classList.remove("nav-open");
   window.scrollTo(0,0);
-  // make sure active link is visible in sidebar
   const active = document.querySelector(".navlink.active");
   if(active) active.scrollIntoView({block:"nearest"});
 }
 
+/* ---- i18n ---- */
+function applyUIStrings(){
+  const t = window.I18N[LANG];
+  document.querySelectorAll("[data-i18n]").forEach(el=>{
+    const k = el.getAttribute("data-i18n");
+    if(t[k] !== undefined) el.textContent = t[k];
+  });
+  document.documentElement.setAttribute("lang", LANG);
+  const lt = document.getElementById("langToggle");
+  if(lt) lt.textContent = LANG.toUpperCase();
+}
+
+function setLang(lang){
+  LANG = (lang === "en") ? "en" : "es";
+  window.LANG = LANG;
+  localStorage.setItem("te_lang", LANG);
+  NAV = (LANG === "en") ? window.NAV_EN : window.NAV_ES;
+  window.NAV = NAV;
+  applyUIStrings();
+  buildSidebar();
+  render();
+}
+
+/* ---- theme ---- */
+function applyTheme(theme){
+  const dark = (theme === "dark");
+  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  localStorage.setItem("te_theme", dark ? "dark" : "light");
+  const tt = document.getElementById("themeToggle");
+  if(tt) tt.textContent = dark ? "☀️" : "🌙";
+}
+
+/* ---- init persisted prefs ---- */
+(function initPrefs(){
+  const savedLang = localStorage.getItem("te_lang");
+  const savedTheme = localStorage.getItem("te_theme");
+  applyTheme(savedTheme || "light");
+  // setLang builds the sidebar + renders, so call it last
+  setLang(savedLang || "es");
+})();
+
+document.getElementById("langToggle").addEventListener("click", ()=> setLang(LANG === "es" ? "en" : "es"));
+document.getElementById("themeToggle").addEventListener("click", ()=>{
+  const cur = document.documentElement.getAttribute("data-theme");
+  applyTheme(cur === "dark" ? "light" : "dark");
+});
 document.getElementById("hamburger").addEventListener("click", ()=> document.body.classList.toggle("nav-open"));
 document.getElementById("backdrop").addEventListener("click", ()=> document.body.classList.remove("nav-open"));
 window.addEventListener("hashchange", render);
-
-buildSidebar();
-render();
 </script>
+
 </body>
 </html>
