@@ -1,6 +1,4 @@
-<div align="center">
-
-<img src="https://github.com/user-attachments/assets/e4066c0d-07c1-419b-a479-3483488521eb" alt="TypeEasy Logo" width="200"/>
+<div align="center"><img src="https://github.com/user-attachments/assets/e4066c0d-07c1-419b-a479-3483488521eb" alt="TypeEasy Logo" width="200"/>
 
 
 # TypeEasy
@@ -74,9 +72,9 @@ typeeasy --api hola.te --port 8080      # -> http://localhost:8080/
 > Documentación de los builtins de API: [docs/API_BUILTINS.md](docs/API_BUILTINS.md) ·
 > Hoja de ruta: [docs/ROADMAP.md](docs/ROADMAP.md)
 
+
+(https://appdeveloper777.github.io/TypeEasy/#/home)
 <img width="1893" height="1071" alt="image" src="https://github.com/user-attachments/assets/c4e70e2b-2ade-48dc-b990-ef9a985f8d7d" />
-
-
 
 ---
 
