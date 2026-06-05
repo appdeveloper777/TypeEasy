@@ -2186,6 +2186,36 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         vars[my_index].value.int_value = 0; // Valor de error
         return;
     }
+    else if (strcmp(value->type, "IDENTIFIER") == 0 || strcmp(value->type, "ID") == 0) {
+        /* `let b = a;` / `var i = start;` — copiar el valor de una variable
+         * existente. Sin esta rama el identificador desnudo caía al catch-all
+         * de te_value_to_variable y se almacenaba como INT 0 (value->value),
+         * perdiendo el valor de origen. Una expresión (a+0) sí funcionaba
+         * porque la evaluaba evaluate_expression; el identificador puro no. */
+        Variable *src = find_variable(value->id);
+        free(vars[my_index].type);
+        if (!src) {
+            fprintf(stderr, "Error: variable '%s' not found.\n", value->id ? value->id : "?");
+            vars[my_index].vtype = VAL_INT;
+            vars[my_index].type = strdup("INT");
+            vars[my_index].value.int_value = 0;
+            return;
+        }
+        vars[my_index].vtype = src->vtype;
+        vars[my_index].type = strdup(src->type ? src->type : "INT");
+        if (src->vtype == VAL_STRING) {
+            vars[my_index].value.string_value = strdup(src->value.string_value ? src->value.string_value : "");
+        } else if (src->vtype == VAL_FLOAT) {
+            vars[my_index].value.float_value = src->value.float_value;
+        } else if (src->vtype == VAL_OBJECT) {
+            /* LIST/MAP/OBJECT/LAMBDA: copiar la referencia (alias), igual que
+             * el resto del intérprete (no se hace deep-copy en asignación). */
+            vars[my_index].value.object_value = src->value.object_value;
+        } else {
+            vars[my_index].value.int_value = src->value.int_value;
+        }
+        return;
+    }
     else {
         /* #5: ramas terminales de mapeo de tipos delegadas al punto único
          * te_value_to_variable (STRING/STRING_LITERAL, FLOAT, OBJECT_LITERAL→MAP,
@@ -4943,21 +4973,22 @@ static void interpret_for(ASTNode *node) {
         }
     }
 
-    int incremento = node->right->right->left->value;
-    int limite = node->right->value;
+    /* Evaluate step and limit as expressions (not raw node->value): this lets
+     * the limit/step be variables or arithmetic, not just NUMBER literals.
+     * Both are evaluated once, before the loop, matching "for to N" semantics. */
+    int incremento = (int)evaluate_expression(node->right->right->left);
+    int limite = (int)evaluate_expression(node->right);
     ASTNode *body = node->right->right->right;
     if (!body) {
         printf("Advertencia: FOR sin cuerpo\n");
         return;
     }
     while (var->value.int_value < limite) {
-        ASTNode *stmt = body;
-        while (stmt) {
-            if (var->value.int_value >= limite) break;
-            interpret_ast(stmt);
-            if (throw_flag || return_flag || break_flag || continue_flag) break;
-            stmt = stmt->right;
-        }
+        /* Interpret the whole body once per iteration. body is a
+         * statement_list node; interpret_statement_list walks every statement
+         * via ->left/->right recursion. (Manually chaining stmt=stmt->right
+         * here double-executed the last statement.) */
+        interpret_ast(body);
         if (break_flag) { break_flag = 0; break; }
         if (continue_flag) { continue_flag = 0; }
         if (throw_flag || return_flag) break;

@@ -1,0 +1,32 @@
+// expect: a=0 a=1 a=2 b=0 b=2 b=4 lim=0 lim=1 lim=2 lim=3 multi=A0|B0|A1|B1|A2|B2| sum=10
+// C-style numeric for: for(i = START; LIMIT; STEP) { ... }
+//  - LIMIT is an exclusive upper bound (NOT a condition).
+//  - STEP is the increment added each iteration.
+//  - LIMIT and STEP may be variables/expressions (evaluated once at loop entry).
+//  - A multi-statement body runs each statement exactly once per iteration.
+var out = "";
+
+// basic: 0,1,2
+for (i = 0; 3; 1) { out = out + "a=" + i + " "; }
+
+// step of 2: 0,2,4
+for (i = 0; 6; 2) { out = out + "b=" + i + " "; }
+
+// limit as a variable: iterates 0..3
+let lim = 4;
+for (i = 0; lim; 1) { out = out + "lim=" + i + " "; }
+
+// multi-statement body (no duplication of the last statement)
+out = out + "multi=";
+for (i = 0; 3; 1) {
+    out = out + "A" + i + "|";
+    out = out + "B" + i + "|";
+}
+out = out + " ";
+
+// accumulator into an outer var
+var sum = 0;
+for (i = 1; 5; 1) { sum = sum + i; }
+out = out + "sum=" + sum;
+
+println(out);

@@ -2741,6 +2741,20 @@ static int bc_compile_for(ASTNode *node, Instr *out, int *pos, int max) {
     if (!fv || fv->is_const) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr,"[BCFOR] fail: fv const/null\n"); return 0; }
     if (fv->vtype != VAL_INT) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr,"[BCFOR] fail: fv not VAL_INT (vtype=%d)\n", fv->vtype); return 0; }
 
+    /* Only compile to bytecode when init/limit/step are NUMBER literals. If the
+     * limit or step is a variable/expression, bail out so the AST walker (which
+     * evaluates them fresh each run) handles it — baking a stale constant here
+     * would be wrong when the same loop node re-runs with a different value. */
+    {
+        NodeKind lk = nk_of(node->right);            /* limit */
+        NodeKind sk = nk_of(update_body->left);      /* step  */
+        if ((lk != NK_NUMBER && lk != NK_INT) ||
+            (sk != NK_NUMBER && sk != NK_INT)) {
+            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr,"[BCFOR] fail: non-literal limit/step (lk=%d sk=%d)\n", lk, sk);
+            return 0;
+        }
+    }
+
     int init_val  = node->left->value;
     int limit_val = node->right->value;
     int step_val  = update_body->left->value;
