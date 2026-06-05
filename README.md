@@ -74,7 +74,8 @@ typeeasy --api hola.te --port 8080      # -> http://localhost:8080/
 > Documentación de los builtins de API: [docs/API_BUILTINS.md](docs/API_BUILTINS.md) ·
 > Hoja de ruta: [docs/ROADMAP.md](docs/ROADMAP.md)
 
-<img width="1910" height="932" alt="image" src="https://github.com/user-attachments/assets/6abbb4f1-9066-44e1-8da6-dfd804cd7d1a" />
+<img width="1893" height="1071" alt="image" src="https://github.com/user-attachments/assets/c4e70e2b-2ade-48dc-b990-ef9a985f8d7d" />
+
 
 
 ---
