@@ -2150,7 +2150,17 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         }
 
         Variable *v = find_variable(o->id);
-        
+
+        /* Fase 7b: `?.` safe access (value==1) on a null object → the whole
+         * access yields null, stored as the canonical null variable. */
+        if (value->value == 1 && (!v || (v->type && strcmp(v->type, "NULL") == 0))) {
+            free(vars[my_index].type);
+            vars[my_index].vtype = VAL_OBJECT;
+            vars[my_index].type = strdup("NULL");
+            vars[my_index].value.object_value = NULL;
+            return;
+        }
+
         if (!v || v->vtype != VAL_OBJECT) {
             printf("Error: object '%s' not found for assignment.\n", o->id);
             vars[my_index].vtype = VAL_INT;
@@ -2167,7 +2177,14 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
                     return;
                 }
                 // Encontramos el atributo. Copiamos su valor.
-                if (obj->attributes[i].vtype == VAL_STRING) {
+                if (obj->attributes[i].vtype == VAL_OBJECT &&
+                    obj->attributes[i].value.object_value == NULL) {
+                    /* Nullable attribute holding null → canonical null var. */
+                    free(vars[my_index].type);
+                    vars[my_index].vtype = VAL_OBJECT;
+                    vars[my_index].type = strdup("NULL");
+                    vars[my_index].value.object_value = NULL;
+                } else if (obj->attributes[i].vtype == VAL_STRING) {
                     vars[my_index].vtype = VAL_STRING;
                     vars[my_index].value.string_value = strdup(obj->attributes[i].value.string_value);
                 } else if (obj->attributes[i].vtype == VAL_INT) {
@@ -3656,6 +3673,49 @@ ASTNode* build_item_from_value(ASTNode *value) {
     return new_item;
 }
 
+/* Fase 7b: detect whether an expression node currently evaluates to null.
+ * Handles three shapes used by the `??` / `?.` operators:
+ *   - the `null` literal node          (type == "NULL")
+ *   - a simple variable holding null    (type == "IDENTIFIER")
+ *   - an object attribute holding null  (type == "ACCESS_ATTR"), e.g. a
+ *     nullable `string?` attribute, or `?.` access on a null object.
+ * Returns 1 when the value is null, 0 otherwise. Conservative: any shape it
+ * cannot resolve is treated as non-null. */
+static int te_expr_is_null(ASTNode *l) {
+    if (!l || !l->type) return 0;
+    if (strcmp(l->type, "NULL") == 0) return 1;
+    if (strcmp(l->type, "IDENTIFIER") == 0) {
+        Variable *vv = find_variable(l->id);
+        if (!vv || (vv->type && strcmp(vv->type, "NULL") == 0)) return 1;
+        return 0;
+    }
+    if (strcmp(l->type, "ACCESS_ATTR") == 0) {
+        ASTNode *obj_ref  = l->left;
+        ASTNode *attr_ref = l->right;
+        if (!obj_ref || !obj_ref->id || !attr_ref || !attr_ref->id) return 0;
+        Variable *obj_var = find_variable(obj_ref->id);
+        if (!obj_var) return 0;
+        /* `?.` on a null object → the whole access is null. */
+        if (obj_var->type && strcmp(obj_var->type, "NULL") == 0) return 1;
+        if (obj_var->vtype != VAL_OBJECT || !obj_var->value.object_value) return 0;
+        ObjectNode *obj = obj_var->value.object_value;
+        if (!obj->class) return 0;
+        for (int i = 0; i < obj->class->attr_count; i++) {
+            if (strcmp(obj->class->attributes[i].id, attr_ref->id) == 0) {
+                Variable *attr = &obj->attributes[i];
+                /* Runtime null marker for an attribute: VAL_OBJECT with a
+                 * NULL object pointer (set by interpret_assign_attr on
+                 * `obj.attr = null` for a nullable `T?` attribute). */
+                if (attr->vtype == VAL_OBJECT && attr->value.object_value == NULL) return 1;
+                if (attr->type && strcmp(attr->type, "NULL") == 0) return 1;
+                return 0;
+            }
+        }
+        return 0;
+    }
+    return 0;
+}
+
 /* Bytecode VM (compile+exec), profiler, tracer and x86_64 JIT now live in
  * te_bytecode.c (Fase 2 modularization). Public API in te_bytecode.h. */
 double evaluate_expression(ASTNode *node) {
@@ -3864,13 +3924,7 @@ double evaluate_expression(ASTNode *node) {
 
     case NK_NULL_COALESCE: {
         ASTNode *l = node->left;
-        int is_null = 0;
-        if (l && nk_of(l) == NK_NULL) is_null = 1;
-        else if (l && nk_of(l) == NK_IDENTIFIER) {
-            Variable *v = find_variable(l->id);
-            if (!v || (v->type && strcmp(v->type, "NULL") == 0)) is_null = 1;
-        }
-        if (is_null) return evaluate_expression(node->right);
+        if (te_expr_is_null(l)) return evaluate_expression(node->right);
         return evaluate_expression(l);
     }
 
@@ -5806,10 +5860,16 @@ static void interpret_call_method_impl(ASTNode *node) {
         }
         if (list && node->id && strcmp(node->id, "pop") == 0) {
             ASTNode *cur = list->left;
-            if (!cur) return;
+            if (!cur) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return; }
             te_colcache_invalidate(list);     /* v0.0.13 (perf) */
-            if (!cur->next) { list->left = NULL; te_invalidate_list_cache(list); return; }
+            if (!cur->next) {
+                /* single element: capture it, then empty the list */
+                add_or_update_variable("__ret__", build_item_from_value(cur));
+                list->left = NULL; te_invalidate_list_cache(list); return;
+            }
             while (cur->next && cur->next->next) cur = cur->next;
+            /* cur->next is the last element — capture its value into __ret__ */
+            add_or_update_variable("__ret__", build_item_from_value(cur->next));
             cur->next = NULL;
             te_invalidate_list_cache(list);  /* Ola 14 */
             return;
@@ -6738,13 +6798,7 @@ static void interpret_var_decl(ASTNode *node) {
     /* Fase 7: NULL_COALESCE — pick the right side at decl time */
     if (value_node && value_node->type && strcmp(value_node->type, "NULL_COALESCE") == 0) {
         ASTNode *l = value_node->left;
-        int is_null = 0;
-        if (l && l->type && strcmp(l->type, "NULL") == 0) is_null = 1;
-        else if (l && l->type && strcmp(l->type, "IDENTIFIER") == 0) {
-            Variable *vv = find_variable(l->id);
-            if (!vv || (vv->type && strcmp(vv->type, "NULL") == 0)) is_null = 1;
-        }
-        value_node = is_null ? value_node->right : l;
+        value_node = te_expr_is_null(l) ? value_node->right : l;
         node->left = value_node;
     }
 
@@ -7687,11 +7741,34 @@ static void interpret_assign_attr(ASTNode *node) {
         return;
     }    
 
+    /* Fase 7b: nullable attribute support ("T?"). A trailing '?' marks the
+     * attribute as nullable. Assigning `null` stores a runtime null marker
+     * (VAL_OBJECT + NULL object_value); assigning null to a non-nullable
+     * attribute is an error. */
+    int decl_nullable = 0;
+    {
+        size_t dl = strlen(declared);
+        if (dl > 0 && declared[dl - 1] == '?') decl_nullable = 1;
+    }
+    if (value_node && value_node->type && strcmp(value_node->type, "NULL") == 0) {
+        if (!decl_nullable) {
+            int ln = node->line ? node->line : (access->line ? access->line : 0);
+            const char *fname = g_script_path ? g_script_path : "<script>";
+            fprintf(stderr,
+                    "%s%s:%d: Error: cannot assign null to non-nullable attribute '%s' of type %s.%s\n",
+                    TE_ERR_RED, fname, ln, attr_name, declared, TE_ERR_RESET);
+            return;
+        }
+        obj->attributes[idx].vtype = VAL_OBJECT;
+        obj->attributes[idx].value.object_value = NULL;
+        return;
+    }
+
     /* Validación de tipo: no permitir asignar un valor de tipo incompatible.
      * Se determina si el atributo declarado es de texto (string) o numérico,
      * y si el valor asignado es de texto o numérico. Un desajuste aborta. */
     {
-        int decl_is_str = (strcmp(declared, "string") == 0);
+        int decl_is_str = (strcmp(declared, "string") == 0 || strcmp(declared, "string?") == 0);
         /* val_kind: 0 = desconocido, 1 = string, 2 = numérico */
         int val_kind = 0;
         if (value_node->type) {
@@ -7725,7 +7802,7 @@ static void interpret_assign_attr(ASTNode *node) {
         }
     }
 
-    if (strcmp(declared, "string") == 0) {
+    if (strcmp(declared, "string") == 0 || strcmp(declared, "string?") == 0) {
         if (value_node->type && strcmp(value_node->type, "STRING") == 0) {
           obj->attributes[idx].value.string_value = strdup(value_node->str_value);
           if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (STRING)\n", attr_name, value_node->str_value);
@@ -8069,7 +8146,9 @@ static void interpret_print(ASTNode *node) {
         }
         if (!te_attr_access_ok(obj->class, idx, o)) return;
         Variable *attr = &obj->attributes[idx];
-        if (attr->vtype == VAL_STRING)
+        if (attr->vtype == VAL_OBJECT && attr->value.object_value == NULL)
+            dbg_printf("null");
+        else if (attr->vtype == VAL_STRING)
             dbg_printf("%s", attr->value.string_value);
         else
             dbg_printf("%d", attr->value.int_value);
@@ -8377,13 +8456,7 @@ static void interpret_println(ASTNode *node) {
     }
     if (arg->type && strcmp(arg->type, "NULL_COALESCE") == 0) {
         ASTNode *l = arg->left;
-        int is_null = 0;
-        if (l && l->type && strcmp(l->type, "NULL") == 0) is_null = 1;
-        else if (l && l->type && strcmp(l->type, "IDENTIFIER") == 0) {
-            Variable *vv = find_variable(l->id);
-            if (!vv || (vv->type && strcmp(vv->type, "NULL") == 0)) is_null = 1;
-        }
-        ASTNode *chosen = is_null ? arg->right : l;
+        ASTNode *chosen = te_expr_is_null(l) ? arg->right : l;
         ASTNode wrapper; memset(&wrapper, 0, sizeof(ASTNode));
         wrapper.type = strdup("PRINTLN"); wrapper.left = chosen;
         interpret_println(&wrapper);
@@ -8564,7 +8637,11 @@ static void interpret_println(ASTNode *node) {
         }
         if (!te_attr_access_ok(obj->class, idx, o)) return;
         Variable *attr = &obj->attributes[idx];
-        if (attr->vtype == VAL_STRING) {
+        if (attr->vtype == VAL_OBJECT && attr->value.object_value == NULL) {
+            dbg_printf("null\n");
+            append_to_stdout("null\n");
+        }
+        else if (attr->vtype == VAL_STRING) {
             dbg_printf("%s\n", attr->value.string_value);
             append_to_stdout(attr->value.string_value);
             append_to_stdout("\n");
