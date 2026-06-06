@@ -1,0 +1,9 @@
+// expect: A B C done
+// Stage 4: async/await keyword sugar over the real event-loop runtime.
+//   `async fn() => {...}` spawns a task; `await <task>` drives the loop until
+// it finishes. Three tasks overlap on one thread; output order is determined
+// by the explicit awaits, so it is fully deterministic.
+var a = async fn() => { sleep_async(10); return "A"; };
+var b = async fn() => { sleep_async(10); return "B"; };
+var c = async fn() => { sleep_async(10); return "C"; };
+println((await a) + " " + (await b) + " " + (await c) + " done");

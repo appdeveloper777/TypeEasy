@@ -1,0 +1,2 @@
+GAMMA-FILE-CONTENT
+line2-gamma

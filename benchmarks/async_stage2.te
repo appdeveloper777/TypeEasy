@@ -1,0 +1,31 @@
+var shared = "global-value";
+
+var t1 = go(fn() => {
+    var local = "one";
+    sleep_async(120);
+    local = local + "-A";
+    local = local + "-B";
+    var r = shared + ":" + local;
+    return r;
+});
+
+var t2 = go(fn() => {
+    var local = "two";
+    sleep_async(60);
+    local = local + "-X";
+    local = local + "-Y";
+    var r = shared + ":" + local;
+    return r;
+});
+
+var t3 = go(fn() => {
+    sleep_async(30);
+    return shared + ":three";
+});
+
+var results = await_async_all(t1, t2, t3);
+println(results[0]);
+println(results[1]);
+println(results[2]);
+println("shared-after=" + shared);
+println("DONE-STAGE2");

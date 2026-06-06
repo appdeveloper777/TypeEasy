@@ -1,0 +1,38 @@
+// async_stage3.te — Stage 3 real non-blocking I/O smoke test.
+// Three fibers each read a file via read_file_async(). The blocking read runs
+// on a background worker thread, so a fourth fiber doing sleep_async() keeps
+// making progress while the disk I/O is in flight (the loop is never stalled).
+
+var t0 = now_ms();
+
+var ra = go(fn() => {
+    var data = read_file_async("benchmarks/async_io_a.txt");
+    return data.contains("ALPHA-FILE-CONTENT");
+});
+
+var rb = go(fn() => {
+    var data = read_file_async("benchmarks/async_io_b.txt");
+    return data.contains("BETA-FILE-CONTENT");
+});
+
+var rc = go(fn() => {
+    var data = read_file_async("benchmarks/async_io_c.txt");
+    return data.contains("GAMMA-FILE-CONTENT");
+});
+
+// A pure-timer fiber that overlaps with the I/O waits.
+var sl = go(fn() => {
+    sleep_async(80);
+    return "slept";
+});
+
+var results = await_async_all(ra, rb, rc, sl);
+
+var elapsed = now_ms() - t0;
+
+print("a_ok="); println(results[0]);
+print("b_ok="); println(results[1]);
+print("c_ok="); println(results[2]);
+print("sleeper="); println(results[3]);
+print("elapsed_ms="); println(elapsed);
+println("DONE-STAGE3");

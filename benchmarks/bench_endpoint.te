@@ -1,0 +1,24 @@
+// Benchmark endpoint for the async/parallelism before-after measurement.
+// Run with:  typeeasy --api bench_endpoint.te --port 9000
+//
+// /bench/light  -> trivial handler (I/O-bound; measures connection throughput)
+// /bench/heavy  -> CPU-bound loop (~tens of ms/request; this is what the GIL
+//                  serializes today, so concurrent wall-clock ~= N * cost).
+
+endpoint {
+    [HttpGet("/bench/light")]
+    light() {
+        return json("{\"ok\":1}");
+    }
+
+    [HttpGet("/bench/heavy")]
+    heavy() {
+        var total = 0;
+        var i = 0;
+        while (i < 1500000) {
+            total = total + i;
+            i = i + 1;
+        }
+        return json(concat("{\"total\":", total, "}"));
+    }
+}

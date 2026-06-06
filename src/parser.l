@@ -168,6 +168,8 @@
 "fprintln"              { return FPRINTLN; }
 "const"                 { yylval.sval = strdup(yytext); return CONST; }
 "fn"                    { return FN; }
+"async"                 { return ASYNC; }
+"await"                 { return AWAIT; }
 
 "HttpGet"               { return HTTPGET; }
 "HTTPGET"               { return HTTPGET; }

@@ -1,0 +1,3 @@
+var a=go(fn()=>{return "A";});
+var b=go(fn()=>{return "B";});
+println(await_async(a));

@@ -545,6 +545,11 @@ int main(int argc, char *argv[]) {
     }
     /* --dev implies --api: it's a dev server for an endpoint script. */
     if (dev_mode) api_mode = 1;
+    /* Publish the API-mode flag to the runtime BEFORE any server thread is
+     * spawned. Disables the bytecode cache so per-request state can later be
+     * made thread-local without stale cross-thread Variable* pointers. */
+    extern int g_api_mode;
+    g_api_mode = api_mode;
     if (api_mode && !script_path) {
         fprintf(stderr, "Error: --api requiere un archivo .te (ej: typeeasy --api endpoint.te)\n");
         return 1;

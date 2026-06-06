@@ -1,0 +1,5 @@
+var a=go(fn()=>{return 1;});
+var b=go(fn()=>{return 2;});
+var rs=await_async_all(a,b);
+println(rs[0]);println(rs[1]);
+println("END-REACHED");

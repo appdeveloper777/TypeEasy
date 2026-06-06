@@ -1,0 +1,34 @@
+// async_demo.te — Stage 1 real-async smoke test.
+// 3 tasks each "wait" 150ms. With real async (event loop) the total is
+// ~150ms (overlapped), NOT 450ms (sequential). That gap is the proof that
+// the fibers suspend and the loop runs them concurrently on one thread.
+
+var t0 = now_ms();
+
+var a = go(fn() => {
+    sleep_async(150);
+    return "A done";
+});
+var b = go(fn() => {
+    sleep_async(150);
+    return "B done";
+});
+var c = go(fn() => {
+    sleep_async(150);
+    return "C done";
+});
+
+var results = await_async_all(a, b, c);
+
+var elapsed = now_ms() - t0;
+
+println(results[0]);
+println(results[1]);
+println(results[2]);
+print("elapsed_ms="); println(elapsed);
+
+if (elapsed < 300) {
+    println("PARALLEL: tasks overlapped (real async).");
+} else {
+    println("SEQUENTIAL: tasks did not overlap.");
+}

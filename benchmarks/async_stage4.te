@@ -1,0 +1,33 @@
+// async_stage4.te — Stage 4: async/await keyword sugar over the real event loop.
+//   async fn() => { ... }   spawns a task (same as go(...))
+//   await <task>            drives the loop until the task finishes (await_async)
+// Both desugar to the validated Stage 1-3 runtime, so all overlap/I-O semantics
+// are preserved. Syntax stays 100% TypeEasy.
+
+var t0 = now_ms();
+
+// Spawn three overlapping tasks with the `async` keyword.
+var a = async fn() => { sleep_async(120); return "A"; };
+var b = async fn() => { sleep_async(120); return "B"; };
+var c = async fn() => { sleep_async(120); return "C"; };
+
+// Await each with the `await` keyword.
+var ra = await a;
+var rb = await b;
+var rc = await c;
+
+var elapsed = now_ms() - t0;
+
+println(ra + rb + rc);
+print("elapsed_ms="); println(elapsed);
+
+// Inline form: await async fn() => { ... }
+var n = await async fn() => { sleep_async(30); return 42; };
+print("inline="); println(n);
+
+if (elapsed < 300) {
+    println("PARALLEL-AWAIT");
+} else {
+    println("SEQUENTIAL-AWAIT");
+}
+println("DONE-STAGE4");

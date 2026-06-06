@@ -1,0 +1,5 @@
+var a = go(fn() => {
+    return "hello";
+});
+var r = await_async(a);
+println(r);

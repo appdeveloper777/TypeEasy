@@ -57,6 +57,7 @@
 %token       AND OR NOT QDOT QQ
 %token       PERCENT SHL SHR BIT_AND BIT_OR BIT_XOR BIT_NOT
 %token       FN
+%token       ASYNC AWAIT
 %token <sval> IDENTIFIER STRING_LITERAL CONST
 %token <sval> STRING_INTERP
 %token <ival> NUMBER
@@ -110,6 +111,7 @@
 %left PLUS MINUS
 %left MULTIPLY DIVIDE PERCENT
 %right UMINUS BIT_NOT
+%right AWAIT ASYNC
 
 %%
 
@@ -482,6 +484,8 @@ expression:
   func_call_expr
  | list_literal   
  | lambda_value
+ | AWAIT expression    { $$ = create_function_call_node("await_async", $2); }
+ | ASYNC lambda_value  { $$ = create_call_node("go", $2); }
 |expression GT expression    { $$ = create_ast_node("GT", $1, $3); }
   | expression LT expression      { $$ = create_ast_node("LT", $1, $3); }
   | expression EQ expression      { $$ = create_ast_node("EQ", $1, $3); }

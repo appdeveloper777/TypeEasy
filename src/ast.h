@@ -227,6 +227,10 @@ extern MethodNode *global_methods;
 void runtime_save_initial_var_count();
 void runtime_reset_vars_to_initial_state();
 void te_runtime_reset_flags(void);
+/* Rebuild the variable name->index side-index from the live vars[0..var_count).
+ * Used by the async event loop after it swaps the active variable set between
+ * fibers (it rewrites vars[] in place). */
+void te_runtime_rebuild_symtab(void);
 
 /* --- PROTOTIPOS DE TU "MOTOR" (PUROS) --- */
 

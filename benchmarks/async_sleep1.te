@@ -1,0 +1,3 @@
+var a = go(fn() => { sleep_async(100); return "X"; });
+var r = await_async(a);
+println(r);

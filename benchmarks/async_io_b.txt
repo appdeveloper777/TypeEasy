@@ -1,0 +1,2 @@
+BETA-FILE-CONTENT
+line2-beta

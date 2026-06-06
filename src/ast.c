@@ -944,6 +944,14 @@ static TeKV *g_resp_headers = NULL;
  * (structured/json) and is reset on every request via typeeasy_http_reset(). */
 int g_response_is_raw_text = 0;
 
+/* API server mode. Set once at startup (before any civetweb worker thread is
+ * spawned) when the process runs `--api`. While set, the bytecode cache is
+ * disabled (see bc_get_or_compile* in te_bytecode.c): the cache lives on the
+ * shared AST nodes and stores raw Variable* pointers into vars[], which is
+ * unsafe once requests run on parallel threads with thread-local vars[].
+ * Read-only after startup, so it needs no synchronization. */
+int g_api_mode = 0;
+
 static void te_kv_free_list(TeKV **head) {
     TeKV *c = *head; while (c) { TeKV *n = c->next; free(c->k); free(c->v); free(c); c = n; }
     *head = NULL;
@@ -1910,6 +1918,17 @@ static void te_sym_reset_to(int initial_count) {
     for (int i = 0; i < initial_count && i < MAX_VARS; i++) {
         if (vars[i].id) te_sym_insert(vars[i].id, i);
     }
+}
+
+/* Rebuild the variable name->index side-index from the live vars[0..var_count).
+ * Exported for the async event loop (te_evloop.c): when it swaps the active
+ * variable set between fibers it rewrites vars[] in place, so the hash keys
+ * (which alias vars[idx].id) must be rebuilt to stay correct. */
+void te_runtime_rebuild_symtab(void) {
+    int n = var_count;
+    if (n < 0) n = 0;
+    if (n > MAX_VARS) n = MAX_VARS;
+    te_sym_reset_to(n);
 }
 
 Variable *find_variable(char *id) {    
