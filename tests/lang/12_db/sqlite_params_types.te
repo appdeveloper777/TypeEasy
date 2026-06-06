@@ -1,4 +1,4 @@
-// expect: ins=1 actives=1 cents=1950 nulls=1
+// expect: ins=1 actives=1 cents=1950 nulls=1 uidlen=36 created_ok=1 filtered=1 nulltype=1
 // Regresión: TODOS los tipos de @param soportados por el plugin SQLite en una
 // sola corrida — int, float, string, bool y null.
 //
@@ -14,18 +14,20 @@
 load_native("sqlite");
 
 let db = sqlite_connect(":memory:");
-sqlite_exec(db, "CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price REAL, active INTEGER, notes TEXT)");
+sqlite_exec(db, "CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price REAL, active INTEGER, notes TEXT, created TEXT, uid TEXT)");
 
 // Fila 1: bool true + notes NULL (string con apóstrofo para verificar escape).
+// created/uid: llamadas INLINE now()/uuid_v4() como @param (CALL_FUNC). En el
+// binder Dapper (db_params.c) un valor inline antes caía a NULL; ahora se evalúa.
 let ins = sqlite_exec(db,
-    "INSERT INTO items (name, price, active, notes) VALUES (@name, @price, @active, @notes)",
-    { "@name": "O'Reilly Book", "@price": 19.5, "@active": true, "@notes": null });
+    "INSERT INTO items (name, price, active, notes, created, uid) VALUES (@name, @price, @active, @notes, @created, @uid)",
+    { "@name": "O'Reilly Book", "@price": 19.5, "@active": true, "@notes": null, "@created": now(), "@uid": uuid_v4() });
 print("ins="); print(ins);
 
 // Fila 2: bool false + notes con texto.
 sqlite_exec(db,
-    "INSERT INTO items (name, price, active, notes) VALUES (@name, @price, @active, @notes)",
-    { "@name": "Widget", "@price": 8.0, "@active": false, "@notes": "n/a" });
+    "INSERT INTO items (name, price, active, notes, created, uid) VALUES (@name, @price, @active, @notes, @created, @uid)",
+    { "@name": "Widget", "@price": 8.0, "@active": false, "@notes": "n/a", "@created": now(), "@uid": uuid_v4() });
 
 // bool: COUNT con @param booleano (true -> 1). Sólo la fila 1 tiene active=1.
 let aRows = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c FROM items WHERE active = @flag", { "@flag": true }, "json"));
@@ -40,6 +42,35 @@ print(" cents="); print(c0["cents"]);
 // null: la fila 1 insertó notes NULL → COUNT IS NULL = 1.
 let nRows = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c FROM items WHERE notes IS NULL", "json"));
 let n0 = nRows[0];
-print(" nulls="); println(n0["c"]);
+print(" nulls="); print(n0["c"]);
+
+// uuid: uuid_v4() inline se bindeó como TEXT de 36 chars.
+let uRows = json_parse(sqlite_query(db, "SELECT LENGTH(uid) AS ulen FROM items WHERE name = @name", { "@name": "O'Reilly Book" }, "json"));
+let u0 = uRows[0];
+print(" uidlen="); print(u0["ulen"]);
+
+// date: now() inline se bindeó como TEXT no vacío (created IS NOT NULL y len>0).
+let dRows = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c FROM items WHERE created IS NOT NULL AND LENGTH(created) > 0", "json"));
+let d0 = dRows[0];
+print(" created_ok="); print(d0["c"] == 2);
+
+// FILTRO COMBINADO por date + el resto de los campos. Tras haber consumido la
+// base (los INSERT de arriba), recuperamos created/uid reales de la fila 1 y
+// luego filtramos por TODOS los campos a la vez como @param: date (created),
+// uuid (uid), string (name), bool (active), float (price) y null (notes).
+let r1Rows = json_parse(sqlite_query(db, "SELECT created, uid FROM items WHERE name = @name", { "@name": "O'Reilly Book" }, "json"));
+let r1 = r1Rows[0];
+let fRows = json_parse(sqlite_query(db,
+    "SELECT COUNT(*) AS c FROM items WHERE created = @created AND uid = @uid AND name = @name AND active = @active AND price = @price AND notes IS NULL",
+    { "@created": r1["created"], "@uid": r1["uid"], "@name": "O'Reilly Book", "@active": true, "@price": 19.5 }, "json"));
+let f0 = fRows[0];
+print(" filtered="); print(f0["c"]);
+
+// null: prueba EXPLÍCITA de que `@notes: null` se bindeó con bind_null y NO
+// como texto vacío. typeof() de SQLite devuelve 'null' sólo si la celda es
+// realmente NULL (sería 'text' si se hubiese bindeado como "").
+let tRows = json_parse(sqlite_query(db, "SELECT typeof(notes) AS t FROM items WHERE name = @name", { "@name": "O'Reilly Book" }, "json"));
+let t0 = tRows[0];
+print(" nulltype="); println(t0["t"] == "null");
 
 sqlite_close(db);

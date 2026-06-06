@@ -161,6 +161,26 @@ static int append_value(char** buf, size_t* len, size_t* cap,
                 }
             }
         }
+    } else if (strcmp(tipo, "CALL_FUNC") == 0 || strcmp(tipo, "CALL_METHOD") == 0) {
+        /* Valor que es una llamada inline en el map, p.ej.
+         * { "@c": now(), "@u": uuid_v4() }. get_node_string EJECUTA la llamada
+         * (corre la función/método y lee __ret__) y devuelve su forma string.
+         * Sin esta rama caía al `else` final (kind=4) y se interpolaba NULL,
+         * perdiendo now()/uuid_v4() en INSERT/UPDATE. Se trata como string
+         * (escapado + entrecomillado), igual que el fallback de texto del
+         * plugin SQLite; si la función devuelve un número MySQL lo coacciona
+         * desde la forma entrecomillada. (Pasar el valor por una variable ya
+         * funcionaba vía la rama IDENTIFIER; esto cubre el caso inline.) */
+        char* s = get_node_string(val);
+        if (!s) { buf_append(buf, len, cap, "NULL", 4); return 1; }
+        char* esc = escape(s, ctx);
+        free(s);
+        if (!esc) { buf_append(buf, len, cap, "NULL", 4); return 1; }
+        buf_append(buf, len, cap, "'", 1);
+        buf_append(buf, len, cap, esc, strlen(esc));
+        buf_append(buf, len, cap, "'", 1);
+        free(esc);
+        return 1;
     } else {
         kind = 4;
     }

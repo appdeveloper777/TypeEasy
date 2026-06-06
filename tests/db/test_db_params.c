@@ -43,6 +43,15 @@ ASTNode *create_kv_pair_node(char *key, ASTNode *value) {
 }
 Variable *find_variable(char *name) { (void)name; return NULL; }
 
+/* db_params.c llama get_node_string() para valores que son llamadas inline
+ * (CALL_FUNC/CALL_METHOD, p.ej. now()/uuid_v4()). En el intérprete real ejecuta
+ * la llamada y lee __ret__; aquí, sin runtime, devolvemos el str_value del leaf
+ * para poder ejercitar la rama de forma determinista. */
+char *get_node_string(ASTNode *node) {
+    if (node && node->str_value) return strdup(node->str_value);
+    return strdup("");
+}
+
 /* ── Escape de prueba: duplica la comilla simple (estándar SQL) ──────────── */
 static char *test_escape(const char *in, void *ctx) {
     (void)ctx;
@@ -133,8 +142,22 @@ int main(void) {
               "UPDATE t SET active = 1, deleted = 0 WHERE id = 1");
         free(sql);
     }
+    /* 8) llamada inline (CALL_FUNC, p.ej. now()/uuid_v4()) -> el bug: antes
+     *    caía a NULL; ahora get_node_string la evalúa y se escapa+entrecomilla.
+     *    El stub get_node_string devuelve el str_value del leaf. */
+    {
+        ASTNode *params =
+            pair("@c", create_ast_leaf("CALL_FUNC", 0, "2026-01-01T00:00:00Z", NULL),
+            pair("@u", create_ast_leaf("CALL_FUNC", 0, "1d360e11-94d5-4a91-9785-67b134f3911a", NULL), NULL));
+        char *sql = db_substitute_params(
+            "INSERT INTO ev (created, uid) VALUES (@c, @u)",
+            params, test_escape, NULL);
+        check("inline_call_param", sql,
+              "INSERT INTO ev (created, uid) VALUES ('2026-01-01T00:00:00Z', '1d360e11-94d5-4a91-9785-67b134f3911a')");
+        free(sql);
+    }
 
     if (g_fail) { printf("\nRESULT: FAIL\n"); return 1; }
-    printf("\nRESULT: OK (7/7)\n");
+    printf("\nRESULT: OK (8/8)\n");
     return 0;
 }

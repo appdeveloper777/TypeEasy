@@ -1647,6 +1647,8 @@ println(r);`)}
   <tr><td><code>float</code></td><td><code>{ "@precio": 19.9 }</code></td><td><code>19.9</code></td></tr>
   <tr><td><code>string</code></td><td><code>{ "@nombre": "O'Reilly" }</code></td><td><code>'O''Reilly'</code> (comillas escapadas)</td></tr>
   <tr><td><code>bool</code></td><td><code>{ "@activo": true }</code></td><td><code>1</code> · <code>false</code> &rarr; <code>0</code> (MySQL no tiene boolean nativo)</td></tr>
+  <tr><td><code>date</code> / <code>datetime</code></td><td><code>{ "@creado": now() }</code></td><td><code>'2026-06-06T04:33:34Z'</code> (string ISO-8601 escapado y entrecomillado)</td></tr>
+  <tr><td><code>uuid</code></td><td><code>{ "@id": uuid_v4() }</code></td><td><code>'1d360e11-94d5-4a91-9785-67b134f3911a'</code> (string escapado y entrecomillado)</td></tr>
   <tr><td><code>null</code></td><td><code>{ "@x": null }</code></td><td><code>NULL</code></td></tr>
   <tr><td>objeto / clase</td><td><code>filtro</code></td><td>cada atributo se expone como <code>@id</code>, <code>@nombre</code>…</td></tr>
 </table>
@@ -2077,6 +2079,8 @@ postgres_close(conn);`)}
   <tr><td><code>float</code></td><td><code>{ "@precio": 19.9 }</code></td><td>REAL (<code>bind_double</code>)</td></tr>
   <tr><td><code>string</code></td><td><code>{ "@nombre": "Teclado" }</code></td><td>TEXT (<code>bind_text</code>)</td></tr>
   <tr><td><code>bool</code></td><td><code>{ "@activo": true }</code></td><td>INTEGER <code>1</code>/<code>0</code> (<code>bind_int64</code>; SQLite no tiene boolean nativo)</td></tr>
+  <tr><td><code>date</code> / <code>datetime</code></td><td><code>{ "@creado": now() }</code></td><td>TEXT (<code>bind_text</code>; string ISO-8601)</td></tr>
+  <tr><td><code>uuid</code></td><td><code>{ "@id": uuid_v4() }</code></td><td>TEXT (<code>bind_text</code>; string de 36 chars)</td></tr>
   <tr><td><code>null</code></td><td><code>{ "@x": null }</code></td><td>NULL (<code>bind_null</code>)</td></tr>
 </table>
 
@@ -3429,6 +3433,8 @@ println(r);`)}
   <tr><td><code>float</code></td><td><code>{ "@price": 19.9 }</code></td><td><code>19.9</code></td></tr>
   <tr><td><code>string</code></td><td><code>{ "@name": "O'Reilly" }</code></td><td><code>'O''Reilly'</code> (quotes escaped)</td></tr>
   <tr><td><code>bool</code></td><td><code>{ "@active": true }</code></td><td><code>1</code> · <code>false</code> &rarr; <code>0</code> (MySQL has no native boolean)</td></tr>
+  <tr><td><code>date</code> / <code>datetime</code></td><td><code>{ "@created": now() }</code></td><td><code>'2026-06-06T04:33:34Z'</code> (ISO-8601 string, escaped and quoted)</td></tr>
+  <tr><td><code>uuid</code></td><td><code>{ "@id": uuid_v4() }</code></td><td><code>'1d360e11-94d5-4a91-9785-67b134f3911a'</code> (string, escaped and quoted)</td></tr>
   <tr><td><code>null</code></td><td><code>{ "@x": null }</code></td><td><code>NULL</code></td></tr>
   <tr><td>object / class</td><td><code>filter</code></td><td>each attribute is exposed as <code>@id</code>, <code>@name</code>…</td></tr>
 </table>
@@ -3853,6 +3859,8 @@ postgres_close(conn);`)}
   <tr><td><code>float</code></td><td><code>{ "@price": 19.9 }</code></td><td>REAL (<code>bind_double</code>)</td></tr>
   <tr><td><code>string</code></td><td><code>{ "@name": "Keyboard" }</code></td><td>TEXT (<code>bind_text</code>)</td></tr>
   <tr><td><code>bool</code></td><td><code>{ "@active": true }</code></td><td>INTEGER <code>1</code>/<code>0</code> (<code>bind_int64</code>; SQLite has no native boolean)</td></tr>
+  <tr><td><code>date</code> / <code>datetime</code></td><td><code>{ "@created": now() }</code></td><td>TEXT (<code>bind_text</code>; ISO-8601 string)</td></tr>
+  <tr><td><code>uuid</code></td><td><code>{ "@id": uuid_v4() }</code></td><td>TEXT (<code>bind_text</code>; 36-char string)</td></tr>
   <tr><td><code>null</code></td><td><code>{ "@x": null }</code></td><td>NULL (<code>bind_null</code>)</td></tr>
 </table>
 
