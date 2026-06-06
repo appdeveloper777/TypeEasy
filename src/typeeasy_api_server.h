@@ -26,6 +26,11 @@ int typeeasy_run_api_server_pool(const char *host, int port, int num_workers,
  * per-worker banner instead of the full route listing. */
 int typeeasy_run_api_server_worker(const char *host, int port, int worker_index);
 
+/* Enable dev hot-reload: the single-server serve loop polls `script_path`'s
+ * mtime and, on a stable change, returns the special code 99 so the caller can
+ * re-exec the process. Call before typeeasy_run_api_server(). */
+void typeeasy_enable_hot_reload(const char *script_path);
+
 /* Configure the value sent in the Access-Control-Allow-Origin header for all
  * responses (and the OPTIONS preflight). Default is "*" (any origin). Pass a
  * concrete origin like "https://app.example.com" to restrict it. */

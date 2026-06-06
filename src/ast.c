@@ -937,6 +937,13 @@ static TeKV *g_req_params  = NULL;
 static int   g_resp_status = 200;
 static TeKV *g_resp_headers = NULL;
 
+/* Response content-type intent. When a handler does `return "text"` (or any
+ * bare scalar/string value rather than json()/xml()), the embedded server must
+ * answer with Content-Type: text/plain instead of application/json. This flag
+ * is set by interpret_return_node and read by the server. It defaults to 0
+ * (structured/json) and is reset on every request via typeeasy_http_reset(). */
+int g_response_is_raw_text = 0;
+
 static void te_kv_free_list(TeKV **head) {
     TeKV *c = *head; while (c) { TeKV *n = c->next; free(c->k); free(c->v); free(c); c = n; }
     *head = NULL;
@@ -961,6 +968,7 @@ void typeeasy_http_reset(void) {
     te_kv_free_list(&g_req_params);
     te_kv_free_list(&g_resp_headers);
     g_resp_status = 200;
+    g_response_is_raw_text = 0;
 }
 void typeeasy_http_set_method(const char *m) { free(g_req_method); g_req_method = m ? strdup(m) : NULL; }
 void typeeasy_http_set_path  (const char *p) { free(g_req_path);   g_req_path   = p ? strdup(p) : NULL; }
@@ -3710,6 +3718,39 @@ static int te_expr_is_null(ASTNode *l) {
                 if (attr->type && strcmp(attr->type, "NULL") == 0) return 1;
                 return 0;
             }
+        }
+        return 0;
+    }
+    if (strcmp(l->type, "ACCESS_EXPR") == 0) {
+        /* `xs[i] ?? default` / `m["k"] ?? default`: an out-of-range list index
+         * or a missing map key evaluates to null. Also handles a stored null
+         * element/value. Conservative: anything resolvable to a concrete value
+         * is non-null; anything we cannot resolve is treated as non-null. */
+        ASTNode *map = resolve_to_map(l->left);
+        if (map) {
+            const char *key = NULL;
+            if (l->right && l->right->type) {
+                if (strcmp(l->right->type, "STRING") == 0) key = l->right->str_value;
+                else if (strcmp(l->right->type, "IDENTIFIER") == 0 ||
+                         strcmp(l->right->type, "ID") == 0) {
+                    Variable *kv = find_variable(l->right->id);
+                    if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+                }
+            }
+            if (!key) return 0;
+            ASTNode *pair = map_find_pair(map, key);
+            if (!pair) return 1;                 /* missing key -> null */
+            ASTNode *val = pair->left;
+            if (val && val->type && strcmp(val->type, "NULL") == 0) return 1;
+            return 0;
+        }
+        ASTNode *list = resolve_to_list(l->left);
+        if (list && l->right) {
+            int idx = (int)evaluate_expression(l->right);
+            if (idx < 0 || idx >= list_length(list)) return 1;  /* out-of-range -> null */
+            ASTNode *item = list_get_item(list, idx);
+            if (item && item->type && strcmp(item->type, "NULL") == 0) return 1;
+            return 0;
         }
         return 0;
     }
@@ -7003,7 +7044,20 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         if (list) {
             int idx = (int)evaluate_expression(value_node->right);
             int len = list_length(list);
-            if (idx >= 0 && idx < len) {
+            if (idx < 0 || idx >= len) {
+                /* Out-of-range index -> first-class null (e.g. `xs[99]` => null),
+                 * enabling `xs[99] ?? default`. Previously this fell through to
+                 * the legacy path and collapsed silently to INT 0. */
+                Variable *var = &vars[var_count++];
+                var->id = strdup(node->id);
+                var->is_const = is_const_flag;
+                var->vtype = VAL_OBJECT;
+                var->type = strdup("NULL");
+                var->value.object_value = NULL;
+                te_sym_insert(var->id, var_count - 1);
+                return;
+            }
+            {
                 ASTNode *item = list_get_item(list, idx);
                 if (item && item->type) {
                     if (strcmp(item->type, "OBJECT") == 0) {
@@ -8965,6 +9019,37 @@ void print_object_as_json_by_id(const char* id) {
     free(arg);
 }
 
+/* Return a freshly malloc'd text/plain rendering of a "bare value" return
+ * expression, or NULL if the expression is not a plain scalar/string we should
+ * surface as a raw HTTP body. Only side-effect-free node kinds are handled here
+ * (no CALL_FUNC / CALL_METHOD — those already populate __ret__ when invoked and
+ * must not be re-evaluated). Object/list/map identifiers return NULL so they
+ * keep the existing behavior (only json()/xml() serialize them). */
+static char *te_return_raw_text(ASTNode *e) {
+    if (!e || !e->type) return NULL;
+    const char *t = e->type;
+    if (!strcmp(t, "STRING") || !strcmp(t, "STRING_LITERAL"))
+        return e->str_value ? strdup(e->str_value) : strdup("");
+    if (!strcmp(t, "STRING_INTERP"))
+        return expand_interp_string(e->str_value ? e->str_value : "");
+    if (!strcmp(t, "NUMBER") || !strcmp(t, "INT")) {
+        char b[32]; snprintf(b, sizeof(b), "%d", e->value); return strdup(b);
+    }
+    if (!strcmp(t, "FLOAT")) {
+        char b[48]; snprintf(b, sizeof(b), "%g", e->str_value ? atof(e->str_value) : 0.0); return strdup(b);
+    }
+    if (!strcmp(t, "IDENTIFIER") || !strcmp(t, "ID")) {
+        Variable *v = find_variable(e->id);
+        if (v && v->vtype == VAL_STRING) return strdup(v->value.string_value ? v->value.string_value : "");
+        if (v && v->vtype == VAL_INT)   { char b[32]; snprintf(b, sizeof(b), "%d", v->value.int_value); return strdup(b); }
+        if (v && v->vtype == VAL_FLOAT) { char b[48]; snprintf(b, sizeof(b), "%g", v->value.float_value); return strdup(b); }
+        return NULL; /* object/list/map variable -> not raw text */
+    }
+    if (!strcmp(t, "ADD") && is_string_type(e))
+        return get_node_string(e); /* string concatenation only */
+    return NULL;
+}
+
 static void interpret_return_node(ASTNode *node) {
    // fprintf(stderr, "[DEBUG] interpret_return_node called\n"); fflush(stderr);
     ASTNode *ret_expr = node->left;
@@ -8980,6 +9065,31 @@ static void interpret_return_node(ASTNode *node) {
          * validation and value extraction still see the return expression. The
          * produced value is already stored in __ret__. */
         return_node = ret_expr;
+
+        /* HTTP response content-type intent. `return json(...)`/`return xml(...)`
+         * stay structured. A bare value return (`return "text"`, `return 42`,
+         * `return msg`, string concat) is surfaced as a text/plain body: it is
+         * stringified into __ret__ here so the embedded server has a body to
+         * write, and g_response_is_raw_text flips the Content-Type. This
+         * eliminates the onboarding gotcha where `return "text"` produced an
+         * empty body. The flag is "last writer wins": json()/xml() reset it to 0
+         * via their own return node, nested helpers propagate naturally. */
+        const char *t = ret_expr->type;
+        int is_json_xml_call =
+            (t && strcmp(t, "CALL_FUNC") == 0 && ret_expr->id &&
+             (strcmp(ret_expr->id, "json") == 0 || strcmp(ret_expr->id, "xml") == 0));
+        if (is_json_xml_call) {
+            g_response_is_raw_text = 0;
+        } else {
+            char *raw = te_return_raw_text(ret_expr);
+            if (raw) {
+                ASTNode *leaf = create_ast_leaf("STRING", 0, raw, NULL);
+                add_or_update_variable("__ret__", leaf);
+                free_ast(leaf);
+                free(raw);
+                g_response_is_raw_text = 1;
+            }
+        }
     }
     return_flag = 1;
 }

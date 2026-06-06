@@ -1,14 +1,7 @@
-// expect: oob=0
-// TRIPWIRE (tipo B — bug silencioso, exit 0 con salida incorrecta).
-// Gotcha NO resuelto (decisión de diseño actual): indexar fuera de rango
-// `xs[99]` colapsa silenciosamente a INT 0 en vez de devolver null/undefined.
-// Es la misma enfermedad de "colapso silencioso" que ataca te_value_to_variable,
-// pero del lado de ACCESO (no de storage).
-//
-// Salida ACTUAL (anclada arriba): oob=0
-// Salida DESEADA cuando se implemente NULL de primera clase: oob=null (o vacío),
-// permitiendo `xs[99] ?? default`. Al arreglarlo, este test fallará ruidoso →
-// actualizar el `// expect:` al valor correcto y mover a regresión positiva.
+// expect: oob=null
+// REGRESIÓN POSITIVA (antes era un TRIPWIRE tipo B).
+// Indexar fuera de rango `xs[99]` ahora devuelve null de primera clase en vez
+// de colapsar silenciosamente a INT 0. Esto habilita `xs[99] ?? default`.
 let xs = [10, 20, 30];
 let v = xs[99];
 println($"oob={v}");

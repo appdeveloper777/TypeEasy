@@ -29,6 +29,7 @@
 #include <setjmp.h>
 #include <time.h>
 #include <stdarg.h>
+#include <sys/stat.h>
 
 #ifdef _WIN32
   /* winsock2 must precede windows.h to avoid the legacy winsock.h clash. */
@@ -55,6 +56,10 @@ extern int  g_runtime_error_line;
 extern char g_runtime_error_msg[256];
 extern const char *g_debug_source_file;
 
+/* Set by interpret_return_node when a handler returns a bare scalar/string
+ * (e.g. `return "text"`) rather than json()/xml(); selects text/plain. */
+extern int g_response_is_raw_text;
+
 #include "civetweb.h"
 #include "ast.h"
 #include "typeeasy_api.h"
@@ -76,6 +81,29 @@ static void invoke_lock_release(void){ pthread_mutex_unlock(&g_invoke_lock); }
 #endif
 
 static volatile sig_atomic_t g_stop_requested = 0;
+
+/* ---- Dev hot-reload (item 2.2) -------------------------------------------
+ * When `--dev` is active the caller registers the script path here. The serve
+ * loop polls its mtime; on a stable change it sets g_reload_requested and
+ * breaks out, so run_single_server tears down civetweb cleanly (closing the
+ * listening socket) and returns TE_RC_RELOAD. typeeasy_main then re-exec's the
+ * process, which re-parses the changed file from scratch. Re-exec avoids the
+ * minefield of tearing down interpreter globals in-process. */
+#define TE_RC_RELOAD 99
+static volatile sig_atomic_t g_reload_requested = 0;
+static const char *g_hotreload_path  = NULL;
+static time_t      g_hotreload_mtime = 0;
+
+static time_t te_file_mtime(const char *path) {
+    struct stat st;
+    if (path && stat(path, &st) == 0) return st.st_mtime;
+    return 0;
+}
+
+void typeeasy_enable_hot_reload(const char *script_path) {
+    g_hotreload_path  = script_path;
+    g_hotreload_mtime = te_file_mtime(script_path);
+}
 
 /* ---- Observability / operational state (items #9-12) ---------------------
  * g_ready      : readiness gate. 0 until routes are registered and the
@@ -727,8 +755,13 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
     char *result = typeeasy_embedded_invoke_method(m);
 
     g_runtime_recovery = NULL;
-    const char *ctype = (strcmp(detect_response_type_embedded(m->body), "xml") == 0)
-                        ? "application/xml" : "application/json";
+    const char *ctype;
+    if (g_response_is_raw_text) {
+        ctype = "text/plain; charset=utf-8";
+    } else {
+        ctype = (strcmp(detect_response_type_embedded(m->body), "xml") == 0)
+                ? "application/xml" : "application/json";
+    }
 
     if (!result) result = strdup("");
     int len = (int)strlen(result);
@@ -865,8 +898,29 @@ static int run_single_server(const char *host, int port, int worker_index) {
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
 
+    if (g_hotreload_path) {
+        te_log("info", "hot-reload watching %s", g_hotreload_path);
+    }
+
     while (!g_stop_requested) {
         te_sleep_ms(200);
+        /* Dev hot-reload: detect a changed script and request a re-exec. The
+         * mtime must settle (two consecutive identical reads) so we don't
+         * reload mid-write while an editor is still flushing the file. */
+        if (g_hotreload_path) {
+            time_t m = te_file_mtime(g_hotreload_path);
+            if (m != 0 && m != g_hotreload_mtime) {
+                te_sleep_ms(150);
+                if (te_file_mtime(g_hotreload_path) == m) {
+                    g_hotreload_mtime = m;
+                    te_log("info", "change detected in %s, reloading", g_hotreload_path);
+                    printf("[typeeasy --dev] change detected, reloading...\n");
+                    fflush(stdout);
+                    g_reload_requested = 1;
+                    break;
+                }
+            }
+        }
     }
 
     /* Graceful shutdown (item #9-12): stop advertising readiness, then give
@@ -886,7 +940,7 @@ static int run_single_server(const char *host, int port, int worker_index) {
     mg_stop(ctx);
     te_log("info", "server stopped (req_total=%ld)", g_req_total);
     mg_exit_library();
-    return 0;
+    return g_reload_requested ? TE_RC_RELOAD : 0;
 }
 
 int typeeasy_run_api_server(const char *host, int port) {

@@ -146,6 +146,13 @@
   .card h3 { margin: 0 0 6px; }
   .card p { margin: 0; color: var(--ink-soft); font-size: 14px; }
 
+  table.cmp { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14px; }
+  table.cmp th, table.cmp td { border: 1px solid var(--border); padding: 9px 12px; text-align: left; vertical-align: top; }
+  table.cmp thead th { background: var(--green); color: #fff; }
+  table.cmp tbody tr:nth-child(even) { background: rgba(24,165,88,.05); }
+  p.note { border-left: 4px solid var(--green); background: rgba(24,165,88,.07); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 18px 0; }
+  p.warn { border-left: 4px solid #e0a106; background: rgba(224,161,6,.10); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 18px 0; }
+
   .pager { display: flex; justify-content: space-between; margin-top: 40px; border-top: 1px solid var(--border); padding-top: 18px; }
   .pager a { background: var(--green); color: #fff; padding: 9px 18px; border-radius: 8px; font-weight: 600; }
   .pager a:hover { background: var(--green-dark); text-decoration: none; }
@@ -455,7 +462,7 @@ PAGES.home = `
 <div class="cards">
   <div class="card"><h3>⚡ Rápido de escribir</h3><p>Sintaxis familiar tipo C# / TypeScript. Defines un endpoint en 4 líneas.</p></div>
   <div class="card"><h3>📦 Un solo binario</h3><p>Compila a un ejecutable nativo. Lo copias al servidor y corre. Sin dependencias.</p></div>
-  <div class="card"><h3>🔋 Baterías incluidas</h3><p>JSON, JWT, CORS, cookies, MySQL/Postgres/SQLite, WebSockets — en el núcleo.</p></div>
+  <div class="card"><h3>🔋 Baterías incluidas</h3><p>JSON, JWT, CORS, cookies, MySQL/PostgreSQL/SQLite/SQL Server, WebSockets — en el núcleo.</p></div>
   <div class="card"><h3>🚀 Listo para producción</h3><p>Health checks, logging estructurado, prefork multi-worker y graceful shutdown.</p></div>
 </div>
 
@@ -470,6 +477,27 @@ ${te(`endpoint {
 ${sh(`typeeasy --api hola.te --port 9000
 curl http://localhost:9000/api/hola/Ana`)}
 ${out('{"mensaje":"Hola Ana"}')}
+
+<h2>TypeEasy vs FastAPI</h2>
+<p>Comparación honesta. TypeEasy gana en velocidad de arranque y simplicidad de despliegue; FastAPI gana en ecosistema y madurez. Elegí según tu prioridad.</p>
+<table class="cmp">
+  <thead><tr><th>Criterio</th><th>TypeEasy</th><th>FastAPI (Python)</th></tr></thead>
+  <tbody>
+    <tr><td>Despliegue</td><td>✅ Copias <strong>un binario</strong> y corre</td><td>⚠️ Python + venv + <code class="inline">pip install</code> + (normalmente) Docker</td></tr>
+    <tr><td>Dependencias en runtime</td><td>✅ Cero (binario nativo)</td><td>⚠️ Intérprete + decenas de paquetes</td></tr>
+    <tr><td>Arranque en frío</td><td>✅ Milisegundos</td><td>⚠️ Cientos de ms (import del runtime)</td></tr>
+    <tr><td>Tamaño del artefacto</td><td>✅ Pocos MB</td><td>⚠️ Imagen de cientos de MB</td></tr>
+    <tr><td>Baterías incluidas</td><td>✅ JSON, JWT, CORS, cookies, 4 DBs, WebSockets en el núcleo</td><td>✅ Vía librerías del ecosistema</td></tr>
+    <tr><td>Concurrencia</td><td>⚠️ Intérprete serializado por request + prefork (<code class="inline">--workers N</code>); escala en Linux</td><td>✅ async/await nativo (asyncio)</td></tr>
+    <tr><td>Validación de modelos</td><td>✅ Model binding con 422 automático</td><td>✅ Pydantic (más expresivo)</td></tr>
+    <tr><td>Ecosistema y librerías</td><td>⚠️ Joven, stdlib enfocada en APIs</td><td>✅ Enorme (todo PyPI)</td></tr>
+    <tr><td>Madurez</td><td>⚠️ En evolución</td><td>✅ Probado en producción a gran escala</td></tr>
+  </tbody>
+</table>
+<p class="note"><strong>En una frase:</strong> si tu dolor es <em>desplegar</em> una API sin tooling, TypeEasy gana. Si necesitás async real, validación rica o un ecosistema gigante, FastAPI sigue siendo la elección.</p>
+
+<h2>Producción y TLS</h2>
+<p class="warn"><strong>El servidor de TypeEasy habla HTTP en claro.</strong> Para producción, poné un <strong>reverse proxy con TLS</strong> (nginx, Caddy o un Ingress) delante del binario. El proxy termina HTTPS y reenvía a TypeEasy por HTTP local. Lo mismo aplica para rate limiting por IP y balanceo entre varios <code class="inline">--workers</code>. Recomendado: desplegar en <strong>Linux</strong> con <code class="inline">--workers N</code> (N ≈ núcleos), donde el prefork escala vía <code class="inline">SO_REUSEPORT</code>.</p>
 
 <div class="pager">
   <span></span>
@@ -1699,7 +1727,7 @@ ${out('{"status":"ok"}')}
 
 <div class="note"><strong>Swagger gratis.</strong> Abre <code class="inline">http://localhost:9000/</code> y TypeEasy genera una UI interactiva con todos tus endpoints.</div>
 
-<div class="warn"><strong>Importante.</strong> Solo <code class="inline">return json(...)</code> y <code class="inline">return xml(...)</code> llenan el cuerpo de la respuesta. Un <code class="inline">return "texto"</code> simple sale vacío.</div>
+<div class="note"><strong>Tip.</strong> <code class="inline">return json(...)</code> y <code class="inline">return xml(...)</code> responden con cuerpo estructurado (JSON/XML). Un <code class="inline">return "texto"</code> simple sale como <code class="inline">text/plain</code> — ver <a href="#/json">Respuestas JSON</a>.</div>
 
 <div class="pager">
   <a class="prev" href="#/stdlib">&larr; Stdlib</a>
@@ -1806,6 +1834,18 @@ crear(u : User) {
     return json(u);   // serializa el objeto entero
 }`)}
 
+<h2>Texto plano (text/plain)</h2>
+<p>Si un handler devuelve un <strong>valor simple</strong> (string, número o concatenación) sin <code class="inline">json(...)</code>, TypeEasy responde con <code class="inline">Content-Type: text/plain; charset=utf-8</code> y ese valor como cuerpo:</p>
+${te(`[HttpGet("/api/saludo")]
+saludo() {
+    return "Hola mundo";
+}`)}
+${sh(`curl -i http://localhost:9000/api/saludo`)}
+${out(`HTTP/1.1 200 OK
+Content-Type: text/plain; charset=utf-8
+
+Hola mundo`)}
+
 <h2>Códigos de estado y headers</h2>
 ${te(`[HttpGet("/api/recurso/{id}")]
 obtener() {
@@ -1827,7 +1867,7 @@ obtener() {
   <tr><td><code>response_header(k, v)</code></td><td>Agrega un header de respuesta.</td></tr>
 </table>
 
-<div class="warn"><strong>Solo <code class="inline">json(...)</code> y <code class="inline">xml(...)</code> llenan el cuerpo.</strong> Un <code class="inline">return "texto"</code> simple produce una respuesta vacía.</div>
+<div class="note"><strong>JSON vs texto plano.</strong> <code class="inline">return json(...)</code> y <code class="inline">return xml(...)</code> fijan el cuerpo estructurado; cualquier otro <code class="inline">return</code> de un valor simple sale como <code class="inline">text/plain</code>. Devolver una variable de tipo objeto/lista/mapa sin <code class="inline">json()</code> no produce texto: usa <code class="inline">json(...)</code> para serializarla.</div>
 
 <div class="pager">
   <a class="prev" href="#/routing">&larr; Rutas y parámetros</a>
@@ -2280,7 +2320,7 @@ PAGES.home = `
 <div class="cards">
   <div class="card"><h3>⚡ Fast to write</h3><p>Familiar C# / TypeScript-like syntax. Define an endpoint in 4 lines.</p></div>
   <div class="card"><h3>📦 A single binary</h3><p>Compiles to a native executable. Copy it to the server and run. No dependencies.</p></div>
-  <div class="card"><h3>🔋 Batteries included</h3><p>JSON, JWT, CORS, cookies, MySQL/Postgres/SQLite, WebSockets — in the core.</p></div>
+  <div class="card"><h3>🔋 Batteries included</h3><p>JSON, JWT, CORS, cookies, MySQL/PostgreSQL/SQLite/SQL Server, WebSockets — in the core.</p></div>
   <div class="card"><h3>🚀 Production ready</h3><p>Health checks, structured logging, multi-worker prefork and graceful shutdown.</p></div>
 </div>
 
@@ -2295,6 +2335,27 @@ ${te(`endpoint {
 ${sh(`typeeasy --api hello.te --port 9000
 curl http://localhost:9000/api/hello/Ann`)}
 ${out('{"message":"Hello Ann"}')}
+
+<h2>TypeEasy vs FastAPI</h2>
+<p>An honest comparison. TypeEasy wins on startup speed and deployment simplicity; FastAPI wins on ecosystem and maturity. Pick based on your priority.</p>
+<table class="cmp">
+  <thead><tr><th>Criterion</th><th>TypeEasy</th><th>FastAPI (Python)</th></tr></thead>
+  <tbody>
+    <tr><td>Deployment</td><td>✅ Copy <strong>one binary</strong> and run</td><td>⚠️ Python + venv + <code class="inline">pip install</code> + (usually) Docker</td></tr>
+    <tr><td>Runtime dependencies</td><td>✅ Zero (native binary)</td><td>⚠️ Interpreter + dozens of packages</td></tr>
+    <tr><td>Cold start</td><td>✅ Milliseconds</td><td>⚠️ Hundreds of ms (runtime import)</td></tr>
+    <tr><td>Artifact size</td><td>✅ A few MB</td><td>⚠️ Hundreds-of-MB image</td></tr>
+    <tr><td>Batteries included</td><td>✅ JSON, JWT, CORS, cookies, 4 DBs, WebSockets in the core</td><td>✅ Via ecosystem libraries</td></tr>
+    <tr><td>Concurrency</td><td>⚠️ Interpreter serialized per request + prefork (<code class="inline">--workers N</code>); scales on Linux</td><td>✅ Native async/await (asyncio)</td></tr>
+    <tr><td>Model validation</td><td>✅ Model binding with automatic 422</td><td>✅ Pydantic (more expressive)</td></tr>
+    <tr><td>Ecosystem &amp; libraries</td><td>⚠️ Young, stdlib focused on APIs</td><td>✅ Huge (all of PyPI)</td></tr>
+    <tr><td>Maturity</td><td>⚠️ Evolving</td><td>✅ Battle-tested at scale</td></tr>
+  </tbody>
+</table>
+<p class="note"><strong>In one sentence:</strong> if your pain is <em>shipping</em> an API without tooling, TypeEasy wins. If you need real async, rich validation or a giant ecosystem, FastAPI is still the choice.</p>
+
+<h2>Production &amp; TLS</h2>
+<p class="warn"><strong>TypeEasy's server speaks plain HTTP.</strong> For production, put a <strong>TLS reverse proxy</strong> (nginx, Caddy or an Ingress) in front of the binary. The proxy terminates HTTPS and forwards to TypeEasy over local HTTP. The same applies for per-IP rate limiting and balancing across multiple <code class="inline">--workers</code>. Recommended: deploy on <strong>Linux</strong> with <code class="inline">--workers N</code> (N ≈ cores), where prefork scales via <code class="inline">SO_REUSEPORT</code>.</p>
 
 <div class="pager">
   <span></span>
@@ -3506,7 +3567,7 @@ ${out('{"status":"ok"}')}
 
 <div class="note"><strong>Free Swagger.</strong> Open <code class="inline">http://localhost:9000/</code> and TypeEasy generates an interactive UI with all your endpoints.</div>
 
-<div class="warn"><strong>Important.</strong> Only <code class="inline">return json(...)</code> and <code class="inline">return xml(...)</code> fill the response body. A plain <code class="inline">return "text"</code> comes out empty.</div>
+<div class="note"><strong>Tip.</strong> <code class="inline">return json(...)</code> and <code class="inline">return xml(...)</code> respond with a structured body (JSON/XML). A plain <code class="inline">return "text"</code> comes out as <code class="inline">text/plain</code> — see <a href="#/json">JSON responses</a>.</div>
 
 <div class="pager">
   <a class="prev" href="#/stdlib">&larr; Stdlib</a>
@@ -3613,6 +3674,18 @@ create(u : User) {
     return json(u);   // serializes the whole object
 }`)}
 
+<h2>Plain text (text/plain)</h2>
+<p>If a handler returns a <strong>simple value</strong> (string, number or concatenation) without <code class="inline">json(...)</code>, TypeEasy responds with <code class="inline">Content-Type: text/plain; charset=utf-8</code> and that value as the body:</p>
+${te(`[HttpGet("/api/greet")]
+greet() {
+    return "Hello world";
+}`)}
+${sh(`curl -i http://localhost:9000/api/greet`)}
+${out(`HTTP/1.1 200 OK
+Content-Type: text/plain; charset=utf-8
+
+Hello world`)}
+
 <h2>Status codes and headers</h2>
 ${te(`[HttpGet("/api/resource/{id}")]
 get() {
@@ -3634,7 +3707,7 @@ get() {
   <tr><td><code>response_header(k, v)</code></td><td>Adds a response header.</td></tr>
 </table>
 
-<div class="warn"><strong>Only <code class="inline">json(...)</code> and <code class="inline">xml(...)</code> fill the body.</strong> A plain <code class="inline">return "text"</code> produces an empty response.</div>
+<div class="note"><strong>JSON vs plain text.</strong> <code class="inline">return json(...)</code> and <code class="inline">return xml(...)</code> set a structured body; any other <code class="inline">return</code> of a simple value comes out as <code class="inline">text/plain</code>. Returning an object/list/map variable without <code class="inline">json()</code> does not produce text: use <code class="inline">json(...)</code> to serialize it.</div>
 
 <div class="pager">
   <a class="prev" href="#/routing">&larr; Routes & parameters</a>

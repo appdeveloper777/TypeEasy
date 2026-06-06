@@ -7,6 +7,42 @@
 #include "debugger.h"
 #include "typeeasy_api_server.h"
 
+#ifdef _WIN32
+  #include <process.h>   /* _execv, _putenv */
+#else
+  #include <unistd.h>    /* execv */
+#endif
+
+/* Replace the current process image with a fresh `argv` (used by --dev
+ * hot-reload). On POSIX this is a real execv. On Windows the CRT _exec*
+ * family rebuilds the child command line by joining argv with spaces and
+ * does NOT quote elements that themselves contain spaces, so paths like
+ * "C:\My App\x.te" get split. We therefore quote spaced arguments manually
+ * before handing them to _execv. Returns only on failure. */
+static void te_reexec(char **argv) {
+#ifdef _WIN32
+    int n = 0;
+    while (argv[n]) n++;
+    const char **qv = (const char **)malloc((size_t)(n + 1) * sizeof(char *));
+    if (!qv) { _execv(argv[0], (const char *const *)argv); return; }
+    for (int i = 0; i < n; i++) {
+        const char *a = argv[i];
+        if (a && a[0] != '"' && strpbrk(a, " \t")) {
+            size_t len = strlen(a);
+            char *q = (char *)malloc(len + 3);
+            if (q) { q[0] = '"'; memcpy(q + 1, a, len); q[len + 1] = '"'; q[len + 2] = '\0'; qv[i] = q; }
+            else qv[i] = a;
+        } else {
+            qv[i] = a;
+        }
+    }
+    qv[n] = NULL;
+    _execv(argv[0], (const char *const *)qv);
+#else
+    execv(argv[0], (char *const *)argv);
+#endif
+}
+
 /* --- Prototipos de las funciones en tu "Motor" --- */
 ASTNode* parse_file(FILE* file);
 extern int g_debug_mode; // Para acceder a la variable global de parser.y
@@ -409,6 +445,7 @@ int main(int argc, char *argv[]) {
             printf("  --debug                Activa logs de debug\n");
             printf("  --debug-port <p>       Inicia debug server DAP en puerto p\n");
             printf("  --api [-p PORT]        Levanta servidor HTTP con los endpoints del .te\n");
+            printf("  --dev                  Modo dev: hot-reload + errores 500 con file:line\n");
             printf("  --port <p>             Puerto para --api (default 8080)\n");
             printf("  --host <h>             Host bind para --api (default 0.0.0.0)\n");
             printf("  --cors-origin <url>    Origen permitido CORS (default *)\n");
@@ -441,6 +478,7 @@ int main(int argc, char *argv[]) {
     int api_workers = 1;
     int api_worker_index = -1;
     const char *api_cors_origin = NULL;
+    int dev_mode = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--emit-wat") == 0) {
@@ -458,6 +496,8 @@ int main(int argc, char *argv[]) {
             symbols_mode = 1;
         } else if (strcmp(argv[i], "--api") == 0) {
             api_mode = 1;
+        } else if (strcmp(argv[i], "--dev") == 0) {
+            dev_mode = 1;
         } else if ((strcmp(argv[i], "--port") == 0 || strcmp(argv[i], "-p") == 0) && i + 1 < argc) {
             api_port = atoi(argv[++i]);
         } else if (strncmp(argv[i], "--port=", 7) == 0) {
@@ -503,6 +543,8 @@ int main(int argc, char *argv[]) {
             return 1;
         }
     }
+    /* --dev implies --api: it's a dev server for an endpoint script. */
+    if (dev_mode) api_mode = 1;
     if (api_mode && !script_path) {
         fprintf(stderr, "Error: --api requiere un archivo .te (ej: typeeasy --api endpoint.te)\n");
         return 1;
@@ -665,13 +707,40 @@ int main(int argc, char *argv[]) {
     // 5b. Modo --api: levantar servidor HTTP con los endpoints del .te.
     if (api_mode) {
         if (api_workers < 1) api_workers = 1;
+        /* Dev mode (--dev): single in-process worker, runtime error file:line in
+         * HTTP 500 bodies (via TYPEEASY_DEV) and hot-reload that re-exec's the
+         * process when the script changes on disk. */
+        if (dev_mode) {
+            api_workers = 1;
+#ifdef _WIN32
+            _putenv("TYPEEASY_DEV=1");
+#else
+            setenv("TYPEEASY_DEV", "1", 1);
+#endif
+            typeeasy_enable_hot_reload(script_path);
+            printf("[typeeasy --dev] dev mode: hot-reload + verbose 500 errors enabled\n");
+            fflush(stdout);
+        }
         /* CORS origin: el flag --cors-origin tiene prioridad; si no se pasa,
          * se usa la variable de entorno TYPEEASY_CORS_ORIGIN (config sin
          * archivo, ideal para Docker / .env). Default "*" si no hay ninguno. */
         if (!api_cors_origin) api_cors_origin = getenv("TYPEEASY_CORS_ORIGIN");
         if (api_cors_origin && *api_cors_origin) typeeasy_set_cors_origin(api_cors_origin);
         int rc;
-        if (api_worker_index >= 0) {
+        if (dev_mode) {
+            /* Single in-process server so the watcher loop can re-exec. */
+            rc = typeeasy_run_api_server(api_host, api_port);
+            if (rc == 99) {
+                /* Hot-reload: replace this process image with a fresh one that
+                 * re-parses the changed script. argv is NUL-terminated per the
+                 * C standard, so it can be passed straight to execv. */
+                free_ast(script_ast);
+                te_reexec(argv);
+                /* If exec fails, fall through and report it. */
+                perror("[typeeasy --dev] hot-reload re-exec failed");
+                return 1;
+            }
+        } else if (api_worker_index >= 0) {
             /* Spawned by the Windows load-balancer master: run as a single
              * worker bound to the internal port with a short banner. */
             rc = typeeasy_run_api_server_worker(api_host, api_port, api_worker_index);
