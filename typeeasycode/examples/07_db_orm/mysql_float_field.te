@@ -1,0 +1,66 @@
+// =====================================================
+// Ejemplo — Campo FLOAT/DOUBLE vía parámetro Dapper (@param) en MySQL
+//
+// Demuestra que un parámetro flotante (p.ej. 19.9) se inserta ÍNTEGRO en
+// una columna DOUBLE usando binding estilo Dapper { "@precio": 19.9 } — el
+// bug donde se interpolaba NULL ya está corregido (src/db_params.c).
+//
+// Reutiliza la configuración de conexión global (no hardcodea credenciales).
+// Los imports se resuelven contra el directorio base de typeeasycode (/code
+// en Docker), no contra la carpeta del archivo:
+import "settings/mysql_config.te";
+//
+// Ejecutar (servidor MySQL/TiDB requerido), desde la carpeta typeeasycode/:
+//   docker compose run --rm typeeasy examples/07_db_orm/mysql_float_field.te
+// =====================================================
+
+// TiDB / PlanetScale / Aiven exigen TLS → 6to parámetro { tls: 1 }.
+// Para MySQL/MariaDB local (XAMPP) podés omitirlo.
+let conn = mysql_connect(global_host, global_user, global_pass, global_db, global_port, { tls: 1 });
+
+// 1) Crear la tabla con un campo float (DOUBLE).
+mysql_query(conn, "DROP TABLE IF EXISTS te_demo_float");
+mysql_query(conn, "CREATE TABLE te_demo_float (id INT PRIMARY KEY AUTO_INCREMENT, nombre VARCHAR(64), precio DOUBLE)");
+
+// 2) INSERT parametrizado con un @param FLOAT (y un string con apóstrofo,
+//    para verificar de paso el escape automático de comillas).
+let ins = mysql_query(
+    conn,
+    "INSERT INTO te_demo_float (nombre, precio) VALUES (@nombre, @precio)",
+    { "@nombre": "O'Reilly Book", "@precio": 19.9 }
+);
+print("[MySQL] insert: ");
+println(ins);
+
+// 3) Leer de vuelta el precio como centavos (entero) para una salida estable:
+//    si el float se hubiera bindeado como NULL/0, cents saldría null/0.
+let rows = mysql_query(
+    conn,
+    "SELECT nombre, precio, CAST(precio * 100 AS SIGNED) AS cents FROM te_demo_float WHERE nombre = @nombre",
+    { "@nombre": "O'Reilly Book" },
+    "json"
+);
+print("[MySQL] fila: ");
+println(rows);
+
+// 4) UPDATE con otro @param float.
+let upd = mysql_query(
+    conn,
+    "UPDATE te_demo_float SET precio = @nuevo WHERE nombre = @nombre",
+    { "@nuevo": 25.5, "@nombre": "O'Reilly Book" }
+);
+print("[MySQL] update: ");
+println(upd);
+
+let rows2 = mysql_query(
+    conn,
+    "SELECT CAST(precio * 100 AS SIGNED) AS cents FROM te_demo_float WHERE nombre = @nombre",
+    { "@nombre": "O'Reilly Book" },
+    "json"
+);
+print("[MySQL] tras update (cents): ");
+println(rows2);
+
+// 5) Limpieza.
+mysql_query(conn, "DROP TABLE IF EXISTS te_demo_float");
+mysql_close(conn);

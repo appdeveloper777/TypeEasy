@@ -1,0 +1,25 @@
+// Regression: method returns that produce a STRING (concatenation with a
+// field) and a BOOL (comparison) must be typed correctly, not collapsed to
+// int. Also covers fields set externally (p.name=...) read via this inside a
+// method, and a bool return printed as true/false.
+class Person {
+    name : string;
+    age  : int;
+    greet() : string {
+        return "Hi, I'm " + this.name;
+    }
+    isAdult() : bool {
+        return this.age >= 18;
+    }
+    lit() : string {
+        return "a" + "b";
+    }
+}
+
+let p = new Person();
+p.name = "Ann";
+p.age = 30;
+
+println(p.greet());
+println(p.isAdult());
+println(p.lit());

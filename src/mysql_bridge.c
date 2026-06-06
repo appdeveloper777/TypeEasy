@@ -139,7 +139,7 @@ ASTNode* mysql_query_to_objects_fast(int conn_id, const char* query, ClassNode* 
     if (te_timing) clock_gettime(CLOCK_MONOTONIC, &t0);
 
     if (conn_id < 0 || conn_id >= MYSQL_POOL_SIZE || !connections[conn_id]) {
-        fprintf(stderr, "[ORM-fast] Conexión inválida (ID: %d)\n", conn_id);
+        fprintf(stderr, "[ORM-fast] invalid connection (ID: %d)\n", conn_id);
         return NULL;
     }
     if (!cls || !query) return NULL;
@@ -306,14 +306,14 @@ ASTNode* mysql_query_result(int conn_id, const char* query) {
     
     // Ejecutar query
     if (mysql_query(conn, query)) {
-        printf("[ORM] Error en query: %s\n", mysql_error(conn));
+        printf("[ORM] query error: %s\n", mysql_error(conn));
         return NULL;
     }
     
     // Obtener resultados
     MYSQL_RES* res = mysql_store_result(conn);
     if (!res) {
-        printf("[ORM] No hay resultados para la consulta\n");
+        printf("[ORM] no results for the query\n");
         return NULL;
     }
     
@@ -476,7 +476,7 @@ static int get_arg_int(ASTNode* args, int index) {
 
     // Si es un identificador, buscar la variable
     if (current->type && strcmp(current->type, "IDENTIFIER") == 0 && current->id) {
-        printf("[DEBUG] Buscando variable IDENTIFIER: %s\n", current->id);
+        // printf("[DEBUG] looking up IDENTIFIER variable: %s\n", current->id);
         Variable* v = find_variable(current->id);
         /*if (v) {
             printf("[DEBUG] Variable encontrada: %s, tipo=%d, valor=%d\n", current->id, v->vtype, v->value.int_value);
@@ -799,8 +799,8 @@ void native_mysql_connect(ASTNode* args) {
     if (!mysql_real_connect(conn, host, user, pass, db, port, NULL, client_flags)) {
         unsigned int err_no = mysql_errno(conn);
         const char* err_msg = mysql_error(conn);
-        fprintf(stderr, "[MySQL] Error de conexion (errno=%u): %s\n",
-                err_no, err_msg ? err_msg : "(sin mensaje)"); fflush(stderr);
+        fprintf(stderr, "[MySQL] connection error (errno=%u): %s\n",
+                err_no, err_msg ? err_msg : "(no message)"); fflush(stderr);
         ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
@@ -1046,11 +1046,11 @@ void native_mysql_close(ASTNode* args) {
     
     /* Si el pool está activo, devolver al pool en vez de cerrar. */
     if (pool_release(conn_id)) {
-        fprintf(stderr, "[MySQL] Conexión devuelta al pool (ID: %d)\n", conn_id);
+        fprintf(stderr, "[MySQL] connection returned to pool (ID: %d)\n", conn_id);
         return;
     }
 
     mysql_close(connections[conn_id]);
     connections[conn_id] = NULL;
-    fprintf(stderr, "[MySQL] Conexión cerrada (ID: %d)\n", conn_id);
+    fprintf(stderr, "[MySQL] connection closed (ID: %d)\n", conn_id);
 }

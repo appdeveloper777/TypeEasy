@@ -1,0 +1,13 @@
+// Regression: CSV with Windows CRLF line endings + trailing newline must not
+// produce a phantom row (Windows native text-mode read() stripped \r so the
+// byte count no longer matched st_size; fixed with O_BINARY in te_csv.c).
+
+class Product {
+    name  : string;
+    price : int;
+}
+
+let products = from "products_crlf.csv", Product;
+println(products.length);
+let total = products.sumBy(fn(p) => p.price);
+println(total);

@@ -109,7 +109,24 @@ static int append_value(char** buf, size_t* len, size_t* cap,
         const char* raw = val->str_value ? val->str_value : "NULL";
         buf_append(buf, len, cap, raw, strlen(raw));
         return 1;
+    } else if (strcmp(tipo, "FLOAT") == 0 || strcmp(tipo, "FLOAT_LITERAL") == 0) {
+        /* Literal flotante (p.ej. 19.9): el parser lo guarda como un leaf
+         * "FLOAT" con el texto numérico en str_value (value=0). Sin esta rama
+         * caía al `else` final (kind=4) y se interpolaba NULL, perdiendo el
+         * valor en INSERT/UPDATE con params { "@price": 19.9 }. Se interpola
+         * crudo, sin comillas, igual que un número. */
+        const char* raw = (val->str_value && *val->str_value) ? val->str_value : "NULL";
+        buf_append(buf, len, cap, raw, strlen(raw));
+        return 1;
+    } else if (strcmp(tipo, "BOOL") == 0) {
+        /* Literal booleano (true/false): el parser lo guarda como un leaf
+         * "BOOL" con value=1/0 (sin str_value). SQL estándar no tiene un tipo
+         * boolean portable en parámetros, así que se interpola como entero
+         * 1/0 (compatible con TINYINT/BOOLEAN de MySQL y INTEGER de SQLite).
+         * Sin esta rama caía al `else` final (kind=4) y se perdía como NULL. */
+        kind = 1; vi = val->value ? 1 : 0;
     } else if (strcmp(tipo, "NULL") == 0 || strcmp(tipo, "NULLTOK") == 0) {
+
         kind = 4;
     } else if ((strcmp(tipo, "IDENTIFIER") == 0 || strcmp(tipo, "ID") == 0) && val->id) {
         Variable* v = find_variable(val->id);

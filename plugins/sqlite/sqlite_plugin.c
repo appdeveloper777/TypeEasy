@@ -199,7 +199,14 @@ static int bind_value(sqlite3_stmt *stmt, int idx, ASTNode *val) {
         /* En ASTNode los enteros viven en `value`. */
         return sqlite3_bind_int64(stmt, idx, (sqlite3_int64)val->value);
     }
+    if (strcmp(t, "BOOL") == 0) {
+        /* Literal booleano (true/false): leaf "BOOL" con value=1/0. SQLite no
+         * tiene tipo boolean nativo → se bindea como INTEGER 1/0. Sin esta
+         * rama caía al fallback arg_string y se bindeaba como texto. */
+        return sqlite3_bind_int64(stmt, idx, val->value ? 1 : 0);
+    }
     if (strcmp(t, "FLOAT") == 0 || strcmp(t, "DB_RAW") == 0) {
+
         /* DB_RAW: float serializado a string por db_params (caso clase). */
         double d = 0;
         if (val->str_value && *val->str_value) d = atof(val->str_value);

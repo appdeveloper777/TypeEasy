@@ -380,7 +380,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     if (r && evaluate_expression(r) != 0) { found = 1; break; }
                     item = item->next;
                 }
-                add_or_update_variable("__ret__", create_ast_leaf_number("INT", found, NULL, NULL));
+                add_or_update_variable("__ret__", create_ast_leaf_number("BOOL", found, NULL, NULL));
                 return 1;
             }
             if (strcmp(fname, "every") == 0) {
@@ -395,7 +395,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         item = item->next;
                     }
                     if (ok) {
-                        add_or_update_variable("__ret__", create_ast_leaf_number("INT", all, NULL, NULL));
+                        add_or_update_variable("__ret__", create_ast_leaf_number("BOOL", all, NULL, NULL));
                         return 1;
                     }
                     item = list->left; all = 1;
@@ -405,7 +405,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     if (!r || evaluate_expression(r) == 0) { all = 0; break; }
                     item = item->next;
                 }
-                add_or_update_variable("__ret__", create_ast_leaf_number("INT", all, NULL, NULL));
+                add_or_update_variable("__ret__", create_ast_leaf_number("BOOL", all, NULL, NULL));
                 return 1;
             }
             /* ===== v0.0.11 LINQ-style higher-order operators ===== */
@@ -421,7 +421,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         item = item->next;
                     }
                     if (ok) {
-                        add_or_update_variable("__ret__", create_ast_leaf_number("INT", none_match, NULL, NULL));
+                        add_or_update_variable("__ret__", create_ast_leaf_number("BOOL", none_match, NULL, NULL));
                         return 1;
                     }
                     item = list->left; none_match = 1;
@@ -431,7 +431,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     if (r && evaluate_expression(r) != 0) { none_match = 0; break; }
                     item = item->next;
                 }
-                add_or_update_variable("__ret__", create_ast_leaf_number("INT", none_match, NULL, NULL));
+                add_or_update_variable("__ret__", create_ast_leaf_number("BOOL", none_match, NULL, NULL));
                 return 1;
             }
             if (strcmp(fname, "lastWhere") == 0) {

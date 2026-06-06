@@ -1,0 +1,45 @@
+// expect: ins=1 actives=1 cents=1950 nulls=1
+// Regresión: TODOS los tipos de @param soportados por el plugin SQLite en una
+// sola corrida — int, float, string, bool y null.
+//
+// El plugin SQLite bindea de forma nativa (sqlite3_bind_int64/double/text/null,
+// ver bind_value en plugins/sqlite/sqlite_plugin.c). El tipo BOOL (true/false)
+// faltaba: caía al fallback arg_string y se bindeaba como texto; ahora va como
+// INTEGER 1/0 (rama "BOOL" -> bind_int64). null va como NULL (bind_null).
+//
+// La aritmética se hace en SQL devolviendo ENTEROS para que la salida sea
+// determinista (no depende del formateo de floats).
+//
+// Plugin embebido (sin servidor) → corre en CI.
+load_native("sqlite");
+
+let db = sqlite_connect(":memory:");
+sqlite_exec(db, "CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price REAL, active INTEGER, notes TEXT)");
+
+// Fila 1: bool true + notes NULL (string con apóstrofo para verificar escape).
+let ins = sqlite_exec(db,
+    "INSERT INTO items (name, price, active, notes) VALUES (@name, @price, @active, @notes)",
+    { "@name": "O'Reilly Book", "@price": 19.5, "@active": true, "@notes": null });
+print("ins="); print(ins);
+
+// Fila 2: bool false + notes con texto.
+sqlite_exec(db,
+    "INSERT INTO items (name, price, active, notes) VALUES (@name, @price, @active, @notes)",
+    { "@name": "Widget", "@price": 8.0, "@active": false, "@notes": "n/a" });
+
+// bool: COUNT con @param booleano (true -> 1). Sólo la fila 1 tiene active=1.
+let aRows = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c FROM items WHERE active = @flag", { "@flag": true }, "json"));
+let a0 = aRows[0];
+print(" actives="); print(a0["c"]);
+
+// float: precio de la fila 1 en centavos (entero), filtrando por string.
+let cRows = json_parse(sqlite_query(db, "SELECT CAST(price * 100 AS INTEGER) AS cents FROM items WHERE name = @name", { "@name": "O'Reilly Book" }, "json"));
+let c0 = cRows[0];
+print(" cents="); print(c0["cents"]);
+
+// null: la fila 1 insertó notes NULL → COUNT IS NULL = 1.
+let nRows = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c FROM items WHERE notes IS NULL", "json"));
+let n0 = nRows[0];
+print(" nulls="); println(n0["c"]);
+
+sqlite_close(db);

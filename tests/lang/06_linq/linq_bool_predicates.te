@@ -1,0 +1,29 @@
+// Regression: LINQ boolean predicates all/none/any must return a BOOL value
+// so println prints true/false, not 1/0. (Previously collapsed to INT.)
+// Expected output is in the sibling linq_bool_predicates.expected file.
+class Product {
+    id : int;
+    name : string;
+    price : int;
+    stock : int;
+    __constructor(_id : int, _name : string, _price : int, _stock : int) {
+        this.id = _id;
+        this.name = _name;
+        this.price = _price;
+        this.stock = _stock;
+    }
+}
+
+let products = [
+    new Product(1, "apple", 10, 30),
+    new Product(2, "pear",  15, 10),
+    new Product(3, "grape",  8, 50),
+    new Product(4, "mango", 20,  5)
+];
+
+println(products.all(fn(p) => p.stock > 0));
+println(products.none(fn(p) => p.price == 0));
+println(products.any(fn(p) => p.price > 18));
+println(products.all(fn(p) => p.price > 100));
+println(products.none(fn(p) => p.stock > 0));
+println(products.any(fn(p) => p.price > 100));

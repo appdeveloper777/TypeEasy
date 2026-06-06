@@ -1,0 +1,43 @@
+// expect: ins=1 cents=1950 above=1 total=2750
+// Regresión: parámetro Dapper de tipo FLOAT en una columna REAL.
+//
+// Contexto del bug hermano: en el path compartido `db_substitute_params`
+// (mysql/postgres/sqlserver) un float literal en el mapa `{ "@price": 19.5 }`
+// se interpolaba como NULL (faltaba la rama "FLOAT" en append_value de
+// src/db_params.c; ya corregido + test en C tests/db/test_db_params.c). El
+// plugin SQLite NO usa ese path: bindea con sqlite3_bind_double, pero igual
+// queremos un test end-to-end que demuestre que un @param flotante llega
+// íntegro a una columna REAL y se puede leer de vuelta.
+//
+// La aritmética se hace en SQL devolviendo ENTEROS (cents / COUNT / SUM*100)
+// para que la salida sea determinista y no dependa del formateo de floats.
+//
+// El plugin SQLite va embebido (no requiere servidor) → corre en CI.
+load_native("sqlite");
+
+let db = sqlite_connect(":memory:");
+sqlite_exec(db, "CREATE TABLE products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price REAL)");
+
+// INSERT con un @param float (y un string con apóstrofo, para verificar que
+// el binding no rompe el quoting).
+let ins = sqlite_exec(db, "INSERT INTO products (name, price) VALUES (@name, @price)", { "@name": "O'Reilly Book", "@price": 19.5 });
+sqlite_exec(db, "INSERT INTO products (name, price) VALUES (@name, @price)", { "@name": "Widget", "@price": 8.0 });
+print("ins="); print(ins);
+
+// Leer de vuelta el precio del primer producto como centavos (entero).
+// Si el float se hubiera bindeado como NULL/0, cents saldría null/0.
+let cRows = json_parse(sqlite_query(db, "SELECT CAST(price * 100 AS INTEGER) AS cents FROM products WHERE name = @name", { "@name": "O'Reilly Book" }, "json"));
+let c0 = cRows[0];
+print(" cents="); print(c0["cents"]);
+
+// COUNT con un @param float en el WHERE (filtra por precio).
+let aRows = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c FROM products WHERE price > @min", { "@min": 10.0 }, "json"));
+let a0 = aRows[0];
+print(" above="); print(a0["c"]);
+
+// SUM de la columna REAL, *100, como entero.
+let tRows = json_parse(sqlite_query(db, "SELECT CAST(SUM(price) * 100 AS INTEGER) AS s FROM products", "json"));
+let t0 = tRows[0];
+print(" total="); println(t0["s"]);
+
+sqlite_close(db);

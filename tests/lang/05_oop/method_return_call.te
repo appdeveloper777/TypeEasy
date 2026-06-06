@@ -1,0 +1,19 @@
+// expect: 5
+// Regression: a method declared with a non-void return type that returns a
+// call expression directly (e.g. `return Math.sqrt(...)`) must NOT raise
+// "does not return a value". The nested call clears the global return_node;
+// interpret_return_node restores it and the value is read from __ret__.
+class Point {
+    x : float;
+    y : float;
+    __constructor(px : float, py : float) {
+        this.x = px;
+        this.y = py;
+    }
+    distance() : float {
+        return Math.sqrt(this.x * this.x + this.y * this.y);
+    }
+}
+
+let point = new Point(3.0, 4.0);
+println(point.distance());

@@ -410,8 +410,15 @@ static char *csv_read_file(const char *filename, size_t *out_len, int *out_is_mm
     }
     (void)force_pread;
 #endif
-    /* V9FS o fallback: pread paralelo (4 threads, evita page-faults VFS). */
-    int fd = open(filename, O_RDONLY);
+    /* V9FS o fallback: pread paralelo (4 threads, evita page-faults VFS).
+     * O_BINARY (Windows/MinGW): sin esto el runtime traduce CRLF→LF al leer,
+     * de modo que read() entrega MENOS bytes que st_size; el parser luego
+     * escanea hasta st_size y procesa bytes basura tras el contenido real
+     * (fila fantasma). En POSIX O_BINARY no existe y no hay traducción. */
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+    int fd = open(filename, O_RDONLY | O_BINARY);
     if (fd < 0) return NULL;
     struct stat st;
     if (fstat(fd, &st) < 0) { close(fd); return NULL; }

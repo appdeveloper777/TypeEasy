@@ -1639,6 +1639,18 @@ let r = mysql_query(
 );
 println(r);`)}
 
+<h2>Tipos de datos en parámetros</h2>
+<p>El binder estilo Dapper acepta estos tipos de TypeEasy y los traduce a SQL de forma segura (las cadenas se escapan y se entrecomillan; nunca se concatena el valor crudo):</p>
+<table class="ref">
+  <tr><th>Tipo TypeEasy</th><th>Ejemplo en el map</th><th>Se interpola como</th></tr>
+  <tr><td><code>int</code></td><td><code>{ "@id": 5 }</code></td><td><code>5</code></td></tr>
+  <tr><td><code>float</code></td><td><code>{ "@precio": 19.9 }</code></td><td><code>19.9</code></td></tr>
+  <tr><td><code>string</code></td><td><code>{ "@nombre": "O'Reilly" }</code></td><td><code>'O''Reilly'</code> (comillas escapadas)</td></tr>
+  <tr><td><code>bool</code></td><td><code>{ "@activo": true }</code></td><td><code>1</code> · <code>false</code> &rarr; <code>0</code> (MySQL no tiene boolean nativo)</td></tr>
+  <tr><td><code>null</code></td><td><code>{ "@x": null }</code></td><td><code>NULL</code></td></tr>
+  <tr><td>objeto / clase</td><td><code>filtro</code></td><td>cada atributo se expone como <code>@id</code>, <code>@nombre</code>…</td></tr>
+</table>
+
 <h2>Cerrar</h2>
 ${te(`mysql_close(conn);`)}
 
@@ -2055,6 +2067,17 @@ postgres_close(conn);`)}
   <tr><td>Consultar</td><td><code>sqlite_query(db, sql, "json")</code> · <code>sqlite_query(db, sql, {params}, "json")</code></td></tr>
   <tr><td>Último id</td><td><code>sqlite_last_id(db)</code></td></tr>
   <tr><td>Cerrar</td><td><code>sqlite_close(db)</code> · <code>mysql_close(conn)</code></td></tr>
+</table>
+
+<h2>Tipos de datos en parámetros (SQLite)</h2>
+<p>El plugin de SQLite bindea los parámetros de forma nativa (con <code class="inline">sqlite3_bind_*</code>), sin concatenar nada en el SQL:</p>
+<table class="ref">
+  <tr><th>Tipo TypeEasy</th><th>Ejemplo en el map</th><th>Binding nativo SQLite</th></tr>
+  <tr><td><code>int</code></td><td><code>{ "@id": 5 }</code></td><td>INTEGER (<code>bind_int64</code>)</td></tr>
+  <tr><td><code>float</code></td><td><code>{ "@precio": 19.9 }</code></td><td>REAL (<code>bind_double</code>)</td></tr>
+  <tr><td><code>string</code></td><td><code>{ "@nombre": "Teclado" }</code></td><td>TEXT (<code>bind_text</code>)</td></tr>
+  <tr><td><code>bool</code></td><td><code>{ "@activo": true }</code></td><td>INTEGER <code>1</code>/<code>0</code> (<code>bind_int64</code>; SQLite no tiene boolean nativo)</td></tr>
+  <tr><td><code>null</code></td><td><code>{ "@x": null }</code></td><td>NULL (<code>bind_null</code>)</td></tr>
 </table>
 
 <div class="note"><strong>Parámetros seguros.</strong> Las claves del map pueden ir con o sin <code class="inline">@</code> (<code class="inline">{ "@id": 1 }</code> o <code class="inline">{ "id": 1 }</code>). Nunca concatenes valores directo en el SQL.</div>
@@ -3398,6 +3421,18 @@ let r = mysql_query(
 );
 println(r);`)}
 
+<h2>Data types in parameters</h2>
+<p>The Dapper-style binder accepts these TypeEasy types and translates them to SQL safely (strings are escaped and quoted; the raw value is never concatenated):</p>
+<table class="ref">
+  <tr><th>TypeEasy type</th><th>Example in the map</th><th>Interpolated as</th></tr>
+  <tr><td><code>int</code></td><td><code>{ "@id": 5 }</code></td><td><code>5</code></td></tr>
+  <tr><td><code>float</code></td><td><code>{ "@price": 19.9 }</code></td><td><code>19.9</code></td></tr>
+  <tr><td><code>string</code></td><td><code>{ "@name": "O'Reilly" }</code></td><td><code>'O''Reilly'</code> (quotes escaped)</td></tr>
+  <tr><td><code>bool</code></td><td><code>{ "@active": true }</code></td><td><code>1</code> · <code>false</code> &rarr; <code>0</code> (MySQL has no native boolean)</td></tr>
+  <tr><td><code>null</code></td><td><code>{ "@x": null }</code></td><td><code>NULL</code></td></tr>
+  <tr><td>object / class</td><td><code>filter</code></td><td>each attribute is exposed as <code>@id</code>, <code>@name</code>…</td></tr>
+</table>
+
 <h2>Close</h2>
 ${te(`mysql_close(conn);`)}
 
@@ -3808,6 +3843,17 @@ postgres_close(conn);`)}
   <tr><td>Query</td><td><code>sqlite_query(db, sql, "json")</code> · <code>sqlite_query(db, sql, {params}, "json")</code></td></tr>
   <tr><td>Last id</td><td><code>sqlite_last_id(db)</code></td></tr>
   <tr><td>Close</td><td><code>sqlite_close(db)</code> · <code>mysql_close(conn)</code></td></tr>
+</table>
+
+<h2>Data types in parameters (SQLite)</h2>
+<p>The SQLite plugin binds parameters natively (with <code class="inline">sqlite3_bind_*</code>), without concatenating anything into the SQL:</p>
+<table class="ref">
+  <tr><th>TypeEasy type</th><th>Example in the map</th><th>Native SQLite binding</th></tr>
+  <tr><td><code>int</code></td><td><code>{ "@id": 5 }</code></td><td>INTEGER (<code>bind_int64</code>)</td></tr>
+  <tr><td><code>float</code></td><td><code>{ "@price": 19.9 }</code></td><td>REAL (<code>bind_double</code>)</td></tr>
+  <tr><td><code>string</code></td><td><code>{ "@name": "Keyboard" }</code></td><td>TEXT (<code>bind_text</code>)</td></tr>
+  <tr><td><code>bool</code></td><td><code>{ "@active": true }</code></td><td>INTEGER <code>1</code>/<code>0</code> (<code>bind_int64</code>; SQLite has no native boolean)</td></tr>
+  <tr><td><code>null</code></td><td><code>{ "@x": null }</code></td><td>NULL (<code>bind_null</code>)</td></tr>
 </table>
 
 <div class="note"><strong>Safe parameters.</strong> The map keys can go with or without <code class="inline">@</code> (<code class="inline">{ "@id": 1 }</code> or <code class="inline">{ "id": 1 }</code>). Never concatenate values directly into the SQL.</div>
