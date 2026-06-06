@@ -441,6 +441,13 @@ static void te_bind_param(ParameterNode *p) {
 char* typeeasy_embedded_invoke_method(MethodNode* m) {
     if (!m || !m->body) return NULL;
 
+    /* C#/.NET async semantics: record whether this handler was declared with
+     * the `async` modifier so te_coop_yield_begin() knows whether to release
+     * the invoke lock while parked in an await. A plain handler keeps the lock
+     * (blocking/serialised); an `async` handler lets other requests overlap. */
+    extern __thread int g_current_handler_async;
+    g_current_handler_async = m->is_async;
+
     /* Mark that we are inside per-request handling so create_ast_leaf() does
      * NOT intern runtime-generated STRING leaves (they are unique per request
      * and would grow the immortal intern table without bound == memory leak).

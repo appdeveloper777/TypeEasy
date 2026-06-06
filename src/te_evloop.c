@@ -209,8 +209,8 @@ static Fiber *g_current = NULL;       /* fiber currently running, NULL = schedul
 static int    g_loop_active = 0;      /* re-entrancy guard for the driver */
 
 #if defined(_WIN32)
-static void *g_sched_fiber = NULL;    /* the scheduler's fiber (this thread) */
-static int   g_thread_converted = 0;
+static void *g_sched_fiber = NULL;    /* the scheduler's fiber (this drain) */
+static int   g_we_converted = 0;      /* did WE ConvertThreadToFiber this drain? */
 #else
 static ucontext_t g_sched_uctx;       /* scheduler resume point */
 #endif
@@ -294,27 +294,34 @@ static void fiber_resume(Fiber *f) {
 }
 
 /* Make sure the scheduler context exists (Windows must convert the thread to a
- * fiber before SwitchToFiber works). Safe to call repeatedly. */
-#if defined(_WIN32)
-/* A thread converted with ConvertThreadToFiber MUST be converted back before
- * the thread exits, or the CRT/OpenMP teardown crashes. We register this once
- * via atexit; it runs on the main thread (which is the scheduler fiber). */
-static void scheduler_atexit_cleanup(void) {
-    if (g_thread_converted && IsThreadAFiber()) {
-        ConvertFiberToThread();
-        g_thread_converted = 0;
-    }
-}
-#endif
-
+ * fiber before SwitchToFiber works). Windows fibers are thread-affine, so the
+ * conversion is established per top-level drain on whatever thread is running
+ * it (the API server serializes drains behind a global invoke lock but may use
+ * a different pool thread for each request). scheduler_release() undoes it so
+ * the thread is left exactly as it was found. */
 static void scheduler_ensure(void) {
 #if defined(_WIN32)
-    if (!g_thread_converted) {
-        void *existing = IsThreadAFiber() ? GetCurrentFiber() : NULL;
-        g_sched_fiber = existing ? existing : ConvertThreadToFiber(NULL);
-        g_thread_converted = 1;
-        atexit(scheduler_atexit_cleanup);
+    if (IsThreadAFiber()) {
+        g_sched_fiber  = GetCurrentFiber();
+        g_we_converted = 0;            /* already a fiber: do not convert back */
+    } else {
+        g_sched_fiber  = ConvertThreadToFiber(NULL);
+        g_we_converted = 1;            /* we own the conversion; undo it later */
     }
+#endif
+}
+
+/* Undo a conversion we performed in scheduler_ensure(). A thread converted with
+ * ConvertThreadToFiber MUST be converted back before it exits, or the CRT/OpenMP
+ * teardown crashes; doing it at the end of every drain keeps each server worker
+ * thread in its original (non-fiber) state. */
+static void scheduler_release(void) {
+#if defined(_WIN32)
+    if (g_we_converted && IsThreadAFiber()) {
+        ConvertFiberToThread();
+        g_we_converted = 0;
+    }
+    g_sched_fiber = NULL;
 #endif
 }
 
@@ -489,7 +496,18 @@ static int io_any_waiting(void) {
  * every IO_WAIT fiber whose job finished to FB_READY. */
 static void io_wait_and_collect(int timeout_ms) {
     pthread_mutex_lock(&g_io_mu);
-    if (g_io_pending > 0) {
+    /* Only block if work is outstanding AND nothing has finished yet. A worker
+     * that completed before we reached pthread_cond_wait would otherwise make
+     * us miss its signal and hang forever (lost wakeup). job->done is published
+     * by the worker under g_io_mu, which we hold here. */
+    int any_done = 0;
+    for (int i = 0; i < TE_FIBER_MAX; i++) {
+        Fiber *f = &g_fibers[i];
+        if (f->in_use && f->state == FB_IO_WAIT && f->io_job && f->io_job->done) {
+            any_done = 1; break;
+        }
+    }
+    if (g_io_pending > 0 && !any_done) {
         if (timeout_ms < 0) {
             pthread_cond_wait(&g_io_done_cv, &g_io_mu);
         } else {
@@ -523,6 +541,8 @@ static void io_wait_and_collect(int timeout_ms) {
  * caller's interpreter context is saved on entry and restored on exit so that
  * resuming fibers (which overwrite the live scope) cannot corrupt it. */
 static void evloop_run_until(const int *ids, int n) {
+    int top = !g_loop_active;          /* outermost drain converts the thread */
+    if (top) scheduler_ensure();
     CtxSnapshot caller;
     memset(&caller, 0, sizeof(caller));  /* ctx_save frees prior contents first */
     ctx_save(&caller);
@@ -587,6 +607,7 @@ static void evloop_run_until(const int *ids, int n) {
     g_loop_active = 0;
     ctx_restore(&caller);
     ctx_free(&caller);   /* caller's strings are now duplicated live; drop ours */
+    if (top) scheduler_release();
 }
 
 /* ---- .te builtin adapters ------------------------------------------------ */
@@ -601,7 +622,6 @@ static int adapt_go(ASTNode *node, ASTNode *args) {
             create_ast_leaf_number("INT", -1, NULL, NULL));
         return 1;
     }
-    scheduler_ensure();
     Fiber *f = &g_fibers[id];
     memset(f, 0, sizeof(*f));
     f->in_use = 1;

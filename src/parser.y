@@ -17,6 +17,11 @@
     int g_debug_mode = 0;
     static int g_pending_auth = 0;   /* @auth decorator flag, applied to next endpoint_method */
     static int g_endpoint_auth_all = 0; /* @auth at endpoint level, applied to ALL methods */
+    /* C#/.NET-style `async` endpoint modifier. The lexer (parser.l) sets this to
+     * 1 when it strips an `async` that follows ']' (an endpoint handler), and the
+     * endpoint_methods reduction below copies it into MethodNode.is_async, then
+     * clears it. Non-static so the lexer translation unit shares it via extern. */
+    int g_pending_async = 0;
     /* v0.1.0 — WebSocket lifecycle blocks (on_open/on_message/on_close).
      * Filled while parsing a single [WebSocket] handler body, then consumed by
      * the WS endpoint_method action. Reset at the start of each WS handler. */
@@ -151,9 +156,9 @@ auth_endpoint_decl:
 
 endpoint_methods:
     endpoint_method
-        { if (global_methods) global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; g_pending_auth = 0; $$ = NULL; }
+        { if (global_methods) { global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; global_methods->is_async = g_pending_async; } g_pending_auth = 0; g_pending_async = 0; $$ = NULL; }
     | endpoint_methods endpoint_method
-        { if (global_methods) global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; g_pending_auth = 0; $$ = NULL; }
+        { if (global_methods) { global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; global_methods->is_async = g_pending_async; } g_pending_auth = 0; g_pending_async = 0; $$ = NULL; }
     | auth_marker
         { $$ = NULL; }
     | endpoint_methods auth_marker

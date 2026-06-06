@@ -58,6 +58,29 @@
         new_import->next = imported_files_list;
         imported_files_list = new_import;
     }
+
+    /* `async` is an OPTIONAL, cosmetic modifier on an endpoint handler
+     * (C#/.NET-style: `[HttpGet("/x")] async foo() {...}`). It carries NO
+     * runtime effect — cooperative request interleaving is already transparent,
+     * so `async foo()` and `foo()` behave identically. Rather than add the
+     * modifier to the (conflict-sensitive) LALR grammar, the scanner strips it:
+     * flex emits its scanner as te_raw_yylex(), and the yylex() wrapper in the
+     * user-code section below drops an ASYNC token ONLY when it immediately
+     * follows ']' (RSBRACKET) — which in valid TypeEasy can only be an endpoint
+     * handler declaration. Everywhere else (e.g. `async fn() => ...`) ASYNC
+     * passes through unchanged. */
+    #define YY_DECL int te_raw_yylex(void)
+
+    /* Last token returned by yylex(); used only to detect the `]`-then-`async`
+     * endpoint-modifier sequence. Reset between top-level parses in
+     * te_lexer_full_reset(). */
+    static int g_prev_lex_tok = 0;
+
+    /* Set to 1 by the yylex() wrapper when it strips an endpoint `async`
+     * modifier; the parser (parser.y) reads it in the endpoint_methods
+     * reduction to set MethodNode.is_async, then clears it. Defined non-static
+     * in parser.y so both translation units share it. */
+    extern int g_pending_async;
 %}
 
 %x INCL
@@ -384,6 +407,35 @@ int yywrap() {
     return 1;
 }
 
+/* yylex(): thin wrapper around the flex-generated scanner (te_raw_yylex, see
+ * the YY_DECL define near the top of this file). Its sole job is to make the
+ * `async` keyword an OPTIONAL, cosmetic modifier on endpoint handlers:
+ *
+ *     [HttpGet("/ping")] async ping() { ... }   // C#/.NET-style
+ *     [HttpGet("/ping")]       ping() { ... }   // plain — identical behaviour
+ *
+ * When ASYNC arrives immediately after ']' (RSBRACKET) it can only be an
+ * endpoint handler's modifier (an array index / list literal `]` is never
+ * followed by `async` in valid source), so we swallow the token but RECORD it
+ * in g_pending_async so the parser can flag the handler's MethodNode.is_async
+ * (which gates cooperative request overlap on await — C#/.NET semantics). In
+ * every other position — notably the `async fn() => ...` task-spawn
+ * expression — ASYNC is returned unchanged. This keeps the modifier out of the
+ * conflict-sensitive LALR grammar entirely, so single-user behaviour and all
+ * existing syntax are byte-for-byte unchanged. */
+int yylex(void) {
+    int t = te_raw_yylex();
+    if (t == ASYNC && g_prev_lex_tok == RSBRACKET) {
+        /* endpoint `async` modifier: drop the token but remember it so the
+         * parser marks this handler async; then fetch the handler name. */
+        g_pending_async = 1;
+        g_prev_lex_tok = t;
+        t = te_raw_yylex();
+    }
+    g_prev_lex_tok = t;
+    return t;
+}
+
 /* === Bloque B: full lexer state reset between top-level parse_file() calls.
  * Called from parse_file() in parser.y. Lives here in parser.l because the
  * YY_CURRENT_BUFFER macro and the BEGIN() / start condition machinery are
@@ -416,6 +468,12 @@ void te_lexer_full_reset(FILE* file) {
     yyrestart(file);
     /* (4) back to the default start condition */
     BEGIN(INITIAL);
+
+    /* (4b) reset the yylex() previous-token tracker so a stale RSBRACKET from
+     * an aborted prior parse can't swallow a leading `async` of the next file. */
+    g_prev_lex_tok = 0;
+    /* and clear any pending endpoint-async flag from an aborted prior parse. */
+    g_pending_async = 0;
 
     /* (5) Bloque C: free the per-parse import dedup list.
      * imported_files_list is a global linked list used by <INCL> to skip

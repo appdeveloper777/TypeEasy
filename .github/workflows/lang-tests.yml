@@ -222,3 +222,34 @@ jobs:
             --mode docker \
             --image typeeasy-typeeasy:latest \
             --requests 600 --workers 24
+
+  async-overlap:
+    # Async endpoint semantics (C#/.NET-style `async`): levanta el server real
+    # sirviendo fixtures/async_overlap_app.te y prueba que un handler `async`
+    # solapa requests concurrentes (libera el invoke lock en `await`) mientras
+    # que el handler PLANO equivalente los serializa (mantiene el lock). Cubre
+    # la diferencia OBSERVABLE entre las dos formas de declarar un endpoint.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build TypeEasy interpreter image
+        run: docker compose build typeeasy
+
+      - name: Run async overlap test
+        env:
+          JWT_SECRET: ci-async-overlap-secret
+        run: |
+          python tests/api/run_async_overlap_test.py \
+            --mode docker \
+            --image typeeasy-typeeasy:latest \
+            -k 4

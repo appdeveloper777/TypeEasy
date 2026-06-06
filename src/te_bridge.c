@@ -33,6 +33,7 @@
   #include <signal.h>
   #include <errno.h>
   #include <poll.h>
+  #include <fcntl.h>
 #endif
 
 /* ---- Host helpers from ast.c (declared in ast.h) ---- */
@@ -151,6 +152,17 @@ static int te_proc_spawn(const char *cmdline) {
         close(inpipe[0]); close(inpipe[1]);
         return -1;
     }
+
+    /* Mark the parent-retained pipe ends close-on-exec so that workers spawned
+     * LATER (each via fork+exec) do not inherit — and thereby keep alive — this
+     * worker's stdin/stdout. Without this, closing one worker's stdin would not
+     * deliver EOF (a sibling worker still holds a copy of the write end), so
+     * lang_close() would block ~2s per worker waiting for an exit that never
+     * comes, fully serialising concurrent --api requests. The child of THIS
+     * fork still gets correct stdin/stdout because dup2() clears close-on-exec
+     * on the duplicated fd 0/1. */
+    fcntl(inpipe[1],  F_SETFD, FD_CLOEXEC); /* parent write end (-> p->in_fd)  */
+    fcntl(outpipe[0], F_SETFD, FD_CLOEXEC); /* parent read end  (-> p->out_fd) */
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -389,6 +401,50 @@ int te_bridge_poll_line(int slot, char **out) {
         return -1;
     }
     return 0;
+}
+
+/* Block until one of the given slots' stdout is readable, or timeout_ms passes.
+ * See te_bridge.h. Touches only per-slot fds/buffers (owner-private), so it is
+ * safe to run with the global interpreter lock released. */
+int te_bridge_wait_readable(const int *slots, int n, int timeout_ms) {
+    if (!slots || n <= 0) return 0;
+
+    /* If any slot already holds a complete buffered line, don't block at all
+     * (the caller can consume it immediately on the next step). */
+    int has_buffered = 0;
+    for (int i = 0; i < n; i++) {
+        int s = slots[i];
+        if (!te_proc_valid(s)) continue;
+        TeProc *p = &g_procs[s];
+        for (size_t j = 0; j < p->rlen; j++) {
+            if (p->rbuf[j] == '\n') { has_buffered = 1; break; }
+        }
+        if (has_buffered) break;
+    }
+
+#if defined(_WIN32)
+    /* Windows anonymous pipes have no poll(); keep the caller's existing
+     * 1ms-sleep behaviour by reporting "nothing waited" (return 0). The
+     * Windows path already overlaps correctly via CRITICAL_SECTION. */
+    (void)timeout_ms; (void)has_buffered;
+    return 0;
+#else
+    struct pollfd pfds[TE_PROC_MAX];
+    int valid = 0;
+    for (int i = 0; i < n && valid < TE_PROC_MAX; i++) {
+        int s = slots[i];
+        if (!te_proc_valid(s)) continue;
+        pfds[valid].fd      = g_procs[s].out_fd;
+        pfds[valid].events  = POLLIN;
+        pfds[valid].revents = 0;
+        valid++;
+    }
+    if (valid == 0) return 0;
+    int t = has_buffered ? 0 : timeout_ms;
+    int pr = poll(pfds, (nfds_t)valid, t);
+    (void)pr; /* readiness is re-checked by te_bridge_poll_line under the lock */
+    return valid;
+#endif
 }
 
 /* ============================================================

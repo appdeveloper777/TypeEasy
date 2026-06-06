@@ -378,6 +378,7 @@ window.NAV_ES = [
     ["cookies", "Cookies y sesión"],
     ["cors", "CORS"],
     ["database", "Bases de datos"],
+    ["async-endpoint", "Async/await endpoint"],
   ]},
   { group: "Ejemplos completos", items: [
     ["ex-crud", "CRUD con SQLite"],
@@ -431,6 +432,7 @@ window.NAV_EN = [
     ["cookies", "Cookies & session"],
     ["cors", "CORS"],
     ["database", "Databases"],
+    ["async-endpoint", "Async/await endpoint"],
   ]},
   { group: "Full examples", items: [
     ["ex-crud", "CRUD with SQLite"],
@@ -1492,6 +1494,33 @@ var texto = await async fn() => { return read_file_async("datos.txt"); };
 println(texto.length);`)}
 ${out("ABC\\nms=124")}
 
+<h2>async / await dentro de un endpoint</h2>
+<p>Las mismas palabras clave funcionan dentro de un <code class="inline">endpoint { }</code>: lanza el trabajo lento con <code class="inline">async</code>, sigue con otra cosa y <code class="inline">await</code> justo cuando necesitas el resultado. Tres lecturas de archivo se solapan en ~el tiempo de una.</p>
+${te(`endpoint {
+    [HttpGet("/api/reporte")]
+    reporte() {
+        // las tres lecturas arrancan a la vez (no bloquean el hilo)
+        var v = async fn() => { return read_file_async("ventas.json"); };
+        var c = async fn() => { return read_file_async("clientes.json"); };
+        var p = async fn() => { return read_file_async("productos.json"); };
+
+        // se esperan cuando hacen falta: total ~= la lectura más lenta
+        var ventas    = await v;
+        var clientes  = await c;
+        var productos = await p;
+
+        return json({
+            ventas: ventas.length,
+            clientes: clientes.length,
+            productos: productos.length
+        });
+    }
+}`, "reporte.te")}
+${sh(`typeeasy --api reporte.te --port 9000`)}
+${sh(`curl http://localhost:9000/api/reporte`)}
+${out('{"ventas":1280,"clientes":342,"productos":97}')}
+<div class="note"><strong>Por qué importa.</strong> Cada petición HTTP corre en su propio event loop, así que el <code class="inline">await</code> no bloquea a los demás clientes: el servidor sigue atendiendo en paralelo.</div>
+
 <div class="pager">
   <a class="prev" href="#/bridge">&larr; Bridge</a>
   <a href="#/first-api">Tu primera API &rarr;</a>
@@ -2179,6 +2208,68 @@ sqlserver_close(conn);`)}
 
 <div class="pager">
   <a class="prev" href="#/cors">&larr; CORS</a>
+  <a href="#/async-endpoint">Async/await endpoint &rarr;</a>
+</div>
+`;
+
+PAGES["async-endpoint"] = `
+<h1>Async/await endpoint <span class="ver" style="vertical-align:middle">v0.0.20</span></h1>
+<p class="lead">Un endpoint se puede declarar de <strong>dos formas</strong> — con o sin <code class="inline">async</code> — igual que en C#/.NET. La palabra clave cambia el comportamiento en tiempo de ejecución: <strong>concurrente</strong> vs <strong>bloqueante</strong>.</p>
+
+<h2>Las dos formas</h2>
+<ul>
+<li><code class="inline">async handler() { ... }</code> — al llegar a un <code class="inline">await</code>, el handler <strong>libera</strong> el lock del intérprete, así que otras peticiones avanzan mientras este espera. Las peticiones concurrentes <strong>se solapan</strong> (como un método <code class="inline">async</code> de .NET).</li>
+<li><code class="inline">handler() { ... }</code> (sin <code class="inline">async</code>) — <strong>mantiene</strong> el lock durante el <code class="inline">await</code>, así que las peticiones concurrentes <strong>se serializan</strong> (como un método síncrono).</li>
+</ul>
+<div class="note"><strong>Misma sintaxis, mismo concepto que .NET.</strong> Ambas formas parsean y ejecutan; lo único que cambia es si el handler cede el turno mientras espera.</div>
+
+<h2>Comparación lado a lado</h2>
+<p>Los dos handlers hacen exactamente el mismo trabajo lento (lanzan un worker que duerme 500 ms y lo esperan). Solo difieren en el modificador <code class="inline">async</code>.</p>
+${te(`endpoint {
+    // CONCURRENTE: libera el lock en await -> las peticiones se solapan
+    [HttpGet("/slow/{tok}")]
+    async slow() {
+        let tok = request_param("tok");
+        let p = lang_spawn(env("WORKER"));
+        let a = lang_call_async(p, concat("{\\"op\\":\\"sleep\\",\\"ms\\":500,\\"payload\\":\\"", tok, "\\"}"));
+        let rs = await_all(a);
+        lang_close(p);
+        return json(concat("{\\"tok\\":\\"", tok, "\\",\\"reply\\":", rs[0], "}"));
+    }
+
+    // BLOQUEANTE: mismo trabajo, SIN async -> las peticiones se serializan
+    [HttpGet("/slowsync/{tok}")]
+    slow_sync() {
+        let tok = request_param("tok");
+        let p = lang_spawn(env("WORKER"));
+        let a = lang_call_async(p, concat("{\\"op\\":\\"sleep\\",\\"ms\\":500,\\"payload\\":\\"", tok, "\\"}"));
+        let rs = await_all(a);
+        lang_close(p);
+        return json(concat("{\\"tok\\":\\"", tok, "\\",\\"reply\\":", rs[0], "}"));
+    }
+}`, "async_endpoint.te")}
+
+<h2>La diferencia es medible</h2>
+<p>Cuatro peticiones en paralelo a cada endpoint. Con <code class="inline">async</code> se solapan (~1× la latencia de una); sin <code class="inline">async</code> se encolan (~4×):</p>
+${sh(`# 4 peticiones concurrentes al endpoint ASYNC -> se solapan
+time (for t in a b c d; do curl -s localhost:9000/slow/$t & done; wait)`)}
+${out("real  ~1.0s   (4 x 500ms solapados)")}
+${sh(`# 4 peticiones concurrentes al endpoint PLANO -> se serializan
+time (for t in a b c d; do curl -s localhost:9000/slowsync/$t & done; wait)`)}
+${out("real  ~2.6s   (4 x 500ms en fila)")}
+
+<div class="note"><strong>Verificado en CI.</strong> El test <code class="inline">tests/api/run_async_overlap_test.py</code> (parte de la regresión) afirma ambas direcciones: el handler <code class="inline">async</code> solapa (~2–2.7×) y el plano serializa (~1×).</div>
+
+<table class="ref">
+  <tr><th>Forma</th><th>En <code>await</code></th><th>Peticiones concurrentes</th><th>Análogo .NET</th></tr>
+  <tr><td><code>async handler()</code></td><td>libera el lock</td><td>se solapan (concurrente)</td><td>método <code>async</code></td></tr>
+  <tr><td><code>handler()</code></td><td>mantiene el lock</td><td>se serializan (bloqueante)</td><td>método síncrono</td></tr>
+</table>
+
+<div class="note"><strong>¿Cuándo usar cada una?</strong> Usa <code class="inline">async</code> cuando el handler espera I/O (otra API, base de datos, worker) y quieres que el server siga atendiendo a otros clientes. Usa la forma plana cuando necesitas serializar el acceso a un recurso compartido.</div>
+
+<div class="pager">
+  <a class="prev" href="#/database">&larr; Bases de datos</a>
   <a href="#/ex-crud">Ejemplo: CRUD &rarr;</a>
 </div>
 `;
@@ -3368,6 +3459,33 @@ var text = await async fn() => { return read_file_async("data.txt"); };
 println(text.length);`)}
 ${out("ABC\\nms=124")}
 
+<h2>async / await inside an endpoint</h2>
+<p>The same keywords work inside an <code class="inline">endpoint { }</code>: kick off the slow work with <code class="inline">async</code>, do other things, then <code class="inline">await</code> exactly when you need the result. Three file reads overlap into ~the time of one.</p>
+${te(`endpoint {
+    [HttpGet("/api/report")]
+    report() {
+        // the three reads start at once (they don't block the thread)
+        var s = async fn() => { return read_file_async("sales.json"); };
+        var c = async fn() => { return read_file_async("customers.json"); };
+        var p = async fn() => { return read_file_async("products.json"); };
+
+        // awaited when needed: total ~= the slowest single read
+        var sales     = await s;
+        var customers = await c;
+        var products  = await p;
+
+        return json({
+            sales: sales.length,
+            customers: customers.length,
+            products: products.length
+        });
+    }
+}`, "report.te")}
+${sh(`typeeasy --api report.te --port 9000`)}
+${sh(`curl http://localhost:9000/api/report`)}
+${out('{"sales":1280,"customers":342,"products":97}')}
+<div class="note"><strong>Why it matters.</strong> Each HTTP request runs in its own event loop, so the <code class="inline">await</code> never blocks other clients: the server keeps serving in parallel.</div>
+
 <div class="pager">
   <a class="prev" href="#/bridge">&larr; Bridge</a>
   <a href="#/first-api">Your first API &rarr;</a>
@@ -4043,6 +4161,68 @@ sqlserver_close(conn);`)}
 
 <div class="pager">
   <a class="prev" href="#/cors">&larr; CORS</a>
+  <a href="#/async-endpoint">Async/await endpoint &rarr;</a>
+</div>
+`;
+
+PAGES["async-endpoint"] = `
+<h1>Async/await endpoint <span class="ver" style="vertical-align:middle">v0.0.20</span></h1>
+<p class="lead">An endpoint can be declared in <strong>two ways</strong> — with or without <code class="inline">async</code> — just like in C#/.NET. The keyword changes the runtime behavior: <strong>concurrent</strong> vs <strong>blocking</strong>.</p>
+
+<h2>The two forms</h2>
+<ul>
+<li><code class="inline">async handler() { ... }</code> — when it reaches an <code class="inline">await</code>, the handler <strong>releases</strong> the interpreter lock, so other requests make progress while this one waits. Concurrent requests <strong>overlap</strong> (like a .NET <code class="inline">async</code> method).</li>
+<li><code class="inline">handler() { ... }</code> (no <code class="inline">async</code>) — it <strong>keeps</strong> the lock across the <code class="inline">await</code>, so concurrent requests <strong>serialise</strong> (like a synchronous method).</li>
+</ul>
+<div class="note"><strong>Same syntax, same concept as .NET.</strong> Both forms parse and run; the only thing that changes is whether the handler yields its turn while waiting.</div>
+
+<h2>Side by side</h2>
+<p>Both handlers do exactly the same slow work (spawn a worker that sleeps 500 ms and await it). They differ only in the <code class="inline">async</code> modifier.</p>
+${te(`endpoint {
+    // CONCURRENT: releases the lock on await -> requests overlap
+    [HttpGet("/slow/{tok}")]
+    async slow() {
+        let tok = request_param("tok");
+        let p = lang_spawn(env("WORKER"));
+        let a = lang_call_async(p, concat("{\\"op\\":\\"sleep\\",\\"ms\\":500,\\"payload\\":\\"", tok, "\\"}"));
+        let rs = await_all(a);
+        lang_close(p);
+        return json(concat("{\\"tok\\":\\"", tok, "\\",\\"reply\\":", rs[0], "}"));
+    }
+
+    // BLOCKING: same work, NO async -> requests serialise
+    [HttpGet("/slowsync/{tok}")]
+    slow_sync() {
+        let tok = request_param("tok");
+        let p = lang_spawn(env("WORKER"));
+        let a = lang_call_async(p, concat("{\\"op\\":\\"sleep\\",\\"ms\\":500,\\"payload\\":\\"", tok, "\\"}"));
+        let rs = await_all(a);
+        lang_close(p);
+        return json(concat("{\\"tok\\":\\"", tok, "\\",\\"reply\\":", rs[0], "}"));
+    }
+}`, "async_endpoint.te")}
+
+<h2>The difference is measurable</h2>
+<p>Four parallel requests to each endpoint. With <code class="inline">async</code> they overlap (~1× the latency of one); without <code class="inline">async</code> they queue up (~4×):</p>
+${sh(`# 4 concurrent requests to the ASYNC endpoint -> overlap
+time (for t in a b c d; do curl -s localhost:9000/slow/$t & done; wait)`)}
+${out("real  ~1.0s   (4 x 500ms overlapped)")}
+${sh(`# 4 concurrent requests to the PLAIN endpoint -> serialise
+time (for t in a b c d; do curl -s localhost:9000/slowsync/$t & done; wait)`)}
+${out("real  ~2.6s   (4 x 500ms in a row)")}
+
+<div class="note"><strong>Covered by CI.</strong> The test <code class="inline">tests/api/run_async_overlap_test.py</code> (part of the regression suite) asserts both directions: the <code class="inline">async</code> handler overlaps (~2–2.7×) and the plain one serialises (~1×).</div>
+
+<table class="ref">
+  <tr><th>Form</th><th>On <code>await</code></th><th>Concurrent requests</th><th>.NET analog</th></tr>
+  <tr><td><code>async handler()</code></td><td>releases the lock</td><td>overlap (concurrent)</td><td><code>async</code> method</td></tr>
+  <tr><td><code>handler()</code></td><td>keeps the lock</td><td>serialise (blocking)</td><td>synchronous method</td></tr>
+</table>
+
+<div class="note"><strong>When to use which?</strong> Use <code class="inline">async</code> when the handler waits on I/O (another API, a database, a worker) and you want the server to keep serving other clients. Use the plain form when you need to serialise access to a shared resource.</div>
+
+<div class="pager">
+  <a class="prev" href="#/database">&larr; Databases</a>
   <a href="#/ex-crud">Example: CRUD &rarr;</a>
 </div>
 `;

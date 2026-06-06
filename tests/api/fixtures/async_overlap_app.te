@@ -1,0 +1,65 @@
+// tests/api/fixtures/async_overlap_app.te
+// Permanent multi-user OVERLAP fixture for the C#/.NET-style `async` endpoint
+// modifier (run by tests/api/run_async_overlap_test.py).
+//
+// Two handlers run the SAME slow work (spawn a worker that sleeps SLEEP_MS and
+// echoes {tok}, then await it) but differ ONLY in the `async` modifier:
+//
+//   async slow()  -> while parked in await_all the runtime RELEASES the global
+//                    invoke lock (coop yield), so K concurrent requests OVERLAP
+//                    their waits and the batch finishes in ~1x the single
+//                    latency (concurrent, like a C#/.NET async method).
+//   slow_sync()   -> plain handler: it KEEPS the lock across the await, so K
+//                    concurrent requests SERIALISE and the batch costs ~Kx
+//                    (blocking, like a synchronous method).
+//
+// This is the observable difference between the two forms. Every response still
+// carries its OWN {tok} (no cross-request state leak).
+//
+// The worker command is injected via env("TE_ASYNC_WORKER") so the test can
+// point lang_spawn at the exact interpreter running the suite.
+
+endpoint {
+    // Readiness probe (so the test harness can wait for the server). Declared
+    // WITHOUT `async` — a plain handler, exercising the non-async form.
+    [HttpGet("/ping")]
+    ping() {
+        return json("{\"pong\":1}");
+    }
+
+    // ASYNC form: overlaps concurrent requests (releases the lock on await).
+    [HttpGet("/slow/{tok}")]
+    async slow() {
+        let tok = request_param("tok");
+        let cmd = env("TE_ASYNC_WORKER");
+        let p = lang_spawn(cmd);
+
+        // Build the request explicitly (concat) so the runtime token reaches
+        // the worker; json_stringify only serialises literal map values.
+        let req = concat("{\"op\":\"sleep\",\"ms\":500,\"payload\":\"", tok, "\"}");
+        let a = lang_call_async(p, req);
+        let rs = await_all(a);
+        lang_close(p);
+
+        // Build the body with concat so it is a plain STRING node (json()
+        // serialises by node type; the await-result node is not a string).
+        // rs[0] is the worker's raw reply: {"ok": true, "result": "<tok>"}.
+        let body = concat("{\"tok\":\"", tok, "\",\"reply\":", rs[0], "}");
+        return json(body);
+    }
+
+    // PLAIN form: identical work, but WITHOUT `async`, so it keeps the lock
+    // across the await and concurrent requests serialise (blocking).
+    [HttpGet("/slowsync/{tok}")]
+    slow_sync() {
+        let tok = request_param("tok");
+        let cmd = env("TE_ASYNC_WORKER");
+        let p = lang_spawn(cmd);
+        let req = concat("{\"op\":\"sleep\",\"ms\":500,\"payload\":\"", tok, "\"}");
+        let a = lang_call_async(p, req);
+        let rs = await_all(a);
+        lang_close(p);
+        let body = concat("{\"tok\":\"", tok, "\",\"reply\":", rs[0], "}");
+        return json(body);
+    }
+}

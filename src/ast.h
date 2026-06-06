@@ -181,6 +181,8 @@ typedef struct MethodNode {
     char *http_method;   // For endpoints
     int cache_ttl;       // For endpoint cache decorator
     int requires_auth;   // For endpoint @auth decorator (Bearer JWT required)
+    int is_async;        // 1 if declared with the C#/.NET-style `async` modifier
+                         // (gates cooperative request overlap on await).
     char *return_type;   // "int" | "string" | "float" | "void" | "dynamic" | NULL (legacy/internal)
     /* Ola 4 (perf): cached bytecode for simple `return <numeric expr>;` bodies.
      * NULL = not yet attempted. (void*)0x1 = tried, not compilable. Else BCInfo*. */
@@ -231,6 +233,25 @@ void te_runtime_reset_flags(void);
  * Used by the async event loop after it swaps the active variable set between
  * fibers (it rewrites vars[] in place). */
 void te_runtime_rebuild_symtab(void);
+
+/* --- Cooperative request yield (Option 1a): transparent multi-user concurrency.
+ * te_reqstate_save/restore snapshot+restore a request's mutable interpreter
+ * state so the global invoke lock can be released while parked in an await.
+ * te_coop_yield_begin/end are the safe wrappers used by the async runtimes;
+ * the API server registers its lock via te_coop_register_lock and toggles
+ * g_te_lock_held while it holds the lock. In CLI builds nothing registers and
+ * the yields are no-ops. --- */
+void *te_reqstate_save(void);
+void  te_reqstate_restore(void *st);
+void  te_coop_register_lock(void (*acq)(void), void (*rel)(void));
+void *te_coop_yield_begin(void);
+void  te_coop_yield_end(void *st);
+extern __thread int g_te_lock_held;
+/* Set by the server to the current handler's MethodNode.is_async before running
+ * its body. te_coop_yield_begin() only releases the invoke lock when this is
+ * non-zero, so a plain (non-async) handler keeps the lock across an await
+ * (blocking/serialised) while an `async` handler lets other requests overlap. */
+extern __thread int g_current_handler_async;
 
 /* --- PROTOTIPOS DE TU "MOTOR" (PUROS) --- */
 

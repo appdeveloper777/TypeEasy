@@ -71,13 +71,44 @@ extern int g_response_is_raw_text;
 static CRITICAL_SECTION g_invoke_lock;
 static int g_invoke_lock_init = 0;
 static void invoke_lock_init(void)   { if (!g_invoke_lock_init) { InitializeCriticalSection(&g_invoke_lock); g_invoke_lock_init = 1; } }
-static void invoke_lock_acquire(void){ EnterCriticalSection(&g_invoke_lock); }
-static void invoke_lock_release(void){ LeaveCriticalSection(&g_invoke_lock); }
+static void invoke_lock_acquire(void){ EnterCriticalSection(&g_invoke_lock); g_te_lock_held = 1; }
+static void invoke_lock_release(void){ g_te_lock_held = 0; LeaveCriticalSection(&g_invoke_lock); }
 #else
-static pthread_mutex_t g_invoke_lock = PTHREAD_MUTEX_INITIALIZER;
-static void invoke_lock_init(void)   { /* static init */ }
-static void invoke_lock_acquire(void){ pthread_mutex_lock(&g_invoke_lock); }
-static void invoke_lock_release(void){ pthread_mutex_unlock(&g_invoke_lock); }
+/* Fair FIFO "ticket" lock for the global invoke lock.
+ *
+ * glibc's default pthread_mutex is unfair: a thread that unlocks and then
+ * immediately re-locks -- exactly what the cooperative await poll does every
+ * ~1ms while a handler is parked -- almost always re-wins the lock before any
+ * parked waiter is scheduled onto a CPU. The net effect is that concurrent
+ * --api requests run strictly serially even though the lock is released on
+ * every poll iteration. A ticket lock enforces FIFO handoff: when a yielding
+ * handler re-acquires the lock it takes a *new* ticket and goes to the back of
+ * the queue, so any other request waiting to run gets its turn first. This is
+ * what makes cooperative request interleaving actually overlap on Linux.
+ *
+ * Single-request behaviour is byte-identical (acquire/release simply hand the
+ * one ticket straight through). The lock is non-recursive, matching the prior
+ * pthread_mutex contract. */
+static pthread_mutex_t g_invoke_mtx  = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_invoke_cv   = PTHREAD_COND_INITIALIZER;
+static unsigned long   g_invoke_next = 0;   /* next ticket to hand out       */
+static unsigned long   g_invoke_serv = 0;   /* ticket currently being served */
+static void invoke_lock_init(void)   { /* static initialisers above */ }
+static void invoke_lock_acquire(void){
+    pthread_mutex_lock(&g_invoke_mtx);
+    unsigned long my = g_invoke_next++;
+    while (my != g_invoke_serv)
+        pthread_cond_wait(&g_invoke_cv, &g_invoke_mtx);
+    pthread_mutex_unlock(&g_invoke_mtx);
+    g_te_lock_held = 1;
+}
+static void invoke_lock_release(void){
+    g_te_lock_held = 0;
+    pthread_mutex_lock(&g_invoke_mtx);
+    g_invoke_serv++;
+    pthread_cond_broadcast(&g_invoke_cv);
+    pthread_mutex_unlock(&g_invoke_mtx);
+}
 #endif
 
 static volatile sig_atomic_t g_stop_requested = 0;
@@ -812,6 +843,11 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
  * worker pool, `worker_index` >= 0 tweaks the banner; -1 means standalone. */
 static int run_single_server(const char *host, int port, int worker_index) {
     invoke_lock_init();
+    /* Register the invoke lock so handlers parked in an `await` can cooperatively
+     * release it (and have it re-acquired on resume) — see te_coop_yield_* in
+     * ast.c. This is what lets multiple requests overlap while one is waiting on
+     * async I/O, without ever running two interpreters at once. */
+    te_coop_register_lock(invoke_lock_acquire, invoke_lock_release);
     g_start_time = time(NULL);
 
     /* Banner: list registered routes. */

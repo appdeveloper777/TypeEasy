@@ -47,12 +47,26 @@ typedef struct {
     int      in_use;
     int      state;
     int      kind;
+    unsigned owner;    /* which request created this task (see te_async_self_owner) */
     ASTNode *lambda;   /* TK_SPAWN: deferred lambda (owned by the AST, not us) */
     int      slot;     /* TK_IO: bridge slot */
     ASTNode *result;   /* DONE: result value (ownership handed to __ret__) */
 } TeTask;
 
 static TeTask g_tasks[TE_TASK_MAX];
+
+/* Per-request owner id. g_tasks is a process-wide pool shared by every server
+ * worker thread; under cooperative interleaving (Option 1a) a parked request's
+ * tasks must NOT be driven by whichever request currently holds the invoke
+ * lock. Each request thread lazily takes a unique owner id and the scheduler
+ * only advances tasks tagged with the running thread's owner. The id is
+ * assigned/read under the invoke lock, so the counter needs no atomics. */
+static unsigned g_owner_seq = 0;
+static __thread unsigned g_te_async_owner = 0;   /* 0 = not yet assigned */
+static unsigned te_async_self_owner(void) {
+    if (g_te_async_owner == 0) g_te_async_owner = ++g_owner_seq;
+    return g_te_async_owner;
+}
 
 static int te_task_find_free(void) {
     for (int i = 0; i < TE_TASK_MAX; i++)
@@ -71,9 +85,11 @@ static int te_task_valid(int id) {
 /* One pass over every live task. Returns 1 if any task made progress. */
 static int te_async_step(void) {
     int progress = 0;
+    unsigned self = te_async_self_owner();
     for (int i = 0; i < TE_TASK_MAX; i++) {
         TeTask *t = &g_tasks[i];
         if (!t->in_use) continue;
+        if (t->owner != self) continue; /* never drive another request's tasks */
 
         if (t->state == TS_SPAWN_PENDING) {
             /* Guard against re-entrancy: mark RUNNING before calling back into
@@ -114,10 +130,37 @@ static void te_async_run_until(const int *ids, int n) {
                 break;
             }
         }
-        if (all_done) return;
+        if (all_done) break;
 
         int progressed = te_async_step();
-        if (!progressed) te_async_msleep(1); /* yield: avoid busy spin on IO */
+        if (!progressed) {
+            /* No task advanced — we are about to block on I/O. Under the API
+             * server this releases the global invoke lock so another request
+             * can run while we wait, then re-acquires + restores our state on
+             * resume (Option 1a).
+             *
+             * The wait itself is a single efficient block on the children's
+             * stdout pipes (te_bridge_wait_readable) rather than a 1ms busy
+             * poll: that keeps the global lock RELEASED for the whole I/O wait
+             * (not re-grabbed every millisecond), which is what lets many
+             * concurrent requests' slow workers genuinely overlap instead of
+             * ping-ponging the lock. In CLI/standalone use begin() returns NULL
+             * (no lock) and we just wait on our own pipes. On platforms/cases
+             * with no pollable fd (Windows pipes, or pure SPAWN tasks) the
+             * helper returns 0 and we fall back to the original ~1ms sleep. */
+            int io_slots[TE_TASK_MAX];
+            int io_n = 0;
+            for (int k = 0; k < n; k++) {
+                int id = ids[k];
+                if (te_task_valid(id) && g_tasks[id].state == TS_IO_WAIT &&
+                    g_tasks[id].slot >= 0)
+                    io_slots[io_n++] = g_tasks[id].slot;
+            }
+            void *cs = te_coop_yield_begin();
+            int waited = te_bridge_wait_readable(io_slots, io_n, 50);
+            if (!waited) te_async_msleep(1);
+            te_coop_yield_end(cs);
+        }
     }
 }
 
@@ -153,6 +196,7 @@ static int adapt_spawn(ASTNode *node, ASTNode *args) {
     g_tasks[id].in_use = 1;
     g_tasks[id].state  = TS_SPAWN_PENDING;
     g_tasks[id].kind   = TK_SPAWN;
+    g_tasks[id].owner  = te_async_self_owner();
     g_tasks[id].lambda = args; /* raw lambda node; AST outlives the task */
     g_tasks[id].slot   = -1;
     g_tasks[id].result = NULL;
@@ -183,6 +227,7 @@ static int adapt_lang_call_async(ASTNode *node, ASTNode *args) {
     g_tasks[id].in_use = 1;
     g_tasks[id].state  = TS_IO_WAIT;
     g_tasks[id].kind   = TK_IO;
+    g_tasks[id].owner  = te_async_self_owner();
     g_tasks[id].slot   = slot;
     g_tasks[id].lambda = NULL;
     g_tasks[id].result = NULL;

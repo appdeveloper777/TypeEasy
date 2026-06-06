@@ -41,4 +41,15 @@ int te_bridge_write_line(int slot, const char *data, size_t len);
  */
 int te_bridge_poll_line(int slot, char **out);
 
+/* Block (efficiently) until at least one of the given child stdout streams is
+ * readable, or `timeout_ms` elapses. Used by the async event loop to wait for
+ * a slow worker's reply WITHOUT holding the global interpreter lock or busy-
+ * spinning. Only reads each slot's fd/handle (owner-private state), so it is
+ * safe to call with the lock released.
+ *   Returns: the number of valid slots that were waited on (0 if none — the
+ *   caller should then fall back to a short sleep). On POSIX it does a real
+ *   poll(); on Windows (where pipes have no poll) it returns 0 so the caller
+ *   keeps its existing 1ms-sleep behaviour unchanged. */
+int te_bridge_wait_readable(const int *slots, int n, int timeout_ms);
+
 #endif /* TE_BRIDGE_H */

@@ -1931,6 +1931,187 @@ void te_runtime_rebuild_symtab(void) {
     te_sym_reset_to(n);
 }
 
+/* ============================================================================
+ * Cooperative request yield (Option 1a) — transparent multi-user concurrency.
+ *
+ * Under the API server every handler runs while holding a single global invoke
+ * lock, so only ONE interpreter ever runs at a time (this keeps the shared AST
+ * value caches and DB connections race-free). When a handler parks in an
+ * `await` waiting on I/O it would otherwise keep the lock and block every other
+ * request for the whole wait. te_coop_yield_begin() snapshots this request's
+ * mutable interpreter state, releases the lock so another request may run, and
+ * returns an opaque stash; te_coop_yield_end() re-acquires the lock and
+ * restores the state. The interpreter never runs on two threads at once, so
+ * single-request behavior is byte-for-byte identical to the serialized model —
+ * only the *waiting* now overlaps across requests.
+ *
+ * Only the per-request variable slice vars[g_initial_var_count..var_count) is
+ * saved; module-level globals vars[0..g_initial_var_count) are shared and left
+ * in place, matching how handlers already treat them. cached_var/cached_class
+ * on shared AST nodes stay valid because they store STABLE slot addresses and
+ * are revalidated by id on read; the table is restored into the same slots.
+ * ============================================================================ */
+typedef struct TeReqState {
+    Variable *slice;          /* deep copy of vars[g_initial..var_count) */
+    int       slice_n;
+    Variable  ret;            /* __ret_var (owned) */
+    int       ret_active;
+    int       return_flag, throw_flag, call_depth;
+    jmp_buf  *recovery;
+    char     *claims;         /* g_current_claims (owned) */
+    /* http context (ownership moved out of the globals) */
+    char *req_method, *req_path, *req_body;
+    TeKV *req_query, *req_headers, *req_params, *resp_headers;
+    int   resp_status, raw_text;
+} TeReqState;
+
+static void te_var_free_owned(Variable *v) {
+    if (v->id)   { free(v->id);   v->id = NULL; }
+    if (v->type) { free(v->type); v->type = NULL; }
+    if (v->vtype == VAL_STRING && v->value.string_value) {
+        free(v->value.string_value); v->value.string_value = NULL;
+    }
+}
+
+/* Steal this request's interpreter state into a heap stash and reset the live
+ * globals to a clean module-globals baseline so the next request starts fresh.
+ * Returns an opaque pointer consumed by te_reqstate_restore().
+ *
+ * MOVE semantics (not deep-copy): the stash takes ownership of the live slots'
+ * heap pointers and the live slots are zeroed WITHOUT freeing. This is what
+ * keeps the swap transparent — any raw `char*` an interpreter frame borrowed
+ * from a variable stays valid across the yield because the string is never
+ * freed here, only relocated into the stash and moved back on restore. */
+void *te_reqstate_save(void) {
+    TeReqState *s = (TeReqState *)calloc(1, sizeof(TeReqState));
+    if (!s) return NULL;
+    int base = g_initial_var_count;
+    if (base < 0) base = 0;
+    if (base > MAX_VARS) base = MAX_VARS;
+    int top = var_count;
+    if (top < base) top = base;
+    if (top > MAX_VARS) top = MAX_VARS;
+    int n = top - base;
+    s->slice_n = n;
+    if (n > 0) {
+        s->slice = (Variable *)malloc((size_t)n * sizeof(Variable));
+        memcpy(s->slice, &vars[base], (size_t)n * sizeof(Variable)); /* shallow: ownership moves to stash */
+    }
+    for (int i = base; i < top; i++) memset(&vars[i], 0, sizeof(Variable)); /* zero, do NOT free */
+    var_count = base;
+    te_runtime_rebuild_symtab();
+
+    s->ret        = __ret_var;          /* ownership moves */
+    s->ret_active = __ret_var_active;
+    memset(&__ret_var, 0, sizeof(Variable));
+    __ret_var_active = 0;
+
+    s->return_flag = return_flag;
+    s->throw_flag  = throw_flag;
+    s->call_depth  = g_call_depth;
+    s->recovery    = g_runtime_recovery;
+    return_flag = 0; throw_flag = 0; g_call_depth = 0;
+
+    s->claims = g_current_claims;       /* ownership moves */
+    g_current_claims = NULL;
+
+    s->req_method = g_req_method; s->req_path = g_req_path; s->req_body = g_req_body;
+    s->req_query  = g_req_query;  s->req_headers = g_req_headers;
+    s->req_params = g_req_params; s->resp_headers = g_resp_headers;
+    s->resp_status = g_resp_status; s->raw_text = g_response_is_raw_text;
+    g_req_method = g_req_path = g_req_body = NULL;
+    g_req_query = g_req_headers = g_req_params = g_resp_headers = NULL;
+    g_resp_status = 200; g_response_is_raw_text = 0;
+    return s;
+}
+
+/* Restore a stash produced by te_reqstate_save(), freeing whatever the current
+ * (other request's) leftover state occupies the globals. Ownership of the
+ * stash's pointers moves back into the live globals; the stash is freed. */
+void te_reqstate_restore(void *st) {
+    TeReqState *s = (TeReqState *)st;
+    if (!s) return;
+    int base = g_initial_var_count;
+    if (base < 0) base = 0;
+    if (base > MAX_VARS) base = MAX_VARS;
+    int top = var_count;
+    if (top < base) top = base;
+    if (top > MAX_VARS) top = MAX_VARS;
+    for (int i = base; i < top; i++) { te_var_free_owned(&vars[i]); memset(&vars[i], 0, sizeof(Variable)); }
+    int n = s->slice_n;
+    if (base + n > MAX_VARS) n = MAX_VARS - base;
+    if (n < 0) n = 0;
+    if (n > 0 && s->slice) memcpy(&vars[base], s->slice, (size_t)n * sizeof(Variable)); /* ownership moves back */
+    var_count = base + n;
+    free(s->slice);
+    te_runtime_rebuild_symtab();
+
+    if (__ret_var_active) te_var_free_owned(&__ret_var);
+    __ret_var = s->ret;                 /* ownership moves */
+    __ret_var_active = s->ret_active;
+
+    return_flag = s->return_flag;
+    throw_flag  = s->throw_flag;
+    g_call_depth = s->call_depth;
+    g_runtime_recovery = s->recovery;
+
+    if (g_current_claims) free(g_current_claims);
+    g_current_claims = s->claims;       /* ownership moves */
+
+    free(g_req_method); free(g_req_path); free(g_req_body);
+    te_kv_free_list(&g_req_query); te_kv_free_list(&g_req_headers);
+    te_kv_free_list(&g_req_params); te_kv_free_list(&g_resp_headers);
+    g_req_method = s->req_method; g_req_path = s->req_path; g_req_body = s->req_body;
+    g_req_query  = s->req_query;  g_req_headers = s->req_headers;
+    g_req_params = s->req_params; g_resp_headers = s->resp_headers;
+    g_resp_status = s->resp_status; g_response_is_raw_text = s->raw_text;
+    free(s);
+}
+
+/* ---- coop lock plumbing (the API server registers its invoke lock here) ----
+ * Kept as function pointers so engine units (te_async.c / te_evloop.c) can ask
+ * to yield the lock without a hard link dependency on the server: in CLI builds
+ * nothing registers, g_te_lock_held stays 0, and the yield is a no-op. */
+static void (*g_coop_lock_acq)(void) = NULL;
+static void (*g_coop_lock_rel)(void) = NULL;
+__thread int g_te_lock_held = 0;   /* set by the server handler while it holds the lock */
+__thread int g_current_handler_async = 0; /* 1 while running an `async`-declared handler */
+
+void te_coop_register_lock(void (*acq)(void), void (*rel)(void)) {
+    g_coop_lock_acq = acq;
+    g_coop_lock_rel = rel;
+}
+
+/* Begin a cooperative yield: if we currently hold the server invoke lock, save
+ * our request state and release it (letting another request run). Returns an
+ * opaque stash to pass to te_coop_yield_end(), or NULL when not under the
+ * server (CLI) — in which case the caller just waits normally. */
+void *te_coop_yield_begin(void) {
+    if (!g_te_lock_held || !g_coop_lock_rel) {
+        return NULL;
+    }
+    /* C#/.NET-style async gate: only an `async`-declared handler releases the
+     * invoke lock while parked in an await, letting other requests overlap. A
+     * plain (sync) handler keeps the lock for the whole wait, so concurrent
+     * requests serialise behind it — exactly like a blocking sync method. */
+    if (!g_current_handler_async) {
+        return NULL;
+    }
+    void *st = te_reqstate_save();
+    g_te_lock_held = 0;
+    g_coop_lock_rel();
+    return st;
+}
+
+/* End a cooperative yield: re-acquire the lock and restore the saved state.
+ * No-op when begin returned NULL. */
+void te_coop_yield_end(void *st) {
+    if (!st) return;
+    if (g_coop_lock_acq) g_coop_lock_acq();
+    g_te_lock_held = 1;
+    te_reqstate_restore(st);
+}
+
 Variable *find_variable(char *id) {    
     if (!id) return NULL;  /* Bug fix: caller paths sometimes pass NULL (e.g. arr[i].attr access where 'o' is ACCESS_EXPR with NULL id). */
     if (strcmp(id, "__ret__") == 0 && __ret_var_active) {
@@ -7700,6 +7881,33 @@ static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
             ASTNode *r = create_ast_leaf("STRING", 0, s, NULL);
             free(s);
             return r;
+        }
+        /* A `return f(...)` / `return obj.m(...)` already executed during
+         * interpret_ast(body) and left its value in __ret__. Re-evaluating it
+         * here would run the call a SECOND time (wrong for side-effecting or
+         * yielding builtins such as read_file_async/await) and coerce the
+         * result to a number — dropping string/list/map results. Read __ret__
+         * instead, mirroring the argument-binding path above. */
+        if (ret->type && (strcmp(ret->type, "CALL_FUNC") == 0 ||
+                          strcmp(ret->type, "CALL_METHOD") == 0)) {
+            Variable *rr = find_variable("__ret__");
+            if (rr && rr->vtype == VAL_STRING) {
+                const char *tt = (rr->type && (strcmp(rr->type, "DATETIME") == 0 ||
+                                               strcmp(rr->type, "UUID") == 0))
+                                 ? rr->type : "STRING";
+                return create_ast_leaf((char*)tt, 0,
+                    rr->value.string_value ? rr->value.string_value : "", NULL);
+            } else if (rr && rr->vtype == VAL_FLOAT) {
+                char buf[64]; snprintf(buf, sizeof(buf), "%g", rr->value.float_value);
+                return create_ast_leaf("FLOAT", 0, buf, NULL);
+            } else if (rr && rr->vtype == VAL_OBJECT && rr->type &&
+                       (strcmp(rr->type, "LIST") == 0 || strcmp(rr->type, "MAP") == 0)) {
+                return (ASTNode*)(intptr_t)rr->value.object_value;
+            } else if (rr && rr->vtype == VAL_INT) {
+                const char *tt = (rr->type && strcmp(rr->type, "BOOL") == 0) ? "BOOL" : "NUMBER";
+                return create_ast_leaf_number((char*)tt, rr->value.int_value, NULL, NULL);
+            }
+            return create_ast_leaf("NULL", 0, NULL, NULL);
         }
         if (ret->type && (strcmp(ret->type, "ID") == 0 || strcmp(ret->type, "IDENTIFIER") == 0)) {
             Variable *v = find_variable(ret->id);
