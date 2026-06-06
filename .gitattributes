@@ -14,3 +14,7 @@ cli/typeeasy        text eol=lf
 cli/templates/**    text eol=lf
 installer/linux/**  text eol=lf
 *.sh                text eol=lf
+
+# Regression fixture: this CSV must keep its CRLF bytes so the Windows
+# text-mode read() / O_BINARY regression test stays meaningful.
+tests/lang/10_linq_csv/products_crlf.csv -text eol=crlf
