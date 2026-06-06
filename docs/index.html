@@ -2019,7 +2019,7 @@ typeeasy --api mi_api.te --cors-origin "*"`)}
 
 PAGES.database = `
 <h1>Bases de datos</h1>
-<p class="lead">TypeEasy incluye conectores estilo Dapper para SQLite, MySQL y PostgreSQL. Los parámetros nombrados <code class="inline">@nombre</code> se bindean de forma nativa (inmunes a inyección SQL).</p>
+<p class="lead">TypeEasy incluye conectores estilo Dapper para SQLite, MySQL, PostgreSQL y SQL Server. Los parámetros nombrados <code class="inline">@nombre</code> se bindean de forma nativa (inmunes a inyección SQL).</p>
 
 <h2>SQLite (plugin embebido)</h2>
 ${te(`load_native("sqlite");
@@ -2061,15 +2061,28 @@ ${te(`let conn = postgres_connect("host", "usuario", "clave", "basedatos", 5432)
 let filas = postgres_query(conn, "SELECT * FROM clientes", "json");
 postgres_close(conn);`)}
 
+<h2>SQL Server</h2>
+${te(`let conn = sqlserver_connect("host", "usuario", "clave", "basedatos", 1433);
+
+let filas = sqlserver_query(conn,
+    "SELECT * FROM usuarios WHERE id = @id",
+    { "@id": 5 },
+    "json");
+println(filas);
+
+sqlserver_close(conn);`)}
+
 <h2>Firmas</h2>
 <table class="ref">
   <tr><th>Función</th><th>Firma</th></tr>
-  <tr><td>Conectar</td><td><code>sqlite_connect(ruta)</code> · <code>mysql_connect(host, user, pass, db, port)</code></td></tr>
+  <tr><td>Conectar</td><td><code>sqlite_connect(ruta)</code> · <code>mysql_connect(host, user, pass, db, port)</code> · <code>postgres_connect(host, user, pass, db, port)</code> · <code>sqlserver_connect(host, user, pass, db, port)</code></td></tr>
   <tr><td>Ejecutar</td><td><code>sqlite_exec(db, sql)</code> · <code>sqlite_exec(db, sql, {params})</code></td></tr>
-  <tr><td>Consultar</td><td><code>sqlite_query(db, sql, "json")</code> · <code>sqlite_query(db, sql, {params}, "json")</code></td></tr>
+  <tr><td>Consultar</td><td><code>sqlite_query(db, sql, "json")</code> · <code>mysql_query(conn, sql, {params}, "json")</code> · <code>postgres_query(conn, sql, {params}, "json")</code> · <code>sqlserver_query(conn, sql, {params}, "json")</code></td></tr>
   <tr><td>Último id</td><td><code>sqlite_last_id(db)</code></td></tr>
-  <tr><td>Cerrar</td><td><code>sqlite_close(db)</code> · <code>mysql_close(conn)</code></td></tr>
+  <tr><td>Cerrar</td><td><code>sqlite_close(db)</code> · <code>mysql_close(conn)</code> · <code>postgres_close(conn)</code> · <code>sqlserver_close(conn)</code></td></tr>
 </table>
+
+<div class="note"><strong>Mismo binder para los tres servidores.</strong> MySQL, PostgreSQL y SQL Server comparten el binder Dapper de TypeEasy, así que aceptan exactamente los mismos tipos de parámetro (la tabla de más abajo). SQL Server usa el puerto <code class="inline">1433</code> por defecto.</div>
 
 <h2>Tipos de datos en parámetros (SQLite)</h2>
 <p>El plugin de SQLite bindea los parámetros de forma nativa (con <code class="inline">sqlite3_bind_*</code>), sin concatenar nada en el SQL:</p>
@@ -2082,6 +2095,20 @@ postgres_close(conn);`)}
   <tr><td><code>date</code> / <code>datetime</code></td><td><code>{ "@creado": now() }</code></td><td>TEXT (<code>bind_text</code>; string ISO-8601)</td></tr>
   <tr><td><code>uuid</code></td><td><code>{ "@id": uuid_v4() }</code></td><td>TEXT (<code>bind_text</code>; string de 36 chars)</td></tr>
   <tr><td><code>null</code></td><td><code>{ "@x": null }</code></td><td>NULL (<code>bind_null</code>)</td></tr>
+</table>
+
+<h2>Tipos de datos en parámetros (MySQL / PostgreSQL / SQL Server)</h2>
+<p>Los tres conectores servidor comparten el binder Dapper: aceptan los mismos tipos y los traducen a SQL de forma segura (las cadenas se escapan y se entrecomillan; nunca se concatena el valor crudo):</p>
+<table class="ref">
+  <tr><th>Tipo TypeEasy</th><th>Ejemplo en el map</th><th>Se interpola como</th></tr>
+  <tr><td><code>int</code></td><td><code>{ "@id": 5 }</code></td><td><code>5</code></td></tr>
+  <tr><td><code>float</code></td><td><code>{ "@precio": 19.9 }</code></td><td><code>19.9</code></td></tr>
+  <tr><td><code>string</code></td><td><code>{ "@nombre": "O'Reilly" }</code></td><td><code>'O''Reilly'</code> (comillas escapadas)</td></tr>
+  <tr><td><code>bool</code></td><td><code>{ "@activo": true }</code></td><td><code>1</code> / <code>0</code> (sin boolean nativo)</td></tr>
+  <tr><td><code>date</code> / <code>datetime</code></td><td><code>{ "@creado": now() }</code></td><td><code>'2026-06-06T04:33:34Z'</code> (string ISO-8601 escapado y entrecomillado)</td></tr>
+  <tr><td><code>uuid</code></td><td><code>{ "@id": uuid_v4() }</code></td><td><code>'1d360e11-94d5-4a91-9785-67b134f3911a'</code> (string escapado y entrecomillado)</td></tr>
+  <tr><td><code>null</code></td><td><code>{ "@x": null }</code></td><td><code>NULL</code></td></tr>
+  <tr><td>objeto / clase</td><td><code>filtro</code></td><td>cada atributo se expone como <code>@id</code>, <code>@nombre</code>…</td></tr>
 </table>
 
 <div class="note"><strong>Parámetros seguros.</strong> Las claves del map pueden ir con o sin <code class="inline">@</code> (<code class="inline">{ "@id": 1 }</code> o <code class="inline">{ "id": 1 }</code>). Nunca concatenes valores directo en el SQL.</div>
@@ -3799,7 +3826,7 @@ typeeasy --api my_api.te --cors-origin "*"`)}
 
 PAGES.database = `
 <h1>Databases</h1>
-<p class="lead">TypeEasy includes Dapper-style connectors for SQLite, MySQL and PostgreSQL. Named parameters <code class="inline">@name</code> are bound natively (immune to SQL injection).</p>
+<p class="lead">TypeEasy includes Dapper-style connectors for SQLite, MySQL, PostgreSQL and SQL Server. Named parameters <code class="inline">@name</code> are bound natively (immune to SQL injection).</p>
 
 <h2>SQLite (embedded plugin)</h2>
 ${te(`load_native("sqlite");
@@ -3841,15 +3868,28 @@ ${te(`let conn = postgres_connect("host", "user", "pass", "database", 5432);
 let rows = postgres_query(conn, "SELECT * FROM customers", "json");
 postgres_close(conn);`)}
 
+<h2>SQL Server</h2>
+${te(`let conn = sqlserver_connect("host", "user", "pass", "database", 1433);
+
+let rows = sqlserver_query(conn,
+    "SELECT * FROM users WHERE id = @id",
+    { "@id": 5 },
+    "json");
+println(rows);
+
+sqlserver_close(conn);`)}
+
 <h2>Signatures</h2>
 <table class="ref">
   <tr><th>Function</th><th>Signature</th></tr>
-  <tr><td>Connect</td><td><code>sqlite_connect(path)</code> · <code>mysql_connect(host, user, pass, db, port)</code></td></tr>
+  <tr><td>Connect</td><td><code>sqlite_connect(path)</code> · <code>mysql_connect(host, user, pass, db, port)</code> · <code>postgres_connect(host, user, pass, db, port)</code> · <code>sqlserver_connect(host, user, pass, db, port)</code></td></tr>
   <tr><td>Execute</td><td><code>sqlite_exec(db, sql)</code> · <code>sqlite_exec(db, sql, {params})</code></td></tr>
-  <tr><td>Query</td><td><code>sqlite_query(db, sql, "json")</code> · <code>sqlite_query(db, sql, {params}, "json")</code></td></tr>
+  <tr><td>Query</td><td><code>sqlite_query(db, sql, "json")</code> · <code>mysql_query(conn, sql, {params}, "json")</code> · <code>postgres_query(conn, sql, {params}, "json")</code> · <code>sqlserver_query(conn, sql, {params}, "json")</code></td></tr>
   <tr><td>Last id</td><td><code>sqlite_last_id(db)</code></td></tr>
-  <tr><td>Close</td><td><code>sqlite_close(db)</code> · <code>mysql_close(conn)</code></td></tr>
+  <tr><td>Close</td><td><code>sqlite_close(db)</code> · <code>mysql_close(conn)</code> · <code>postgres_close(conn)</code> · <code>sqlserver_close(conn)</code></td></tr>
 </table>
+
+<div class="note"><strong>Same binder for all three servers.</strong> MySQL, PostgreSQL and SQL Server share TypeEasy's Dapper binder, so they accept exactly the same parameter types (table below). SQL Server uses port <code class="inline">1433</code> by default.</div>
 
 <h2>Data types in parameters (SQLite)</h2>
 <p>The SQLite plugin binds parameters natively (with <code class="inline">sqlite3_bind_*</code>), without concatenating anything into the SQL:</p>
@@ -3862,6 +3902,20 @@ postgres_close(conn);`)}
   <tr><td><code>date</code> / <code>datetime</code></td><td><code>{ "@created": now() }</code></td><td>TEXT (<code>bind_text</code>; ISO-8601 string)</td></tr>
   <tr><td><code>uuid</code></td><td><code>{ "@id": uuid_v4() }</code></td><td>TEXT (<code>bind_text</code>; 36-char string)</td></tr>
   <tr><td><code>null</code></td><td><code>{ "@x": null }</code></td><td>NULL (<code>bind_null</code>)</td></tr>
+</table>
+
+<h2>Data types in parameters (MySQL / PostgreSQL / SQL Server)</h2>
+<p>The three server connectors share the Dapper binder: they accept the same types and translate them to SQL safely (strings are escaped and quoted; the raw value is never concatenated):</p>
+<table class="ref">
+  <tr><th>TypeEasy type</th><th>Example in the map</th><th>Interpolated as</th></tr>
+  <tr><td><code>int</code></td><td><code>{ "@id": 5 }</code></td><td><code>5</code></td></tr>
+  <tr><td><code>float</code></td><td><code>{ "@price": 19.9 }</code></td><td><code>19.9</code></td></tr>
+  <tr><td><code>string</code></td><td><code>{ "@name": "O'Reilly" }</code></td><td><code>'O''Reilly'</code> (quotes escaped)</td></tr>
+  <tr><td><code>bool</code></td><td><code>{ "@active": true }</code></td><td><code>1</code> / <code>0</code> (no native boolean)</td></tr>
+  <tr><td><code>date</code> / <code>datetime</code></td><td><code>{ "@created": now() }</code></td><td><code>'2026-06-06T04:33:34Z'</code> (escaped, quoted ISO-8601 string)</td></tr>
+  <tr><td><code>uuid</code></td><td><code>{ "@id": uuid_v4() }</code></td><td><code>'1d360e11-94d5-4a91-9785-67b134f3911a'</code> (escaped, quoted string)</td></tr>
+  <tr><td><code>null</code></td><td><code>{ "@x": null }</code></td><td><code>NULL</code></td></tr>
+  <tr><td>object / class</td><td><code>filter</code></td><td>each attribute is exposed as <code>@id</code>, <code>@name</code>…</td></tr>
 </table>
 
 <div class="note"><strong>Safe parameters.</strong> The map keys can go with or without <code class="inline">@</code> (<code class="inline">{ "@id": 1 }</code> or <code class="inline">{ "id": 1 }</code>). Never concatenate values directly into the SQL.</div>
