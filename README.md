@@ -318,6 +318,24 @@ import "product_endpoint.te";
 
 y abre ese archivo como activo antes de pulsar **F5**. Verás `Escuchando en ... (N rutas)` con todas las rutas listadas.
 
+#### Ejemplo real: detenido dentro de un handler `HttpGet`
+
+La sesión quedó pausada en `return json(...)` (línea 4) tras un `curl`. El panel **Variables → Locals** muestra el request entrante (`$req`) con `method`, `path`, `client`, `query`, `params` y `headers` listos para inspeccionar:
+
+<div align="center">
+  <img src="docs/breackpoint_debbug.png" alt="Debug de un endpoint HTTP en VS Code: breakpoint en el handler y panel de Variables con el request $req" width="820"/>
+</div>
+
+#### Checklist: qué configurar en VS Code antes de depurar un endpoint
+
+1. **Extensión instalada** — corré `bash scripts/install_vscode_extension.sh` (o el `.ps1` en PowerShell) y reiniciá VS Code.
+2. **Docker corriendo** — el debugger se ejecuta dentro del contenedor `typeeasy`; abrí Docker Desktop. **No funciona con el binario nativo en Windows** (el `--debug-port` nativo está deshabilitado en ese build).
+3. **Abrí la carpeta del repo** (la que tiene `docker-compose.yml`), no un `.te` suelto en otra carpeta — sin el compose, el spawn falla con `no configuration file provided: not found`.
+4. **Config de launch** — en `.vscode/launch.json` usá la entrada **"TypeEasy: debug API (GET/POST Handlers)"** (`"api": true`, `"port": 4712`, `"httpPort": 8081`).
+5. **Breakpoint en una sentencia ejecutable** del handler (la línea `return json(...)`, una asignación, etc.), no sobre un comentario ni una llave.
+6. **F5** con el `.te` del endpoint como archivo activo → esperá `Listening on http://0.0.0.0:8081` en el Debug Console.
+7. **Dispará el request** desde otra terminal: `curl http://localhost:8081/api/hola`. La ejecución se detiene en el breakpoint y el `curl` queda en espera hasta que pulses **Continue (F5)**.
+
 ### Solución de problemas
 
 | Problema | Solución |

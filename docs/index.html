@@ -381,6 +381,7 @@ window.NAV_ES = [
     ["database", "Bases de datos"],
     ["async-endpoint", "Async/await endpoint"],
     ["deploy", "Publicar (dev/prod)"],
+    ["debug", "Depurar en VS Code"],
   ]},
   { group: "Ejemplos completos", items: [
     ["ex-crud", "CRUD con SQLite"],
@@ -437,6 +438,7 @@ window.NAV_EN = [
     ["database", "Databases"],
     ["async-endpoint", "Async/await endpoint"],
     ["deploy", "Publish (dev/prod)"],
+    ["debug", "Debug in VS Code"],
   ]},
   { group: "Full examples", items: [
     ["ex-crud", "CRUD with SQLite"],
@@ -2413,6 +2415,106 @@ ${sh(`te serve --prod
 
 <div class="pager">
   <a class="prev" href="#/async-endpoint">&larr; Async/await endpoint</a>
+  <a href="#/debug">Depurar en VS Code &rarr;</a>
+</div>
+`;
+
+PAGES["debug"] = `
+<h1>Depurar en VS Code (breakpoints) <span class="ver" style="vertical-align:middle">v0.0.20</span></h1>
+<p class="lead">La extensión de VS Code de TypeEasy te da <strong>breakpoints reales</strong>, step-over/in/out, inspección de variables y la consola de <code class="inline">print()</code> — incluido depurar <strong>endpoints HTTP</strong> parando dentro del handler cuando llega un request.</p>
+
+<div class="note"><strong>Importante.</strong> El debugger corre <strong>dentro del contenedor Docker</strong> (Linux). El binario nativo de Windows trae el flag <code class="inline">--debug-port</code> pero está deshabilitado en ese build, así que para depurar con breakpoints necesitas <strong>Docker</strong> y abrir la carpeta del repo (la que tiene <code class="inline">docker-compose.yml</code>).</div>
+
+<h2>1. Qué instalar en VS Code</h2>
+<ul>
+  <li><strong>La extensión de TypeEasy</strong> (resaltado + debugger). Desde el repo clonado:</li>
+</ul>
+${sh(`# Linux / macOS / Git Bash
+bash scripts/install_vscode_extension.sh
+
+# Windows PowerShell
+powershell -ExecutionPolicy Bypass -File scripts\\install_vscode_extension.ps1`)}
+<ul>
+  <li><strong>El comando <code class="inline">code</code> en el PATH</strong> — en VS Code: <code class="inline">Ctrl+Shift+P</code> &rarr; <em>Shell Command: Install 'code' command in PATH</em>.</li>
+  <li><strong>Docker Desktop</strong> corriendo (el adapter levanta el contenedor <code class="inline">typeeasy</code>).</li>
+</ul>
+<p>Reinicia VS Code después de instalar la extensión.</p>
+
+<h2>2. Checklist antes de depurar un endpoint</h2>
+<table class="ref">
+  <tr><th>#</th><th>Requisito</th></tr>
+  <tr><td>1</td><td>Extensión instalada y VS Code reiniciado.</td></tr>
+  <tr><td>2</td><td>Docker Desktop abierto y corriendo.</td></tr>
+  <tr><td>3</td><td>Abrir la <strong>carpeta del repo</strong> (con <code>docker-compose.yml</code>), no un <code>.te</code> suelto.</td></tr>
+  <tr><td>4</td><td>Config de launch <strong>"TypeEasy: debug API (GET/POST Handlers)"</strong>.</td></tr>
+  <tr><td>5</td><td>Breakpoint en una <strong>sentencia ejecutable</strong> del handler.</td></tr>
+</table>
+<p class="warn"><strong>Error típico:</strong> si abres un <code class="inline">.te</code> en una carpeta sin <code class="inline">docker-compose.yml</code>, el spawn falla con <code class="inline">no configuration file provided: not found</code>. Solución: abre la carpeta del repo.</p>
+
+<h2>3. El endpoint de ejemplo</h2>
+${te(`endpoint {
+    [HttpGet("/api/hola")]
+    Hola() {
+        return json({ mensaje: "¡Hola desde TypeEasy!" });   // ← breakpoint aquí
+    }
+}`, "test_custom.te")}
+
+<h2>4. La configuración de launch</h2>
+<p>En <code class="inline">.vscode/launch.json</code> (la extensión la crea sola la primera vez con <strong>F5</strong>):</p>
+${te(`{
+  "type": "typeeasy",
+  "request": "launch",
+  "name": "TypeEasy: debug API (GET/POST Handlers)",
+  "program": "\${file}",
+  "stopOnEntry": false,
+  "port": 4712,
+  "api": true,
+  "httpPort": 8081,
+  "apiHost": "0.0.0.0"
+}`, "launch.json")}
+
+<h2>5. El flujo, paso a paso</h2>
+<ol>
+  <li>Pon un <strong>breakpoint</strong> en la línea <code class="inline">return json(...)</code> (clic en el margen o <strong>F9</strong>).</li>
+  <li>Con el <code class="inline">.te</code> como archivo activo, pulsa <strong>F5</strong>. El contenedor arranca en modo <code class="inline">--api</code> y el adapter conecta. En el <strong>Debug Console</strong> verás <code class="inline">Listening on http://0.0.0.0:8081 (1 route)</code>.</li>
+  <li>Desde otra terminal, dispara el request:</li>
+</ol>
+${sh(`curl http://localhost:8081/api/hola`)}
+<ol start="4">
+  <li>VS Code <strong>se detiene en el breakpoint</strong> dentro de <code class="inline">Hola()</code>. El <code class="inline">curl</code> queda esperando.</li>
+  <li>Inspecciona variables, haz step y pulsa <strong>Continue (F5)</strong> &rarr; el <code class="inline">curl</code> recibe la respuesta.</li>
+</ol>
+${out('{"mensaje":"¡Hola desde TypeEasy!"}')}
+
+<h2>6. Detenido dentro del handler</h2>
+<p>La sesión queda pausada en <code class="inline">return json(...)</code> y el panel <strong>Variables &rarr; Locals</strong> muestra el request entrante (<code class="inline">$req</code>) con <code class="inline">method</code>, <code class="inline">path</code>, <code class="inline">client</code>, <code class="inline">query</code>, <code class="inline">params</code> y <code class="inline">headers</code>:</p>
+<div style="text-align:center;margin:18px 0;">
+  <img src="breackpoint_debbug.png" alt="VS Code detenido en un breakpoint dentro del handler HttpGet, con el panel Variables mostrando el request $req" style="max-width:100%;border:1px solid var(--border);border-radius:10px;" />
+</div>
+
+<h2>7. Atajos de teclado</h2>
+<table class="ref">
+  <tr><th>Acción</th><th>Tecla</th></tr>
+  <tr><td>Continuar</td><td><code>F5</code></td></tr>
+  <tr><td>Step Over</td><td><code>F10</code></td></tr>
+  <tr><td>Step Into</td><td><code>F11</code></td></tr>
+  <tr><td>Step Out</td><td><code>Shift+F11</code></td></tr>
+  <tr><td>Detener</td><td><code>Shift+F5</code></td></tr>
+  <tr><td>Toggle breakpoint</td><td><code>F9</code></td></tr>
+</table>
+
+<h2>8. Solución de problemas</h2>
+<table class="ref">
+  <tr><th>Problema</th><th>Solución</th></tr>
+  <tr><td><code>no configuration file provided: not found</code></td><td>Abre la carpeta del repo (con <code>docker-compose.yml</code>), no un <code>.te</code> suelto.</td></tr>
+  <tr><td><code>ECONNREFUSED :4712</code> o <code>port is already allocated</code></td><td>Contenedor zombie. Mátalo: <code>docker rm -f $(docker ps -aq --filter "name=typeeasy-dap")</code>.</td></tr>
+  <tr><td>El breakpoint no para</td><td>Ponlo en una sentencia ejecutable (no comentario ni llave). El request debe llegar al endpoint con <code>curl</code>.</td></tr>
+  <tr><td><code>Docker daemon not running</code></td><td>Inicia Docker Desktop.</td></tr>
+  <tr><td>Solo ejecutar (sin breakpoints)</td><td>El binario nativo alcanza: <code>te --api --port 8080 archivo.te</code> — sin Docker.</td></tr>
+</table>
+
+<div class="pager">
+  <a class="prev" href="#/deploy">&larr; Publicar (dev/prod)</a>
   <a href="#/ex-crud">Ejemplo: CRUD &rarr;</a>
 </div>
 `;
@@ -4493,6 +4595,106 @@ ${sh(`te serve --prod
 
 <div class="pager">
   <a class="prev" href="#/async-endpoint">&larr; Async/await endpoint</a>
+  <a href="#/debug">Debug in VS Code &rarr;</a>
+</div>
+`;
+
+PAGES["debug"] = `
+<h1>Debug in VS Code (breakpoints) <span class="ver" style="vertical-align:middle">v0.0.20</span></h1>
+<p class="lead">The TypeEasy VS Code extension gives you <strong>real breakpoints</strong>, step over/in/out, variable inspection and the <code class="inline">print()</code> console — including debugging <strong>HTTP endpoints</strong> by stopping inside the handler when a request arrives.</p>
+
+<div class="note"><strong>Important.</strong> The debugger runs <strong>inside the Docker container</strong> (Linux). The native Windows binary ships the <code class="inline">--debug-port</code> flag but it is disabled in that build, so to debug with breakpoints you need <strong>Docker</strong> and to open the repo folder (the one with <code class="inline">docker-compose.yml</code>).</div>
+
+<h2>1. What to install in VS Code</h2>
+<ul>
+  <li><strong>The TypeEasy extension</strong> (highlighting + debugger). From the cloned repo:</li>
+</ul>
+${sh(`# Linux / macOS / Git Bash
+bash scripts/install_vscode_extension.sh
+
+# Windows PowerShell
+powershell -ExecutionPolicy Bypass -File scripts\\install_vscode_extension.ps1`)}
+<ul>
+  <li><strong>The <code class="inline">code</code> command in PATH</strong> — in VS Code: <code class="inline">Ctrl+Shift+P</code> &rarr; <em>Shell Command: Install 'code' command in PATH</em>.</li>
+  <li><strong>Docker Desktop</strong> running (the adapter spins up the <code class="inline">typeeasy</code> container).</li>
+</ul>
+<p>Restart VS Code after installing the extension.</p>
+
+<h2>2. Checklist before debugging an endpoint</h2>
+<table class="ref">
+  <tr><th>#</th><th>Requirement</th></tr>
+  <tr><td>1</td><td>Extension installed and VS Code restarted.</td></tr>
+  <tr><td>2</td><td>Docker Desktop open and running.</td></tr>
+  <tr><td>3</td><td>Open the <strong>repo folder</strong> (with <code>docker-compose.yml</code>), not a lone <code>.te</code> file.</td></tr>
+  <tr><td>4</td><td>Launch config <strong>"TypeEasy: debug API (GET/POST Handlers)"</strong>.</td></tr>
+  <tr><td>5</td><td>Breakpoint on an <strong>executable statement</strong> of the handler.</td></tr>
+</table>
+<p class="warn"><strong>Common error:</strong> if you open a <code class="inline">.te</code> in a folder without <code class="inline">docker-compose.yml</code>, the spawn fails with <code class="inline">no configuration file provided: not found</code>. Fix: open the repo folder.</p>
+
+<h2>3. The sample endpoint</h2>
+${te(`endpoint {
+    [HttpGet("/api/hello")]
+    Hello() {
+        return json({ message: "Hello from TypeEasy!" });   // ← breakpoint here
+    }
+}`, "test_custom.te")}
+
+<h2>4. The launch configuration</h2>
+<p>In <code class="inline">.vscode/launch.json</code> (the extension creates it on the first <strong>F5</strong>):</p>
+${te(`{
+  "type": "typeeasy",
+  "request": "launch",
+  "name": "TypeEasy: debug API (GET/POST Handlers)",
+  "program": "\${file}",
+  "stopOnEntry": false,
+  "port": 4712,
+  "api": true,
+  "httpPort": 8081,
+  "apiHost": "0.0.0.0"
+}`, "launch.json")}
+
+<h2>5. The flow, step by step</h2>
+<ol>
+  <li>Set a <strong>breakpoint</strong> on the <code class="inline">return json(...)</code> line (click the gutter or press <strong>F9</strong>).</li>
+  <li>With the <code class="inline">.te</code> as the active file, press <strong>F5</strong>. The container starts in <code class="inline">--api</code> mode and the adapter connects. In the <strong>Debug Console</strong> you'll see <code class="inline">Listening on http://0.0.0.0:8081 (1 route)</code>.</li>
+  <li>From another terminal, fire the request:</li>
+</ol>
+${sh(`curl http://localhost:8081/api/hello`)}
+<ol start="4">
+  <li>VS Code <strong>stops on the breakpoint</strong> inside <code class="inline">Hello()</code>. The <code class="inline">curl</code> stays waiting.</li>
+  <li>Inspect variables, step around and press <strong>Continue (F5)</strong> &rarr; the <code class="inline">curl</code> gets its response.</li>
+</ol>
+${out('{"message":"Hello from TypeEasy!"}')}
+
+<h2>6. Stopped inside the handler</h2>
+<p>The session is paused at <code class="inline">return json(...)</code> and the <strong>Variables &rarr; Locals</strong> panel shows the incoming request (<code class="inline">$req</code>) with <code class="inline">method</code>, <code class="inline">path</code>, <code class="inline">client</code>, <code class="inline">query</code>, <code class="inline">params</code> and <code class="inline">headers</code>:</p>
+<div style="text-align:center;margin:18px 0;">
+  <img src="breackpoint_debbug.png" alt="VS Code stopped at a breakpoint inside the HttpGet handler, with the Variables panel showing the $req request" style="max-width:100%;border:1px solid var(--border);border-radius:10px;" />
+</div>
+
+<h2>7. Keyboard shortcuts</h2>
+<table class="ref">
+  <tr><th>Action</th><th>Key</th></tr>
+  <tr><td>Continue</td><td><code>F5</code></td></tr>
+  <tr><td>Step Over</td><td><code>F10</code></td></tr>
+  <tr><td>Step Into</td><td><code>F11</code></td></tr>
+  <tr><td>Step Out</td><td><code>Shift+F11</code></td></tr>
+  <tr><td>Stop</td><td><code>Shift+F5</code></td></tr>
+  <tr><td>Toggle breakpoint</td><td><code>F9</code></td></tr>
+</table>
+
+<h2>8. Troubleshooting</h2>
+<table class="ref">
+  <tr><th>Problem</th><th>Fix</th></tr>
+  <tr><td><code>no configuration file provided: not found</code></td><td>Open the repo folder (with <code>docker-compose.yml</code>), not a lone <code>.te</code>.</td></tr>
+  <tr><td><code>ECONNREFUSED :4712</code> or <code>port is already allocated</code></td><td>Zombie container. Kill it: <code>docker rm -f $(docker ps -aq --filter "name=typeeasy-dap")</code>.</td></tr>
+  <tr><td>The breakpoint never hits</td><td>Put it on an executable statement (not a comment or brace). The request must reach the endpoint via <code>curl</code>.</td></tr>
+  <tr><td><code>Docker daemon not running</code></td><td>Start Docker Desktop.</td></tr>
+  <tr><td>Just run (no breakpoints)</td><td>The native binary is enough: <code>te --api --port 8080 file.te</code> — no Docker.</td></tr>
+</table>
+
+<div class="pager">
+  <a class="prev" href="#/deploy">&larr; Publish (dev/prod)</a>
   <a href="#/ex-crud">Example: CRUD &rarr;</a>
 </div>
 `;
