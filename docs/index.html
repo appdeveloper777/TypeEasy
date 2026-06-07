@@ -380,6 +380,7 @@ window.NAV_ES = [
     ["cors", "CORS"],
     ["database", "Bases de datos"],
     ["async-endpoint", "Async/await endpoint"],
+    ["deploy", "Publicar (dev/prod)"],
   ]},
   { group: "Ejemplos completos", items: [
     ["ex-crud", "CRUD con SQLite"],
@@ -435,6 +436,7 @@ window.NAV_EN = [
     ["cors", "CORS"],
     ["database", "Databases"],
     ["async-endpoint", "Async/await endpoint"],
+    ["deploy", "Publish (dev/prod)"],
   ]},
   { group: "Full examples", items: [
     ["ex-crud", "CRUD with SQLite"],
@@ -2321,7 +2323,7 @@ ${out("real  ~2.6s   (4 x 500ms en fila)")}
 
 <div class="pager">
   <a class="prev" href="#/database">&larr; Bases de datos</a>
-  <a href="#/ex-crud">Ejemplo: CRUD &rarr;</a>
+  <a href="#/deploy">Publicar (dev/prod) &rarr;</a>
 </div>
 `;
 </script>
@@ -2330,6 +2332,90 @@ ${out("real  ~2.6s   (4 x 500ms en fila)")}
 /* ============================================================
    PAGES — full examples
    ============================================================ */
+
+PAGES["deploy"] = `
+<h1>Publicar: dev vs producción <span class="ver" style="vertical-align:middle">v0.0.10</span></h1>
+<p class="lead">El CLI <code class="inline">te</code> levanta tu API con dos perfiles listos para usar: <code class="inline">--dev</code> para trabajar local con hot-reload, y <code class="inline">--prod</code> para exponerla públicamente con varios workers y watchdog.</p>
+
+<h2>Los dos modos</h2>
+${sh(`te serve --dev    # 127.0.0.1, 1 worker, hot-reload ON  (default)
+te serve --prod   # 0.0.0.0, workers=auto, watchdog activo`)}
+
+<table class="ref">
+  <tr><th>Ajuste</th><th><code>--dev</code></th><th><code>--prod</code></th></tr>
+  <tr><td>Host</td><td>127.0.0.1 (solo local)</td><td>0.0.0.0 (público)</td></tr>
+  <tr><td>Workers</td><td>1</td><td>auto (todos los cores)</td></tr>
+  <tr><td>Hot-reload</td><td>ON</td><td>OFF</td></tr>
+  <tr><td>Watchdog</td><td>—</td><td>backoff exponencial 1s → 30s, reintentos infinitos</td></tr>
+  <tr><td>Uso típico</td><td>desarrollo local</td><td>VPS pequeño sin systemd a mano</td></tr>
+</table>
+
+<h2>Configuración persistente</h2>
+<p>Los perfiles viven en <code class="inline">typeeasy.toml</code>. Los flags de CLI siempre tienen prioridad.</p>
+${te(`[env.dev]
+host = "127.0.0.1"
+port = 8080
+workers = 1
+hotreload = true
+
+[env.prod]
+host = "0.0.0.0"
+port = 8080
+workers = 0       # 0 = auto (todos los cores)
+hotreload = false`, "typeeasy.toml")}
+<div class="note"><strong>Precedencia:</strong> flags CLI &gt; <code class="inline">[env.dev|prod]</code> &gt; <code class="inline">[server]</code> &gt; defaults internos.</div>
+
+<h2>Flags directos al binario</h2>
+<p>Cualquier flag del intérprete pasa transparente a través del CLI:</p>
+${sh(`te --api endpoint.te --port 9000 --host 0.0.0.0
+te --api-dir ./apis --workers 4 --hotreload`)}
+<table class="ref">
+  <tr><th>Flag</th><th>Default</th><th>Descripción</th></tr>
+  <tr><td><code>--api &lt;file.te&gt;</code></td><td>—</td><td>modo single-file</td></tr>
+  <tr><td><code>--api-dir &lt;dir&gt;</code></td><td>—</td><td>multi-archivo: escanea todos los .te del directorio</td></tr>
+  <tr><td><code>--port N</code> / <code>-p N</code></td><td>8080</td><td>puerto TCP</td></tr>
+  <tr><td><code>--host H</code></td><td>0.0.0.0</td><td>interfaz de red</td></tr>
+  <tr><td><code>--workers N</code></td><td>auto</td><td>procesos worker (solo modo --api-dir)</td></tr>
+  <tr><td><code>--hotreload</code></td><td>OFF</td><td>recarga automática al cambiar archivos</td></tr>
+</table>
+
+<h2>Producción: mantener el API corriendo</h2>
+<p class="warn"><strong>El servidor habla HTTP en claro.</strong> Para producción, poné un <strong>reverse proxy con TLS</strong> (nginx, Caddy o un Ingress) delante del binario: termina HTTPS y reenvía a TypeEasy por HTTP local. Lo mismo aplica para rate limiting y balanceo entre varios <code class="inline">--workers</code>.</p>
+
+<h3>Linux — systemd (incluido en el .deb)</h3>
+${sh(`sudo apt install ./typeeasy_0.0.10_amd64.deb   # binario + CLI + alias 'te'
+sudo vi /etc/default/typeeasy-api               # archivo .te a servir
+sudo systemctl enable --now typeeasy-api@9001
+sudo systemctl status typeeasy-api@9001
+sudo journalctl -u typeeasy-api@9001 -f`)}
+
+<h3>Linux — escalar con varias instancias + nginx</h3>
+${sh(`for p in 9001 9002 9003 9004; do
+  sudo systemctl enable --now typeeasy-api@$p
+done
+
+sudo apt install -y nginx
+sudo cp /usr/share/typeeasy/nginx/typeeasy-api.conf /etc/nginx/sites-available/typeeasy-api
+sudo ln -s /etc/nginx/sites-available/typeeasy-api /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx`)}
+
+<h3>Windows — service mode (NSSM, opcional)</h3>
+${sh(`# Como administrador, desde C:\\\\Program Files\\\\TypeEasy\\\\
+.\\\\install_service_nssm.ps1 -EndpointFile "C:\\\\mi-app\\\\apis\\\\producto.te" -Port 9001`)}
+
+<h3>Sin systemd/NSSM — watchdog del CLI</h3>
+<p>Para VPS chicos o pruebas, <code class="inline">te serve --prod</code> ya trae watchdog: si el proceso muere, se respawnea con backoff exponencial 1s → 2s → 4s → … → 30s (tope), reintentos infinitos.</p>
+${sh(`te serve --prod
+# [typeeasy] Watchdog activo — el server se reinicia solo si crashea.
+# [typeeasy] Ctrl+C para detener.`)}
+
+<div class="note"><strong>Sin binario nativo.</strong> Si no hay intérprete instalado, el CLI hace fallback automático a Docker (<code class="inline">te serve --dev --docker</code> lo fuerza): limpia containers stale, convierte paths Windows → POSIX y montea tu carpeta <code class="inline">apis/</code>.</div>
+
+<div class="pager">
+  <a class="prev" href="#/async-endpoint">&larr; Async/await endpoint</a>
+  <a href="#/ex-crud">Ejemplo: CRUD &rarr;</a>
+</div>
+`;
 
 PAGES["ex-crud"] = `
 <h1>Ejemplo: CRUD completo con SQLite</h1>
@@ -4323,6 +4409,90 @@ ${out("real  ~2.6s   (4 x 500ms in a row)")}
 
 <div class="pager">
   <a class="prev" href="#/database">&larr; Databases</a>
+  <a href="#/deploy">Publish (dev/prod) &rarr;</a>
+</div>
+`;
+
+PAGES["deploy"] = `
+<h1>Publish: dev vs production <span class="ver" style="vertical-align:middle">v0.0.10</span></h1>
+<p class="lead">The <code class="inline">te</code> CLI serves your API with two ready-to-use profiles: <code class="inline">--dev</code> for local work with hot-reload, and <code class="inline">--prod</code> to expose it publicly with multiple workers and a watchdog.</p>
+
+<h2>The two modes</h2>
+${sh(`te serve --dev    # 127.0.0.1, 1 worker, hot-reload ON  (default)
+te serve --prod   # 0.0.0.0, workers=auto, watchdog on`)}
+
+<table class="ref">
+  <tr><th>Setting</th><th><code>--dev</code></th><th><code>--prod</code></th></tr>
+  <tr><td>Host</td><td>127.0.0.1 (local only)</td><td>0.0.0.0 (public)</td></tr>
+  <tr><td>Workers</td><td>1</td><td>auto (all cores)</td></tr>
+  <tr><td>Hot-reload</td><td>ON</td><td>OFF</td></tr>
+  <tr><td>Watchdog</td><td>—</td><td>exponential backoff 1s → 30s, infinite retries</td></tr>
+  <tr><td>Typical use</td><td>local development</td><td>small VPS without systemd at hand</td></tr>
+</table>
+
+<h2>Persistent configuration</h2>
+<p>Profiles live in <code class="inline">typeeasy.toml</code>. CLI flags always win.</p>
+${te(`[env.dev]
+host = "127.0.0.1"
+port = 8080
+workers = 1
+hotreload = true
+
+[env.prod]
+host = "0.0.0.0"
+port = 8080
+workers = 0       # 0 = auto (all cores)
+hotreload = false`, "typeeasy.toml")}
+<div class="note"><strong>Precedence:</strong> CLI flags &gt; <code class="inline">[env.dev|prod]</code> &gt; <code class="inline">[server]</code> &gt; internal defaults.</div>
+
+<h2>Flags passed straight to the binary</h2>
+<p>Any interpreter flag passes transparently through the CLI:</p>
+${sh(`te --api endpoint.te --port 9000 --host 0.0.0.0
+te --api-dir ./apis --workers 4 --hotreload`)}
+<table class="ref">
+  <tr><th>Flag</th><th>Default</th><th>Description</th></tr>
+  <tr><td><code>--api &lt;file.te&gt;</code></td><td>—</td><td>single-file mode</td></tr>
+  <tr><td><code>--api-dir &lt;dir&gt;</code></td><td>—</td><td>multi-file: scans every .te in the directory</td></tr>
+  <tr><td><code>--port N</code> / <code>-p N</code></td><td>8080</td><td>TCP port</td></tr>
+  <tr><td><code>--host H</code></td><td>0.0.0.0</td><td>network interface</td></tr>
+  <tr><td><code>--workers N</code></td><td>auto</td><td>worker processes (--api-dir mode only)</td></tr>
+  <tr><td><code>--hotreload</code></td><td>OFF</td><td>auto-reload on file change</td></tr>
+</table>
+
+<h2>Production: keeping the API up</h2>
+<p class="warn"><strong>The server speaks plain HTTP.</strong> For production, put a <strong>TLS reverse proxy</strong> (nginx, Caddy or an Ingress) in front of the binary: it terminates HTTPS and forwards to TypeEasy over local HTTP. The same applies to rate limiting and balancing across multiple <code class="inline">--workers</code>.</p>
+
+<h3>Linux — systemd (bundled in the .deb)</h3>
+${sh(`sudo apt install ./typeeasy_0.0.10_amd64.deb   # binary + CLI + 'te' alias
+sudo vi /etc/default/typeeasy-api               # .te file to serve
+sudo systemctl enable --now typeeasy-api@9001
+sudo systemctl status typeeasy-api@9001
+sudo journalctl -u typeeasy-api@9001 -f`)}
+
+<h3>Linux — scale with several instances + nginx</h3>
+${sh(`for p in 9001 9002 9003 9004; do
+  sudo systemctl enable --now typeeasy-api@$p
+done
+
+sudo apt install -y nginx
+sudo cp /usr/share/typeeasy/nginx/typeeasy-api.conf /etc/nginx/sites-available/typeeasy-api
+sudo ln -s /etc/nginx/sites-available/typeeasy-api /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx`)}
+
+<h3>Windows — service mode (NSSM, optional)</h3>
+${sh(`# As administrator, from C:\\\\Program Files\\\\TypeEasy\\\\
+.\\\\install_service_nssm.ps1 -EndpointFile "C:\\\\my-app\\\\apis\\\\product.te" -Port 9001`)}
+
+<h3>No systemd/NSSM — CLI watchdog</h3>
+<p>For small VPSes or testing, <code class="inline">te serve --prod</code> already ships a watchdog: if the process dies, it respawns with exponential backoff 1s → 2s → 4s → … → 30s (cap), infinite retries.</p>
+${sh(`te serve --prod
+# [typeeasy] Watchdog active — the server restarts itself on crash.
+# [typeeasy] Ctrl+C to stop.`)}
+
+<div class="note"><strong>No native binary.</strong> If no interpreter is installed, the CLI falls back to Docker automatically (<code class="inline">te serve --dev --docker</code> forces it): it cleans stale containers, converts Windows → POSIX paths and mounts your <code class="inline">apis/</code> folder.</div>
+
+<div class="pager">
+  <a class="prev" href="#/async-endpoint">&larr; Async/await endpoint</a>
   <a href="#/ex-crud">Example: CRUD &rarr;</a>
 </div>
 `;
