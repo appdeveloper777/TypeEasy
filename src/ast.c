@@ -5367,6 +5367,7 @@ char *te_validate_body_against_class(ClassNode *cls, const char *json) {
     const char *pp = json;
     ASTNode *root = te_json_parse_value(&pp);
     if (!root || !root->type || strcmp(root->type, "OBJECT_LITERAL") != 0) {
+        if (root) free_ast(root);
         TE_ADD_ERR("body", "request body must be a JSON object");
         n += snprintf(errbuf + n, sizeof(errbuf) - n, "]}");
         return strdup(errbuf);
@@ -5401,6 +5402,12 @@ char *te_validate_body_against_class(ClassNode *cls, const char *json) {
         (void)is_flt;
     }
     #undef TE_ADD_ERR
+
+    /* item #6 (leak audit): el árbol JSON parseado para validación es
+     * per-request y debe liberarse en TODAS las rutas de salida; antes
+     * leakeaba ~1KB por request con body tipado (model binding /api/login),
+     * el grueso de los +265 B/req sostenidos de la regresión total. */
+    free_ast(root);
 
     if (first) return NULL; /* all attributes valid */
     n += snprintf(errbuf + n, sizeof(errbuf) - n, "]}");

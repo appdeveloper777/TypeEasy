@@ -26,9 +26,11 @@ import platform
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
+from collections import deque
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -93,12 +95,30 @@ def start_native_server(port: int) -> subprocess.Popen:
     if os.name == "nt":
         # Ensure MSYS2 mingw64 runtime DLLs are visible.
         env["PATH"] = "C:\\msys64\\mingw64\\bin;C:\\msys64\\usr\\bin;" + env.get("PATH", "")
-    return subprocess.Popen(
+    proc = subprocess.Popen(
         [str(binary), "--api", str(ENDPOINT_TE), "--port", str(port),
          "--host", "127.0.0.1"],
         cwd=str(REPO_ROOT), env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
+    # The server emits one access-log line per request to stderr (merged into
+    # stdout above). If nobody reads this pipe, its OS buffer (~64 KiB on
+    # Windows) fills after a few hundred requests and the server's fflush()
+    # blocks every civetweb worker thread -> the whole server deadlocks under
+    # load (frozen CPU, stable RSS). Docker doesn't hit this because the docker
+    # daemon continuously drains container output. Drain the pipe in a daemon
+    # thread, keeping only the tail for post-mortem diagnostics on failure.
+    proc._drained = deque(maxlen=200)  # type: ignore[attr-defined]
+
+    def _drain(p: subprocess.Popen) -> None:
+        try:
+            for line in iter(p.stdout.readline, b""):
+                p._drained.append(line)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    threading.Thread(target=_drain, args=(proc,), daemon=True).start()
+    return proc
 
 
 def wait_for_server(port: int, timeout: float = 20.0) -> bool:
@@ -395,9 +415,10 @@ def main() -> int:
 
         if not wait_for_server(port):
             print("FAIL: server did not respond to /ping within timeout")
-            if proc and proc.poll() is not None:
-                out = proc.stdout.read().decode("utf-8", errors="replace") if proc.stdout else ""
-                print(out)
+            if proc is not None:
+                out = b"".join(getattr(proc, "_drained", [])).decode("utf-8", errors="replace")
+                if out:
+                    print(out)
             return 2
 
         passed, failed, warned = run_tests(port)
