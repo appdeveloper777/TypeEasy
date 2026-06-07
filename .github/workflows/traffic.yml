@@ -12,20 +12,22 @@ jobs:
       - name: Checkout repository code
         uses: actions/checkout@v4
       
-      - name: Save clones and views data
-        uses: joshcarp/traffic-lite@v2.0.0
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          repo: ${{ github.repository }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          path: .github/traffic-history.json
+          python-version: '3.x'
       
-      - name: Create empty file if it doesn't exist
+      - name: Install dependencies
         run: |
-          if [ ! -f .github/traffic-history.json ]; then
-            echo '[]' > .github/traffic-history.json
-          fi
+          python -m pip install --upgrade pip
+          pip install requests
       
-      - name: Commit and push the file to the repository
+      - name: Save traffic data
+        run: python scripts/save_traffic.py
+        env:
+          GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+      
+      - name: Commit and push changes
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Update traffic history"
