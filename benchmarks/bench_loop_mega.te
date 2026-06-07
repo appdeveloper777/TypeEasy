@@ -1,8 +1,13 @@
-// Mega bench: 100M iter — fuerza al intérprete a dominar sobre Docker
+// Mega bench: 100M iter — mide su propio tiempo con now_ms()
+var t0 = now_ms();
+
 var total = 0;
 var i = 0;
 while (i < 100000000) {
     total = total + i;
     i = i + 1;
 }
+
+var t1 = now_ms();
 println(total);
+println("Tiempo (ms): " + to_str(t1 - t0));

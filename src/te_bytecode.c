@@ -36,11 +36,26 @@ extern int is_string_type(ASTNode *node);
 #  define BC_UNUSED
 #endif
 
-/* JIT availability: bytecode-only on Windows / non-x86_64 platforms. */
+/* JIT availability: x86_64 on Linux/macOS (mmap PROT_EXEC) and Windows
+ * (VirtualAlloc PAGE_EXECUTE_READWRITE). The trace JIT emits a self-contained
+ * leaf function that only touches rax/rdx/xmm0 (volatile in both SysV and
+ * Win64 ABIs) and rbx/r12-r15 (callee-saved in both, push/pop in pro/epilogue)
+ * and never calls back into C, so the same machine code is ABI-correct on
+ * Windows without any register renaming. */
 #if defined(__x86_64__) && (defined(__linux__) || defined(__APPLE__))
 #  define TE_JIT_AVAILABLE 1
 #  include <sys/mman.h>
 #  include <unistd.h>
+#elif (defined(__x86_64__) || defined(_M_X64)) && defined(_WIN32)
+#  define TE_JIT_AVAILABLE 1
+#  define TE_JIT_WIN32 1
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
 #else
 #  define TE_JIT_AVAILABLE 0
 #endif
@@ -1093,6 +1108,22 @@ static void jit_init_once(void) {
     }
 #if TE_JIT_AVAILABLE
     if (g_jit_on) {
+#if defined(TE_JIT_WIN32)
+        SYSTEM_INFO si;
+        GetSystemInfo(&si);
+        size_t ps = si.dwPageSize ? (size_t)si.dwPageSize : 4096;
+        g_jit_slab_sz = ps * 16;  /* 64 KiB */
+        g_jit_slab = VirtualAlloc(NULL, g_jit_slab_sz,
+                                  MEM_COMMIT | MEM_RESERVE,
+                                  PAGE_EXECUTE_READWRITE);
+        if (g_jit_slab == NULL) {
+            fprintf(stderr, "[OLA10] VirtualAlloc PAGE_EXECUTE_READWRITE failed; JIT disabled\n");
+            g_jit_on = 0;
+        } else {
+            fprintf(stderr, "[OLA10] JIT slab=%p size=%zu (PAGE_EXECUTE_READWRITE ok)\n",
+                    g_jit_slab, g_jit_slab_sz);
+        }
+#else
         long ps = sysconf(_SC_PAGESIZE);
         if (ps <= 0) ps = 4096;
         g_jit_slab_sz = (size_t)ps * 16;  /* 64 KiB */
@@ -1107,6 +1138,7 @@ static void jit_init_once(void) {
             fprintf(stderr, "[OLA10] JIT slab=%p size=%zu (PROT_EXEC ok)\n",
                     g_jit_slab, g_jit_slab_sz);
         }
+#endif
     }
 #else
     if (g_jit_on) {
@@ -2066,7 +2098,7 @@ double bc_exec(Instr *code) {
     uint16_t rstack[64];
     uint8_t  rtype[64];
     /* Helpers locales: detección de tipo desde valor runtime. */
-    #define TY_OF(v) (((v) == (double)(int)(v)) ? T_INT : T_FLOAT)
+    #define TY_OF(v) (((v) == (double)(long long)(v)) ? T_INT : T_FLOAT)
     /* Aborto de la traza desde cualquier handler no soportado. */
     #define TRACE_ABORT() do { if (g_record_on) trace_end(0); } while (0)
 
@@ -2207,9 +2239,9 @@ do_store: {
      * the Fase 2 fast-path: integral doubles stay as VAL_INT. */
     Variable *v = ip->u.var;
     double r = stack[--sp];
-    if (r == (double)(int)r) {
+    if (r == (double)(long long)r) {
         v->vtype = VAL_INT;
-        v->value.int_value = (int)r;
+        v->value.int_value = (long long)r;
     } else {
         v->vtype = VAL_FLOAT;
         v->value.float_value = r;
@@ -2352,7 +2384,7 @@ do_call_method: {
             pv->value.float_value = v;
         } else {
             pv->vtype = VAL_INT;
-            pv->value.int_value = (int)v;
+            pv->value.int_value = (long long)v;
         }
         if (recording) {
             IRType ty = (pv->vtype == VAL_INT) ? T_INT : T_FLOAT;

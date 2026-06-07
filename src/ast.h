@@ -137,7 +137,7 @@ typedef struct Variable {
     ValueType vtype;
     char *type;
     union {
-        int int_value;
+        long long int_value;
         char *string_value;
         double float_value;
         struct ObjectNode *object_value;

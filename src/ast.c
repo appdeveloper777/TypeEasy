@@ -653,7 +653,7 @@ char* get_node_string(ASTNode* node) {
         Variable *r = find_variable("__ret__");
         if (r) {
             if (r->vtype == VAL_STRING) return strdup(r->value.string_value ? r->value.string_value : "");
-            if (r->vtype == VAL_INT)    { snprintf(temp, sizeof(temp), "%d", r->value.int_value); return strdup(temp); }
+            if (r->vtype == VAL_INT)    { snprintf(temp, sizeof(temp), "%lld", r->value.int_value); return strdup(temp); }
             if (r->vtype == VAL_FLOAT)  { snprintf(temp, sizeof(temp), "%f", r->value.float_value); return strdup(temp); }
         }
         return strdup("");
@@ -666,7 +666,7 @@ char* get_node_string(ASTNode* node) {
         Variable *r = find_variable("__ret__");
         if (r) {
             if (r->vtype == VAL_STRING) return strdup(r->value.string_value ? r->value.string_value : "");
-            if (r->vtype == VAL_INT)    { snprintf(temp, sizeof(temp), "%d", r->value.int_value); return strdup(temp); }
+            if (r->vtype == VAL_INT)    { snprintf(temp, sizeof(temp), "%lld", r->value.int_value); return strdup(temp); }
             if (r->vtype == VAL_FLOAT)  { snprintf(temp, sizeof(temp), "%g", r->value.float_value); return strdup(temp); }
             if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) return strdup("null");
         }
@@ -710,7 +710,7 @@ char* get_node_string(ASTNode* node) {
         if (v) {
             if (v->vtype == VAL_STRING) return strdup(v->value.string_value ? v->value.string_value : "");
             if (v->vtype == VAL_INT) {
-                snprintf(temp, sizeof(temp), "%d", v->value.int_value);
+                snprintf(temp, sizeof(temp), "%lld", v->value.int_value);
                 return strdup(temp);
             }
             if (v->vtype == VAL_FLOAT) {
@@ -8531,7 +8531,7 @@ static void interpret_print(ASTNode *node) {
         if (v->vtype == VAL_STRING)
             dbg_printf("%s", v->value.string_value);
         else if (v->vtype == VAL_INT)
-            dbg_printf("%d", v->value.int_value);
+            dbg_printf("%lld", v->value.int_value);
         else if (v->vtype == VAL_FLOAT)
             dbg_printf("%f", v->value.float_value);
         else
@@ -8784,7 +8784,7 @@ static void interpret_println(ASTNode *node) {
             const char *s = r->value.int_value ? "true" : "false";
             dbg_printf("%s\n", s); return;
         }
-        if (r->vtype == VAL_INT) { dbg_printf("%d\n", r->value.int_value); return; }
+        if (r->vtype == VAL_INT) { dbg_printf("%lld\n", r->value.int_value); return; }
         if (r->vtype == VAL_FLOAT) { dbg_printf("%f\n", r->value.float_value); return; }
         if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) { dbg_printf("null\n"); return; }
         dbg_printf("\n");
@@ -8800,7 +8800,7 @@ static void interpret_println(ASTNode *node) {
             const char *s = r->value.int_value ? "true" : "false";
             dbg_printf("%s\n", s); append_to_stdout(s); append_to_stdout("\n"); return;
         }
-        if (r->vtype == VAL_INT)    { dbg_printf("%d\n", r->value.int_value); char tmp[32]; snprintf(tmp,32,"%d\n",r->value.int_value); append_to_stdout(tmp); return; }
+        if (r->vtype == VAL_INT)    { dbg_printf("%lld\n", r->value.int_value); char tmp[32]; snprintf(tmp,32,"%lld\n",r->value.int_value); append_to_stdout(tmp); return; }
         if (r->vtype == VAL_FLOAT)  { dbg_printf("%f\n", r->value.float_value); return; }
         if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
             ASTNode *listNode = (ASTNode*)(intptr_t)r->value.object_value;
@@ -9028,8 +9028,8 @@ static void interpret_println(ASTNode *node) {
             append_to_stdout("\n");
         }
         else if (v->vtype == VAL_INT) {
-            dbg_printf("%d\n", v->value.int_value);
-            char temp[32]; snprintf(temp, 32, "%d\n", v->value.int_value);
+            dbg_printf("%lld\n", v->value.int_value);
+            char temp[32]; snprintf(temp, 32, "%lld\n", v->value.int_value);
             append_to_stdout(temp);
         }
         else if (v->vtype == VAL_FLOAT) {
