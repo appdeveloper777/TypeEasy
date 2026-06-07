@@ -2,9 +2,7 @@ name: Save traffic statistics
 
 on:
   schedule:
-    # Runs every Sunday at 12:00 UTC. Change the day/time as you wish
     - cron: '0 12 * * 0'
-  # Allows you to run it manually from the Actions tab if needed
   workflow_dispatch: 
 
 jobs:
@@ -20,6 +18,12 @@ jobs:
           repo: ${{ github.repository }}
           token: ${{ secrets.GITHUB_TOKEN }}
           path: .github/traffic-history.json
+      
+      - name: Create empty file if it doesn't exist
+        run: |
+          if [ ! -f .github/traffic-history.json ]; then
+            echo '[]' > .github/traffic-history.json
+          fi
       
       - name: Commit and push the file to the repository
         uses: stefanzweifel/git-auto-commit-action@v5
