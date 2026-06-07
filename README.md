@@ -69,9 +69,6 @@ typeeasy --api hola.te --port 8080      # -> http://localhost:8080/
 > Las capacidades de **CSV/LINQ/DataFrame** son *features de soporte* para mover
 > datos dentro de tus endpoints — **no** un competidor de Polars/pandas.
 
-> Documentación de los builtins de API: [docs/API_BUILTINS.md](docs/API_BUILTINS.md) ·
-> Hoja de ruta: [docs/ROADMAP.md](docs/ROADMAP.md)
-
 
 Página oficial: (https://appdeveloper777.github.io/TypeEasy/#/home)
 
