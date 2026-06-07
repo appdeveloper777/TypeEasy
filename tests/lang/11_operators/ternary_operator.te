@@ -1,0 +1,15 @@
+// Operador ternario `cond ? a : b` (v0.0.20). Cubre: numerico, string,
+// println directo, concat, anidado (right-assoc) y max idiomatico.
+let v = 5;
+let r = v > 0 ? 1 : 0;
+println(r);
+let s = v > 0 ? "pos" : "neg";
+println(s);
+println(v > 10 ? "big" : "small");
+let x = "val=" + (v > 0 ? "yes" : "no");
+println(x);
+let grade = v >= 9 ? "A" : v >= 7 ? "B" : v >= 5 ? "C" : "F";
+println(grade);
+let a = 3;
+let b = 7;
+println(a > b ? a : b);

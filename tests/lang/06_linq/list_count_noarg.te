@@ -1,0 +1,8 @@
+// Regresión: xs.count() sin argumento sobre lista plana (antes segfault).
+// Semántica C# .Count() => longitud de la lista.
+let a = [3, 1, 4, 1, 5];
+println(a.count());
+let b = ["x", "y", "z"];
+println(b.count());
+let c = [];
+println(c.count());

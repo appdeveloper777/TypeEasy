@@ -1,0 +1,36 @@
+// Matriz LINQ: cada método x contexto (println directo, variable, concat).
+// Regresión de los bugs de stringify de listas (concat y println de método).
+let xs = [3, 1, 4, 1, 5, 9, 2, 6];
+
+// --- escalares ---
+println("count=" + xs.count());
+println("sum=" + xs.sum());
+println("avg=" + xs.avg());
+println("min=" + xs.minVal());
+println("max=" + xs.maxVal());
+println("first=" + xs.first());
+println("last=" + xs.last());
+println("countWhere=" + xs.countWhere(n => n > 3));
+println("sumBy=" + xs.sumBy(n => n));
+println("any=" + xs.any(n => n > 8));
+println("all=" + xs.all(n => n > 0));
+println("none=" + xs.none(n => n > 100));
+
+// --- listas: concat ---
+println("distinct=" + xs.distinct());
+println("take=" + xs.take(3));
+println("skip=" + xs.skip(5));
+println("where=" + xs.where(n => n > 3));
+println("select=" + xs.select(n => n * 10));
+println("orderBy=" + xs.orderBy(n => n));
+println("orderByDesc=" + xs.orderByDescending(n => n));
+println("chain=" + xs.where(n => n > 2).select(n => n * 2).take(3));
+
+// --- listas: println directo ---
+println(xs.distinct());
+println(xs.take(3));
+
+// --- listas: en variable ---
+let d = xs.distinct();
+println("var=" + d);
+println(d.length);

@@ -1,0 +1,11 @@
+// expect: 7
+// Una keyword reservada (model, state, node, agent...) ahora puede usarse como
+// nombre de METODO de clase. El lexer la degrada a IDENTIFIER tras '.' (llamada)
+// y la gramatica la acepta via `member_name` en la declaracion del metodo.
+class Repo {
+    v : int;
+    __constructor(_v : int) { this.v = _v; }
+    model() : int { return this.v; }
+}
+let r = new Repo(7);
+println(r.model());

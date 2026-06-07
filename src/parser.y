@@ -74,6 +74,7 @@
 %type <sval> method_return_type
 %type <sval> type_name
 %type <sval> field_type
+%type <sval> member_name
 %type <ival> access_mod
 %type <node>  expression_list var_decl constructor_decl return_stmt arg_list more_args lambda_expression httpget_method_decl lambda_value
 %type <sval> lambda_param_list
@@ -103,6 +104,7 @@
 %type <node> ws_body ws_clauses ws_clause
 %type <ival> cache_decorator
 %right ARROW
+%right QMARK
 %left QQ
 %left OR
 %left AND
@@ -397,19 +399,38 @@ layer_list: layer_decl                          { $$ = $1; };
 layer_list: layer_list layer_decl               { $$ = append_layer_to_list($1, $2); };
 layer_decl: LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON { $$ = create_layer_node($2, $4, $6); };
 
+/* member_name: a class field/method name. Accepts a plain IDENTIFIER or any
+ * of the "soft" reserved keywords (state, model, node, match, ...). class_body
+ * only ever contains class_member, so these keywords are unambiguous here and
+ * introduce no LALR conflict. Member ACCESS (`obj.state`) is handled in the
+ * lexer's yylex() wrapper via DOT-context demotion. */
+member_name:
+    IDENTIFIER { $$ = $1; }
+  | STATE      { $$ = strdup("state"); }
+  | MODEL      { $$ = strdup("model"); }
+  | NODE       { $$ = strdup("node"); }
+  | MATCH      { $$ = strdup("match"); }
+  | FROM       { $$ = strdup("from"); }
+  | AS         { $$ = strdup("as"); }
+  | JSON       { $$ = strdup("json"); }
+  | CONCAT     { $$ = strdup("concat"); }
+  | AGENT      { $$ = strdup("agent"); }
+  | CASE       { $$ = strdup("case"); }
+  ;
+
 attribute_decl:
-    IDENTIFIER COLON INT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "int"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
-  | IDENTIFIER COLON STRING SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "string"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
-  | IDENTIFIER COLON FLOAT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "float"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
-  | IDENTIFIER COLON BOOLTYPE SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "bool"); } }
-  | IDENTIFIER COLON DATETIMETYPE SEMICOLON { if (last_class) { add_attribute_to_class(last_class, $1, "datetime"); } }
-  | IDENTIFIER COLON UUIDTYPE SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "uuid"); } }
-  | IDENTIFIER COLON INT QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "int?"); } }
-  | IDENTIFIER COLON STRING QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "string?"); } }
-  | IDENTIFIER COLON FLOAT QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "float?"); } }
-  | IDENTIFIER COLON BOOLTYPE QMARK SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "bool?"); } }
-  | IDENTIFIER COLON DATETIMETYPE QMARK SEMICOLON { if (last_class) { add_attribute_to_class(last_class, $1, "datetime?"); } }
-  | IDENTIFIER COLON UUIDTYPE QMARK SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "uuid?"); } }
+    member_name COLON INT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "int"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
+  | member_name COLON STRING SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "string"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
+  | member_name COLON FLOAT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "float"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
+  | member_name COLON BOOLTYPE SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "bool"); } }
+  | member_name COLON DATETIMETYPE SEMICOLON { if (last_class) { add_attribute_to_class(last_class, $1, "datetime"); } }
+  | member_name COLON UUIDTYPE SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "uuid"); } }
+  | member_name COLON INT QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "int?"); } }
+  | member_name COLON STRING QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "string?"); } }
+  | member_name COLON FLOAT QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "float?"); } }
+  | member_name COLON BOOLTYPE QMARK SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "bool?"); } }
+  | member_name COLON DATETIMETYPE QMARK SEMICOLON { if (last_class) { add_attribute_to_class(last_class, $1, "datetime?"); } }
+  | member_name COLON UUIDTYPE QMARK SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "uuid?"); } }
   /* C#/C-style fields: [public|private|protected] type name [= default] ; */
   | field_type IDENTIFIER SEMICOLON
       { if (last_class) { add_attribute_to_class(last_class, $2, $1); } free($1); }
@@ -481,8 +502,8 @@ method_return_type:
   ;
 
 method_decl:
-    IDENTIFIER LPAREN RPAREN COLON method_return_type LBRACKET statement_list RBRACKET  { if (!last_class) { fprintf(stderr, "Internal error: no active class to add method '%s'.\n", $1); } else { add_method_to_class(last_class, $1, NULL, $7, $5); } $$ = NULL; }
-  | IDENTIFIER LPAREN parameter_list RPAREN COLON method_return_type LBRACKET statement_list RBRACKET  { if (!last_class) { fprintf(stderr, "Internal error: no active class to add method '%s'.\n", $1); } else { add_method_to_class(last_class, $1, $3, $8, $6); } $$ = NULL; }
+    member_name LPAREN RPAREN COLON method_return_type LBRACKET statement_list RBRACKET  { if (!last_class) { fprintf(stderr, "Internal error: no active class to add method '%s'.\n", $1); } else { add_method_to_class(last_class, $1, NULL, $7, $5); } $$ = NULL; }
+  | member_name LPAREN parameter_list RPAREN COLON method_return_type LBRACKET statement_list RBRACKET  { if (!last_class) { fprintf(stderr, "Internal error: no active class to add method '%s'.\n", $1); } else { add_method_to_class(last_class, $1, $3, $8, $6); } $$ = NULL; }
   ;
 
 expression:
@@ -501,6 +522,8 @@ expression:
   | expression OR expression     { $$ = create_ast_node("OR", $1, $3); }
   | NOT expression               { $$ = create_ast_node("NOT", $2, NULL); }
   | expression QQ expression     { $$ = create_ast_node("NULL_COALESCE", $1, $3); }
+  | expression QMARK expression COLON expression %prec QMARK
+      { ASTNode *t = create_ast_node("TERNARY", $1, $3); t->extra = $5; $$ = t; }
   | expression QDOT IDENTIFIER LPAREN RPAREN              { ASTNode *call = create_method_call_node($1, $3, NULL); call->value = 1; /* null-safe flag */ $$ = call; }
   | expression QDOT IDENTIFIER LPAREN expression_list RPAREN { ASTNode *call = create_method_call_node($1, $3, $5); call->value = 1; $$ = call; }
   | expression QDOT IDENTIFIER   { ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3); ASTNode *n = create_ast_node("ACCESS_ATTR", $1, attr); n->value = 1; $$ = n; }

@@ -1,0 +1,24 @@
+count=8
+sum=31
+avg=3.875
+min=1
+max=9
+first=3
+last=6
+countWhere=4
+sumBy=31
+any=1
+all=1
+none=1
+distinct=[3, 1, 4, 5, 9, 2, 6]
+take=[3, 1, 4]
+skip=[9, 2, 6]
+where=[4, 5, 9, 6]
+select=[30, 10, 40, 10, 50, 90, 20, 60]
+orderBy=[1, 1, 2, 3, 4, 5, 6, 9]
+orderByDesc=[9, 6, 5, 4, 3, 2, 1, 1]
+chain=[6, 8, 10]
+[3, 1, 4, 5, 9, 2, 6]
+[3, 1, 4]
+var=[3, 1, 4, 5, 9, 2, 6]
+7

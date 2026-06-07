@@ -640,11 +640,55 @@ int map_length(ASTNode *map);
 ASTNode* map_find_pair(ASTNode *map, const char *key);
 static void interpret_call_method(ASTNode *node);
 
+/* Render a LIST node to a malloc'd string like "[1, 2, 3]" for string
+ * concatenation (+) and string-context coercion. Mirrors the element
+ * formatting of te_print_list_node (STRING raw, FLOAT %f, int %d). */
+static char* te_list_node_to_string(ASTNode *listNode) {
+    size_t cap = 64, len = 0;
+    char *out = (char*)malloc(cap);
+    if (!out) return strdup("");
+    out[0] = '\0';
+#define TE_LS_APPEND(s) do { \
+        const char *_s = (s); size_t _l = strlen(_s); \
+        if (len + _l + 1 > cap) { while (len + _l + 1 > cap) cap *= 2; out = (char*)realloc(out, cap); } \
+        memcpy(out + len, _s, _l); len += _l; out[len] = '\0'; \
+    } while (0)
+    TE_LS_APPEND("[");
+    ASTNode *cur = listNode ? listNode->left : NULL;
+    int first = 1;
+    char buf[64];
+    while (cur) {
+        if (!first) TE_LS_APPEND(", ");
+        first = 0;
+        if (cur->type && strcmp(cur->type, "STRING") == 0) {
+            TE_LS_APPEND(cur->str_value ? cur->str_value : "");
+        } else if (cur->type && strcmp(cur->type, "FLOAT") == 0) {
+            snprintf(buf, sizeof(buf), "%f", cur->str_value ? atof(cur->str_value) : 0.0);
+            TE_LS_APPEND(buf);
+        } else if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
+            TE_LS_APPEND("object");
+        } else {
+            snprintf(buf, sizeof(buf), "%d", cur->value);
+            TE_LS_APPEND(buf);
+        }
+        cur = cur->next;
+    }
+    TE_LS_APPEND("]");
+#undef TE_LS_APPEND
+    return out;
+}
+
 // Helper function to get string representation of any node
 char* get_node_string(ASTNode* node) {
     if (!node) return strdup("");
     
     char temp[64];
+
+    /* Ternary in string context: evaluate condition, stringify chosen branch. */
+    if (node->type && strcmp(node->type, "TERNARY") == 0) {
+        int cond = (evaluate_expression(node->left) != 0.0);
+        return get_node_string(cond ? node->right : node->extra);
+    }
 
     /* Phase H: nested function call — invoke it and read __ret__. Lets
      * concat(a, request_param("id"), b) work, plus any future nesting. */
@@ -655,6 +699,8 @@ char* get_node_string(ASTNode* node) {
             if (r->vtype == VAL_STRING) return strdup(r->value.string_value ? r->value.string_value : "");
             if (r->vtype == VAL_INT)    { snprintf(temp, sizeof(temp), "%lld", r->value.int_value); return strdup(temp); }
             if (r->vtype == VAL_FLOAT)  { snprintf(temp, sizeof(temp), "%f", r->value.float_value); return strdup(temp); }
+            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0)
+                return te_list_node_to_string((ASTNode *)(intptr_t)r->value.object_value);
         }
         return strdup("");
     }
@@ -669,6 +715,8 @@ char* get_node_string(ASTNode* node) {
             if (r->vtype == VAL_INT)    { snprintf(temp, sizeof(temp), "%lld", r->value.int_value); return strdup(temp); }
             if (r->vtype == VAL_FLOAT)  { snprintf(temp, sizeof(temp), "%g", r->value.float_value); return strdup(temp); }
             if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) return strdup("null");
+            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0)
+                return te_list_node_to_string((ASTNode *)(intptr_t)r->value.object_value);
         }
         return strdup("");
     }
@@ -717,6 +765,10 @@ char* get_node_string(ASTNode* node) {
                 snprintf(temp, sizeof(temp), "%f", v->value.float_value);
                 return strdup(temp);
             }
+            if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0)
+                return te_list_node_to_string((ASTNode *)(intptr_t)v->value.object_value);
+            if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "NULL") == 0)
+                return strdup("null");
         }
         return strdup(""); // Variable not found or unknown type
     }
@@ -2709,6 +2761,7 @@ NodeKind nk_from_str(const char *t) {
             if (!strcmp(t, "THROW")) return NK_THROW;
             if (!strcmp(t, "TRAIN")) return NK_TRAIN;
             if (!strcmp(t, "TRY_CATCH")) return NK_TRY_CATCH;
+            if (!strcmp(t, "TERNARY")) return NK_TERNARY;
             break;
         case 'V':
             if (!strcmp(t, "VAR_DECL")) return NK_VAR_DECL;
@@ -2864,12 +2917,13 @@ ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right) {
         node->value = left->value * right->value;
     } 
     else if (strcmp(type, "DIV") == 0) {
-        if (right->value != 0) {
-            node->value = left->value / right->value;
-        } else {
-            printf("Error: division by zero.\n");
-            node->value = 0;
-        }
+        // Parse-time integer constant-fold only. The `value` field holds the
+        // INT operand; for FLOAT literals it is 0, so a zero divisor here is
+        // NOT a real division by zero. The real division (with float support)
+        // happens at runtime in evaluate_expression, which reports genuine
+        // errors. Do not emit a spurious "division by zero" while building the
+        // AST — that fired for every float division (e.g. `1.0 / 4.0`).
+        node->value = (right->value != 0) ? (left->value / right->value) : 0;
     } 
     else {
         node->value = 0;
@@ -4168,6 +4222,12 @@ double evaluate_expression(ASTNode *node) {
         if (te_expr_is_null(l)) return evaluate_expression(node->right);
         return evaluate_expression(l);
     }
+
+    case NK_TERNARY:
+        /* cond ? then : else  — node->left=cond, node->right=then, node->extra=else */
+        return evaluate_expression(node->left)
+                   ? evaluate_expression(node->right)
+                   : evaluate_expression(node->extra);
 
     case NK_ADD:
         return evaluate_expression(node->left) + evaluate_expression(node->right);
@@ -7088,6 +7148,15 @@ static void interpret_var_decl(ASTNode *node) {
         node->left = value_node;
     }
 
+    /* Ternary `cond ? a : b`: pick the branch fresh each evaluation (do NOT
+     * mutate node->left, so loops/functions re-evaluate the condition). Loop
+     * to resolve nested ternaries (`a ? x : b ? y : z`, right-assoc). The
+     * chosen branch is processed by the existing per-type logic below. */
+    while (value_node && value_node->type && strcmp(value_node->type, "TERNARY") == 0) {
+        int cond = (evaluate_expression(value_node->left) != 0.0);
+        value_node = cond ? value_node->right : value_node->extra;
+    }
+
     // 1. Si el valor es una llamada a función, ejecútala primero
 if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0 || strcmp(value_node->type, "FILTER_CALL") == 0 || strcmp(value_node->type, "CALL_FUNC") == 0 || strcmp(value_node->type, "CALL_EXPR") == 0)) {        
         //printf("[DEBUG] interpret_var_decl: executing function call\n"); fflush(stdout);
@@ -8445,6 +8514,24 @@ static void interpret_print(ASTNode *node) {
         free(s);
         return;
     }
+    /* println(xs.distinct()) — método que retorna LIST/escalar vía __ret__.
+     * Sin esto, un método que retorna lista caía al fallback numérico e
+     * imprimía vacío. */
+    if (arg->type && strcmp(arg->type, "CALL_METHOD") == 0) {
+        interpret_call_method(arg);
+        Variable *r = find_variable("__ret__");
+        if (r) {
+            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
+                te_print_list_node((ASTNode *)(intptr_t)r->value.object_value, 0);
+                return;
+            }
+            if (r->vtype == VAL_STRING) { dbg_printf("%s", r->value.string_value ? r->value.string_value : ""); append_to_stdout(r->value.string_value ? r->value.string_value : ""); return; }
+            if (r->vtype == VAL_INT)    { char b[32]; snprintf(b, sizeof(b), "%lld", r->value.int_value); dbg_printf("%s", b); append_to_stdout(b); return; }
+            if (r->vtype == VAL_FLOAT)  { char b[64]; snprintf(b, sizeof(b), "%g", r->value.float_value); dbg_printf("%s", b); append_to_stdout(b); return; }
+            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) { dbg_printf("null"); append_to_stdout("null"); return; }
+        }
+        return;
+    }
     if (arg->type && strcmp(arg->type, "ACCESS_EXPR") == 0) {
         ASTNode *map = resolve_to_map(arg->left);
         if (map) {
@@ -8794,6 +8881,10 @@ static void interpret_println(ASTNode *node) {
         if (r->vtype == VAL_INT) { dbg_printf("%lld\n", r->value.int_value); return; }
         if (r->vtype == VAL_FLOAT) { dbg_printf("%f\n", r->value.float_value); return; }
         if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) { dbg_printf("null\n"); return; }
+        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
+            ASTNode *listNode = (ASTNode*)(intptr_t)r->value.object_value;
+            if (listNode) { te_print_list_node(listNode, 1); return; }
+        }
         dbg_printf("\n");
         return;
     }
@@ -8819,6 +8910,15 @@ static void interpret_println(ASTNode *node) {
     if (arg->type && strcmp(arg->type, "NULL_COALESCE") == 0) {
         ASTNode *l = arg->left;
         ASTNode *chosen = te_expr_is_null(l) ? arg->right : l;
+        ASTNode wrapper; memset(&wrapper, 0, sizeof(ASTNode));
+        wrapper.type = strdup("PRINTLN"); wrapper.left = chosen;
+        interpret_println(&wrapper);
+        free(wrapper.type);
+        return;
+    }
+    if (arg->type && strcmp(arg->type, "TERNARY") == 0) {
+        int cond = (evaluate_expression(arg->left) != 0.0);
+        ASTNode *chosen = cond ? arg->right : arg->extra;
         ASTNode wrapper; memset(&wrapper, 0, sizeof(ASTNode));
         wrapper.type = strdup("PRINTLN"); wrapper.left = chosen;
         interpret_println(&wrapper);

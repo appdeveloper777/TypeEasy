@@ -251,6 +251,17 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
         return 1;
     }
 
+    /* ===== xs.count() no-arg: equivalente a C# .Count() => longitud =====
+     * Antes `count` solo se reconocía en cadenas lazy y en CSV; sobre una
+     * LIST plana caía a un path no manejado y segfaulteaba. La forma con
+     * predicado es `countWhere(pred)` (manejada en te_linq_ops.c). */
+    if (strcmp(fname, "count") == 0 && !node->right) {
+        long long n = 0;
+        for (ASTNode *it = list->left; it; it = it->next) n++;
+        add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)n, NULL, NULL));
+        return 1;
+    }
+
     /* ===== v0.0.11 LINQ: numeric / no-arg methods on LIST ===== */
     if (!(strcmp(fname, "sum") == 0 ||
           strcmp(fname, "avg") == 0 ||

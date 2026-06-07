@@ -1,0 +1,33 @@
+// Matriz de retorno de métodos: cada tipo de retorno x cada FORMA de return,
+// y cada método consumido en varios CONTEXTOS (statement, let, concat, suma).
+// Históricamente esta combinatoria escondió bugs (return <call> directo,
+// string/bool colapsados a int, división float con error espurio).
+// Salida esperada en method_return_matrix.expected.
+class Box {
+    v : int;
+    __constructor(_v : int) { this.v = _v; }
+    raw() : int { return this.v; }              // return de campo
+    viaCall() : int { return this.raw(); }      // return de llamada a método propio
+    sq() : int { return this.v * this.v; }      // return de expresión aritmética
+    idx() : int { let a = [7, 8, 9]; return a[1]; } // return de indexación
+    lit() : string { return "x"; }              // return de literal string
+    label() : string { return "v=" + this.v; }  // return de concatenación
+    cmp() : bool { return this.v > 5; }         // return de comparación (bool)
+    fdiv() : float { return 1.0 / 4.0; }        // return de división float
+    mathc() : float { return Math.sqrt(this.v * 1.0); } // return de llamada builtin
+}
+
+let b = new Box(9);
+println(b.raw());
+println(b.viaCall());
+println(b.sq());
+println(b.idx());
+println(b.lit());
+println(b.label());
+println(b.cmp());
+println(b.fdiv());
+println(b.mathc());
+println("chain=" + b.raw());
+let r = b.raw();
+println(r);
+println(b.raw() + b.sq());

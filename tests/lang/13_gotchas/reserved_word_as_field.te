@@ -1,0 +1,10 @@
+// expect: active
+// Una keyword reservada por el lexer (state, model, node, agent...) ahora puede
+// usarse como nombre de CAMPO de clase. El lexer la degrada a IDENTIFIER tras
+// '.' (acceso) y la gramatica la acepta via `member_name` en la declaracion.
+class Account {
+    state : string;
+    __constructor(_s : string) { this.state = _s; }
+}
+let a = new Account("active");
+println(a.state);

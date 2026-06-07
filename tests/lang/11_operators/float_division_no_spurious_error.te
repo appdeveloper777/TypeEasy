@@ -1,0 +1,13 @@
+// expect: 0.250000 3.500000 2.500000 0.500000
+// Regresión: la división de FLOATS no debe imprimir un "Error: division by
+// zero." espurio. CAUSA (corregida): create_ast_node hacía un constant-fold
+// entero en tiempo de parseo usando el campo INT `value`, que para literales
+// float es 0, disparando el falso error en CADA división float (1.0/4.0, etc).
+// El resultado siempre fue correcto; el ruido en stderr era el bug.
+let a = 1.0 / 4.0;
+let b = 7.0 / 2.0;
+let x = 5.0;
+let y = 2.0;
+let c = x / y;
+let d = x / 10.0;
+println("" + a + " " + b + " " + c + " " + d);

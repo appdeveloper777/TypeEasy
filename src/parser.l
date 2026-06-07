@@ -423,6 +423,35 @@ int yywrap() {
  * expression — ASYNC is returned unchanged. This keeps the modifier out of the
  * conflict-sensitive LALR grammar entirely, so single-user behaviour and all
  * existing syntax are byte-for-byte unchanged. */
+/* Soft-keyword spelling table: maps a reserved keyword TOKEN to its source
+ * spelling. Used by the yylex() wrapper to demote a keyword to a plain
+ * IDENTIFIER when it appears in member-access position (`obj.state`,
+ * `repo.model()`). After a '.' a bare keyword can never be valid in the
+ * current grammar, so this rewrite is unambiguous and introduces no conflict.
+ * Returns NULL for tokens that are NOT demotable soft keywords. */
+static const char *te_soft_keyword_spelling(int t) {
+    switch (t) {
+        case STATE:   return "state";
+        case MODEL:   return "model";
+        case NODE:    return "node";
+        case MATCH:   return "match";
+        case FROM:    return "from";
+        case AS:      return "as";
+        case JSON:    return "json";
+        case CONCAT:  return "concat";
+        case AGENT:   return "agent";
+        case CASE:    return "case";
+        case DATASET: return "dataset";
+        case TRAIN:   return "train";
+        case PREDICT: return "predict";
+        case LISTENER:return "listener";
+        case BRIDGE:  return "bridge";
+        case ENDPOINT:return "endpoint";
+        case LAYER:   return "layer";
+        default:      return NULL;
+    }
+}
+
 int yylex(void) {
     int t = te_raw_yylex();
     if (t == ASYNC && g_prev_lex_tok == RSBRACKET) {
@@ -431,6 +460,16 @@ int yylex(void) {
         g_pending_async = 1;
         g_prev_lex_tok = t;
         t = te_raw_yylex();
+    }
+    /* Member-access demotion: `obj.state`, `repo.model()`. When a soft keyword
+     * immediately follows '.', it is a member name, not a keyword — rewrite it
+     * to IDENTIFIER so the grammar's `expression DOT IDENTIFIER` rules apply. */
+    if (g_prev_lex_tok == DOT) {
+        const char *sp = te_soft_keyword_spelling(t);
+        if (sp) {
+            yylval.sval = strdup(sp);
+            t = IDENTIFIER;
+        }
     }
     g_prev_lex_tok = t;
     return t;
