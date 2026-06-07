@@ -1,32 +1,129 @@
-name: Save traffic statistics
+#!/usr/bin/env python3
+import json
+import os
+import requests
+from pathlib import Path
 
-on:
-  schedule:
-    - cron: '0 12 * * 0'
-  workflow_dispatch: 
+def get_traffic_data(repo, token, traffic_type):
+    """Obtiene datos de clones o vistas desde la API de GitHub"""
+    url = f"https://api.github.com/repos/{repo}/traffic/{traffic_type}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    response = requests.get(url, headers=headers)
+    
+    if response.status_code == 200:
+        data = response.json()
+        # La API devuelve un diccionario con una lista en la clave 'clones' o 'views'
+        if traffic_type in data:
+            return data[traffic_type]  # Devuelve la lista
+        else:
+            print(f"⚠️ Formato inesperado para {traffic_type}: {data.keys() if isinstance(data, dict) else type(data)}")
+            return []
+    else:
+        print(f"❌ Error obteniendo {traffic_type}: {response.status_code}")
+        if response.status_code == 403:
+            print("   → Token sin permisos. Asegúrate que el token tiene scope 'repo'")
+        elif response.status_code == 404:
+            print("   → El repositorio no tiene datos de tráfico o es muy nuevo")
+        return []
 
-jobs:
-  save_traffic:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-      
-      - name: Install requests
-        run: pip install requests
-      
-      - name: Save traffic data
-        run: python scripts/save_traffic.py
-        env:
-          GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
-      
-      - name: Commit and push
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "Update traffic history"
-          file_pattern: .github/traffic-history.json
+def main():
+    repo = os.getenv("GITHUB_REPOSITORY")
+    token = os.getenv("GH_ACCESS_TOKEN")
+    history_path = Path(".github/traffic-history.json")
+    
+    if not token:
+        print("❌ Error: GH_ACCESS_TOKEN no configurado en secrets")
+        print("   Crea un Personal Access Token y agrégalo como secret")
+        exit(1)
+    
+    print(f"📊 Obteniendo datos de tráfico para: {repo}")
+    
+    # Obtener datos actuales
+    clones = get_traffic_data(repo, token, "clones")
+    views = get_traffic_data(repo, token, "views")
+    
+    print(f"   Clones encontrados: {len(clones) if clones else 0} días")
+    print(f"   Views encontrados: {len(views) if views else 0} días")
+    
+    # Cargar historial existente
+    history = []
+    if history_path.exists():
+        with open(history_path, 'r') as f:
+            history = json.load(f)
+        print(f"📂 Historial existente: {len(history)} días")
+    
+    # Crear diccionario de fechas existentes
+    history_by_date = {item["timestamp"]: item for item in history}
+    
+    # Agregar datos de clones
+    new_days = 0
+    if clones and isinstance(clones, list):
+        for clone in clones:
+            timestamp = clone.get("timestamp")
+            if timestamp and timestamp not in history_by_date:
+                history.append({
+                    "timestamp": timestamp,
+                    "clones": {
+                        "count": clone.get("count", 0),
+                        "uniques": clone.get("uniques", 0)
+                    }
+                })
+                new_days += 1
+            elif timestamp:
+                # Actualizar si ya existe
+                history_by_date[timestamp]["clones"] = {
+                    "count": clone.get("count", 0),
+                    "uniques": clone.get("uniques", 0)
+                }
+    
+    # Agregar datos de vistas
+    if views and isinstance(views, list):
+        for view in views:
+            timestamp = view.get("timestamp")
+            if timestamp and timestamp not in history_by_date:
+                history.append({
+                    "timestamp": timestamp,
+                    "views": {
+                        "count": view.get("count", 0),
+                        "uniques": view.get("uniques", 0)
+                    }
+                })
+                new_days += 1
+            elif timestamp:
+                # Actualizar si ya existe
+                if timestamp in history_by_date:
+                    history_by_date[timestamp]["views"] = {
+                        "count": view.get("count", 0),
+                        "uniques": view.get("uniques", 0)
+                    }
+                else:
+                    # Crear nuevo con solo views
+                    history.append({
+                        "timestamp": timestamp,
+                        "views": {
+                            "count": view.get("count", 0),
+                            "uniques": view.get("uniques", 0)
+                        }
+                    })
+                    new_days += 1
+    
+    # Ordenar por fecha
+    history.sort(key=lambda x: x["timestamp"])
+    
+    # Guardar historial
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(history_path, 'w') as f:
+        json.dump(history, f, indent=2)
+    
+    print(f"✅ Datos guardados en {history_path}")
+    print(f"📈 Total de días en historial: {len(history)}")
+    if new_days > 0:
+        print(f"✨ Días nuevos agregados: {new_days}")
+    else:
+        print("ℹ️ No se encontraron nuevos datos")
+
+if __name__ == "__main__":
+    main()
