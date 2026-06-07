@@ -1,0 +1,11 @@
+// expect-contains: ONE 42
+let one = [42];
+println("ONE " + one.single());
+
+let empty = [];
+println("FOD " + empty.firstOrDefault());
+println("LOD " + empty.lastOrDefault());
+
+let xs = [10, 20, 30];
+println("FIRST " + xs.firstOrDefault());
+println("LAST " + xs.lastOrDefault());

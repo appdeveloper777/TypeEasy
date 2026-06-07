@@ -1,0 +1,30 @@
+// expect-contains: Alvarez 50
+class User {
+    lastName : string;
+    age : int;
+    __constructor(_l : string, _a : int) {
+        this.lastName = _l;
+        this.age = _a;
+    }
+}
+
+let users = [
+    new User("Perez", 40),
+    new User("Perez", 25),
+    new User("Gomez", 30),
+    new User("Perez", 33),
+    new User("Gomez", 18),
+    new User("Alvarez", 50)
+];
+
+let r1 = users.orderBy(fn(u) => u.lastName);
+let r2 = r1.thenBy(fn(u) => u.age);
+for (let u in r2) {
+    println(u.lastName + " " + u.age);
+}
+
+let d1 = users.orderBy(fn(u) => u.lastName);
+let d2 = d1.thenByDescending(fn(u) => u.age);
+for (let u in d2) {
+    println("D " + u.lastName + " " + u.age);
+}

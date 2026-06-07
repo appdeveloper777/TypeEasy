@@ -237,6 +237,44 @@ int te_linq_lazy_method_dispatch(ASTNode *node, Variable *v) {
     return 0;
 }
 
+/* v0.0.20: structural equality used by set operations (union/intersect/except).
+ * Strings compare by value; numbers by numeric value; string vs number never
+ * equal (type-strict, matching C# default equality semantics). */
+static int te_item_equal(ASTNode *a, ASTNode *b) {
+    if (!a || !b) return a == b;
+    int a_str = (a->type && strcmp(a->type, "STRING") == 0);
+    int b_str = (b->type && strcmp(b->type, "STRING") == 0);
+    if (a_str != b_str) return 0;
+    if (a_str) {
+        return a->str_value && b->str_value && strcmp(a->str_value, b->str_value) == 0;
+    }
+    double av = a->str_value ? atof(a->str_value) : (double)a->value;
+    double bv = b->str_value ? atof(b->str_value) : (double)b->value;
+    return av == bv;
+}
+
+/* v0.0.20: resolve a method argument that should be another LIST
+ * (literal or identifier). Mirrors the concat/zip resolution pattern. */
+static ASTNode *te_resolve_list_arg(ASTNode *arg) {
+    if (!arg) return NULL;
+    if (arg->type && strcmp(arg->type, "LIST") == 0) return arg;
+    if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+        Variable *ov = find_variable(arg->id);
+        if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "LIST") == 0) {
+            return (ASTNode*)(intptr_t)ov->value.object_value;
+        }
+    }
+    return NULL;
+}
+
+/* v0.0.20: true if `target` is already present in result list `result`. */
+static int te_list_contains_item(ASTNode *result, ASTNode *target) {
+    for (ASTNode *r = result->left; r; r = r->next) {
+        if (te_item_equal(r, target)) return 1;
+    }
+    return 0;
+}
+
 int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
     if (!list || !node || !node->id) return 0;
     const char *fname = node->id;
@@ -270,11 +308,17 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
           strcmp(fname, "maxVal") == 0 ||
           strcmp(fname, "first") == 0 ||
           strcmp(fname, "last") == 0 ||
+          strcmp(fname, "single") == 0 ||
+          strcmp(fname, "firstOrDefault") == 0 ||
+          strcmp(fname, "lastOrDefault") == 0 ||
           strcmp(fname, "take") == 0 ||
           strcmp(fname, "skip") == 0 ||
           strcmp(fname, "distinct") == 0 ||
           strcmp(fname, "toList") == 0 ||
           strcmp(fname, "concat") == 0 ||
+          strcmp(fname, "union") == 0 ||
+          strcmp(fname, "intersect") == 0 ||
+          strcmp(fname, "except") == 0 ||
           strcmp(fname, "zip") == 0)) {
         return 0;
     }
@@ -337,10 +381,37 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
         else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
         return 1;
     }
+    if (strcmp(fname, "firstOrDefault") == 0) {
+        if (list->left) add_or_update_variable("__ret__", build_item_from_value(list->left));
+        else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+        return 1;
+    }
     if (strcmp(fname, "last") == 0) {
         ASTNode *cur = list->left;
         if (!cur) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return 1; }
         while (cur->next) cur = cur->next;
+        add_or_update_variable("__ret__", build_item_from_value(cur));
+        return 1;
+    }
+    if (strcmp(fname, "lastOrDefault") == 0) {
+        ASTNode *cur = list->left;
+        if (!cur) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return 1; }
+        while (cur->next) cur = cur->next;
+        add_or_update_variable("__ret__", build_item_from_value(cur));
+        return 1;
+    }
+    if (strcmp(fname, "single") == 0) {
+        ASTNode *cur = list->left;
+        if (!cur) {
+            printf("Error: single() requires exactly one element, list is empty.\n");
+            add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+            return 1;
+        }
+        if (cur->next) {
+            printf("Error: single() requires exactly one element, list has more than one.\n");
+            add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+            return 1;
+        }
         add_or_update_variable("__ret__", build_item_from_value(cur));
         return 1;
     }
@@ -470,6 +541,55 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
         if (other_list) {
             ASTNode *oi = other_list->left;
             while (oi) { te_list_append(result, build_item_from_value(oi)); oi = oi->next; }
+        }
+        add_or_update_variable("__ret__", result);
+        return 1;
+    }
+    if (strcmp(fname, "union") == 0) {
+        /* Distinct elements present in either list (this first, then other). */
+        ASTNode *result = create_list_node(NULL);
+        ASTNode *other_list = te_resolve_list_arg(node->right);
+        for (ASTNode *it = list->left; it; it = it->next) {
+            if (!te_list_contains_item(result, it)) te_list_append(result, build_item_from_value(it));
+        }
+        if (other_list) {
+            for (ASTNode *oi = other_list->left; oi; oi = oi->next) {
+                if (!te_list_contains_item(result, oi)) te_list_append(result, build_item_from_value(oi));
+            }
+        }
+        add_or_update_variable("__ret__", result);
+        return 1;
+    }
+    if (strcmp(fname, "intersect") == 0) {
+        /* Distinct elements present in both lists (preserving this list order). */
+        ASTNode *result = create_list_node(NULL);
+        ASTNode *other_list = te_resolve_list_arg(node->right);
+        for (ASTNode *it = list->left; it; it = it->next) {
+            int in_other = 0;
+            if (other_list) {
+                for (ASTNode *oi = other_list->left; oi; oi = oi->next) {
+                    if (te_item_equal(it, oi)) { in_other = 1; break; }
+                }
+            }
+            if (!in_other) continue;
+            if (!te_list_contains_item(result, it)) te_list_append(result, build_item_from_value(it));
+        }
+        add_or_update_variable("__ret__", result);
+        return 1;
+    }
+    if (strcmp(fname, "except") == 0) {
+        /* Distinct elements of this list not present in the other list. */
+        ASTNode *result = create_list_node(NULL);
+        ASTNode *other_list = te_resolve_list_arg(node->right);
+        for (ASTNode *it = list->left; it; it = it->next) {
+            int in_other = 0;
+            if (other_list) {
+                for (ASTNode *oi = other_list->left; oi; oi = oi->next) {
+                    if (te_item_equal(it, oi)) { in_other = 1; break; }
+                }
+            }
+            if (in_other) continue;
+            if (!te_list_contains_item(result, it)) te_list_append(result, build_item_from_value(it));
         }
         add_or_update_variable("__ret__", result);
         return 1;

@@ -56,6 +56,11 @@ services:
       context: .
       dockerfile: src/Dockerfile
       target: typeeasy
+      args:
+        # Nivel de optimización del binario. Por defecto -O3 (producción).
+        # Para depurar con gdb (variables sin "optimized out"):
+        #   docker compose build --build-arg TE_OPT=-O0 typeeasy
+        TE_OPT: ${TE_OPT:--O3}
     # Modo --api por defecto: levanta endpoint.te en :9000.
     # Override: `docker compose run --rm typeeasy <archivo.te>`
     command: ["--api", "endpoint.te", "--port", "9000"]

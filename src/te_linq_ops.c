@@ -29,12 +29,72 @@ static int te_sort_cmp_idx(const void *pa, const void *pb) {
         const char *sa = g_sort_keys_s[a] ? g_sort_keys_s[a] : "";
         const char *sb = g_sort_keys_s[b] ? g_sort_keys_s[b] : "";
         int c = strcmp(sa, sb);
-        return g_sort_desc ? -c : c;
+        if (c) return g_sort_desc ? -c : c;
+        return (a > b) - (a < b);   /* stable: tiebreak by original index */
     }
     double da = g_sort_keys_d[a], db = g_sort_keys_d[b];
-    if (da == db) return 0;
-    int c = (da < db) ? -1 : 1;
-    return g_sort_desc ? -c : c;
+    if (da != db) { int c = (da < db) ? -1 : 1; return g_sort_desc ? -c : c; }
+    return (a > b) - (a < b);       /* stable: tiebreak by original index */
+}
+
+/* ---- thenBy / thenByDescending support: multi-key sort context ----
+ * orderBy/orderByDescending record the sort context (one key column per call).
+ * thenBy/thenByDescending append another column and re-sort with a composite
+ * comparator (column 0 most significant), with a stable tiebreak by original
+ * index. The context is aligned positionally to the produced (sorted) list and
+ * validated against the next call's items via their shared ObjectNode* so a
+ * thenBy only refines the immediately-preceding ordered list. */
+#define TE_MAX_SORT_COLS 8
+typedef struct { double *d; char **s; int is_str; int desc; } SortCol;
+static SortCol  g_then_cols[TE_MAX_SORT_COLS];
+static int      g_then_ncols = 0;
+static void   **g_then_objs  = NULL;   /* item->extra (ObjectNode*) in sorted order */
+static int      g_then_n     = 0;
+
+static void te_then_reset(void) {
+    for (int c = 0; c < g_then_ncols; c++) {
+        free(g_then_cols[c].d);
+        if (g_then_cols[c].s) {
+            for (int i = 0; i < g_then_n; i++) free(g_then_cols[c].s[i]);
+            free(g_then_cols[c].s);
+        }
+        g_then_cols[c].d = NULL; g_then_cols[c].s = NULL;
+    }
+    g_then_ncols = 0;
+    free(g_then_objs); g_then_objs = NULL;
+    g_then_n = 0;
+}
+
+/* Composite comparator over g_then_cols[0..g_then_ncols-1]. */
+static int te_then_cmp_idx(const void *pa, const void *pb) {
+    int a = *(const int*)pa, b = *(const int*)pb;
+    for (int c = 0; c < g_then_ncols; c++) {
+        SortCol *col = &g_then_cols[c];
+        int r;
+        if (col->is_str) {
+            const char *x = col->s && col->s[a] ? col->s[a] : "";
+            const char *y = col->s && col->s[b] ? col->s[b] : "";
+            r = strcmp(x, y);
+        } else {
+            double x = col->d[a], y = col->d[b];
+            r = (x > y) - (x < y);
+        }
+        if (r) return col->desc ? -r : r;
+    }
+    return (a > b) - (a < b);   /* stable */
+}
+
+/* Reorder a SortCol's payload by idx[] (positions stay aligned to sorted order). */
+static void te_col_reorder(SortCol *col, int *idx, int n) {
+    if (col->is_str && col->s) {
+        char **ns = (char**)malloc((size_t)n * sizeof(char*));
+        for (int a = 0; a < n; a++) ns[a] = col->s[idx[a]];
+        free(col->s); col->s = ns;
+    } else if (col->d) {
+        double *nd = (double*)malloc((size_t)n * sizeof(double));
+        for (int a = 0; a < n; a++) nd[a] = col->d[idx[a]];
+        free(col->d); col->d = nd;
+    }
 }
 
 int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
@@ -69,6 +129,8 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 strcmp(node->id, "groupBy") == 0 ||
                 strcmp(node->id, "orderBy") == 0 ||
                 strcmp(node->id, "orderByDescending") == 0 ||
+                strcmp(node->id, "thenBy") == 0 ||
+                strcmp(node->id, "thenByDescending") == 0 ||
                 strcmp(node->id, "distinctBy") == 0 ||
                 strcmp(node->id, "aggregate") == 0 ||
                 strcmp(node->id, "fold") == 0 ||
@@ -1025,7 +1087,121 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     ASTNode *w = build_object_wrapper_pooled(src);
                     te_list_append(result, w ? w : build_item_from_value(src));
                 }
+                /* thenBy context: record this single key column (in sorted order)
+                 * plus the per-item ObjectNode* so a following thenBy can refine
+                 * the order positionally. */
+                te_then_reset();
+                g_then_n = n;
+                g_then_objs = (void**)malloc((size_t)n * sizeof(void*));
+                for (int a = 0; a < n; a++) g_then_objs[a] = items_arr[idx[a]]->extra;
+                g_then_cols[0].is_str = is_str_key;
+                g_then_cols[0].desc   = descending;
+                if (is_str_key) {
+                    g_then_cols[0].d = NULL;
+                    g_then_cols[0].s = (char**)malloc((size_t)n * sizeof(char*));
+                    for (int a = 0; a < n; a++)
+                        g_then_cols[0].s[a] = strdup(skeys[idx[a]] ? skeys[idx[a]] : "");
+                } else {
+                    g_then_cols[0].s = NULL;
+                    g_then_cols[0].d = (double*)malloc((size_t)n * sizeof(double));
+                    for (int a = 0; a < n; a++) g_then_cols[0].d[a] = keys[idx[a]];
+                }
+                g_then_ncols = 1;
                 for (int a = 0; a < n; a++) if (skeys[a]) free(skeys[a]);
+                free(items_arr); free(keys); free(skeys); free(idx);
+                add_or_update_variable("__ret__", result);
+                return 1;
+            }
+            if (strcmp(fname, "thenBy") == 0 || strcmp(fname, "thenByDescending") == 0) {
+                /* Secondary (and further) sort key. Refines the order produced by
+                 * the immediately-preceding orderBy/thenBy: re-sorts with a
+                 * composite comparator (column 0 most significant). If there is no
+                 * valid aligned context (no preceding orderBy, or the list was
+                 * altered in between), it degrades to a plain stable sort by this
+                 * key — equivalent to orderBy. */
+                int descending = (strcmp(fname, "thenByDescending") == 0);
+                int n = list_length(list);
+                if (n <= 0) { add_or_update_variable("__ret__", create_list_node(NULL)); return 1; }
+
+                /* Collect the input items. */
+                ASTNode **items_arr = (ASTNode**)calloc(n, sizeof(ASTNode*));
+                int i = 0;
+                for (ASTNode *it = list->left; it && i < n; it = it->next) items_arr[i++] = it;
+
+                /* Validate positional alignment with the recorded context. */
+                int aligned = (g_then_ncols > 0 && g_then_ncols < TE_MAX_SORT_COLS && g_then_n == n && g_then_objs);
+                if (aligned) {
+                    for (int a = 0; a < n; a++) {
+                        if (items_arr[a]->extra != g_then_objs[a]) { aligned = 0; break; }
+                    }
+                }
+                if (!aligned) te_then_reset();   /* start a fresh context (acts as orderBy) */
+
+                /* Compute this key column over the items in current order. */
+                double *keys = (double*)calloc(n, sizeof(double));
+                char **skeys = (char**)calloc(n, sizeof(char*));
+                int is_str_key = 0;
+                int fast_ok = 0;
+                if (fl.spec != SPEC_NONE) {
+                    fast_ok = 1;
+                    for (int a = 0; a < n; a++) {
+                        double v; int vint;
+                        if (!fast_eval(&fl, items_arr[a], &v, &vint)) { fast_ok = 0; break; }
+                        keys[a] = v;
+                    }
+                    if (!fast_ok) memset(keys, 0, (size_t)n * sizeof(double));
+                }
+                if (!fast_ok) {
+                    for (int a = 0; a < n; a++) {
+                        ASTNode *k = call_lambda(fn, items_arr[a]);
+                        if (k && k->type && strcmp(k->type, "STRING") == 0) {
+                            is_str_key = 1;
+                            skeys[a] = strdup(k->str_value ? k->str_value : "");
+                        } else if (k) {
+                            keys[a] = evaluate_expression(k);
+                        }
+                    }
+                }
+
+                /* Append this column to the context. */
+                int col = g_then_ncols;
+                if (col >= TE_MAX_SORT_COLS) col = TE_MAX_SORT_COLS - 1;  /* clamp */
+                g_then_cols[col].is_str = is_str_key;
+                g_then_cols[col].desc   = descending;
+                if (is_str_key) {
+                    g_then_cols[col].d = NULL;
+                    g_then_cols[col].s = (char**)malloc((size_t)n * sizeof(char*));
+                    for (int a = 0; a < n; a++) g_then_cols[col].s[a] = skeys[a] ? skeys[a] : strdup("");
+                } else {
+                    g_then_cols[col].s = NULL;
+                    g_then_cols[col].d = (double*)malloc((size_t)n * sizeof(double));
+                    for (int a = 0; a < n; a++) g_then_cols[col].d[a] = keys[a];
+                    for (int a = 0; a < n; a++) if (skeys[a]) free(skeys[a]);
+                }
+                g_then_ncols = col + 1;
+                if (!g_then_objs) {
+                    g_then_objs = (void**)malloc((size_t)n * sizeof(void*));
+                    g_then_n = n;
+                }
+
+                /* Composite re-sort. */
+                int *idx = (int*)malloc(n * sizeof(int));
+                for (int a = 0; a < n; a++) idx[a] = a;
+                qsort(idx, (size_t)n, sizeof(int), te_then_cmp_idx);
+
+                ASTNode *result = create_list_node(NULL);
+                for (int a = 0; a < n; a++) {
+                    ASTNode *src = items_arr[idx[a]];
+                    ASTNode *w = build_object_wrapper_pooled(src);
+                    te_list_append(result, w ? w : build_item_from_value(src));
+                }
+
+                /* Keep the context aligned to the new sorted order for a next thenBy. */
+                void **nobjs = (void**)malloc((size_t)n * sizeof(void*));
+                for (int a = 0; a < n; a++) nobjs[a] = items_arr[idx[a]]->extra;
+                free(g_then_objs); g_then_objs = nobjs; g_then_n = n;
+                for (int c = 0; c < g_then_ncols; c++) te_col_reorder(&g_then_cols[c], idx, n);
+
                 free(items_arr); free(keys); free(skeys); free(idx);
                 add_or_update_variable("__ret__", result);
                 return 1;

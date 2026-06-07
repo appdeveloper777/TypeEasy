@@ -23,6 +23,14 @@
         { "description": "Map /app -> workspace dentro de WSL", "text": "set substitute-path /app /mnt/c/Users/FERNANDO INGUNZA/Documents/TypeEasy Staging 2/TypeEasy", "ignoreFailures": true },
         { "description": "Map /typeeasy -> workspace dentro de WSL", "text": "set substitute-path /typeeasy /mnt/c/Users/FERNANDO INGUNZA/Documents/TypeEasy Staging 2/TypeEasy", "ignoreFailures": true }
       ],
+      // sourceFileMap es procesado por la extensión cppdbg (no por gdb crudo),
+      // por lo que SÍ tolera los espacios de la ruta ("TypeEasy Staging 2").
+      // Mapea el comp-dir del binario (compilado en /app/src vía `make -C /app/src`)
+      // y la ruta del contenedor (/typeeasy) al código fuente del workspace.
+      "sourceFileMap": {
+        "/app": "${workspaceFolder}",
+        "/typeeasy": "${workspaceFolder}"
+      },
       "preLaunchTask": "debug: start gdbserver in container"
     },
     {

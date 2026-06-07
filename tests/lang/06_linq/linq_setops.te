@@ -1,0 +1,20 @@
+// expect-contains: U 6
+let a = [1, 2, 3, 4, 2, 3];
+let b = [3, 4, 5, 6];
+
+let u = a.union(b);
+println("U " + u.size());
+for (let x in u) { println("u " + x); }
+
+let i = a.intersect(b);
+println("I " + i.size());
+for (let x in i) { println("i " + x); }
+
+let e = a.except(b);
+println("E " + e.size());
+for (let x in e) { println("e " + x); }
+
+let s1 = ["pera", "uva", "pera"];
+let s2 = ["uva", "kiwi"];
+let su = s1.union(s2);
+for (let x in su) { println("s " + x); }

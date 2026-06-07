@@ -21,9 +21,14 @@ COPY . .
 # =================================================================
 FROM base AS typeeasy_builder
 
+# Nivel de optimización del binario. Por defecto -O3 (producción).
+# Para una imagen de depuración con gdb usar:
+#   docker compose build --build-arg TE_OPT=-O0 typeeasy
+ARG TE_OPT=-O3
+
 # 'make all' ahora construye AMBOS: 'typeeasy' y 'servidor_agent'
 # Asume que tu Makefile modificado está en /app/src/
-RUN make -C /app/src clean && make -C /app/src all
+RUN make -C /app/src clean && make -C /app/src all TE_OPT="${TE_OPT}"
 
 # Compila el plugin nativo SQLite (libte_sqlite.so) desde el código fuente,
 # enlazando con la libsqlite3 del sistema. Se hace aquí (no se versiona el .so

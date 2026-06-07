@@ -1642,6 +1642,49 @@ let desc = productos.orderByDescending(fn(p) => p.stock);
 let conMasStock = desc.first();
 println("más stock = " + conMasStock.nombre); // uva`)}
 
+<h2>Ordenar por varias claves (thenBy)</h2>
+<p>Como en C# (<code>OrderBy(...).ThenBy(...)</code>), encadena <code>.thenBy(fn)</code> o <code>.thenByDescending(fn)</code> después de <code>orderBy</code> para añadir claves de desempate. El orden previo se mantiene estable.</p>
+${te(`let usuarios = [
+  new Usuario("Perez", 40),
+  new Usuario("Perez", 25),
+  new Usuario("Gomez", 30),
+  new Usuario("Gomez", 18)
+];
+
+// Ordena por apellido y, dentro de cada apellido, por edad ascendente
+let q1 = usuarios.orderBy(fn(u) => u.apellido);
+let q2 = q1.thenBy(fn(u) => u.edad);
+for (let u in q2) {
+  println(u.apellido + " " + u.edad);
+}
+// Gomez 18
+// Gomez 30
+// Perez 25
+// Perez 40
+
+// Desempate descendente
+let d1 = usuarios.orderBy(fn(u) => u.apellido);
+let d2 = d1.thenByDescending(fn(u) => u.edad);`)}
+
+<h2>Operaciones de conjuntos (union / intersect / except)</h2>
+<p>Como en C#, combina dos listas eliminando duplicados. El resultado siempre es <em>distinct</em> (sin repetidos) y conserva el orden de aparición.</p>
+${te(`let a = [1, 2, 3, 4, 2, 3];
+let b = [3, 4, 5, 6];
+
+let u = a.union(b);      // [1, 2, 3, 4, 5, 6] (presentes en cualquiera)
+let i = a.intersect(b);  // [3, 4]             (presentes en ambas)
+let e = a.except(b);     // [1, 2]             (en a pero no en b)`)}
+<p class="note">Nota: pasa la segunda lista como variable; el resultado guárdalo en una variable antes de iterar con <code>for-in</code>.</p>
+
+<h2>Acceso seguro (single / firstOrDefault / lastOrDefault)</h2>
+<p><code>single()</code> exige que la lista tenga exactamente un elemento. <code>firstOrDefault()</code> y <code>lastOrDefault()</code> devuelven <code>null</code> en lugar de error si la lista está vacía.</p>
+${te(`let solo = [42];
+println(solo.single());            // 42
+
+let vacia = [];
+println(vacia.firstOrDefault());  // null
+println(vacia.lastOrDefault());   // null`)}
+
 <h2>Buscar y comprobar</h2>
 ${te(`let p3 = productos.firstWhere(fn(p) => p.id == 3);
 println(p3.nombre);                           // uva
@@ -1662,11 +1705,15 @@ println("top = " + top.nombre);               // pera`)}
   <tr><td><code>.where(fn)</code></td><td>Lista filtrada.</td></tr>
   <tr><td><code>.select(fn)</code></td><td>Lista proyectada.</td></tr>
   <tr><td><code>.orderBy(fn)</code> / <code>.orderByDescending(fn)</code></td><td>Lista ordenada.</td></tr>
+  <tr><td><code>.thenBy(fn)</code> / <code>.thenByDescending(fn)</code></td><td>Clave de desempate tras <code>orderBy</code> (orden estable).</td></tr>
   <tr><td><code>.sumBy(fn)</code> / <code>.avgBy(fn)</code></td><td>Número.</td></tr>
   <tr><td><code>.minBy(fn)</code> / <code>.maxBy(fn)</code></td><td>El elemento mínimo / máximo.</td></tr>
   <tr><td><code>.countWhere(fn)</code></td><td>Cantidad que cumple.</td></tr>
   <tr><td><code>.first()</code> / <code>.last()</code></td><td>Primer / último elemento.</td></tr>
+  <tr><td><code>.firstOrDefault()</code> / <code>.lastOrDefault()</code></td><td>Primer / último o <code>null</code> si está vacía.</td></tr>
+  <tr><td><code>.single()</code></td><td>El único elemento (error si no hay exactamente uno).</td></tr>
   <tr><td><code>.firstWhere(fn)</code></td><td>Primero que cumple.</td></tr>
+  <tr><td><code>.union(lista)</code> / <code>.intersect(lista)</code> / <code>.except(lista)</code></td><td>Conjuntos: unión / intersección / diferencia (distinct).</td></tr>
   <tr><td><code>.all(fn)</code> / <code>.none(fn)</code></td><td>Bool.</td></tr>
   <tr><td><code>.join(sep)</code></td><td>Une una lista de strings.</td></tr>
 </table>
@@ -3835,6 +3882,49 @@ let desc = products.orderByDescending(fn(p) => p.stock);
 let mostStock = desc.first();
 println("most stock = " + mostStock.name);     // grape`)}
 
+<h2>Sort by multiple keys (thenBy)</h2>
+<p>Like C# (<code>OrderBy(...).ThenBy(...)</code>), chain <code>.thenBy(fn)</code> or <code>.thenByDescending(fn)</code> after <code>orderBy</code> to add tie-breaker keys. The previous order is kept stable.</p>
+${te(`let users = [
+  new User("Perez", 40),
+  new User("Perez", 25),
+  new User("Gomez", 30),
+  new User("Gomez", 18)
+];
+
+// Sort by last name and, within each last name, by age ascending
+let q1 = users.orderBy(fn(u) => u.lastName);
+let q2 = q1.thenBy(fn(u) => u.age);
+for (let u in q2) {
+  println(u.lastName + " " + u.age);
+}
+// Gomez 18
+// Gomez 30
+// Perez 25
+// Perez 40
+
+// Descending tie-breaker
+let d1 = users.orderBy(fn(u) => u.lastName);
+let d2 = d1.thenByDescending(fn(u) => u.age);`)}
+
+<h2>Set operations (union / intersect / except)</h2>
+<p>Like C#, combine two lists removing duplicates. The result is always <em>distinct</em> and keeps the order of appearance.</p>
+${te(`let a = [1, 2, 3, 4, 2, 3];
+let b = [3, 4, 5, 6];
+
+let u = a.union(b);      // [1, 2, 3, 4, 5, 6] (present in either)
+let i = a.intersect(b);  // [3, 4]             (present in both)
+let e = a.except(b);     // [1, 2]             (in a but not in b)`)}
+<p class="note">Note: pass the second list as a variable; store the result in a variable before iterating with <code>for-in</code>.</p>
+
+<h2>Safe access (single / firstOrDefault / lastOrDefault)</h2>
+<p><code>single()</code> requires the list to have exactly one element. <code>firstOrDefault()</code> and <code>lastOrDefault()</code> return <code>null</code> instead of an error when the list is empty.</p>
+${te(`let only = [42];
+println(only.single());            // 42
+
+let empty = [];
+println(empty.firstOrDefault());  // null
+println(empty.lastOrDefault());   // null`)}
+
 <h2>Search and check</h2>
 ${te(`let p3 = products.firstWhere(fn(p) => p.id == 3);
 println(p3.name);                              // grape
@@ -3855,11 +3945,15 @@ println("top = " + top.name);                  // pear`)}
   <tr><td><code>.where(fn)</code></td><td>Filtered list.</td></tr>
   <tr><td><code>.select(fn)</code></td><td>Projected list.</td></tr>
   <tr><td><code>.orderBy(fn)</code> / <code>.orderByDescending(fn)</code></td><td>Sorted list.</td></tr>
+  <tr><td><code>.thenBy(fn)</code> / <code>.thenByDescending(fn)</code></td><td>Tie-breaker key after <code>orderBy</code> (stable order).</td></tr>
   <tr><td><code>.sumBy(fn)</code> / <code>.avgBy(fn)</code></td><td>Number.</td></tr>
   <tr><td><code>.minBy(fn)</code> / <code>.maxBy(fn)</code></td><td>The min / max element.</td></tr>
   <tr><td><code>.countWhere(fn)</code></td><td>Count that matches.</td></tr>
   <tr><td><code>.first()</code> / <code>.last()</code></td><td>First / last element.</td></tr>
+  <tr><td><code>.firstOrDefault()</code> / <code>.lastOrDefault()</code></td><td>First / last or <code>null</code> if empty.</td></tr>
+  <tr><td><code>.single()</code></td><td>The only element (error if not exactly one).</td></tr>
   <tr><td><code>.firstWhere(fn)</code></td><td>First that matches.</td></tr>
+  <tr><td><code>.union(list)</code> / <code>.intersect(list)</code> / <code>.except(list)</code></td><td>Sets: union / intersection / difference (distinct).</td></tr>
   <tr><td><code>.all(fn)</code> / <code>.none(fn)</code></td><td>Bool.</td></tr>
   <tr><td><code>.join(sep)</code></td><td>Join a list of strings.</td></tr>
 </table>
