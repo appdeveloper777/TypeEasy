@@ -366,6 +366,7 @@ window.NAV_ES = [
     ["errors", "Manejo de errores"],
     ["modules", "Módulos (import)"],
     ["stdlib", "Stdlib"],
+    ["timing", "Medir tiempo"],
     ["bridge", "Bridge (otros lenguajes)"],
     ["async", "Async / concurrencia"],
   ]},
@@ -420,6 +421,7 @@ window.NAV_EN = [
     ["errors", "Error handling"],
     ["modules", "Modules (import)"],
     ["stdlib", "Stdlib"],
+    ["timing", "Measure time"],
     ["bridge", "Bridge (other languages)"],
     ["async", "Async / concurrency"],
   ]},
@@ -1373,6 +1375,55 @@ ${out('{"origen":"Lima","grados":21}')}
 
 <div class="pager">
   <a class="prev" href="#/modules">&larr; Módulos</a>
+  <a href="#/timing">Medir tiempo &rarr;</a>
+</div>
+`;
+
+PAGES.timing = `
+<h1>Medir tiempo (benchmark)</h1>
+<p class="lead">TypeEasy trae medición de tiempo nativa. Para benchmarks usa <code class="inline">now_ms()</code>: devuelve milisegundos de un reloj <strong>monotónico</strong>, perfecto para medir cuánto tarda un bloque de código.</p>
+
+<h2>Los tres builtins de tiempo</h2>
+${te(`now();        // "2026-06-06T12:00:00Z"  fecha/hora ISO-8601 (UTC)
+now_epoch();  // 1780000000             segundos desde 1970 (int)
+now_ms();     // 1780000000123          milisegundos monotónicos (int)`)}
+<div class="note"><strong>¿Cuál usar?</strong> <code class="inline">now()</code> para timestamps legibles, <code class="inline">now_epoch()</code> para guardar fechas, y <code class="inline">now_ms()</code> para <strong>medir duración</strong>. El reloj de <code class="inline">now_ms()</code> es monotónico: el delta nunca sale negativo aunque cambie la hora del sistema.</div>
+
+<h2>Patrón: tomar t0 y t1</h2>
+<p>Captura el tiempo antes y después del código, y resta:</p>
+${te(`let t0 = now_ms();
+
+// ... código a medir ...
+var total = 0;
+var i = 0;
+while (i < 100000000) {
+    total = total + i;
+    i = i + 1;
+}
+
+let t1 = now_ms();
+println(total);
+println("Tiempo (ms): " + to_str(t1 - t0));`)}
+${out("4999999950000000\nTiempo (ms): 2665")}
+
+<h2>Reutilizar la medición con una función</h2>
+${te(`var medir = fn(nombre, n) => {
+    let t0 = now_ms();
+    var s = 0;
+    var i = 0;
+    while (i < n) { s = s + i; i = i + 1; }
+    let ms = now_ms() - t0;
+    println(nombre + ": " + to_str(ms) + " ms (suma=" + to_str(s) + ")");
+};
+
+medir("1 millon", 1000000);
+medir("10 millones", 10000000);`)}
+${out("1 millon: 3 ms (suma=499999500000)\n10 millones: 27 ms (suma=49999995000000)")}
+
+<div class="note"><strong>Tip.</strong> Para acelerar bucles calientes con el JIT, ejecuta con <code class="inline">TYPEEASY_JIT=1 TYPEEASY_PROFILE=1</code>. El mismo bucle de 100M baja de ~2.7s a ~0.13s.</div>
+
+<div class="pager">
+  <a class="prev" href="#/stdlib">&larr; Stdlib</a>
   <a href="#/bridge">Bridge &rarr;</a>
 </div>
 `;
@@ -3338,6 +3389,55 @@ ${out('{"source":"Lima","degrees":21}')}
 
 <div class="pager">
   <a class="prev" href="#/modules">&larr; Modules</a>
+  <a href="#/timing">Measure time &rarr;</a>
+</div>
+`;
+
+PAGES.timing = `
+<h1>Measure time (benchmark)</h1>
+<p class="lead">TypeEasy ships with native time measurement. For benchmarks use <code class="inline">now_ms()</code>: it returns milliseconds from a <strong>monotonic</strong> clock, perfect for timing how long a block of code takes.</p>
+
+<h2>The three time builtins</h2>
+${te(`now();        // "2026-06-06T12:00:00Z"  ISO-8601 date/time (UTC)
+now_epoch();  // 1780000000             seconds since 1970 (int)
+now_ms();     // 1780000000123          monotonic milliseconds (int)`)}
+<div class="note"><strong>Which one?</strong> <code class="inline">now()</code> for readable timestamps, <code class="inline">now_epoch()</code> to store dates, and <code class="inline">now_ms()</code> to <strong>measure duration</strong>. The <code class="inline">now_ms()</code> clock is monotonic: the delta is never negative even if the system clock changes.</div>
+
+<h2>Pattern: take t0 and t1</h2>
+<p>Capture the time before and after the code, then subtract:</p>
+${te(`let t0 = now_ms();
+
+// ... code to measure ...
+var total = 0;
+var i = 0;
+while (i < 100000000) {
+    total = total + i;
+    i = i + 1;
+}
+
+let t1 = now_ms();
+println(total);
+println("Time (ms): " + to_str(t1 - t0));`)}
+${out("4999999950000000\nTime (ms): 2665")}
+
+<h2>Reuse the measurement with a function</h2>
+${te(`var measure = fn(name, n) => {
+    let t0 = now_ms();
+    var s = 0;
+    var i = 0;
+    while (i < n) { s = s + i; i = i + 1; }
+    let ms = now_ms() - t0;
+    println(name + ": " + to_str(ms) + " ms (sum=" + to_str(s) + ")");
+};
+
+measure("1 million", 1000000);
+measure("10 million", 10000000);`)}
+${out("1 million: 3 ms (sum=499999500000)\n10 million: 27 ms (sum=49999995000000)")}
+
+<div class="note"><strong>Tip.</strong> To speed up hot loops with the JIT, run with <code class="inline">TYPEEASY_JIT=1 TYPEEASY_PROFILE=1</code>. The same 100M loop drops from ~2.7s to ~0.13s.</div>
+
+<div class="pager">
+  <a class="prev" href="#/stdlib">&larr; Stdlib</a>
   <a href="#/bridge">Bridge &rarr;</a>
 </div>
 `;
