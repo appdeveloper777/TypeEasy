@@ -73,7 +73,7 @@ typeeasy --api hola.te --port 8080      # -> http://localhost:8080/
 > Hoja de ruta: [docs/ROADMAP.md](docs/ROADMAP.md)
 
 
-(https://appdeveloper777.github.io/TypeEasy/#/home)
+Página oficial: (https://appdeveloper777.github.io/TypeEasy/#/home)
 
 <img width="1892" height="1052" alt="image" src="https://github.com/user-attachments/assets/a2f9e155-1eb7-4834-935a-e703d3f15743" />
 
