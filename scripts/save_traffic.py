@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import json
 import os
-from datetime import datetime, timedelta
 import requests
 from pathlib import Path
 
@@ -15,26 +14,17 @@ def get_traffic_data(repo, token, traffic_type):
     response = requests.get(url, headers=headers)
     
     if response.status_code == 200:
-        return response.json()
+        data = response.json()
+        # La API devuelve un diccionario, extraemos la lista
+        if isinstance(data, dict) and traffic_type in data:
+            return data[traffic_type]
+        elif isinstance(data, list):
+            return data
+        else:
+            return []
     else:
         print(f"Error obteniendo {traffic_type}: {response.status_code}")
-        return None
-
-def merge_data(existing_data, new_data, traffic_type):
-    """Fusiona datos existentes con nuevos sin duplicados"""
-    existing_dates = {item["timestamp"] for item in existing_data}
-    
-    for item in new_data:
-        if item["timestamp"] not in existing_dates:
-            existing_data.append({
-                "timestamp": item["timestamp"],
-                traffic_type: {
-                    "count": item["count"],
-                    "uniques": item["uniques"]
-                }
-            })
-    
-    return existing_data
+        return []
 
 def main():
     repo = os.getenv("GITHUB_REPOSITORY")
@@ -45,68 +35,44 @@ def main():
         print("Error: GH_ACCESS_TOKEN no configurado")
         exit(1)
     
-    # Obtener datos actuales
-    clones = get_traffic_data(repo, token, "clones")
-    views = get_traffic_data(repo, token, "views")
+    print(f"Obteniendo datos para: {repo}")
     
-    if not clones and not views:
-        print("No se obtuvieron datos")
-        exit(0)
+    # Obtener datos
+    clones_data = get_traffic_data(repo, token, "clones")
+    views_data = get_traffic_data(repo, token, "views")
     
-    # Cargar historial existente o crear nuevo
+    # Cargar historial existente
+    history = []
     if history_path.exists():
         with open(history_path, 'r') as f:
             history = json.load(f)
-    else:
-        history = []
     
-    # Crear diccionario de fechas existentes
-    history_by_date = {item["timestamp"]: item for item in history}
+    # Crear diccionario de fechas
+    date_map = {item["timestamp"]: item for item in history}
     
-    # Agregar datos de clones
-    if clones:
-        for clone in clones:
-            if clone["timestamp"] not in history_by_date:
-                history.append({
-                    "timestamp": clone["timestamp"],
-                    "clones": {
-                        "count": clone["count"],
-                        "uniques": clone["uniques"]
-                    }
-                })
-            else:
-                history_by_date[clone["timestamp"]]["clones"] = {
-                    "count": clone["count"],
-                    "uniques": clone["uniques"]
-                }
+    # Agregar clones
+    for item in clones_data:
+        ts = item["timestamp"]
+        if ts not in date_map:
+            date_map[ts] = {"timestamp": ts}
+        date_map[ts]["clones"] = {"count": item["count"], "uniques": item["uniques"]}
     
-    # Agregar datos de vistas
-    if views:
-        for view in views:
-            if view["timestamp"] not in history_by_date:
-                history.append({
-                    "timestamp": view["timestamp"],
-                    "views": {
-                        "count": view["count"],
-                        "uniques": view["uniques"]
-                    }
-                })
-            else:
-                history_by_date[view["timestamp"]]["views"] = {
-                    "count": view["count"],
-                    "uniques": view["uniques"]
-                }
+    # Agregar views
+    for item in views_data:
+        ts = item["timestamp"]
+        if ts not in date_map:
+            date_map[ts] = {"timestamp": ts}
+        date_map[ts]["views"] = {"count": item["count"], "uniques": item["uniques"]}
     
-    # Ordenar por fecha
-    history.sort(key=lambda x: x["timestamp"])
+    # Convertir a lista y ordenar
+    history = sorted(date_map.values(), key=lambda x: x["timestamp"])
     
-    # Guardar historial
+    # Guardar
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with open(history_path, 'w') as f:
         json.dump(history, f, indent=2)
     
-    print(f"Datos guardados en {history_path}")
-    print(f"Total de días en historial: {len(history)}")
+    print(f"Guardado: {len(history)} días de datos")
 
 if __name__ == "__main__":
     main()
