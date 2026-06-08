@@ -59,6 +59,7 @@
 #else
   #include <sys/types.h>
   #include <sys/socket.h>
+  #include <sys/select.h>
   #include <netinet/in.h>
   #include <arpa/inet.h>
   #include <signal.h>
@@ -298,6 +299,77 @@ static int parse_lines_array(const char *line) {
 static int line_has_breakpoint(int line) {
     for (int i = 0; i < g_bp_count; ++i) if (g_bp_lines[i] == line) return 1;
     return 0;
+}
+
+/* Non-blocking drain of commands that arrived while the program is RUNNING
+ * (i.e. not stopped at a breakpoint). This is what makes toggling breakpoints
+ * mid-session take effect: VS Code sends set_breakpoints at any time, but the
+ * socket is only read here and in wait_for_resume(). Without this, BPs added
+ * after the first stop (e.g. between HTTP requests in --api mode) sit unread
+ * and never apply. Returns immediately when no data is pending. */
+static void drain_pending_commands(void) {
+    if (g_client_fd < 0) return;
+    for (;;) {
+        /* Is a full line already buffered? */
+        int have_line = 0;
+        for (size_t i = 0; i < g_rx_len; ++i) {
+            if (g_rx[i] == '\n') { have_line = 1; break; }
+        }
+        if (!have_line) {
+            /* Peek the socket without blocking. */
+            fd_set rfds;
+            FD_ZERO(&rfds);
+#ifdef _WIN32
+            FD_SET((SOCKET)g_client_fd, &rfds);
+#else
+            FD_SET(g_client_fd, &rfds);
+#endif
+            struct timeval tv = {0, 0};
+            int sel = select(g_client_fd + 1, &rfds, NULL, NULL, &tv);
+            if (sel <= 0) return;            /* nothing pending (or error) */
+            if (g_rx_len >= RX_CAP) { g_rx_len = 0; return; }
+            int r = te_sock_read(g_client_fd, g_rx + g_rx_len, RX_CAP - g_rx_len);
+            if (r == 0) {                    /* EOF: adapter detached */
+                te_sock_close(g_client_fd); g_client_fd = -1; g_debug_enabled = 0;
+                return;
+            }
+            if (r < 0) {
+                if (TE_SOCK_ERRNO == TE_EINTR) continue;
+                return;
+            }
+            g_rx_len += (size_t)r;
+            continue;                        /* re-check for a full line */
+        }
+        /* Extract one buffered line (mirrors recv_line's buffer handling). */
+        char line[2048];
+        size_t li = 0;
+        for (; li < g_rx_len; ++li) if (g_rx[li] == '\n') break;
+        size_t copy = li < sizeof(line) - 1 ? li : sizeof(line) - 1;
+        memcpy(line, g_rx, copy);
+        line[copy] = '\0';
+        size_t rem = g_rx_len - (li + 1);
+        memmove(g_rx, g_rx + li + 1, rem);
+        g_rx_len = rem;
+
+        char cmd[64];
+        if (json_str_field(line, "cmd", cmd, sizeof(cmd)) < 0) continue;
+        if (strcmp(cmd, "set_breakpoints") == 0) {
+            parse_lines_array(line);
+            send_line("{\"resp\":\"ok\"}");
+        } else if (strcmp(cmd, "pause") == 0) {
+            /* Break as soon as possible: stop on the next statement. */
+            g_step = STEP_IN;
+            g_step_depth = g_frame_top;
+            send_line("{\"resp\":\"ok\"}");
+        } else if (strcmp(cmd, "disconnect") == 0) {
+            te_sock_close(g_client_fd);
+            g_client_fd = -1;
+            g_debug_enabled = 0;
+            return;
+        }
+        /* Other commands (stack/vars/eval) are only meaningful while stopped
+         * and are handled in wait_for_resume(); ignore them here. */
+    }
 }
 
 /* ===== command handlers ===== */
@@ -891,7 +963,8 @@ void debugger_init(int port, const char *source_file) {
         perror("[debugger] listen"); te_sock_close(listen_fd); return;
     }
 
-    if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] Listening on port %d, waiting for adapter...\n", port);
+    fprintf(stderr, "[typeeasy] Debug server ready on port %d.\n", port);
+    fprintf(stderr, "[typeeasy] Waiting for VS Code to attach (press F5 with \"attachOnly\": true)... this is normal, not a hang.\n");
     fflush(stderr);
 
     struct sockaddr_in cli;
@@ -907,6 +980,7 @@ void debugger_init(int port, const char *source_file) {
     debugger_push_frame("<main>", NULL);
 
     if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] Adapter connected. Awaiting configuration...\n");
+    fprintf(stderr, "[typeeasy] VS Code attached. Debugging started.\n");
     fflush(stderr);
 
     /* Send 'initialized' so adapter sends breakpoints + start. */
@@ -960,6 +1034,13 @@ void debugger_pop_frame(void) {
 
 void debugger_on_statement(ASTNode *node) {
     if (!g_debug_enabled || !node) return;
+
+    /* Apply any breakpoint toggles / pause that arrived while running, so
+     * adding or removing breakpoints mid-session takes effect on the very
+     * next statement (e.g. between HTTP requests in --api mode). */
+    drain_pending_commands();
+    if (!g_debug_enabled) return;   /* drain may have processed a disconnect */
+
     int line = node->line;
     if (line <= 0) {
         if (getenv("TYPEEASY_DEBUG_VERBOSE")) {

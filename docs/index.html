@@ -2615,16 +2615,28 @@ ${sh(`te --debug-port 4712 typeeasycode\\test_custom.te`)}
   <li>Pon tus breakpoints, pulsa <strong>F5</strong> y elige esa config: mismo step-over/in/out e inspección de variables.</li>
 </ol>
 
-<p class="note">Para depurar <strong>endpoints HTTP</strong> con breakpoints dentro del handler, usa el flujo con <strong>Docker (F5)</strong> de las secciones anteriores. El modo nativo es ideal para scripts y lógica <code class="inline">.te</code> sin servidor.</p>
+<h3>8.3 Depurar endpoints HTTP nativo (sin Docker)</h3>
+<p>Un archivo que solo declara una <code class="inline">class</code> y un <code class="inline">endpoint</code> <strong>no ejecuta nada</strong> al correrlo con <code class="inline">te --debug-port ... archivo.te</code>: el cuerpo del handler solo corre cuando llega una petición HTTP. Por eso el proceso "termina al instante" tras el attach (no es un crash). Para depurar el handler de forma nativa:</p>
+<ol>
+  <li>Arranca el servidor en modo API <strong>y</strong> debug — bloquea esperando el attach <em>antes</em> de levantar el servidor:</li>
+</ol>
+${sh(`te --api --debug-port 4712 test_custom.te`)}
+<ol start="2">
+  <li>Pon el breakpoint en una <strong>sentencia plana</strong> del handler (ej. la línea <code class="inline">return json(...)</code>, una asignación o un <code class="inline">println</code>). Pulsa <strong>F5</strong> con la config <code class="inline">"attachOnly": true</code>. En el Debug Console verás <code class="inline">attachOnly: not spawning docker</code> y <code class="inline">connected to interpreter on port 4712</code>.</li>
+  <li>Dispara una petición en <strong>otra terminal</strong> para que el handler corra y se detenga en el breakpoint:</li>
+</ol>
+${sh(`curl http://localhost:8080/api/hola`)}
+<p class="note"><strong>Tip:</strong> un breakpoint en una línea con LINQ + lambda (ej. <code class="inline">let q = lista.orderBy(fn(u) =&gt; u.campo);</code>) puede no detenerse — el intérprete atribuye esa línea a la siguiente sentencia. Pon el breakpoint en una línea "normal" (asignación, <code class="inline">println</code>, <code class="inline">return</code>) y sí para.</p>
 
 <h2>9. Solución de problemas</h2>
 <table class="ref">
   <tr><th>Problema</th><th>Solución</th></tr>
-  <tr><td><code>no configuration file provided: not found</code></td><td>Abre la carpeta del repo (con <code>docker-compose.yml</code>), no un <code>.te</code> suelto.</td></tr>
+  <tr><td>No puedo poner el punto rojo en un <code>.te</code></td><td>Revisa <code>files.associations</code> en Settings: <code>"*.te"</code> debe ser <code>"typeeasy"</code> (no <code>objective-cpp</code> ni otro). Luego <em>Developer: Reload Window</em>. Confirma que abajo a la derecha diga <strong>TypeEasy</strong>.</td></tr>
+  <tr><td><code>no configuration file provided: not found</code></td><td>Estás usando una config <strong>Docker</strong> (<code>"api": true</code>) en una carpeta sin <code>docker-compose.yml</code>. En carpetas sueltas usa la config <strong>attach nativo</strong> (<code>"attachOnly": true</code>).</td></tr>
+  <tr><td>Depura <code>launch.json</code> en vez de tu <code>.te</code></td><td>La config usa <code>"program": "\${file}"</code> y tenías otra pestaña activa. Fija la ruta: <code>"program": "\${workspaceFolder}/test_custom.te"</code>.</td></tr>
   <tr><td><code>ECONNREFUSED :4712</code> o <code>port is already allocated</code></td><td>Contenedor zombie. Mátalo: <code>docker rm -f $(docker ps -aq --filter "name=typeeasy-dap")</code>.</td></tr>
-  <tr><td>El breakpoint no para</td><td>Ponlo en una sentencia ejecutable (no comentario ni llave). El request debe llegar al endpoint con <code>curl</code>.</td></tr>
-  <tr><td><code>Docker daemon not running</code></td><td>Inicia Docker Desktop.</td></tr>
-  <tr><td>Solo ejecutar (sin breakpoints)</td><td>El binario nativo alcanza: <code>te --api --port 8080 archivo.te</code> — sin Docker.</td></tr>
+  <tr><td>El breakpoint no para</td><td>Ponlo en una sentencia ejecutable y "plana" (no comentario, llave, ni línea con lambda/LINQ). En endpoints, el request debe llegar con <code>curl</code>.</td></tr>
+  <tr><td><code>Docker daemon not running</code></td><td>Inicia Docker Desktop (solo si usas el flujo Docker).</td></tr>
   <tr><td>Attach nativo no conecta (<code>ECONNREFUSED</code>)</td><td>Arranca primero el binario con <code>--debug-port 4712</code> y usa el mismo <code>port</code> en el <code>launch.json</code> con <code>"attachOnly": true</code>.</td></tr>
 </table>
 
@@ -4910,16 +4922,28 @@ ${sh(`te --debug-port 4712 typeeasycode\\test_custom.te`)}
   <li>Set your breakpoints, press <strong>F5</strong> and pick that config: same step over/in/out and variable inspection.</li>
 </ol>
 
-<p class="note">To debug <strong>HTTP endpoints</strong> with breakpoints inside the handler, use the <strong>Docker (F5)</strong> flow from the previous sections. Native mode is ideal for plain <code class="inline">.te</code> scripts and logic without a server.</p>
+<h3>8.3 Debug HTTP endpoints natively (no Docker)</h3>
+<p>A file that only declares a <code class="inline">class</code> and an <code class="inline">endpoint</code> <strong>runs nothing</strong> when launched with <code class="inline">te --debug-port ... file.te</code>: the handler body only runs when an HTTP request arrives. That's why the process "exits instantly" after attach (it is not a crash). To debug the handler natively:</p>
+<ol>
+  <li>Start the server in API <strong>and</strong> debug mode — it blocks waiting for the attach <em>before</em> starting the server:</li>
+</ol>
+${sh(`te --api --debug-port 4712 test_custom.te`)}
+<ol start="2">
+  <li>Put the breakpoint on a <strong>plain statement</strong> inside the handler (e.g. the <code class="inline">return json(...)</code> line, an assignment or a <code class="inline">println</code>). Press <strong>F5</strong> with the <code class="inline">"attachOnly": true</code> config. The Debug Console shows <code class="inline">attachOnly: not spawning docker</code> and <code class="inline">connected to interpreter on port 4712</code>.</li>
+  <li>Fire a request from <strong>another terminal</strong> so the handler runs and stops at the breakpoint:</li>
+</ol>
+${sh(`curl http://localhost:8080/api/hola`)}
+<p class="note"><strong>Tip:</strong> a breakpoint on a line with LINQ + lambda (e.g. <code class="inline">let q = list.orderBy(fn(u) =&gt; u.field);</code>) may not stop — the interpreter attributes that line to the next statement. Put the breakpoint on a "normal" line (assignment, <code class="inline">println</code>, <code class="inline">return</code>) and it stops.</p>
 
 <h2>9. Troubleshooting</h2>
 <table class="ref">
   <tr><th>Problem</th><th>Fix</th></tr>
-  <tr><td><code>no configuration file provided: not found</code></td><td>Open the repo folder (with <code>docker-compose.yml</code>), not a lone <code>.te</code>.</td></tr>
+  <tr><td>Can't set a breakpoint on a <code>.te</code> file</td><td>Check <code>files.associations</code> in Settings: <code>"*.te"</code> must be <code>"typeeasy"</code> (not <code>objective-cpp</code> or anything else). Then <em>Developer: Reload Window</em>. Confirm the bottom-right says <strong>TypeEasy</strong>.</td></tr>
+  <tr><td><code>no configuration file provided: not found</code></td><td>You're using a <strong>Docker</strong> config (<code>"api": true</code>) in a folder without <code>docker-compose.yml</code>. In lone folders use the <strong>native attach</strong> config (<code>"attachOnly": true</code>).</td></tr>
+  <tr><td>Debugs <code>launch.json</code> instead of your <code>.te</code></td><td>The config uses <code>"program": "\${file}"</code> and another tab was active. Pin the path: <code>"program": "\${workspaceFolder}/test_custom.te"</code>.</td></tr>
   <tr><td><code>ECONNREFUSED :4712</code> or <code>port is already allocated</code></td><td>Zombie container. Kill it: <code>docker rm -f $(docker ps -aq --filter "name=typeeasy-dap")</code>.</td></tr>
-  <tr><td>The breakpoint never hits</td><td>Put it on an executable statement (not a comment or brace). The request must reach the endpoint via <code>curl</code>.</td></tr>
-  <tr><td><code>Docker daemon not running</code></td><td>Start Docker Desktop.</td></tr>
-  <tr><td>Just run (no breakpoints)</td><td>The native binary is enough: <code>te --api --port 8080 file.te</code> — no Docker.</td></tr>
+  <tr><td>The breakpoint never hits</td><td>Put it on an executable, "plain" statement (not a comment, brace, or lambda/LINQ line). For endpoints, the request must reach it via <code>curl</code>.</td></tr>
+  <tr><td><code>Docker daemon not running</code></td><td>Start Docker Desktop (only if you use the Docker flow).</td></tr>
   <tr><td>Native attach won't connect (<code>ECONNREFUSED</code>)</td><td>Start the binary first with <code>--debug-port 4712</code> and use the same <code>port</code> in <code>launch.json</code> with <code>"attachOnly": true</code>.</td></tr>
 </table>
 
