@@ -2596,13 +2596,18 @@ ${sh(`te --api --port 8081 --debug-port 4712 test.te`)}
   <li>En <code class="inline">.vscode/launch.json</code> usa una config con <code class="inline">"attachOnly": true</code>. Así el adapter <strong>no</strong> levanta Docker: solo se conecta al proceso nativo en <code class="inline">127.0.0.1:4712</code>.</li>
 </ol>
 ${te(`{
-  "type": "typeeasy",
-  "request": "launch",
-  "name": "TypeEasy: attach nativo (sin Docker)",
-  "program": "\${workspaceFolder}/test.te",
-  "attachOnly": true,
-  "port": 4712
-}`, "launch.json")}
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "typeeasy",
+      "request": "launch",
+      "name": "TypeEasy: attach nativo (sin Docker)",
+      "program": "\${workspaceFolder}/test.te",
+      "attachOnly": true,
+      "port": 4712
+    }
+  ]
+}`, ".vscode/launch.json")}
 <ol start="3">
   <li>Pon el breakpoint en una <strong>sentencia plana</strong> del handler (ej. <code class="inline">return json(...)</code>, una asignación o un <code class="inline">println</code> — no en líneas con lambda/LINQ). Pulsa <strong>F5</strong> y elige esa config.</li>
   <li>Dispara una petición en <strong>otra terminal</strong> (al mismo puerto del paso 1) para que el handler corra y se detenga en el breakpoint:</li>
@@ -2619,13 +2624,18 @@ ${sh(`te --api --port 8081 --debug-port 4712 test.te`)}
   <li>Usa <strong>el mismo</strong> <code class="inline">.vscode/launch.json</code> con <code class="inline">"attachOnly": true</code> y <code class="inline">"port": 4712</code> (idéntico al de Linux). VS Code se conecta al <code class="inline">typeeasy-bin.exe</code> nativo en <code class="inline">127.0.0.1:4712</code>, sin Docker.</li>
 </ol>
 ${te(`{
-  "type": "typeeasy",
-  "request": "launch",
-  "name": "TypeEasy: attach nativo (sin Docker)",
-  "program": "\${workspaceFolder}/test.te",
-  "attachOnly": true,
-  "port": 4712
-}`, "launch.json")}
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "typeeasy",
+      "request": "launch",
+      "name": "TypeEasy: attach nativo (sin Docker)",
+      "program": "\${workspaceFolder}/test.te",
+      "attachOnly": true,
+      "port": 4712
+    }
+  ]
+}`, ".vscode/launch.json")}
 <ol start="3">
   <li>Pon el breakpoint en una <strong>sentencia plana</strong> del handler (ej. <code class="inline">return json(...)</code>, una asignación o un <code class="inline">println</code> — no en líneas con lambda/LINQ). Pulsa <strong>F5</strong> y elige esa config.</li>
   <li>Dispara una petición en <strong>otra terminal</strong> (al mismo puerto del paso 1) para que el handler corra y se detenga en el breakpoint:</li>
@@ -4922,13 +4932,18 @@ ${sh(`te --api --port 8081 --debug-port 4712 test.te`)}
   <li>In <code class="inline">.vscode/launch.json</code> use a config with <code class="inline">"attachOnly": true</code>. The adapter then does <strong>not</strong> spin up Docker: it just connects to the native process at <code class="inline">127.0.0.1:4712</code>.</li>
 </ol>
 ${te(`{
-  "type": "typeeasy",
-  "request": "launch",
-  "name": "TypeEasy: native attach (no Docker)",
-  "program": "\${workspaceFolder}/test.te",
-  "attachOnly": true,
-  "port": 4712
-}`, "launch.json")}
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "typeeasy",
+      "request": "launch",
+      "name": "TypeEasy: native attach (no Docker)",
+      "program": "\${workspaceFolder}/test.te",
+      "attachOnly": true,
+      "port": 4712
+    }
+  ]
+}`, ".vscode/launch.json")}
 <ol start="3">
   <li>Put the breakpoint on a <strong>plain statement</strong> inside the handler (e.g. <code class="inline">return json(...)</code>, an assignment or a <code class="inline">println</code> — not on lambda/LINQ lines). Press <strong>F5</strong> and pick that config.</li>
   <li>Fire a request from <strong>another terminal</strong> (to the same port as step 1) so the handler runs and stops at the breakpoint:</li>
@@ -4945,13 +4960,18 @@ ${sh(`te --api --port 8081 --debug-port 4712 test.te`)}
   <li>Use <strong>the same</strong> <code class="inline">.vscode/launch.json</code> with <code class="inline">"attachOnly": true</code> and <code class="inline">"port": 4712</code> (identical to Linux). VS Code connects to the native <code class="inline">typeeasy-bin.exe</code> at <code class="inline">127.0.0.1:4712</code>, no Docker.</li>
 </ol>
 ${te(`{
-  "type": "typeeasy",
-  "request": "launch",
-  "name": "TypeEasy: native attach (no Docker)",
-  "program": "\${workspaceFolder}/test.te",
-  "attachOnly": true,
-  "port": 4712
-}`, "launch.json")}
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "typeeasy",
+      "request": "launch",
+      "name": "TypeEasy: native attach (no Docker)",
+      "program": "\${workspaceFolder}/test.te",
+      "attachOnly": true,
+      "port": 4712
+    }
+  ]
+}`, ".vscode/launch.json")}
 <ol start="3">
   <li>Put the breakpoint on a <strong>plain statement</strong> inside the handler (e.g. <code class="inline">return json(...)</code>, an assignment or a <code class="inline">println</code> — not on lambda/LINQ lines). Press <strong>F5</strong> and pick that config.</li>
   <li>Fire a request from <strong>another terminal</strong> (to the same port as step 1) so the handler runs and stops at the breakpoint:</li>
