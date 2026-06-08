@@ -1865,7 +1865,10 @@ ObjectNode *create_object(ClassNode *class) {
         obj->attributes[i].id    = strdup(class->attributes[i].id);
         obj->attributes[i].type  = strdup(class->attributes[i].type);
         // Inicialización por defecto (ej. int 0)
-        if (strcmp(class->attributes[i].type, "string") == 0) {
+        if (strcmp(class->attributes[i].type, "string") == 0 ||
+            strcmp(class->attributes[i].type, "uuid") == 0 ||
+            strcmp(class->attributes[i].type, "datetime") == 0) {
+            /* v1.0.0: uuid/datetime are storage-aliased to STRING. */
             obj->attributes[i].vtype = VAL_STRING;
             obj->attributes[i].value.string_value = strdup("");
         } else if (strcmp(class->attributes[i].type, "float") == 0) {
@@ -2299,13 +2302,26 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
                 return;
             }
 
-            /* Read the original Object pointer from either 'extra' (preferred)
-               or 'value' (legacy). Then clone and store the cloned object in
-               both fields so future code can find it. */
-            ObjectNode *obj_original = NULL;
-            if (cur->extra) obj_original = (ObjectNode *)(cur->extra);
-            else obj_original = (ObjectNode *)(intptr_t)cur->value;
-            ObjectNode *obj_clonado = clone_object(obj_original);
+            /* Read the original Object pointer. In the persistent embedded-API
+             * scenario this same LIST literal AST node is re-declared on every
+             * request, so we must NOT destroy the parse-time template here.
+             * The pristine template object lives in `cur->extra` on the first
+             * pass; we stash it in `cur->cached_class` (unused for OBJECT item
+             * nodes) so subsequent requests clone from the original instead of
+             * from the previous request's already-constructed clone, and we
+             * keep `cur->left` (the ctor args) intact for re-binding. */
+            ObjectNode *obj_template = (ObjectNode *)cur->cached_class;
+            if (!obj_template) {
+                if (cur->extra) obj_template = (ObjectNode *)(cur->extra);
+                else obj_template = (ObjectNode *)(intptr_t)cur->value;
+                cur->cached_class = (void *)obj_template;
+            } else if (cur->extra && (ObjectNode *)cur->extra != obj_template) {
+                /* Free the previous request's clone before replacing it so the
+                 * persistent API doesn't leak one ObjectNode per item per
+                 * request. Never frees the pristine template (== cached_class). */
+                free_object_node((ObjectNode *)cur->extra);
+            }
+            ObjectNode *obj_clonado = clone_object(obj_template);
             ASTNode *arg = cur->left;
             cur->value = (int)(intptr_t)obj_clonado;
             cur->extra = (struct ASTNode*)obj_clonado;
@@ -2321,6 +2337,12 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
                     if (arg->type && strcmp(arg->type, "STRING") == 0) {
                         vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
                     } 
+                    else if (arg->type && strcmp(arg->type, "FLOAT") == 0) {
+                        /* Float literal: value lives in str_value (parsed via
+                         * atof in te_value_to_variable). Passing it as INT here
+                         * truncated 19.99 -> 19. */
+                        vn = create_ast_leaf("FLOAT", 0, arg->str_value, NULL);
+                    }
                     else if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
                         Variable *v = find_variable(arg->id);
                         if (!v) {
@@ -2329,6 +2351,10 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
                         }
                         if (v->vtype == VAL_STRING) {
                             vn = create_ast_leaf("STRING", 0, strdup(v->value.string_value), NULL);
+                        } else if (v->vtype == VAL_FLOAT) {
+                            char fbuf[64];
+                            snprintf(fbuf, sizeof(fbuf), "%.17g", v->value.float_value);
+                            vn = create_ast_leaf("FLOAT", 0, fbuf, NULL);
                         } else {
                             vn = create_ast_leaf_number("INT", v->value.int_value, NULL, NULL);
                         }
@@ -2347,8 +2373,10 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
                 return_node = NULL;
                 /* debug print removed */
             }
-            cur->left = NULL;
-            /* debug print removed */
+            /* NOTE: do NOT null out cur->left here. The args must survive so
+             * that the persistent embedded API can re-run this constructor on
+             * the next request (see template handling above). Nulling it caused
+             * numeric attributes to reset to 0 on the second request. */
             cur = cur->next;
         }
     /* debug print removed */
@@ -6105,10 +6133,16 @@ static void interpret_call_method_impl(ASTNode *node) {
                             ASTNode *vn = NULL;
                             if (carg->type && strcmp(carg->type, "STRING") == 0) {
                                 vn = create_ast_leaf("STRING", 0, carg->str_value, NULL);
+                            } else if (carg->type && strcmp(carg->type, "FLOAT") == 0) {
+                                vn = create_ast_leaf("FLOAT", 0, carg->str_value, NULL);
                             } else if (carg->type && (strcmp(carg->type, "ID") == 0 || strcmp(carg->type, "IDENTIFIER") == 0)) {
                                 Variable *vv = find_variable(carg->id);
                                 if (vv && vv->vtype == VAL_STRING) {
                                     vn = create_ast_leaf("STRING", 0, strdup(vv->value.string_value), NULL);
+                                } else if (vv && vv->vtype == VAL_FLOAT) {
+                                    char fbuf[64];
+                                    snprintf(fbuf, sizeof(fbuf), "%.17g", vv->value.float_value);
+                                    vn = create_ast_leaf("FLOAT", 0, fbuf, NULL);
                                 } else if (vv) {
                                     vn = create_ast_leaf_number("INT", vv->value.int_value, NULL, NULL);
                                 } else {
@@ -7103,6 +7137,8 @@ ObjectNode* clone_object(ObjectNode *original) {
             clone->attributes[i].value.string_value = src ? strdup(src) : strdup("");
         } else if (clone->attributes[i].vtype == VAL_INT) {
             clone->attributes[i].value.int_value = original->attributes[i].value.int_value;
+        } else if (clone->attributes[i].vtype == VAL_FLOAT) {
+            clone->attributes[i].value.float_value = original->attributes[i].value.float_value;
         } else {
             // (Manejar otros tipos como float si es necesario)
         }
@@ -7554,6 +7590,8 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 if (arg->type && (strcmp(arg->type, "STRING") == 0 || strcmp(arg->type, "STRING_LITERAL") == 0)) {
                     vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
                     //fprintf(stderr, "[DEBUG] Constructor arg string val: %s\n", arg->str_value);
+                } else if (arg->type && strcmp(arg->type, "FLOAT") == 0) {
+                    vn = create_ast_leaf("FLOAT", 0, arg->str_value, NULL);
                 } else if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
                     Variable *v = find_variable(arg->id);
                     if (!v) {
@@ -7563,6 +7601,10 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                     if (v->vtype == VAL_STRING) {
                         vn = create_ast_leaf("STRING", 0, strdup(v->value.string_value), NULL);
                       //  fprintf(stderr, "[DEBUG] Constructor arg var string val: %s\n", v->value.string_value);
+                    } else if (v->vtype == VAL_FLOAT) {
+                        char fbuf[64];
+                        snprintf(fbuf, sizeof(fbuf), "%.17g", v->value.float_value);
+                        vn = create_ast_leaf("FLOAT", 0, fbuf, NULL);
                     } else {
                         vn = create_ast_leaf_number("INT", v->value.int_value, NULL, NULL);
                       //  fprintf(stderr, "[DEBUG] Constructor arg var int val: %d\n", v->value.int_value);
@@ -8163,7 +8205,9 @@ static void interpret_assign_attr(ASTNode *node) {
      * Se determina si el atributo declarado es de texto (string) o numérico,
      * y si el valor asignado es de texto o numérico. Un desajuste aborta. */
     {
-        int decl_is_str = (strcmp(declared, "string") == 0 || strcmp(declared, "string?") == 0);
+        int decl_is_str = (strcmp(declared, "string") == 0 || strcmp(declared, "string?") == 0 ||
+                           strcmp(declared, "uuid") == 0 || strcmp(declared, "uuid?") == 0 ||
+                           strcmp(declared, "datetime") == 0 || strcmp(declared, "datetime?") == 0);
         /* val_kind: 0 = desconocido, 1 = string, 2 = numérico */
         int val_kind = 0;
         if (value_node->type) {
@@ -8197,7 +8241,9 @@ static void interpret_assign_attr(ASTNode *node) {
         }
     }
 
-    if (strcmp(declared, "string") == 0 || strcmp(declared, "string?") == 0) {
+    if (strcmp(declared, "string") == 0 || strcmp(declared, "string?") == 0 ||
+        strcmp(declared, "uuid") == 0 || strcmp(declared, "uuid?") == 0 ||
+        strcmp(declared, "datetime") == 0 || strcmp(declared, "datetime?") == 0) {
         if (value_node->type && strcmp(value_node->type, "STRING") == 0) {
           obj->attributes[idx].value.string_value = strdup(value_node->str_value);
           if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (STRING)\n", attr_name, value_node->str_value);
@@ -8232,10 +8278,17 @@ static void interpret_assign_attr(ASTNode *node) {
         }
         obj->attributes[idx].vtype = VAL_STRING;
       } else {
-        int val = evaluate_expression(value_node);
-        obj->attributes[idx].value.int_value = val;
-        obj->attributes[idx].vtype = VAL_INT;
-        if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %d (INT)\n", attr_name, val);
+        double val = evaluate_expression(value_node);
+        int decl_is_float = (strcmp(declared, "float") == 0 || strcmp(declared, "float?") == 0);
+        if (decl_is_float) {
+            obj->attributes[idx].value.float_value = val;
+            obj->attributes[idx].vtype = VAL_FLOAT;
+            if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %f (FLOAT)\n", attr_name, val);
+        } else {
+            obj->attributes[idx].value.int_value = (int)val;
+            obj->attributes[idx].vtype = VAL_INT;
+            if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %d (INT)\n", attr_name, (int)val);
+        }
     }
 }
 
