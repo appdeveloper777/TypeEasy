@@ -2472,10 +2472,41 @@ PAGES["debug"] = `
 
 <div class="note"><strong>Importante.</strong> Hay <strong>dos maneras</strong> de depurar: (1) con <strong>F5</strong> en VS Code, que levanta el <strong>contenedor Docker</strong> (Linux) — funciona en cualquier SO con Docker; o (2) de forma <strong>nativa sin Docker</strong>, usando el binario con <code class="inline">--debug-port</code>, que desde la <strong>v0.0.20</strong> funciona tanto en <strong>Linux</strong> como en <strong>Windows</strong> (ver §8). El flujo de F5 con Docker necesita abrir la carpeta del repo (la que tiene <code class="inline">docker-compose.yml</code>).</div>
 
+<h2>Tres formas de depurar: Docker, Linux y Windows</h2>
+<table class="ref">
+  <tr><th>Modo</th><th>SO</th><th>Cómo se arranca</th><th>launch.json</th><th>Ideal para</th></tr>
+  <tr>
+    <td><strong>Docker (F5)</strong></td>
+    <td>Cualquier SO con Docker</td>
+    <td>Pulsas <strong>F5</strong>; la extensión levanta el contenedor <code class="inline">typeeasy</code> sola.</td>
+    <td><code class="inline">"api": true</code>, <code class="inline">"port": 4712</code></td>
+    <td><strong>Endpoints HTTP</strong> (parar dentro del handler).</td>
+  </tr>
+  <tr>
+    <td><strong>Nativo Linux</strong></td>
+    <td>Linux / macOS</td>
+    <td><code class="inline">te --debug-port 4712 archivo.te</code>, luego <strong>F5</strong>.</td>
+    <td><code class="inline">"attachOnly": true</code>, <code class="inline">"port": 4712</code></td>
+    <td>Scripts y lógica <code class="inline">.te</code> sin Docker.</td>
+  </tr>
+  <tr>
+    <td><strong>Nativo Windows</strong></td>
+    <td>Windows (PowerShell / Git Bash)</td>
+    <td><code class="inline">te --debug-port 4712 archivo.te</code>, luego <strong>F5</strong>.</td>
+    <td><code class="inline">"attachOnly": true</code>, <code class="inline">"port": 4712</code></td>
+    <td>Scripts <code class="inline">.te</code> con el <code class="inline">.exe</code> nativo, sin Docker.</td>
+  </tr>
+</table>
+<p>Las secciones 2–7 cubren el flujo <strong>Docker (F5)</strong>; la sección 8 cubre el modo <strong>nativo (Linux y Windows)</strong>.</p>
+
 <h2>1. Qué instalar en VS Code</h2>
 <ul>
-  <li><strong>La extensión de TypeEasy</strong> (resaltado + debugger). Desde el repo clonado:</li>
+  <li><strong>La extensión de TypeEasy</strong> (resaltado + debugger).</li>
 </ul>
+<p><strong>Si instalaste TypeEasy con el instalador</strong> (Windows o <code class="inline">.deb</code>/tarball de Linux), la extensión viene incluida en el paquete. Solo corre:</p>
+${sh(`te ext install`)}
+<p>Reinicia VS Code y listo — no necesitas clonar el repo.</p>
+<p><strong>Si trabajas desde el repo clonado</strong>, usa los scripts:</p>
 ${sh(`# Linux / macOS / Git Bash
 bash scripts/install_vscode_extension.sh
 
@@ -2551,16 +2582,14 @@ ${out('{"mensaje":"¡Hola desde TypeEasy!"}')}
   <tr><td>Toggle breakpoint</td><td><code>F9</code></td></tr>
 </table>
 
-<h2>8. Depurar nativo (Linux y Windows, sin Docker)</h2>
-<p>Desde la <strong>v0.0.20</strong> el binario nativo incluye un debugger TCP que funciona igual en <strong>Linux</strong> y en <strong>Windows</strong>, sin necesidad de Docker. Arrancas el intérprete escuchando en un puerto y conectas VS Code en modo <em>attach</em>.</p>
+<h2>8. Depurar nativo (sin Docker)</h2>
+<p>Desde la <strong>v0.0.20</strong> el binario nativo incluye un debugger TCP que funciona sin necesidad de Docker. Arrancas el intérprete escuchando en un puerto y conectas VS Code en modo <em>attach</em>. El flujo es el mismo en ambos sistemas; solo cambia cómo arrancas el binario.</p>
+
+<h3>8.1 Linux / macOS</h3>
 <ol>
   <li>Lanza el binario en modo debug — queda esperando a que el adapter conecte:</li>
 </ol>
-${sh(`# Linux / macOS
-te --debug-port 4712 typeeasycode/test_custom.te
-
-# Windows (PowerShell o Git Bash)
-te --debug-port 4712 typeeasycode/test_custom.te`)}
+${sh(`te --debug-port 4712 typeeasycode/test_custom.te`)}
 <ol start="2">
   <li>En <code class="inline">.vscode/launch.json</code> usa una config con <code class="inline">"attachOnly": true</code>. Así el adapter <strong>no</strong> levanta Docker: solo se conecta al proceso nativo en <code class="inline">127.0.0.1:4712</code>.</li>
 </ol>
@@ -2575,6 +2604,17 @@ ${te(`{
 <ol start="3">
   <li>Pon tus breakpoints, pulsa <strong>F5</strong> y elige esa config. VS Code conecta al proceso nativo y se detiene en cada breakpoint, con step-over/in/out e inspección de variables igual que con Docker.</li>
 </ol>
+
+<h3>8.2 Windows</h3>
+<ol>
+  <li>Lanza el binario en modo debug desde <strong>PowerShell</strong> o <strong>Git Bash</strong> — queda esperando a que el adapter conecte:</li>
+</ol>
+${sh(`te --debug-port 4712 typeeasycode\\test_custom.te`)}
+<ol start="2">
+  <li>Usa <strong>el mismo</strong> <code class="inline">.vscode/launch.json</code> con <code class="inline">"attachOnly": true</code> y <code class="inline">"port": 4712</code> (idéntico al de Linux). VS Code se conecta al <code class="inline">typeeasy-bin.exe</code> nativo en <code class="inline">127.0.0.1:4712</code>, sin Docker.</li>
+  <li>Pon tus breakpoints, pulsa <strong>F5</strong> y elige esa config: mismo step-over/in/out e inspección de variables.</li>
+</ol>
+
 <p class="note">Para depurar <strong>endpoints HTTP</strong> con breakpoints dentro del handler, usa el flujo con <strong>Docker (F5)</strong> de las secciones anteriores. El modo nativo es ideal para scripts y lógica <code class="inline">.te</code> sin servidor.</p>
 
 <h2>9. Solución de problemas</h2>
@@ -4727,10 +4767,41 @@ PAGES["debug"] = `
 
 <div class="note"><strong>Important.</strong> There are <strong>two ways</strong> to debug: (1) press <strong>F5</strong> in VS Code, which spins up the <strong>Docker container</strong> (Linux) — works on any OS with Docker; or (2) <strong>natively without Docker</strong>, using the binary with <code class="inline">--debug-port</code>, which since <strong>v0.0.20</strong> works on both <strong>Linux</strong> and <strong>Windows</strong> (see §8). The Docker F5 flow requires opening the repo folder (the one with <code class="inline">docker-compose.yml</code>).</div>
 
+<h2>Three ways to debug: Docker, Linux and Windows</h2>
+<table class="ref">
+  <tr><th>Mode</th><th>OS</th><th>How it starts</th><th>launch.json</th><th>Best for</th></tr>
+  <tr>
+    <td><strong>Docker (F5)</strong></td>
+    <td>Any OS with Docker</td>
+    <td>Press <strong>F5</strong>; the extension spins up the <code class="inline">typeeasy</code> container for you.</td>
+    <td><code class="inline">"api": true</code>, <code class="inline">"port": 4712</code></td>
+    <td><strong>HTTP endpoints</strong> (stop inside the handler).</td>
+  </tr>
+  <tr>
+    <td><strong>Native Linux</strong></td>
+    <td>Linux / macOS</td>
+    <td><code class="inline">te --debug-port 4712 file.te</code>, then <strong>F5</strong>.</td>
+    <td><code class="inline">"attachOnly": true</code>, <code class="inline">"port": 4712</code></td>
+    <td>Scripts and <code class="inline">.te</code> logic without Docker.</td>
+  </tr>
+  <tr>
+    <td><strong>Native Windows</strong></td>
+    <td>Windows (PowerShell / Git Bash)</td>
+    <td><code class="inline">te --debug-port 4712 file.te</code>, then <strong>F5</strong>.</td>
+    <td><code class="inline">"attachOnly": true</code>, <code class="inline">"port": 4712</code></td>
+    <td><code class="inline">.te</code> scripts with the native <code class="inline">.exe</code>, no Docker.</td>
+  </tr>
+</table>
+<p>Sections 2–7 cover the <strong>Docker (F5)</strong> flow; section 8 covers the <strong>native (Linux &amp; Windows)</strong> mode.</p>
+
 <h2>1. What to install in VS Code</h2>
 <ul>
-  <li><strong>The TypeEasy extension</strong> (highlighting + debugger). From the cloned repo:</li>
+  <li><strong>The TypeEasy extension</strong> (highlighting + debugger).</li>
 </ul>
+<p><strong>If you installed TypeEasy with the installer</strong> (Windows, or the Linux <code class="inline">.deb</code>/tarball), the extension ships inside the package. Just run:</p>
+${sh(`te ext install`)}
+<p>Restart VS Code — no need to clone the repo.</p>
+<p><strong>If you work from the cloned repo</strong>, use the scripts:</p>
 ${sh(`# Linux / macOS / Git Bash
 bash scripts/install_vscode_extension.sh
 
@@ -4806,16 +4877,14 @@ ${out('{"message":"Hello from TypeEasy!"}')}
   <tr><td>Toggle breakpoint</td><td><code>F9</code></td></tr>
 </table>
 
-<h2>8. Debug natively (Linux &amp; Windows, no Docker)</h2>
-<p>Since <strong>v0.0.20</strong> the native binary ships a TCP debugger that works the same on <strong>Linux</strong> and <strong>Windows</strong>, with no Docker required. You start the interpreter listening on a port and attach VS Code in <em>attach</em> mode.</p>
+<h2>8. Debug natively (no Docker)</h2>
+<p>Since <strong>v0.0.20</strong> the native binary ships a TCP debugger that works with no Docker required. You start the interpreter listening on a port and attach VS Code in <em>attach</em> mode. The flow is the same on both systems; only how you launch the binary differs.</p>
+
+<h3>8.1 Linux / macOS</h3>
 <ol>
   <li>Launch the binary in debug mode — it waits for the adapter to connect:</li>
 </ol>
-${sh(`# Linux / macOS
-te --debug-port 4712 typeeasycode/test_custom.te
-
-# Windows (PowerShell or Git Bash)
-te --debug-port 4712 typeeasycode/test_custom.te`)}
+${sh(`te --debug-port 4712 typeeasycode/test_custom.te`)}
 <ol start="2">
   <li>In <code class="inline">.vscode/launch.json</code> use a config with <code class="inline">"attachOnly": true</code>. The adapter then does <strong>not</strong> spin up Docker: it just connects to the native process at <code class="inline">127.0.0.1:4712</code>.</li>
 </ol>
@@ -4830,6 +4899,17 @@ ${te(`{
 <ol start="3">
   <li>Set your breakpoints, press <strong>F5</strong> and pick that config. VS Code connects to the native process and stops on each breakpoint, with step over/in/out and variable inspection just like with Docker.</li>
 </ol>
+
+<h3>8.2 Windows</h3>
+<ol>
+  <li>Launch the binary in debug mode from <strong>PowerShell</strong> or <strong>Git Bash</strong> — it waits for the adapter to connect:</li>
+</ol>
+${sh(`te --debug-port 4712 typeeasycode\\test_custom.te`)}
+<ol start="2">
+  <li>Use <strong>the same</strong> <code class="inline">.vscode/launch.json</code> with <code class="inline">"attachOnly": true</code> and <code class="inline">"port": 4712</code> (identical to Linux). VS Code connects to the native <code class="inline">typeeasy-bin.exe</code> at <code class="inline">127.0.0.1:4712</code>, no Docker.</li>
+  <li>Set your breakpoints, press <strong>F5</strong> and pick that config: same step over/in/out and variable inspection.</li>
+</ol>
+
 <p class="note">To debug <strong>HTTP endpoints</strong> with breakpoints inside the handler, use the <strong>Docker (F5)</strong> flow from the previous sections. Native mode is ideal for plain <code class="inline">.te</code> scripts and logic without a server.</p>
 
 <h2>9. Troubleshooting</h2>

@@ -43,6 +43,7 @@ Name: "addtopath"; Description: "Agregar TypeEasy al PATH (recomendado)"; GroupD
 ;   {app}\bin\te.cmd            (alias)
 ;   {app}\cli\typeeasy          (bash script invocado por el .cmd via Git Bash)
 ;   {app}\cli\templates\        (scaffolds para 'typeeasy new')
+;   {app}\vscode\typeeasy-debug.vsix  (extension VS Code; 'te ext install' la instala)
 Source: "{#SourceDir}\\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [InstallDelete]

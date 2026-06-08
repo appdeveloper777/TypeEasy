@@ -137,6 +137,31 @@ function Cmd-Install {
     & $script -ApisDir $apis -Port $port
 }
 
+# --- ext: install the VS Code extension (colors + debugger) ---
+function Cmd-Ext {
+    param([string]$Action = "install")
+    if ($Action -and $Action -ne "install") { Die "Unknown ext command: $Action (try: typeeasy ext install)" }
+    if (-not (Get-Command code -ErrorAction SilentlyContinue)) {
+        Die "'code' CLI not found in PATH. Open VS Code -> Ctrl+Shift+P -> 'Shell Command: Install 'code' command in PATH', then retry."
+    }
+    $vsix = $env:TYPEEASY_VSIX
+    if (-not ($vsix -and (Test-Path $vsix))) {
+        $vsix = $null
+        foreach ($dir in @((Join-Path $PSScriptRoot "..\vscode"),
+                           "C:\Program Files\TypeEasy\vscode",
+                           "C:\Program Files (x86)\TypeEasy\vscode")) {
+            if (Test-Path $dir) {
+                $found = Get-ChildItem -Path $dir -Filter *.vsix -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($found) { $vsix = $found.FullName; break }
+            }
+        }
+    }
+    if (-not $vsix) { Die "No bundled .vsix found. Reinstall TypeEasy (the package ships the extension)." }
+    Info "Installing VS Code extension: $vsix"
+    & code --install-extension $vsix --force
+    Info "Done. Restart VS Code to activate TypeEasy colors + debugger."
+}
+
 function Cmd-Help {
 @"
 typeeasy $VERSION — CLI for TypeEasy projects (Windows)
@@ -146,6 +171,7 @@ USAGE:
   typeeasy gen resource <name>    Generate CRUD endpoint + migration
   typeeasy gen endpoint <name>    Generate empty endpoint
   typeeasy serve                  Run dev server (hot-reload)
+  typeeasy ext install            Install the VS Code extension (colors + debugger)
   typeeasy install --nssm         Install as Windows Service via NSSM
   typeeasy version
 
@@ -160,6 +186,7 @@ switch ($Command) {
     "new"     { Cmd-New $Rest[0] }
     "gen"     { Cmd-Gen $Rest[0] $Rest[1] }
     "serve"   { Cmd-Serve }
+    "ext"     { Cmd-Ext $Rest[0] }
     "install" { Cmd-Install }
     "version" { Write-Host "typeeasy $VERSION" }
     "help"    { Cmd-Help }

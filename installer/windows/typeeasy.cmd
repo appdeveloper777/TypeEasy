@@ -31,6 +31,7 @@ if /I "%SUB%"=="gen"     goto :cli
 if /I "%SUB%"=="generate" goto :cli
 if /I "%SUB%"=="serve"   goto :cli
 if /I "%SUB%"=="docs"    goto :cli
+if /I "%SUB%"=="ext"     goto :cli
 if /I "%SUB%"=="migrate" goto :cli
 if /I "%SUB%"=="console" goto :cli
 if /I "%SUB%"=="install" goto :cli

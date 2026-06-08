@@ -525,6 +525,75 @@ cmd_docs() {
     fi
   fi
 }
+# ============================================================================
+# ext — Manage the TypeEasy VS Code extension (syntax highlighting + debugger)
+# ============================================================================
+# Lets a brand-new user (who only installed `te`, no cloned repo) install the
+# editor extension that provides colors/autocomplete for .te files and F5
+# breakpoint debugging:
+#
+#     te ext install
+#
+# Locates the .vsix bundled with the install package. As a dev fallback (when
+# run from a cloned repo), it builds the .vsix from tools/typeeasy-vscode.
+cmd_ext() {
+  local action="${1:-install}"
+  case "$action" in
+    install|"") _ext_install ;;
+    path)       if _ext_locate; then echo "$EXT_VSIX"; else die "No bundled .vsix found."; fi ;;
+    *) die "Unknown ext command: $action (try: typeeasy ext install)" ;;
+  esac
+}
+
+# Locate a bundled .vsix; on success sets global EXT_VSIX and returns 0.
+_ext_locate() {
+  EXT_VSIX=""
+  local self_dir; self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -n "${TYPEEASY_VSIX:-}" && -f "$TYPEEASY_VSIX" ]]; then
+    EXT_VSIX="$TYPEEASY_VSIX"; return 0
+  fi
+  local cand v
+  for cand in \
+    "$self_dir/../vscode" \
+    "$self_dir/../share/typeeasy/vscode" \
+    "/usr/share/typeeasy/vscode" \
+    "/usr/local/share/typeeasy/vscode" \
+    "/c/Program Files/TypeEasy/vscode" \
+    "/c/Program Files (x86)/TypeEasy/vscode"; do
+    [[ -d "$cand" ]] || continue
+    v="$(ls "$cand"/*.vsix 2>/dev/null | head -n1 || true)"
+    if [[ -n "$v" ]]; then EXT_VSIX="$v"; return 0; fi
+  done
+  return 1
+}
+
+_ext_install() {
+  command -v code >/dev/null 2>&1 || die "'code' CLI not found in PATH.
+       Open VS Code -> Ctrl+Shift+P -> 'Shell Command: Install 'code' command in PATH', then retry."
+
+  local vsix=""
+  if _ext_locate; then
+    vsix="$EXT_VSIX"
+  else
+    # Dev fallback: build from the source tree if present.
+    local self_dir; self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local builder=""
+    for cand in "$self_dir/../scripts/build_vscode_vsix.sh" \
+                "$self_dir/../../scripts/build_vscode_vsix.sh"; do
+      [[ -f "$cand" ]] && { builder="$cand"; break; }
+    done
+    [[ -n "$builder" ]] || die "No bundled .vsix found. Reinstall TypeEasy (the package ships the extension)."
+    command -v npx >/dev/null 2>&1 || die "No bundled .vsix found and 'npx' (Node.js) is missing to build it. Reinstall TypeEasy."
+    info "No bundled .vsix found; building from source..."
+    vsix="$(mktemp -d)/typeeasy-debug.vsix"
+    bash "$builder" "$vsix" >/dev/null
+  fi
+
+  info "Installing VS Code extension: $vsix"
+  code --install-extension "$vsix" --force
+  info "Done. Restart VS Code to activate TypeEasy colors + debugger."
+}
+
 cmd_help() {
   cat <<EOF
 typeeasy $VERSION — CLI for TypeEasy projects
@@ -535,6 +604,7 @@ USAGE:
   typeeasy gen endpoint <name>    Generate empty endpoint
   typeeasy serve [--dev|--prod]   Run server from typeeasy.toml
   typeeasy docs [--clean]         Open the built-in Swagger UI in browser
+  typeeasy ext install            Install the VS Code extension (colors + debugger)
   typeeasy install --systemd      Install as systemd service (Linux, sudo)
   typeeasy deploy                 rsync apis/ to configured prod + restart
   typeeasy logs                   Tail journalctl for the service
@@ -592,6 +662,7 @@ case "${1:-help}" in
   gen)        shift; cmd_gen "$@" ;;
   serve)      shift; cmd_serve "$@" ;;
   docs)       shift; cmd_docs "$@" ;;
+  ext)        shift; cmd_ext "$@" ;;
   install)    shift; cmd_install "$@" ;;
   deploy)     shift; cmd_deploy "$@" ;;
   logs)       cmd_service logs ;;

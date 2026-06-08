@@ -24,7 +24,7 @@ fi
 
 # --- 1) Carpeta portable + tar.gz -------------------------------------------
 rm -rf "$PKG_DIR" "$TARBALL"
-mkdir -p "$PKG_DIR/bin" "$PKG_DIR/examples" "$PKG_DIR/cli/templates" "$PKG_DIR/plugins/sqlite"
+mkdir -p "$PKG_DIR/bin" "$PKG_DIR/examples" "$PKG_DIR/cli/templates" "$PKG_DIR/plugins/sqlite" "$PKG_DIR/vscode"
 
 # Native interpreter (renombrado para no chocar con el bash CLI wrapper)
 cp "$BIN_PATH" "$PKG_DIR/bin/typeeasy-bin"
@@ -37,6 +37,27 @@ ln -sf typeeasy "$PKG_DIR/bin/te"
 
 # Templates Rails-style
 cp -r "$ROOT_DIR/cli/templates/." "$PKG_DIR/cli/templates/"
+
+# VS Code extension (.vsix) so users can run `te ext install` without the repo.
+# Build once here; reused for both the tarball and the .deb below.
+VSIX_SRC="${TYPEEASY_VSIX:-}"
+if [[ -n "$VSIX_SRC" && -f "$VSIX_SRC" ]]; then
+  echo "VS Code extension (prebuilt): $VSIX_SRC"
+elif command -v npx >/dev/null 2>&1; then
+  VSIX_SRC="$OUT_DIR/typeeasy-debug.vsix"
+  if ! bash "$ROOT_DIR/scripts/build_vscode_vsix.sh" "$VSIX_SRC" >/dev/null 2>&1; then
+    echo "WARN: no se pudo construir el .vsix; los paquetes no incluiran la extension VS Code" >&2
+    VSIX_SRC=""
+  fi
+else
+  echo "WARN: npx no encontrado; los paquetes no incluiran la extension VS Code (te ext install no funcionara offline)" >&2
+  VSIX_SRC=""
+fi
+if [[ -n "$VSIX_SRC" && -f "$VSIX_SRC" ]]; then
+  cp -f "$VSIX_SRC" "$PKG_DIR/vscode/typeeasy-debug.vsix"
+else
+  rmdir "$PKG_DIR/vscode" 2>/dev/null || true
+fi
 
 for doc in README.md BUILD.md; do
   if [[ -f "$ROOT_DIR/$doc" ]]; then
@@ -125,6 +146,7 @@ mkdir -p "$DEB_DIR/DEBIAN" \
          "$DEB_DIR/usr/share/typeeasy/templates" \
          "$DEB_DIR/usr/share/typeeasy/nginx" \
          "$DEB_DIR/usr/share/typeeasy/plugins/sqlite" \
+         "$DEB_DIR/usr/share/typeeasy/vscode" \
          "$DEB_DIR/usr/share/doc/typeeasy" \
          "$DEB_DIR/lib/systemd/system" \
          "$DEB_DIR/etc/default"
@@ -140,6 +162,13 @@ ln -sf typeeasy "$DEB_DIR/usr/bin/te"
 
 # Templates para 'typeeasy new'
 cp -r "$ROOT_DIR/cli/templates/." "$DEB_DIR/usr/share/typeeasy/templates/"
+
+# VS Code extension (.vsix) -> /usr/share/typeeasy/vscode/ (found by `te ext install`)
+if [[ -n "$VSIX_SRC" && -f "$VSIX_SRC" ]]; then
+  install -m 0644 "$VSIX_SRC" "$DEB_DIR/usr/share/typeeasy/vscode/typeeasy-debug.vsix"
+else
+  rmdir "$DEB_DIR/usr/share/typeeasy/vscode" 2>/dev/null || true
+fi
 
 # systemd unit (instanced) + defaults + nginx sample
 if [[ -f "$ROOT_DIR/installer/linux/typeeasy-api@.service" ]]; then

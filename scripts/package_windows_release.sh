@@ -18,7 +18,7 @@ if [[ ! -f "$BIN_PATH" ]]; then
 fi
 
 rm -rf "$PKG_DIR"
-mkdir -p "$PKG_DIR/bin" "$PKG_DIR/examples" "$PKG_DIR/cli/templates" "$PKG_DIR/plugins/sqlite"
+mkdir -p "$PKG_DIR/bin" "$PKG_DIR/examples" "$PKG_DIR/cli/templates" "$PKG_DIR/plugins/sqlite" "$PKG_DIR/vscode"
 
 # Binary is renamed to typeeasy-bin.exe so the smart .cmd wrapper takes
 # precedence on PATH (Windows PATHEXT default puts .EXE before .CMD).
@@ -33,6 +33,24 @@ cp "$ROOT_DIR/cli/typeeasy" "$PKG_DIR/cli/typeeasy"
 cp "$ROOT_DIR/cli/te"       "$PKG_DIR/cli/te"
 chmod +x "$PKG_DIR/cli/typeeasy" "$PKG_DIR/cli/te"
 cp -r "$ROOT_DIR/cli/templates/." "$PKG_DIR/cli/templates/"
+
+# VS Code extension (.vsix) so users can run `te ext install` without the repo.
+# Reuse a prebuilt one if provided ($TYPEEASY_VSIX), else build it (needs npx).
+VSIX_DST="$PKG_DIR/vscode/typeeasy-debug.vsix"
+if [[ -n "${TYPEEASY_VSIX:-}" && -f "$TYPEEASY_VSIX" ]]; then
+  cp -f "$TYPEEASY_VSIX" "$VSIX_DST"
+  echo "VS Code extension incluida (prebuilt): $VSIX_DST"
+elif command -v npx >/dev/null 2>&1; then
+  if bash "$ROOT_DIR/scripts/build_vscode_vsix.sh" "$VSIX_DST" >/dev/null 2>&1; then
+    echo "VS Code extension incluida (build): $VSIX_DST"
+  else
+    echo "WARN: no se pudo construir el .vsix; el paquete no incluira la extension VS Code" >&2
+    rmdir "$PKG_DIR/vscode" 2>/dev/null || true
+  fi
+else
+  echo "WARN: npx no encontrado; el paquete no incluira la extension VS Code (te ext install no funcionara offline)" >&2
+  rmdir "$PKG_DIR/vscode" 2>/dev/null || true
+fi
 
 for doc in README.md BUILD.md; do
   if [[ -f "$ROOT_DIR/$doc" ]]; then
