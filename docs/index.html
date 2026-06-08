@@ -2585,11 +2585,13 @@ ${out('{"mensaje":"¡Hola desde TypeEasy!"}')}
 <h2>8. Depurar nativo (sin Docker)</h2>
 <p>Desde la <strong>v0.0.20</strong> el binario nativo incluye un debugger TCP que funciona sin necesidad de Docker. Arrancas el intérprete escuchando en un puerto y conectas VS Code en modo <em>attach</em>. El flujo es el mismo en ambos sistemas; solo cambia cómo arrancas el binario.</p>
 
+<p class="note"><strong>¿Script plano o endpoint?</strong> Si tu <code class="inline">.te</code> tiene código ejecutable a nivel superior (un <em>script</em>: <code class="inline">let</code>, <code class="inline">println</code>, <code class="inline">for</code>…), usa <code class="inline">te --debug-port</code> (esta sección). Si solo declara <code class="inline">class</code> + <code class="inline">endpoint</code> (una API), NO ejecuta nada por sí solo: salta a <strong>&sect;8.3</strong> y usa <code class="inline">te --api --debug-port</code>.</p>
+
 <h3>8.1 Linux / macOS</h3>
 <ol>
   <li>Lanza el binario en modo debug — queda esperando a que el adapter conecte:</li>
 </ol>
-${sh(`te --debug-port 4712 typeeasycode/test_custom.te`)}
+${sh(`te --debug-port 4712 typeeasycode/debug_setops.te`)}
 <ol start="2">
   <li>En <code class="inline">.vscode/launch.json</code> usa una config con <code class="inline">"attachOnly": true</code>. Así el adapter <strong>no</strong> levanta Docker: solo se conecta al proceso nativo en <code class="inline">127.0.0.1:4712</code>.</li>
 </ol>
@@ -2607,31 +2609,43 @@ ${te(`{
 
 <h3>8.2 Windows</h3>
 <ol>
-  <li>Lanza el binario en modo debug desde <strong>PowerShell</strong> o <strong>Git Bash</strong> — queda esperando a que el adapter conecte:</li>
+  <li>Lanza el binario en modo debug desde <strong>PowerShell</strong> o <strong>Git Bash</strong> — queda esperando a que el adapter conecte (ejemplo con un <em>script plano</em>):</li>
 </ol>
-${sh(`te --debug-port 4712 typeeasycode\\test_custom.te`)}
+${sh(`te --debug-port 4712 typeeasycode\\debug_setops.te`)}
 <ol start="2">
   <li>Usa <strong>el mismo</strong> <code class="inline">.vscode/launch.json</code> con <code class="inline">"attachOnly": true</code> y <code class="inline">"port": 4712</code> (idéntico al de Linux). VS Code se conecta al <code class="inline">typeeasy-bin.exe</code> nativo en <code class="inline">127.0.0.1:4712</code>, sin Docker.</li>
+</ol>
+${te(`{
+  "type": "typeeasy",
+  "request": "launch",
+  "name": "TypeEasy: attach nativo (sin Docker)",
+  "program": "\${workspaceFolder}/tes.te",
+  "attachOnly": true,
+  "port": 4712
+}`, "launch.json")}
+<ol start="3">
   <li>Pon tus breakpoints, pulsa <strong>F5</strong> y elige esa config: mismo step-over/in/out e inspección de variables.</li>
 </ol>
+<p class="note"><strong>Importante:</strong> con <code class="inline">"attachOnly": true</code> VS Code <strong>no</strong> arranca el intérprete — debes lanzarlo tú primero en la terminal (paso 1). Si pulsas F5 sin tener el binario escuchando verás <code class="inline">connect error: timeout waiting for interpreter to listen</code>. No pongas <code class="inline">"api"</code> ni <code class="inline">"httpPort"</code> en una config attach: se ignoran (esos campos solo aplican cuando el adapter arranca el proceso).</p>
 
 <h3>8.3 Depurar endpoints HTTP nativo (sin Docker)</h3>
 <p>Un archivo que solo declara una <code class="inline">class</code> y un <code class="inline">endpoint</code> <strong>no ejecuta nada</strong> al correrlo con <code class="inline">te --debug-port ... archivo.te</code>: el cuerpo del handler solo corre cuando llega una petición HTTP. Por eso el proceso "termina al instante" tras el attach (no es un crash). Para depurar el handler de forma nativa:</p>
 <ol>
-  <li>Arranca el servidor en modo API <strong>y</strong> debug — bloquea esperando el attach <em>antes</em> de levantar el servidor:</li>
+  <li>Arranca el servidor en modo API <strong>y</strong> debug — bloquea esperando el attach <em>antes</em> de levantar el servidor. Usa <code class="inline">--port</code> para fijar el puerto HTTP y <code class="inline">--debug-port</code> para el del debugger:</li>
 </ol>
-${sh(`te --api --debug-port 4712 test_custom.te`)}
+${sh(`te --api --port 8081 --debug-port 4712 tes.te`)}
 <ol start="2">
   <li>Pon el breakpoint en una <strong>sentencia plana</strong> del handler (ej. la línea <code class="inline">return json(...)</code>, una asignación o un <code class="inline">println</code>). Pulsa <strong>F5</strong> con la config <code class="inline">"attachOnly": true</code>. En el Debug Console verás <code class="inline">attachOnly: not spawning docker</code> y <code class="inline">connected to interpreter on port 4712</code>.</li>
-  <li>Dispara una petición en <strong>otra terminal</strong> para que el handler corra y se detenga en el breakpoint:</li>
+  <li>Dispara una petición en <strong>otra terminal</strong> (al mismo puerto del paso 1) para que el handler corra y se detenga en el breakpoint:</li>
 </ol>
-${sh(`curl http://localhost:8080/api/hola`)}
+${sh(`curl http://localhost:8081/api/hola`)}
 <p class="note"><strong>Tip:</strong> un breakpoint en una línea con LINQ + lambda (ej. <code class="inline">let q = lista.orderBy(fn(u) =&gt; u.campo);</code>) puede no detenerse — el intérprete atribuye esa línea a la siguiente sentencia. Pon el breakpoint en una línea "normal" (asignación, <code class="inline">println</code>, <code class="inline">return</code>) y sí para.</p>
 
 <h2>9. Solución de problemas</h2>
 <table class="ref">
   <tr><th>Problema</th><th>Solución</th></tr>
   <tr><td>No puedo poner el punto rojo en un <code>.te</code></td><td>Revisa <code>files.associations</code> en Settings: <code>"*.te"</code> debe ser <code>"typeeasy"</code> (no <code>objective-cpp</code> ni otro). Luego <em>Developer: Reload Window</em>. Confirma que abajo a la derecha diga <strong>TypeEasy</strong>.</td></tr>
+  <tr><td><code>connect error: timeout waiting for interpreter to listen</code></td><td>Con <code>"attachOnly": true</code> VS Code no arranca el intérprete. Lánzalo tú PRIMERO en la terminal (<code>te --debug-port 4712 archivo.te</code> o <code>te --api --debug-port 4712 archivo.te</code>) y DESPUÉS pulsa F5.</td></tr>
   <tr><td><code>no configuration file provided: not found</code></td><td>Estás usando una config <strong>Docker</strong> (<code>"api": true</code>) en una carpeta sin <code>docker-compose.yml</code>. En carpetas sueltas usa la config <strong>attach nativo</strong> (<code>"attachOnly": true</code>).</td></tr>
   <tr><td>Depura <code>launch.json</code> en vez de tu <code>.te</code></td><td>La config usa <code>"program": "\${file}"</code> y tenías otra pestaña activa. Fija la ruta: <code>"program": "\${workspaceFolder}/test_custom.te"</code>.</td></tr>
   <tr><td><code>ECONNREFUSED :4712</code> o <code>port is already allocated</code></td><td>Contenedor zombie. Mátalo: <code>docker rm -f $(docker ps -aq --filter "name=typeeasy-dap")</code>.</td></tr>
@@ -4892,11 +4906,13 @@ ${out('{"message":"Hello from TypeEasy!"}')}
 <h2>8. Debug natively (no Docker)</h2>
 <p>Since <strong>v0.0.20</strong> the native binary ships a TCP debugger that works with no Docker required. You start the interpreter listening on a port and attach VS Code in <em>attach</em> mode. The flow is the same on both systems; only how you launch the binary differs.</p>
 
+<p class="note"><strong>Plain script or endpoint?</strong> If your <code class="inline">.te</code> has top-level executable code (a <em>script</em>: <code class="inline">let</code>, <code class="inline">println</code>, <code class="inline">for</code>…), use <code class="inline">te --debug-port</code> (this section). If it only declares <code class="inline">class</code> + <code class="inline">endpoint</code> (an API), it runs nothing on its own: jump to <strong>&sect;8.3</strong> and use <code class="inline">te --api --debug-port</code>.</p>
+
 <h3>8.1 Linux / macOS</h3>
 <ol>
   <li>Launch the binary in debug mode — it waits for the adapter to connect:</li>
 </ol>
-${sh(`te --debug-port 4712 typeeasycode/test_custom.te`)}
+${sh(`te --debug-port 4712 typeeasycode/debug_setops.te`)}
 <ol start="2">
   <li>In <code class="inline">.vscode/launch.json</code> use a config with <code class="inline">"attachOnly": true</code>. The adapter then does <strong>not</strong> spin up Docker: it just connects to the native process at <code class="inline">127.0.0.1:4712</code>.</li>
 </ol>
@@ -4914,31 +4930,43 @@ ${te(`{
 
 <h3>8.2 Windows</h3>
 <ol>
-  <li>Launch the binary in debug mode from <strong>PowerShell</strong> or <strong>Git Bash</strong> — it waits for the adapter to connect:</li>
+  <li>Launch the binary in debug mode from <strong>PowerShell</strong> or <strong>Git Bash</strong> — it waits for the adapter to connect (example with a <em>plain script</em>):</li>
 </ol>
-${sh(`te --debug-port 4712 typeeasycode\\test_custom.te`)}
+${sh(`te --debug-port 4712 typeeasycode\\debug_setops.te`)}
 <ol start="2">
   <li>Use <strong>the same</strong> <code class="inline">.vscode/launch.json</code> with <code class="inline">"attachOnly": true</code> and <code class="inline">"port": 4712</code> (identical to Linux). VS Code connects to the native <code class="inline">typeeasy-bin.exe</code> at <code class="inline">127.0.0.1:4712</code>, no Docker.</li>
+</ol>
+${te(`{
+  "type": "typeeasy",
+  "request": "launch",
+  "name": "TypeEasy: native attach (no Docker)",
+  "program": "\${workspaceFolder}/tes.te",
+  "attachOnly": true,
+  "port": 4712
+}`, "launch.json")}
+<ol start="3">
   <li>Set your breakpoints, press <strong>F5</strong> and pick that config: same step over/in/out and variable inspection.</li>
 </ol>
+<p class="note"><strong>Important:</strong> with <code class="inline">"attachOnly": true</code> VS Code does <strong>not</strong> launch the interpreter — you must start it first in the terminal (step 1). Pressing F5 with nothing listening shows <code class="inline">connect error: timeout waiting for interpreter to listen</code>. Do not add <code class="inline">"api"</code> or <code class="inline">"httpPort"</code> to an attach config: they are ignored (those fields only apply when the adapter spawns the process).</p>
 
 <h3>8.3 Debug HTTP endpoints natively (no Docker)</h3>
 <p>A file that only declares a <code class="inline">class</code> and an <code class="inline">endpoint</code> <strong>runs nothing</strong> when launched with <code class="inline">te --debug-port ... file.te</code>: the handler body only runs when an HTTP request arrives. That's why the process "exits instantly" after attach (it is not a crash). To debug the handler natively:</p>
 <ol>
-  <li>Start the server in API <strong>and</strong> debug mode — it blocks waiting for the attach <em>before</em> starting the server:</li>
+  <li>Start the server in API <strong>and</strong> debug mode — it blocks waiting for the attach <em>before</em> starting the server. Use <code class="inline">--port</code> for the HTTP port and <code class="inline">--debug-port</code> for the debugger:</li>
 </ol>
-${sh(`te --api --debug-port 4712 test_custom.te`)}
+${sh(`te --api --port 8081 --debug-port 4712 tes.te`)}
 <ol start="2">
   <li>Put the breakpoint on a <strong>plain statement</strong> inside the handler (e.g. the <code class="inline">return json(...)</code> line, an assignment or a <code class="inline">println</code>). Press <strong>F5</strong> with the <code class="inline">"attachOnly": true</code> config. The Debug Console shows <code class="inline">attachOnly: not spawning docker</code> and <code class="inline">connected to interpreter on port 4712</code>.</li>
-  <li>Fire a request from <strong>another terminal</strong> so the handler runs and stops at the breakpoint:</li>
+  <li>Fire a request from <strong>another terminal</strong> (to the same port as step 1) so the handler runs and stops at the breakpoint:</li>
 </ol>
-${sh(`curl http://localhost:8080/api/hola`)}
+${sh(`curl http://localhost:8081/api/hola`)}
 <p class="note"><strong>Tip:</strong> a breakpoint on a line with LINQ + lambda (e.g. <code class="inline">let q = list.orderBy(fn(u) =&gt; u.field);</code>) may not stop — the interpreter attributes that line to the next statement. Put the breakpoint on a "normal" line (assignment, <code class="inline">println</code>, <code class="inline">return</code>) and it stops.</p>
 
 <h2>9. Troubleshooting</h2>
 <table class="ref">
   <tr><th>Problem</th><th>Fix</th></tr>
   <tr><td>Can't set a breakpoint on a <code>.te</code> file</td><td>Check <code>files.associations</code> in Settings: <code>"*.te"</code> must be <code>"typeeasy"</code> (not <code>objective-cpp</code> or anything else). Then <em>Developer: Reload Window</em>. Confirm the bottom-right says <strong>TypeEasy</strong>.</td></tr>
+  <tr><td><code>connect error: timeout waiting for interpreter to listen</code></td><td>With <code>"attachOnly": true</code> VS Code does not launch the interpreter. Start it FIRST in the terminal (<code>te --debug-port 4712 file.te</code> or <code>te --api --debug-port 4712 file.te</code>), THEN press F5.</td></tr>
   <tr><td><code>no configuration file provided: not found</code></td><td>You're using a <strong>Docker</strong> config (<code>"api": true</code>) in a folder without <code>docker-compose.yml</code>. In lone folders use the <strong>native attach</strong> config (<code>"attachOnly": true</code>).</td></tr>
   <tr><td>Debugs <code>launch.json</code> instead of your <code>.te</code></td><td>The config uses <code>"program": "\${file}"</code> and another tab was active. Pin the path: <code>"program": "\${workspaceFolder}/test_custom.te"</code>.</td></tr>
   <tr><td><code>ECONNREFUSED :4712</code> or <code>port is already allocated</code></td><td>Zombie container. Kill it: <code>docker rm -f $(docker ps -aq --filter "name=typeeasy-dap")</code>.</td></tr>
