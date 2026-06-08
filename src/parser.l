@@ -81,6 +81,18 @@
      * reduction to set MethodNode.is_async, then clears it. Defined non-static
      * in parser.y so both translation units share it. */
     extern int g_pending_async;
+
+    /* Line of the keyword that STARTS a variable declaration (let/var/const or
+     * a leading type like int/float/string). bison reduces a var_decl rule only
+     * AFTER scanning its whole right-hand side, so for a multi-line declaration
+     * (e.g. `let xs = [ ...\n... ];`) yylineno already points at the LAST line
+     * (the closing `];`). The debugger matches breakpoints by node->line, so a
+     * breakpoint placed on the VISUAL first line of the statement would never
+     * fire. The scanner stamps this with yylineno the moment it sees the
+     * declaration's leading keyword, and create_var_decl_node() (ast.c) uses it
+     * so the node is attributed to the statement's first line. Defined in
+     * ast.c. */
+    extern int g_decl_stmt_line;
 %}
 
 %x INCL
@@ -177,19 +189,19 @@
     /* runtime registry (te_builtins.c). Add new builtins by calling    */
     /* te_builtin_register() in te_register_ast_builtins() in ast.c.    */
 
-"var"                   { return VAR; }
+"var"                   { g_decl_stmt_line = yylineno; return VAR; }
 "return"                { return RETURN; }
 "class"                 { return CLASS; }
 "extends"               { return EXTENDS; }
 "__constructor"         { return CONSTRUCTOR; }
 "this"                  { return THIS; }
 "new"                   { return NEW; }
-"let"                   { return LET; }
+"let"                   { g_decl_stmt_line = yylineno; return LET; }
 "print"                 { return PRINT; }
 "println"               { return PRINTLN; }
 "fprint"                { return FPRINT; }
 "fprintln"              { return FPRINTLN; }
-"const"                 { yylval.sval = strdup(yytext); return CONST; }
+"const"                 { g_decl_stmt_line = yylineno; yylval.sval = strdup(yytext); return CONST; }
 "fn"                    { return FN; }
 "async"                 { return ASYNC; }
 "await"                 { return AWAIT; }
@@ -224,9 +236,9 @@
 "concat"                { return CONCAT; }
 "in"                    { return IN; }
 
-"int"                   { yylval.sval = strdup(yytext); return INT; }
-"float"                 { yylval.sval = strdup(yytext); return FLOAT; }
-"string"                { yylval.sval = strdup(yytext); return STRING; }
+"int"                   { g_decl_stmt_line = yylineno; yylval.sval = strdup(yytext); return INT; }
+"float"                 { g_decl_stmt_line = yylineno; yylval.sval = strdup(yytext); return FLOAT; }
+"string"                { g_decl_stmt_line = yylineno; yylval.sval = strdup(yytext); return STRING; }
 "void"                  { return VOID; }
 "dynamic"               { return DYNAMIC; }
 "public"                { return PUBLIC; }
@@ -235,9 +247,9 @@
 "null"                  { return NULLTOK; }
 "true"                  { return TRUETOK; }
 "false"                 { return FALSETOK; }
-"bool"                  { yylval.sval = strdup(yytext); return BOOLTYPE; }
-"datetime"              { yylval.sval = strdup(yytext); return DATETIMETYPE; }
-"uuid"                  { yylval.sval = strdup(yytext); return UUIDTYPE; }
+"bool"                  { g_decl_stmt_line = yylineno; yylval.sval = strdup(yytext); return BOOLTYPE; }
+"datetime"              { g_decl_stmt_line = yylineno; yylval.sval = strdup(yytext); return DATETIMETYPE; }
+"uuid"                  { g_decl_stmt_line = yylineno; yylval.sval = strdup(yytext); return UUIDTYPE; }
 "try"                   { return TRY; }
 "catch"                 { return CATCH; }
 "finally"               { return FINALLY; }

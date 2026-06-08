@@ -261,6 +261,13 @@ extern int g_debug_mode;
  * creation time so the runtime debugger can match breakpoints. */
 extern int yylineno;
 
+/* Line of the leading keyword (let/var/const/type) of the variable declaration
+ * currently being parsed. The scanner (parser.l) stamps it the moment it sees
+ * that keyword, so create_var_decl_node() can attribute a multi-line decl to its
+ * FIRST line instead of yylineno (which, at bison reduction time, points at the
+ * statement's LAST line). */
+int g_decl_stmt_line = 0;
+
 /* Phase H: forward declaration so get_node_string / native_json can recursively
  * evaluate nested CALL_FUNC arguments (e.g. json(concat(...)), concat(a, request_param("id"), b)). */
 static void interpret_call_func(ASTNode *node);
@@ -2997,7 +3004,12 @@ ASTNode *create_var_decl_node(char *id, ASTNode *value) {
     node->left = value;
     node->right = NULL;
     node->str_value = NULL; // Fix: Initialize to NULL to avoid garbage access
-    node->line = yylineno;
+    /* For a MULTI-LINE declaration (e.g. `let xs = [ ...\n... ];`) bison reduces
+     * this rule only after scanning the closing `];`, so yylineno already points
+     * at the LAST line. The scanner stamps g_decl_stmt_line with the line of the
+     * leading keyword (let/var/const/type), so the node is attributed to the
+     * statement's FIRST line — which is where a user places a breakpoint. */
+    node->line = (g_decl_stmt_line > 0) ? g_decl_stmt_line : yylineno;
     //printf("[DEBUG] create_var_decl_node success\n"); fflush(stdout);
     return node;
 }
@@ -4787,6 +4799,7 @@ static void interpret_for_in(ASTNode *node) {
     }
     ASTNode *items = listNode->left;   
     for (ASTNode *item = items; item; item = item->next) {
+        debugger_on_loop_iteration();
         if (item->type && strcmp(item->type, "OBJECT") == 0) {
             // Get ObjectNode from extra field (where create_object_with_args stores it)
             // For backward compatibility, also check value field for objects created differently
@@ -5238,6 +5251,7 @@ void interpret_ast(ASTNode *node) {
             if (throw_flag || return_flag) break;
             int cond = evaluate_condition(node->left);
             if (!cond) break;
+            debugger_on_loop_iteration();
             interpret_ast(node->right);
             if (break_flag) { break_flag = 0; break; }
             if (continue_flag) { continue_flag = 0; continue; }
@@ -5371,6 +5385,7 @@ static void interpret_for(ASTNode *node) {
          * statement_list node; interpret_statement_list walks every statement
          * via ->left/->right recursion. (Manually chaining stmt=stmt->right
          * here double-executed the last statement.) */
+        debugger_on_loop_iteration();
         interpret_ast(body);
         if (break_flag) { break_flag = 0; break; }
         if (continue_flag) { continue_flag = 0; }

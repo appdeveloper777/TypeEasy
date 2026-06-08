@@ -39,27 +39,52 @@
 #include <errno.h>
 
 #ifdef _WIN32
-  /* Windows host build is not the supported debug target (we run inside the
-   * Linux container). Stub out everything to avoid breaking other builds. */
-  int g_debug_enabled = 0;
-  const char *g_debug_source_file = NULL;
-  void debugger_init(int port, const char *src) { (void)port; (void)src; }
-  void debugger_push_frame(const char *n, ASTNode *c) { (void)n; (void)c; }
-  void debugger_pop_frame(void) {}
-  void debugger_on_statement(ASTNode *n) { (void)n; }
-  void debugger_terminate(int e) { (void)e; }
-  void debugger_emit_output(const char *c, const char *t) { (void)c; (void)t; }
-  void debugger_listen_async(int port, const char *src) { (void)port; (void)src; }
+  /* Windows native debug backend: Winsock + Win32 threads. The shims below map
+   * the few primitives that differ from POSIX so the bulk of the code (parsing,
+   * variable rendering, the command loop) is shared verbatim. Socket handles
+   * are kept in `int`: valid Windows SOCKET values fit in 32 bits and
+   * INVALID_SOCKET maps to -1 when cast to int, so the file's `fd < 0` / `= -1`
+   * conventions remain valid. */
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #include <windows.h>
+  #include <process.h>            /* _beginthreadex */
+  typedef int socklen_t;          /* winsock addr lengths are plain int */
+  static int te_sock_read (int fd, void *buf, size_t n)       { return recv((SOCKET)fd, (char*)buf, (int)n, 0); }
+  static int te_sock_write(int fd, const void *buf, size_t n) { return send((SOCKET)fd, (const char*)buf, (int)n, 0); }
+  #define te_sock_close(fd) closesocket((SOCKET)(fd))
+  #define TE_SLEEP_SEC(s)   Sleep((DWORD)(s) * 1000u)
+  #define TE_EINTR          WSAEINTR
+  #define TE_SOCK_ERRNO     WSAGetLastError()
 #else
-
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <signal.h>
-#include <pthread.h>
+  #include <sys/types.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <signal.h>
+  #include <pthread.h>
+  static int te_sock_read (int fd, void *buf, size_t n)       { return (int)read(fd, buf, n); }
+  static int te_sock_write(int fd, const void *buf, size_t n) { return (int)write(fd, buf, n); }
+  #define te_sock_close(fd) close(fd)
+  #define TE_SLEEP_SEC(s)   sleep((unsigned)(s))
+  #define TE_EINTR          EINTR
+  #define TE_SOCK_ERRNO     errno
+#endif
 
 #include "typeeasy_http.h"
+
+/* One-time Winsock initialisation (no-op on POSIX). */
+static void te_sock_startup(void) {
+#ifdef _WIN32
+    static int done = 0;
+    if (!done) {
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+        done = 1;
+    }
+#endif
+}
+
 
 /* ===== globals ===== */
 int g_debug_enabled = 0;
@@ -98,6 +123,11 @@ static int g_last_line = 0;      /* avoid re-stopping on same statement */
 /* Re-arm a breakpoint after a 'continue' so the same line can re-trigger
  * (e.g. inside a loop). */
 static int g_armed = 1;
+/* Per-line stop de-duplication, reset at the top of each loop iteration by
+ * debugger_on_loop_iteration() so a single-line loop body re-fires every
+ * iteration (file-scope so the loop hook can clear them). */
+static int g_last_stop_line = -1;
+static int g_last_stop_depth = -1;
 
 /* Forward decls of interpreter internals we touch from here. */
 extern Variable vars[];
@@ -107,9 +137,9 @@ extern int var_count;
 
 static int write_all(int fd, const char *buf, size_t n) {
     while (n > 0) {
-        ssize_t w = write(fd, buf, n);
+        int w = te_sock_write(fd, buf, n);
         if (w < 0) {
-            if (errno == EINTR) continue;
+            if (TE_SOCK_ERRNO == TE_EINTR) continue;
             return -1;
         }
         buf += w; n -= (size_t)w;
@@ -169,10 +199,10 @@ static int recv_line(char *out, size_t cap) {
             g_rx_len = 0;
             return -1;
         }
-        ssize_t r = read(g_client_fd, g_rx + g_rx_len, RX_CAP - g_rx_len);
+        int r = te_sock_read(g_client_fd, g_rx + g_rx_len, RX_CAP - g_rx_len);
         if (r == 0) return -1;          /* EOF */
         if (r < 0) {
-            if (errno == EINTR) continue;
+            if (TE_SOCK_ERRNO == TE_EINTR) continue;
             return -1;
         }
         g_rx_len += (size_t)r;
@@ -821,7 +851,7 @@ static void wait_for_resume(void) {
             /* Already paused; just ack. */
             send_line("{\"resp\":\"ok\"}");
         } else if (strcmp(cmd, "disconnect") == 0) {
-            close(g_client_fd);
+            te_sock_close(g_client_fd);
             g_client_fd = -1;
             g_debug_enabled = 0;
             return;
@@ -836,14 +866,17 @@ static void wait_for_resume(void) {
 void debugger_init(int port, const char *source_file) {
     g_debug_source_file = source_file ? source_file : "";
 
+    te_sock_startup();
+#ifndef _WIN32
     /* Avoid SIGPIPE crashing the interpreter when adapter disconnects. */
     signal(SIGPIPE, SIG_IGN);
+#endif
 
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0) { perror("[debugger] socket"); return; }
 
     int yes = 1;
-    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -852,10 +885,10 @@ void debugger_init(int port, const char *source_file) {
     addr.sin_port = htons((uint16_t)port);
 
     if (bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        perror("[debugger] bind"); close(listen_fd); return;
+        perror("[debugger] bind"); te_sock_close(listen_fd); return;
     }
     if (listen(listen_fd, 1) < 0) {
-        perror("[debugger] listen"); close(listen_fd); return;
+        perror("[debugger] listen"); te_sock_close(listen_fd); return;
     }
 
     if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] Listening on port %d, waiting for adapter...\n", port);
@@ -864,7 +897,7 @@ void debugger_init(int port, const char *source_file) {
     struct sockaddr_in cli;
     socklen_t cli_len = sizeof(cli);
     int fd = accept(listen_fd, (struct sockaddr*)&cli, &cli_len);
-    close(listen_fd);
+    te_sock_close(listen_fd);
     if (fd < 0) { perror("[debugger] accept"); return; }
 
     g_client_fd = fd;
@@ -897,7 +930,7 @@ void debugger_init(int port, const char *source_file) {
             g_step = RUN;
             return;
         } else if (strcmp(cmd, "disconnect") == 0) {
-            close(g_client_fd);
+            te_sock_close(g_client_fd);
             g_client_fd = -1;
             g_debug_enabled = 0;
             return;
@@ -953,16 +986,15 @@ void debugger_on_statement(ASTNode *node) {
     }
 
     /* De-duplicate: if executor calls the hook multiple times for the same
-     * source line within the same frame depth, only stop once. */
-    static int last_stop_line = -1;
-    static int last_stop_depth = -1;
+     * source line within the same frame depth, only stop once. (File-scope so
+     * debugger_on_loop_iteration() can reset it between loop iterations.) */
 
     int should_stop = 0;
     const char *reason = "step";
 
     /* If line changes vs last stop, re-arm so the same line can hit again
      * later (e.g. loop body). */
-    if (line != last_stop_line) g_armed = 1;
+    if (line != g_last_stop_line) g_armed = 1;
 
     if (line_has_breakpoint(line)) {
         if (g_armed) {
@@ -993,8 +1025,8 @@ void debugger_on_statement(ASTNode *node) {
 
     if (!should_stop) return;
 
-    last_stop_line = line;
-    last_stop_depth = g_frame_top;
+    g_last_stop_line = line;
+    g_last_stop_depth = g_frame_top;
     g_step = RUN;
     g_armed = 0;        /* require a different line before re-firing same BP */
     send_stopped(reason, line);
@@ -1009,12 +1041,29 @@ void debugger_on_statement(ASTNode *node) {
     }
 }
 
+void debugger_on_loop_iteration(void) {
+    if (!g_debug_enabled) return;
+    /* Reset the per-line stop de-duplication so the SAME source line (a
+     * single-line loop body) is treated as fresh on each iteration. Without
+     * this, after stopping once on the body line, g_last_line / g_last_stop_line
+     * still equal that line, so a step (F10/F11) or a breakpoint on it would not
+     * re-fire on the next iteration and the loop appears to "skip" its rounds. */
+    g_last_line = -1;
+    g_last_stop_line = -1;
+    g_last_stop_depth = -1;
+    g_armed = 1;
+    if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
+        fprintf(stderr, "[typeeasy-debugger] loop-iteration: dedup reset\n");
+        fflush(stderr);
+    }
+}
+
 void debugger_terminate(int exit_code) {
     if (g_client_fd < 0) return;
     char buf[64];
     snprintf(buf, sizeof(buf), "{\"event\":\"terminated\",\"exit\":%d}", exit_code);
     send_line(buf);
-    close(g_client_fd);
+    te_sock_close(g_client_fd);
     g_client_fd = -1;
     g_debug_enabled = 0;
 }
@@ -1055,9 +1104,9 @@ static void *dbg_acceptor_thread(void *arg) {
         socklen_t cli_len = sizeof(cli);
         int fd = accept(g_dbg_listen_fd, (struct sockaddr*)&cli, &cli_len);
         if (fd < 0) {
-            if (errno == EINTR) continue;
+            if (TE_SOCK_ERRNO == TE_EINTR) continue;
             perror("[debugger] accept (async)");
-            sleep(1);
+            TE_SLEEP_SEC(1);
             continue;
         }
         g_client_fd = fd;
@@ -1097,7 +1146,7 @@ static void *dbg_acceptor_thread(void *arg) {
             fflush(stderr);
             break; /* fall through: armed, waiting for requests to hit BPs */
             } else if (strcmp(cmd, "disconnect") == 0) {
-                close(g_client_fd);
+                te_sock_close(g_client_fd);
                 g_client_fd = -1;
                 g_debug_enabled = 0;
                 break;
@@ -1109,9 +1158,9 @@ static void *dbg_acceptor_thread(void *arg) {
          * monitor the socket for disconnect by sleeping; the read in
          * wait_for_resume detects EOF and clears g_debug_enabled. */
         while (g_debug_enabled && g_client_fd >= 0) {
-            sleep(1);
+            TE_SLEEP_SEC(1);
         }
-        if (g_client_fd >= 0) { close(g_client_fd); g_client_fd = -1; }
+        if (g_client_fd >= 0) { te_sock_close(g_client_fd); g_client_fd = -1; }
         g_debug_enabled = 0;
         if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] (async) Adapter disconnected, listening again\n");
         fflush(stderr);
@@ -1119,17 +1168,27 @@ static void *dbg_acceptor_thread(void *arg) {
     return NULL;
 }
 
+#ifdef _WIN32
+static unsigned __stdcall dbg_acceptor_thread_win(void *arg) {
+    dbg_acceptor_thread(arg);
+    return 0;
+}
+#endif
+
 void debugger_listen_async(int port, const char *source_file) {
     g_debug_source_file = source_file ? source_file : "";
     g_dbg_port = port;
 
+    te_sock_startup();
+#ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
+#endif
 
     g_dbg_listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (g_dbg_listen_fd < 0) { perror("[debugger] socket"); return; }
 
     int yes = 1;
-    setsockopt(g_dbg_listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    setsockopt(g_dbg_listen_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -1139,21 +1198,25 @@ void debugger_listen_async(int port, const char *source_file) {
 
     if (bind(g_dbg_listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("[debugger] bind (async)");
-        close(g_dbg_listen_fd); g_dbg_listen_fd = -1;
+        te_sock_close(g_dbg_listen_fd); g_dbg_listen_fd = -1;
         return;
     }
     if (listen(g_dbg_listen_fd, 1) < 0) {
         perror("[debugger] listen (async)");
-        close(g_dbg_listen_fd); g_dbg_listen_fd = -1;
+        te_sock_close(g_dbg_listen_fd); g_dbg_listen_fd = -1;
         return;
     }
 
+#ifdef _WIN32
+    uintptr_t th = _beginthreadex(NULL, 0, dbg_acceptor_thread_win, NULL, 0, NULL);
+    if (th) CloseHandle((HANDLE)th);
+#else
     pthread_t th;
     pthread_create(&th, NULL, dbg_acceptor_thread, NULL);
     pthread_detach(th);
+#endif
 
     if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] async listener up on port %d\n", port);
     fflush(stderr);
 }
 
-#endif /* !_WIN32 */

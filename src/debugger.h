@@ -29,6 +29,12 @@ void debugger_pop_frame(void);
  * g_debug_enabled == 0 (early return). */
 void debugger_on_statement(ASTNode *node);
 
+/* Loop-iteration hook: called at the TOP of every loop iteration (for / for-in
+ * / while). Resets the per-line de-duplication state so a step (F10/F11) and a
+ * breakpoint placed on a single-line loop body re-fire on EVERY iteration
+ * instead of only the first. No-op when g_debug_enabled == 0. */
+void debugger_on_loop_iteration(void);
+
 /* Notify debugger of program termination (sends 'terminated' event). */
 void debugger_terminate(int exit_code);
 
