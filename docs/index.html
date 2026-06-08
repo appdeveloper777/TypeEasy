@@ -2557,10 +2557,10 @@ ${out('{"mensaje":"¡Hola desde TypeEasy!"}')}
   <li>Lanza el binario en modo debug — queda esperando a que el adapter conecte:</li>
 </ol>
 ${sh(`# Linux / macOS
-./bin/typeeasy --debug-port 4712 typeeasycode/test_custom.te
+te --debug-port 4712 typeeasycode/test_custom.te
 
 # Windows (PowerShell o Git Bash)
-bin\\typeeasy.exe --debug-port 4712 typeeasycode/test_custom.te`)}
+te --debug-port 4712 typeeasycode/test_custom.te`)}
 <ol start="2">
   <li>En <code class="inline">.vscode/launch.json</code> usa una config con <code class="inline">"attachOnly": true</code>. Así el adapter <strong>no</strong> levanta Docker: solo se conecta al proceso nativo en <code class="inline">127.0.0.1:4712</code>.</li>
 </ol>
@@ -4812,10 +4812,10 @@ ${out('{"message":"Hello from TypeEasy!"}')}
   <li>Launch the binary in debug mode — it waits for the adapter to connect:</li>
 </ol>
 ${sh(`# Linux / macOS
-./bin/typeeasy --debug-port 4712 typeeasycode/test_custom.te
+te --debug-port 4712 typeeasycode/test_custom.te
 
 # Windows (PowerShell or Git Bash)
-bin\\typeeasy.exe --debug-port 4712 typeeasycode/test_custom.te`)}
+te --debug-port 4712 typeeasycode/test_custom.te`)}
 <ol start="2">
   <li>In <code class="inline">.vscode/launch.json</code> use a config with <code class="inline">"attachOnly": true</code>. The adapter then does <strong>not</strong> spin up Docker: it just connects to the native process at <code class="inline">127.0.0.1:4712</code>.</li>
 </ol>
