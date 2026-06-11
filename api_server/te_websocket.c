@@ -53,17 +53,28 @@ void typeeasy_http_add_query (const char *k, const char *v);
 void typeeasy_http_add_header(const char *k, const char *v);
 void typeeasy_http_add_param (const char *k, const char *v);
 
-/* MethodNode layout (mirror from src/ast.h; we only need name/route_path/http_method) */
+/* MethodNode layout (mirror from src/ast.h; we only need name/route_path/http_method).
+ * CRITICAL: this MUST stay byte-for-byte compatible with `struct MethodNode` in
+ * src/ast.h up to and including `next`, otherwise the route-registration loop
+ * below walks `next` at the wrong offset and dereferences a wild pointer
+ * (startup SEGV). Keep every field in sync with src/ast.h. */
 typedef struct MN {
     char *name;
-    void *params;
-    void *body;
+    void *params;        /* ParameterNode* */
+    void *body;          /* ASTNode* */
     char *route_path;
     char *http_method;
     int cache_ttl;
+    int requires_auth;   /* @auth decorator (added in src/ast.h) */
+    int is_async;        /* `async` modifier (added in src/ast.h) */
     char *return_type;
-    void *bc_body;
+    void *bc_body;       /* cached bytecode (NULL / 0x1 sentinel / BCInfo*) */
     struct MN *next;
+    /* trailing WebSocket lifecycle fields (mirror for completeness) */
+    int   ws_lifecycle;
+    void *ws_on_open;    /* ASTNode* */
+    void *ws_on_close;   /* ASTNode* */
+    char *ws_msg_param;
 } MN;
 
 /* ===== Channel list per connection ===== */
