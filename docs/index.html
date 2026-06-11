@@ -377,6 +377,7 @@ window.NAV_ES = [
     ["binding", "Model binding"],
     ["jwt", "Autenticación JWT"],
     ["cookies", "Cookies y sesión"],
+    ["response-headers", "Cabeceras de respuesta"],
     ["cors", "CORS"],
     ["database", "Bases de datos"],
     ["async-endpoint", "Async/await endpoint"],
@@ -434,6 +435,7 @@ window.NAV_EN = [
     ["binding", "Model binding"],
     ["jwt", "JWT authentication"],
     ["cookies", "Cookies & session"],
+    ["response-headers", "Response headers"],
     ["cors", "CORS"],
     ["database", "Databases"],
     ["async-endpoint", "Async/await endpoint"],
@@ -2161,6 +2163,69 @@ curl -i http://localhost:9000/api/perfil`)}
 
 <div class="pager">
   <a class="prev" href="#/jwt">&larr; Autenticación JWT</a>
+  <a href="#/response-headers">Cabeceras de respuesta &rarr;</a>
+</div>
+`;
+
+PAGES["response-headers"] = `
+<h1>Cabeceras de respuesta</h1>
+<p class="lead">Añade cualquier cabecera HTTP a la respuesta de un endpoint con <code class="inline">response_header(nombre, valor)</code>. Puedes llamarlo varias veces, incluso con el mismo nombre (como <code class="inline">Set-Cookie</code>).</p>
+
+<div class="note"><code class="inline">Content-Type</code> y <code class="inline">Content-Length</code> los calcula el servidor automáticamente; no hace falta emitirlos.</div>
+
+<h2>Cabeceras informativas y de seguridad</h2>
+${te(`[HttpGet("/api/info")]
+info() {
+    response_header("X-Request-Id", "req-7f3a9c21");
+    response_header("X-Content-Type-Options", "nosniff");
+    response_header("X-Frame-Options", "DENY");
+    return json({ status: "ok" });
+}`)}
+
+<h2>Control de caché (Cache-Control + ETag)</h2>
+${te(`[HttpGet("/api/cacheable")]
+cacheable() {
+    response_header("Cache-Control", "public, max-age=60");
+    response_header("ETag", "\\"v1-abc123\\"");
+    return json({ data: [1, 2, 3] });
+}`)}
+
+<h2>Rate-limit</h2>
+${te(`[HttpGet("/api/limited")]
+limited() {
+    response_header("X-RateLimit-Limit", "100");
+    response_header("X-RateLimit-Remaining", "99");
+    response_header("X-RateLimit-Reset", "60");
+    return json({ ok: true });
+}`)}
+
+<h2>Forzar descarga de archivo</h2>
+${te(`[HttpGet("/api/download")]
+download() {
+    response_header("Content-Disposition", "attachment; filename=\\"reporte.json\\"");
+    return json({ ventas: 1234, mes: "junio" });
+}`)}
+
+<h2>Probar con curl</h2>
+${sh(`# -i muestra las cabeceras de la respuesta
+curl -i http://localhost:9000/api/info
+curl -i http://localhost:9000/api/cacheable
+curl -i http://localhost:9000/api/limited
+curl -i http://localhost:9000/api/download`)}
+
+<table class="ref">
+  <tr><th>Cabecera</th><th>Para qué sirve</th></tr>
+  <tr><td><code>X-Request-Id</code></td><td>Correlacionar logs entre cliente y servidor.</td></tr>
+  <tr><td><code>Cache-Control</code> / <code>ETag</code></td><td>Cachear y revalidar la respuesta.</td></tr>
+  <tr><td><code>X-RateLimit-*</code></td><td>Informar del límite y peticiones restantes.</td></tr>
+  <tr><td><code>Content-Disposition</code></td><td>Forzar la descarga del cuerpo como archivo.</td></tr>
+  <tr><td><code>Set-Cookie</code></td><td>Emitir cookies (ver <a href="#/cookies">Cookies y sesión</a>).</td></tr>
+</table>
+
+<p>Ejemplo completo: <code class="inline">examples/22_response_headers/</code>.</p>
+
+<div class="pager">
+  <a class="prev" href="#/cookies">&larr; Cookies y sesión</a>
   <a href="#/cors">CORS &rarr;</a>
 </div>
 `;
@@ -4503,6 +4568,69 @@ curl -i http://localhost:9000/api/profile`)}
 
 <div class="pager">
   <a class="prev" href="#/jwt">&larr; JWT authentication</a>
+  <a href="#/response-headers">Response headers &rarr;</a>
+</div>
+`;
+
+PAGES["response-headers"] = `
+<h1>Response headers</h1>
+<p class="lead">Add any HTTP header to an endpoint's response with <code class="inline">response_header(name, value)</code>. You can call it multiple times, even with the same name (like <code class="inline">Set-Cookie</code>).</p>
+
+<div class="note"><code class="inline">Content-Type</code> and <code class="inline">Content-Length</code> are computed automatically by the server; you don't need to emit them.</div>
+
+<h2>Informational and security headers</h2>
+${te(`[HttpGet("/api/info")]
+info() {
+    response_header("X-Request-Id", "req-7f3a9c21");
+    response_header("X-Content-Type-Options", "nosniff");
+    response_header("X-Frame-Options", "DENY");
+    return json({ status: "ok" });
+}`)}
+
+<h2>Caching (Cache-Control + ETag)</h2>
+${te(`[HttpGet("/api/cacheable")]
+cacheable() {
+    response_header("Cache-Control", "public, max-age=60");
+    response_header("ETag", "\\"v1-abc123\\"");
+    return json({ data: [1, 2, 3] });
+}`)}
+
+<h2>Rate-limit</h2>
+${te(`[HttpGet("/api/limited")]
+limited() {
+    response_header("X-RateLimit-Limit", "100");
+    response_header("X-RateLimit-Remaining", "99");
+    response_header("X-RateLimit-Reset", "60");
+    return json({ ok: true });
+}`)}
+
+<h2>Force a file download</h2>
+${te(`[HttpGet("/api/download")]
+download() {
+    response_header("Content-Disposition", "attachment; filename=\\"report.json\\"");
+    return json({ sales: 1234, month: "june" });
+}`)}
+
+<h2>Test with curl</h2>
+${sh(`# -i shows the response headers
+curl -i http://localhost:9000/api/info
+curl -i http://localhost:9000/api/cacheable
+curl -i http://localhost:9000/api/limited
+curl -i http://localhost:9000/api/download`)}
+
+<table class="ref">
+  <tr><th>Header</th><th>What it's for</th></tr>
+  <tr><td><code>X-Request-Id</code></td><td>Correlate logs between client and server.</td></tr>
+  <tr><td><code>Cache-Control</code> / <code>ETag</code></td><td>Cache and revalidate the response.</td></tr>
+  <tr><td><code>X-RateLimit-*</code></td><td>Tell the client the limit and remaining requests.</td></tr>
+  <tr><td><code>Content-Disposition</code></td><td>Force the body to download as a file.</td></tr>
+  <tr><td><code>Set-Cookie</code></td><td>Issue cookies (see <a href="#/cookies">Cookies and session</a>).</td></tr>
+</table>
+
+<p>Full example: <code class="inline">examples/22_response_headers/</code>.</p>
+
+<div class="pager">
+  <a class="prev" href="#/cookies">&larr; Cookies and session</a>
   <a href="#/cors">CORS &rarr;</a>
 </div>
 `;

@@ -1,0 +1,66 @@
+// =============================================================
+// apis/response_headers_api — cabeceras de respuesta personalizadas
+//
+// Demuestra el builtin response_header(nombre, valor), que añade
+// CUALQUIER cabecera HTTP a la respuesta del endpoint. Se puede
+// llamar varias veces (incluso con el mismo nombre, p.ej. Set-Cookie).
+//
+// Casos típicos que se cubren aquí:
+//   - Identificador de petición            -> X-Request-Id
+//   - Control de caché                      -> Cache-Control / ETag
+//   - Cabeceras de rate-limit               -> X-RateLimit-*
+//   - Descarga de archivo                   -> Content-Disposition
+//   - Cabeceras de seguridad                -> X-Content-Type-Options, etc.
+//
+// Ejecutar:
+//   typeeasy --api examples/22_response_headers/response_headers_api.te --port 9104
+//
+// Probar (con curl -i para ver las cabeceras):
+//   curl -i http://localhost:9104/api/info
+//   curl -i http://localhost:9104/api/cacheable
+//   curl -i http://localhost:9104/api/limited
+//   curl -i http://localhost:9104/api/download
+// =============================================================
+
+endpoint {
+    // --- Cabeceras informativas / de seguridad ------------------
+    [HttpGet("/api/info")]
+    info() {
+        // Identificador de la petición (útil para correlacionar logs).
+        response_header("X-Request-Id", "req-7f3a9c21");
+        // Quién sirve la respuesta.
+        response_header("X-Powered-By", "TypeEasy");
+        // Cabeceras de seguridad recomendadas.
+        response_header("X-Content-Type-Options", "nosniff");
+        response_header("X-Frame-Options", "DENY");
+        return json("{\"service\":\"demo\",\"status\":\"ok\"}");
+    }
+
+    // --- Control de caché (Cache-Control + ETag) ----------------
+    [HttpGet("/api/cacheable")]
+    cacheable() {
+        // El cliente/proxy puede cachear 60s; ETag permite revalidar.
+        response_header("Cache-Control", "public, max-age=60");
+        response_header("ETag", "\"v1-abc123\"");
+        return json("{\"data\":[1,2,3],\"cached\":true}");
+    }
+
+    // --- Cabeceras de rate-limit --------------------------------
+    [HttpGet("/api/limited")]
+    limited() {
+        // Informa al cliente cuántas peticiones le quedan.
+        response_header("X-RateLimit-Limit", "100");
+        response_header("X-RateLimit-Remaining", "99");
+        response_header("X-RateLimit-Reset", "60");
+        return json("{\"ok\":true}");
+    }
+
+    // --- Forzar descarga de archivo -----------------------------
+    [HttpGet("/api/download")]
+    download() {
+        // Content-Disposition: attachment hace que el navegador
+        // descargue el cuerpo como un archivo en vez de mostrarlo.
+        response_header("Content-Disposition", "attachment; filename=\"reporte.json\"");
+        return json("{\"reporte\":{\"ventas\":1234,\"mes\":\"junio\"}}");
+    }
+}

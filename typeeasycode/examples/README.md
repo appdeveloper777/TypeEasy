@@ -19,6 +19,7 @@ Categorias organizadas por concepto. Cada carpeta tiene su propio README.
 | `17_jwt/`        | Autenticación con JWT HS256 (`jwt_sign`/`jwt_verify`) |
 | `18_cors/`       | CORS: consumir la API desde otro dominio (`--cors-origin`) |
 | `21_cookies/`    | Sesión con cookies (`request_cookie` + `Set-Cookie`) |
+| `22_response_headers/` | Cabeceras de respuesta personalizadas (`response_header`) |
 | `_scratch/`      | Tests de debug / temporales (no en regression)     |
 
 ## Como correr un test

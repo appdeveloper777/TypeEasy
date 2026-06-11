@@ -67,6 +67,19 @@ extern int g_response_is_raw_text;
 #include "typeeasy_api_server.h"
 #include "../api_server/te_websocket.h"
 
+/* Case-insensitive ASCII string compare. Local helper to avoid depending on
+ * POSIX <strings.h> strcasecmp (not declared by default on Windows MinGW). */
+static int te_strcasecmp(const char *a, const char *b) {
+    if (!a || !b) return (a == b) ? 0 : (a ? 1 : -1);
+    while (*a && *b) {
+        int ca = tolower((unsigned char)*a);
+        int cb = tolower((unsigned char)*b);
+        if (ca != cb) return ca - cb;
+        a++; b++;
+    }
+    return (unsigned char)*a - (unsigned char)*b;
+}
+
 #ifdef _WIN32
 static CRITICAL_SECTION g_invoke_lock;
 static int g_invoke_lock_init = 0;
@@ -815,10 +828,41 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
         default:  reason = "OK"; break;
     }
 
-    /* The interpreter is done and `result`/`status`/`ctype` are now local
-     * copies (ctype is a string literal). Release the global interpreter lock
-     * BEFORE the network write so slow clients / large bodies don't keep the
-     * single-threaded interpreter blocked. This lets request I/O overlap. */
+    /* Capture any custom response headers set by the handler via
+     * response_header(k, v) (e.g. Set-Cookie). These live in interpreter-global
+     * state (g_resp_headers) which is reset on the next request, so we must
+     * serialize them into a local heap buffer BEFORE releasing the lock. We
+     * skip Content-Type and Content-Length (they are computed above) to avoid
+     * duplicate/conflicting headers; everything else (including multiple
+     * Set-Cookie lines) is emitted verbatim. */
+    char *extra_headers = NULL;
+    {
+        size_t cap = 0, used = 0;
+        const char *hk, *hv;
+        for (int hi = 0; typeeasy_http_iter_response_header(hi, &hk, &hv); hi++) {
+            if (!hk) continue;
+            if (te_strcasecmp(hk, "Content-Type") == 0 ||
+                te_strcasecmp(hk, "Content-Length") == 0) continue;
+            size_t need = strlen(hk) + 2 /* ": " */ + (hv ? strlen(hv) : 0) + 2 /* CRLF */;
+            if (used + need + 1 > cap) {
+                size_t newcap = (cap ? cap * 2 : 256);
+                while (newcap < used + need + 1) newcap *= 2;
+                char *grown = (char *)realloc(extra_headers, newcap);
+                if (!grown) break; /* out of memory: emit what we have */
+                extra_headers = grown;
+                cap = newcap;
+            }
+            used += (size_t)snprintf(extra_headers + used, cap - used,
+                                     "%s: %s\r\n", hk, hv ? hv : "");
+        }
+        if (extra_headers) extra_headers[used] = '\0';
+    }
+
+    /* The interpreter is done and `result`/`status`/`ctype`/`extra_headers`
+     * are now local copies (ctype is a string literal). Release the global
+     * interpreter lock BEFORE the network write so slow clients / large bodies
+     * don't keep the single-threaded interpreter blocked. This lets request
+     * I/O overlap. */
     char cors_org[1024];
     cors_resolve_origin(conn, cors_org, sizeof(cors_org));
     invoke_lock_release();
@@ -829,10 +873,13 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
               "Content-Length: %d\r\n"
               "Access-Control-Allow-Origin: %s\r\n"
               TE_CORS_EXTRA_HEADERS
+              "%s"
               "\r\n",
-              status, reason, ctype, len, cors_org);
+              status, reason, ctype, len, cors_org,
+              extra_headers ? extra_headers : "");
     if (len > 0) mg_write(conn, result, len);
 
+    free(extra_headers);
     free(result);
     TE_REQ_DONE(status);
     return 1;
