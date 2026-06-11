@@ -152,5 +152,27 @@
       "count": 17,
       "uniques": 2
     }
+  },
+  {
+    "timestamp": "2026-06-07T00:00:00Z",
+    "clones": {
+      "count": 446,
+      "uniques": 97
+    },
+    "views": {
+      "count": 121,
+      "uniques": 5
+    }
+  },
+  {
+    "timestamp": "2026-06-08T00:00:00Z",
+    "clones": {
+      "count": 246,
+      "uniques": 49
+    },
+    "views": {
+      "count": 32,
+      "uniques": 3
+    }
   }
 ]
