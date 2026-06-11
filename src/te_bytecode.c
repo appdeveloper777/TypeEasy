@@ -41,8 +41,21 @@ extern int is_string_type(ASTNode *node);
  * leaf function that only touches rax/rdx/xmm0 (volatile in both SysV and
  * Win64 ABIs) and rbx/r12-r15 (callee-saved in both, push/pop in pro/epilogue)
  * and never calls back into C, so the same machine code is ABI-correct on
- * Windows without any register renaming. */
-#if defined(__x86_64__) && (defined(__linux__) || defined(__APPLE__))
+ * Windows without any register renaming.
+ *
+ * GATE (TE_ENABLE_JIT): the experimental trace JIT is COMPILED OUT by default.
+ * It must be explicitly enabled at build time with -DTE_ENABLE_JIT=1. Reason:
+ * the JIT path emits W+X executable memory (VirtualAlloc PAGE_EXECUTE_READWRITE
+ * / mmap PROT_EXEC), a byte pattern that Windows Defender / SmartScreen flag as
+ * malware heuristics in release binaries. Since the JIT is off at runtime
+ * unless TYPEEASY_JIT=1, excluding it from release builds changes NOTHING for
+ * normal users (same interpreter, same performance) while removing the
+ * antivirus trigger from the shipped .exe. Dev builds can still opt in via
+ * -DTE_ENABLE_JIT=1. */
+#if !defined(TE_ENABLE_JIT)
+/* JIT disabled (default): no executable-memory allocation in the binary. */
+#  define TE_JIT_AVAILABLE 0
+#elif defined(__x86_64__) && (defined(__linux__) || defined(__APPLE__))
 #  define TE_JIT_AVAILABLE 1
 #  include <sys/mman.h>
 #  include <unistd.h>
