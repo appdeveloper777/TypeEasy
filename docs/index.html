@@ -1527,8 +1527,8 @@ ${out("Tiempo total (ms): 512\\nSi fuese secuencial seria ~1500 ms; concurrente 
 
 <div class="note"><strong>Por qué importa.</strong> La diferencia de ~1500 ms a ~500 ms es la prueba de que la concurrencia es real: el event loop sondea los tres procesos al mismo tiempo en vez de bloquearse en cada uno.</div>
 
-<h2>async / await <span class="ver" style="vertical-align:middle">v0.0.20</span></h2>
-<p>Desde la v0.0.20 TypeEasy trae un <strong>event loop real</strong> (como C#, Python o Node) con fibras y un pool de hilos para I/O, además de las palabras clave <code class="inline">async</code> y <code class="inline">await</code>. La sintaxis y todo lo anterior se conservan al 100%.</p>
+<h2>async / await <span class="ver" style="vertical-align:middle">v0.0.21</span></h2>
+<p>Desde la v0.0.21 TypeEasy trae un <strong>event loop real</strong> (como C#, Python o Node) con fibras y un pool de hilos para I/O, además de las palabras clave <code class="inline">async</code> y <code class="inline">await</code>. La sintaxis y todo lo anterior se conservan al 100%.</p>
 <ul>
 <li><code class="inline">async fn() => { ... }</code> — lanza una tarea (fibra) que corre de forma concurrente.</li>
 <li><code class="inline">await tarea</code> — corre el event loop hasta que la tarea termina y devuelve su resultado.</li>
@@ -1954,9 +1954,9 @@ PAGES.json = `
 <p>La más legible: pasa un objeto inline. Las claves van <strong>sin comillas</strong>:</p>
 ${te(`[HttpGet("/api/status")]
 status() {
-    return json({ ok: true, version: "0.0.20" });
+    return json({ ok: true, version: "0.0.21" });
 }`)}
-${out('{"ok":true,"version":"0.0.20"}')}
+${out('{"ok":true,"version":"0.0.21"}')}
 
 <h2>Forma 2 — object literal con interpolación</h2>
 <p>Dentro de un valor puedes usar <code class="inline">$"...{expr}..."</code>:</p>
@@ -2380,7 +2380,7 @@ sqlserver_close(conn);`)}
 `;
 
 PAGES["async-endpoint"] = `
-<h1>Async/await endpoint <span class="ver" style="vertical-align:middle">v0.0.20</span></h1>
+<h1>Async/await endpoint <span class="ver" style="vertical-align:middle">v0.0.21</span></h1>
 <p class="lead">Un endpoint se puede declarar de <strong>dos formas</strong> — con o sin <code class="inline">async</code> — igual que en C#/.NET. La palabra clave cambia el comportamiento en tiempo de ejecución: <strong>concurrente</strong> vs <strong>bloqueante</strong>.</p>
 
 <h2>Las dos formas</h2>
@@ -2986,7 +2986,7 @@ PAGES.quickstart = `
 <h2>1. Install</h2>
 <p>Download the binary for your system from the releases page:</p>
 <ul>
-  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.0.20.exe</code> (installer) or the portable <code class="inline">.zip</code>.</li>
+  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.0.21.exe</code> (installer) or the portable <code class="inline">.zip</code>.</li>
   <li><strong>Linux</strong>: <code class="inline">.deb</code> (Debian/Ubuntu/Mint) or the portable <code class="inline">.tar.gz</code>.</li>
 </ul>
 <p><a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">Releases on GitHub &rarr;</a></p>
@@ -3944,8 +3944,8 @@ ${out("Total time (ms): 512\\nIf it were sequential it would be ~1500 ms; concur
 
 <div class="note"><strong>Why it matters.</strong> The difference from ~1500 ms to ~500 ms proves the concurrency is real: the event loop polls the three processes at the same time instead of blocking on each one.</div>
 
-<h2>async / await <span class="ver" style="vertical-align:middle">v0.0.20</span></h2>
-<p>Since v0.0.20 TypeEasy ships a <strong>real event loop</strong> (like C#, Python or Node) with fibers and an I/O thread pool, plus the <code class="inline">async</code> and <code class="inline">await</code> keywords. The syntax and everything before it are preserved 100%.</p>
+<h2>async / await <span class="ver" style="vertical-align:middle">v0.0.21</span></h2>
+<p>Since v0.0.21 TypeEasy ships a <strong>real event loop</strong> (like C#, Python or Node) with fibers and an I/O thread pool, plus the <code class="inline">async</code> and <code class="inline">await</code> keywords. The syntax and everything before it are preserved 100%.</p>
 <ul>
 <li><code class="inline">async fn() => { ... }</code> — spawns a task (fiber) that runs concurrently.</li>
 <li><code class="inline">await task</code> — runs the event loop until the task finishes and returns its result.</li>
@@ -4359,9 +4359,9 @@ PAGES.json = `
 <p>The most readable: pass an inline object. Keys go <strong>without quotes</strong>:</p>
 ${te(`[HttpGet("/api/status")]
 status() {
-    return json({ ok: true, version: "0.0.20" });
+    return json({ ok: true, version: "0.0.21" });
 }`)}
-${out('{"ok":true,"version":"0.0.20"}')}
+${out('{"ok":true,"version":"0.0.21"}')}
 
 <h2>Form 2 — object literal with interpolation</h2>
 <p>Inside a value you can use <code class="inline">$"...{expr}..."</code>:</p>
@@ -4785,7 +4785,7 @@ sqlserver_close(conn);`)}
 `;
 
 PAGES["async-endpoint"] = `
-<h1>Async/await endpoint <span class="ver" style="vertical-align:middle">v0.0.20</span></h1>
+<h1>Async/await endpoint <span class="ver" style="vertical-align:middle">v0.0.21</span></h1>
 <p class="lead">An endpoint can be declared in <strong>two ways</strong> — with or without <code class="inline">async</code> — just like in C#/.NET. The keyword changes the runtime behavior: <strong>concurrent</strong> vs <strong>blocking</strong>.</p>
 
 <h2>The two forms</h2>
