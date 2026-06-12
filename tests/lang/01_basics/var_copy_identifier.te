@@ -1,7 +1,7 @@
 // Copia de una variable a otra con identificador desnudo (let b = a).
 // Regresión: antes el identificador puro caía al catch-all y se guardaba
 // como INT 0. Debe copiar el valor real (int/float/string) y ser independiente.
-// expect: i=2 s=hola f=3.500000 indep=1 a2=99 while=2|3|4|
+// expect: i=2 s=hola f=3.5 indep=1 a2=99 while=2|3|4|
 var out = "";
 
 let vi = 2;

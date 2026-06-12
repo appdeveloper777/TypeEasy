@@ -199,7 +199,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         return 1;
     }
     if (strcmp(m, "parse_float") == 0) {
-        char buf[64]; snprintf(buf, 64, "%f", atof(s));
+        char buf[64]; te_fmt_double(buf, sizeof(buf), atof(s));
         add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
         return 1;
     }

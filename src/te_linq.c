@@ -190,7 +190,7 @@ int lazy_terminal(ASTNode *lazy_node, ASTNode *node) {
         if (sum_is_int && sum_acc == (double)(long long)sum_acc)
             add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)sum_acc, NULL, NULL));
         else {
-            char buf[64]; snprintf(buf, sizeof(buf), "%g", sum_acc);
+            char buf[64]; te_fmt_double(buf, sizeof(buf), sum_acc);
             add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
         }
         return 1;
@@ -335,7 +335,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
         if (is_int && acc == (double)(long long)acc) {
             add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)acc, NULL, NULL));
         } else {
-            char buf[64]; snprintf(buf, sizeof(buf), "%g", acc);
+            char buf[64]; te_fmt_double(buf, sizeof(buf), acc);
             add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
         }
         return 1;
@@ -348,7 +348,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
             cnt++; it = it->next;
         }
         double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
-        char buf[64]; snprintf(buf, sizeof(buf), "%g", res);
+        char buf[64]; te_fmt_double(buf, sizeof(buf), res);
         add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
         return 1;
     }

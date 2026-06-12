@@ -202,7 +202,7 @@ ASTNode *te_resolve_arg(ASTNode *arg, const char **out_type) {
             return tmp;
         }
         if (v->vtype == VAL_FLOAT) {
-            char buf[64]; snprintf(buf, sizeof(buf), "%g", v->value.float_value);
+            char buf[64]; te_fmt_double(buf, sizeof(buf), v->value.float_value);
             ASTNode *tmp = create_ast_leaf("FLOAT", 0, buf, NULL);
             if (out_type) *out_type = "FLOAT";
             return tmp;
@@ -417,7 +417,7 @@ int te_builtin_dispatch(ASTNode *node) {
                 }
             } else v = evaluate_expression(a0);
         }
-        char buf[64]; snprintf(buf, 64, "%f", v);
+        char buf[64]; te_fmt_double(buf, sizeof(buf), v);
         add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
         return 1;
     }
@@ -442,7 +442,7 @@ int te_builtin_dispatch(ASTNode *node) {
     if (strcmp(fn, "abs") == 0) {
         double v = a0 ? evaluate_expression(a0) : 0;
         if (v == (int)v) add_or_update_variable("__ret__", create_ast_leaf_number("INT", abs((int)v), NULL, NULL));
-        else { char buf[64]; snprintf(buf, 64, "%f", v < 0 ? -v : v); add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL)); }
+        else { char buf[64]; te_fmt_double(buf, sizeof(buf), v < 0 ? -v : v); add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL)); }
         return 1;
     }
     if (strcmp(fn, "min") == 0 || strcmp(fn, "max") == 0) {
@@ -450,7 +450,7 @@ int te_builtin_dispatch(ASTNode *node) {
         double vb = a1 ? evaluate_expression(a1) : va;
         double r = (strcmp(fn,"min")==0) ? (va < vb ? va : vb) : (va > vb ? va : vb);
         if (r == (int)r) add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)r, NULL, NULL));
-        else { char buf[64]; snprintf(buf, 64, "%f", r); add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL)); }
+        else { char buf[64]; te_fmt_double(buf, sizeof(buf), r); add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL)); }
         return 1;
     }
 
@@ -789,12 +789,19 @@ static int adapt_env(ASTNode *node, ASTNode *args) {
     if (val && *val) {
         add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, val, NULL));
     } else {
-        /* unset/empty: use the optional 2nd arg as default, else "" */
+        /* unset/empty: usar el 2º arg como default si se dio. Si NO hay 2º
+         * arg, devolver null (no "") para que `env("X") ?? def` funcione
+         * (gotcha #12). El check de null sobre la CALL_FUNC lo hace
+         * te_expr_is_null. */
         ASTNode *a1 = args ? args->next : NULL; /* gotcha #1: 2nd arg via ->next */
-        char *def = a1 ? get_node_string(a1) : NULL;
-        add_or_update_variable("__ret__",
-            create_ast_leaf("STRING", 0, def ? def : "", NULL));
-        if (def) free(def);
+        if (a1) {
+            char *def = get_node_string(a1);
+            add_or_update_variable("__ret__",
+                create_ast_leaf("STRING", 0, def ? def : "", NULL));
+            if (def) free(def);
+        } else {
+            add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+        }
     }
     return 1;
 }
@@ -1023,7 +1030,7 @@ static int adapt_uuid_v4(ASTNode *node, ASTNode *args) {
     return 1;
 }
 
-/* uuid_valid("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") -> int (1/0). */
+/* uuid_valid("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") -> bool (true/false). */
 static int adapt_uuid_valid(ASTNode *node, ASTNode *args) {
     (void)node;
     /* NOTE: evaluate_native_args mutates AST permanently — skip it. */
@@ -1038,8 +1045,10 @@ static int adapt_uuid_valid(ASTNode *node, ASTNode *args) {
         }
     }
     if (s) free(s);
+    /* gotcha #6: uuid_valid es un predicado; devolver BOOL (true/false) en vez
+     * de INT 1/0 para que `if (uuid_valid(x))` y println muestren booleanos. */
     add_or_update_variable("__ret__",
-        create_ast_leaf_number("INT", ok, NULL, NULL));
+        create_ast_leaf_number("BOOL", ok, NULL, NULL));
     return 1;
 }
 
@@ -1112,7 +1121,7 @@ static double host_arg_float(ASTNode *arg, double defv) {
 static void   host_set_ret_int(int v)            { te_set_ret_int(v); }
 static void   host_set_ret_str(const char *s)    { te_set_ret_string(s); }
 static void   host_set_ret_float(double v) {
-    char buf[64]; snprintf(buf, sizeof(buf), "%g", v);
+    char buf[64]; te_fmt_double(buf, sizeof(buf), v);
     ASTNode *r = create_ast_leaf("FLOAT", 0, buf, NULL);
     add_or_update_variable("__ret__", r);
     free_ast(r);

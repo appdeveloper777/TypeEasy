@@ -1,4 +1,4 @@
-// expect: 0.250000 3.500000 2.500000 0.500000
+// expect: 0.25 3.5 2.5 0.5
 // Regresión: la división de FLOATS no debe imprimir un "Error: division by
 // zero." espurio. CAUSA (corregida): create_ast_node hacía un constant-fold
 // entero en tiempo de parseo usando el campo INT `value`, que para literales

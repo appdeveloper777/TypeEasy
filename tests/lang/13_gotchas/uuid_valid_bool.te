@@ -1,0 +1,8 @@
+// Gotcha #6 ARREGLADO: uuid_valid() devuelve bool (true/false) en lugar de 1/0,
+// tanto al asignarlo a una variable como al imprimir la llamada directa.
+let ok = uuid_valid("550e8400-e29b-41d4-a716-446655440000");
+let bad = uuid_valid("not-a-uuid");
+println(ok);
+println(bad);
+println(uuid_valid("550e8400-e29b-41d4-a716-446655440000"));
+println(uuid_valid("nope"));

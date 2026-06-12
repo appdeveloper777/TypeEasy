@@ -30,6 +30,17 @@
   #include <curl/curl.h>
 #endif
 
+/* gotcha #11: soporte TLS para https:// en modo script SIN libcurl.
+ * El build nativo de Windows (scripts/build_native_windows.sh) enlaza
+ * -lssl -lcrypto (OpenSSL) para civetweb pero NO compila libcurl, así que
+ * http_get("https://...") devolvía cadena vacía. Con -DTE_HAVE_OPENSSL el
+ * fallback TCP de abajo envuelve el socket con OpenSSL para los https.
+ * En Docker/Linux se usa libcurl (TE_HAVE_LIBCURL) y este bloque queda inerte. */
+#ifdef TE_HAVE_OPENSSL
+  #include <openssl/ssl.h>
+  #include <openssl/err.h>
+#endif
+
 /* Minimal HTTP/1.0 client over plain TCP. Returns body as malloc'd string (caller frees), or NULL. */
 static char* te_http_request(const char *method, const char *url, const char *body) {
     if (!url) return NULL;
@@ -48,13 +59,21 @@ static char* te_http_request(const char *method, const char *url, const char *bo
         }
     }
 #endif
-    /* Parse http://host[:port]/path */
+    /* Parse http://host[:port]/path  ó  https://host[:port]/path */
     const char *u = url;
+    int use_tls = 0;
     if (strncmp(u, "http://", 7) == 0) u += 7;
-    else if (strncmp(u, "https://", 8) == 0) return NULL; /* TLS no soportado en stdlib mínima */
+    else if (strncmp(u, "https://", 8) == 0) {
+#ifdef TE_HAVE_OPENSSL
+        u += 8; use_tls = 1;
+#else
+        return NULL; /* TLS no soportado: compila con -DTE_HAVE_OPENSSL o usa libcurl */
+#endif
+    }
     char host[512] = {0};
     char port[16]  = "80";
     char path[1024] = "/";
+    if (use_tls) snprintf(port, sizeof(port), "443"); /* default https port */
     const char *slash = strchr(u, '/');
     const char *colon = strchr(u, ':');
     size_t hostlen;
@@ -91,12 +110,51 @@ static char* te_http_request(const char *method, const char *url, const char *bo
         freeaddrinfo(res); return NULL;
     }
     freeaddrinfo(res);
+#ifdef TE_HAVE_OPENSSL
+    /* gotcha #11: handshake TLS sobre el socket ya conectado para https://.
+     * SSL_CTX se crea una sola vez (estático). SNI vía SSL_set_tlsext_host_name
+     * es obligatorio para hosts virtuales (CDNs, GitHub, etc.). Por defecto NO
+     * verificamos el certificado contra el store del SO (Windows no expone uno
+     * compatible con OpenSSL de fábrica); el objetivo es habilitar el transporte
+     * cifrado en modo script. TE_HTTP_INSECURE se mantiene como no-op aquí. */
+    SSL *ssl = NULL;
+    if (use_tls) {
+        static SSL_CTX *g_ssl_ctx = NULL;
+        if (!g_ssl_ctx) {
+            SSL_library_init();
+            SSL_load_error_strings();
+            g_ssl_ctx = SSL_CTX_new(TLS_client_method());
+        }
+        if (!g_ssl_ctx) {
+#ifdef _WIN32
+            closesocket(sock);
+#else
+            close(sock);
+#endif
+            return NULL;
+        }
+        ssl = SSL_new(g_ssl_ctx);
+        if (ssl) {
+            SSL_set_tlsext_host_name(ssl, host); /* SNI */
+            SSL_set_fd(ssl, (int)sock);
+        }
+        if (!ssl || SSL_connect(ssl) != 1) {
+            if (ssl) SSL_free(ssl);
+#ifdef _WIN32
+            closesocket(sock);
+#else
+            close(sock);
+#endif
+            return NULL;
+        }
+    }
+#endif
     /* Build request */
     TeBuf req; tebuf_init(&req);
     tebuf_puts(&req, method); tebuf_putc(&req, ' ');
     tebuf_puts(&req, path); tebuf_puts(&req, " HTTP/1.0\r\n");
     tebuf_puts(&req, "Host: "); tebuf_puts(&req, host);
-    if (strcmp(port, "80") != 0) { tebuf_putc(&req, ':'); tebuf_puts(&req, port); }
+    if (strcmp(port, use_tls ? "443" : "80") != 0) { tebuf_putc(&req, ':'); tebuf_puts(&req, port); }
     tebuf_puts(&req, "\r\n");
     tebuf_puts(&req, "User-Agent: TypeEasy/1.0\r\nAccept: */*\r\nConnection: close\r\n");
     if (body && *body) {
@@ -109,10 +167,23 @@ static char* te_http_request(const char *method, const char *url, const char *bo
     /* Send */
     size_t sent = 0; size_t total = req.len;
     while (sent < total) {
+#ifdef TE_HAVE_OPENSSL
+        int w;
+        if (ssl) {
+            w = SSL_write(ssl, req.p + sent, (int)(total - sent));
+        } else {
+#ifdef _WIN32
+            w = send(sock, req.p + sent, (int)(total - sent), 0);
+#else
+            w = (int)send(sock, req.p + sent, total - sent, 0);
+#endif
+        }
+#else
 #ifdef _WIN32
         int w = send(sock, req.p + sent, (int)(total - sent), 0);
 #else
         ssize_t w = send(sock, req.p + sent, total - sent, 0);
+#endif
 #endif
         if (w <= 0) break;
         sent += (size_t)w;
@@ -121,12 +192,27 @@ static char* te_http_request(const char *method, const char *url, const char *bo
     /* Receive */
     TeBuf resp; tebuf_init(&resp);
     char chunk[4096];
+#ifdef TE_HAVE_OPENSSL
+    int r;
+    for (;;) {
+        if (ssl) {
+            r = SSL_read(ssl, chunk, (int)sizeof(chunk));
+        } else {
+#ifdef _WIN32
+            r = recv(sock, chunk, (int)sizeof(chunk), 0);
+#else
+            r = (int)recv(sock, chunk, sizeof(chunk), 0);
+#endif
+        }
+        if (r <= 0) break;
+#else
 #ifdef _WIN32
     int r;
     while ((r = recv(sock, chunk, (int)sizeof(chunk), 0)) > 0) {
 #else
     ssize_t r;
     while ((r = recv(sock, chunk, sizeof(chunk), 0)) > 0) {
+#endif
 #endif
         if (resp.len + (size_t)r + 1 > resp.cap) {
             while (resp.len + (size_t)r + 1 > resp.cap) resp.cap *= 2;
@@ -136,6 +222,9 @@ static char* te_http_request(const char *method, const char *url, const char *bo
         resp.len += (size_t)r;
         resp.p[resp.len] = 0;
     }
+#ifdef TE_HAVE_OPENSSL
+    if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
+#endif
 #ifdef _WIN32
     closesocket(sock);
 #else

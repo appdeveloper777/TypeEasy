@@ -184,7 +184,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                             /* Igual que build_item_from_value: tipo "NUMBER" + ->value. */
                             node = create_ast_leaf_number("NUMBER", (int)a->value.int_value, NULL, NULL);
                         } else if (a->vtype == VAL_FLOAT) {
-                            char buf[64]; snprintf(buf, sizeof(buf), "%f", a->value.float_value);
+                            char buf[64]; te_fmt_double(buf, sizeof(buf), a->value.float_value);
                             node = create_ast_leaf("FLOAT", 0, buf, NULL);
                         } else if (a->vtype == VAL_STRING) {
                             node = create_ast_leaf("STRING", 0,
@@ -215,7 +215,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         if (rv_is_int) {
                             node = create_ast_leaf_number("NUMBER", (int)rv, NULL, NULL);
                         } else {
-                            char buf[64]; snprintf(buf, sizeof(buf), "%f", rv);
+                            char buf[64]; te_fmt_double(buf, sizeof(buf), rv);
                             node = create_ast_leaf("FLOAT", 0, buf, NULL);
                         }
                         te_list_append(result, node);
@@ -370,7 +370,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     } else {
                         double r = evaluate_expression(initArg);
                         if (r == (double)(long long)r) acc = create_ast_leaf_number("NUMBER", (int)r, NULL, NULL);
-                        else { char b[64]; snprintf(b,sizeof(b),"%g",r); acc = create_ast_leaf("FLOAT", 0, b, NULL); }
+                        else { char b[64]; te_fmt_double(b,sizeof(b),r); acc = create_ast_leaf("FLOAT", 0, b, NULL); }
                     }
                 } else {
                     acc = create_ast_leaf_number("NUMBER", 0, NULL, NULL);
@@ -616,7 +616,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                                     add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                                 }
                             } else {
-                                char buf[64]; snprintf(buf, sizeof(buf), "%g", dtotal);
+                                char buf[64]; te_fmt_double(buf, sizeof(buf), dtotal);
                                 add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                             }
                             return 1;
@@ -660,7 +660,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                                         add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                                     }
                                 } else {
-                                    char buf[64]; snprintf(buf, sizeof(buf), "%g", dtotal + (double)itotal);
+                                    char buf[64]; te_fmt_double(buf, sizeof(buf), dtotal + (double)itotal);
                                     add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                                 }
                                 return 1;
@@ -689,7 +689,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                                     add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                                 }
                             } else {
-                                char buf[64]; snprintf(buf, sizeof(buf), "%g", dacc + (double)iacc);
+                                char buf[64]; te_fmt_double(buf, sizeof(buf), dacc + (double)iacc);
                                 add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                             }
                             return 1;
@@ -711,7 +711,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 if (is_int && acc == (double)(long long)acc) {
                     add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)acc, NULL, NULL));
                 } else {
-                    char buf[64]; snprintf(buf, sizeof(buf), "%g", acc);
+                    char buf[64]; te_fmt_double(buf, sizeof(buf), acc);
                     add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                 }
                 return 1;
@@ -730,7 +730,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                             long long n = te_colcache_count(cc, NULL);
                             double sum = is_int ? (double)itotal : dtotal;
                             double res = n > 0 ? sum / (double)n : 0.0;
-                            char buf[64]; snprintf(buf, sizeof(buf), "%g", res);
+                            char buf[64]; te_fmt_double(buf, sizeof(buf), res);
                             add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                             return 1;
                         }
@@ -746,7 +746,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     }
                     if (ok) {
                         double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
-                        char buf[64]; snprintf(buf, sizeof(buf), "%g", res);
+                        char buf[64]; te_fmt_double(buf, sizeof(buf), res);
                         add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                         return 1;
                     }
@@ -758,7 +758,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     item = item->next;
                 }
                 double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
-                char buf[64]; snprintf(buf, sizeof(buf), "%g", res);
+                char buf[64]; te_fmt_double(buf, sizeof(buf), res);
                 add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                 return 1;
             }
@@ -925,11 +925,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                              * compatibilidad con el comportamiento previo
                              * (groupBy int → key "3"); floats como "%g". */
                             char kbuf[32];
-                            if (v == (double)(long long)v && v > -9.0e15 && v < 9.0e15) {
-                                snprintf(kbuf, sizeof(kbuf), "%lld", (long long)v);
-                            } else {
-                                snprintf(kbuf, sizeof(kbuf), "%g", v);
-                            }
+                            te_fmt_double(kbuf, sizeof(kbuf), v);
                             ASTNode *kv_key = create_kv_pair_node("key", create_ast_leaf("STRING", 0, kbuf, NULL));
                             group_items = create_list_node(NULL);
                             ASTNode *kv_items = create_kv_pair_node("items", group_items);

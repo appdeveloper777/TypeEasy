@@ -57,7 +57,7 @@ int te_math_method_dispatch(ASTNode *node, ASTNode *objNode) {
         r = create_ast_leaf_number("INT", (int)res, NULL, NULL);
     } else {
         char buf[64];
-        snprintf(buf, 64, "%f", res);
+        te_fmt_double(buf, sizeof(buf), res);
         r = create_ast_leaf("FLOAT", 0, buf, NULL);
     }
     add_or_update_variable("__ret__", r);

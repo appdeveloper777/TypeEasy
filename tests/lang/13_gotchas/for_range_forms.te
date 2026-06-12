@@ -1,0 +1,30 @@
+// Gotcha #1 (resuelto v0.0.20): el for ahora acepta formas estilo range() de
+// Python sin variable de control: for(START; STOP; STEP) y for(START, STOP, STEP).
+// START/STOP/STEP pueden ser literales o expresiones; STOP es límite exclusivo.
+
+// Forma con punto y coma, literales
+var a = 0;
+for (0; 8; 1) { a = a + 1; }
+println(a);            // 8
+
+// Forma con comas, literales
+var b = 0;
+for (0, 8, 1) { b = b + 1; }
+println(b);            // 8
+
+// Paso distinto de 1 (coma)
+var c = 0;
+for (0, 10, 2) { c = c + 1; }
+println(c);            // 5
+
+// Campos como expresiones / variables
+let lo = 2;
+let hi = 9;
+var d = 0;
+for (lo; hi; 1) { d = d + 1; }
+println(d);            // 7
+
+// Forma clásica sigue funcionando
+var e = 0;
+for (i = 0; 4; 1) { e = e + i; }
+println(e);            // 0+1+2+3 = 6

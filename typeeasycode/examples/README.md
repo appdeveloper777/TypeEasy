@@ -2,6 +2,8 @@
 
 Categorias organizadas por concepto. Cada carpeta tiene su propio README.
 
+> 📖 **Referencia completa de sintaxis y gotchas:** [`../../docs/SINTAXIS_Y_GOTCHAS.md`](../../docs/SINTAXIS_Y_GOTCHAS.md)
+
 | Carpeta | Tema |
 |---------|------|
 | `01_basics/`     | Variables, printing, control de flujo, arrays/maps |

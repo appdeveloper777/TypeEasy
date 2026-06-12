@@ -1715,7 +1715,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
                     } else {
                         double avg = (double)r / (double)n;
                         char buf[40];
-                        snprintf(buf, sizeof(buf), "%.17g", avg);
+                        te_fmt_double(buf, sizeof(buf), avg);
                         add_or_update_variable("__ret__",
                             create_ast_leaf_number("FLOAT", 0, buf, NULL));
                     }
@@ -1751,7 +1751,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
                             m, fl.attr_name, (t1 - t0) / 1000, n);
                 }
                 char buf[40];
-                snprintf(buf, sizeof(buf), "%.17g", acc);
+                te_fmt_double(buf, sizeof(buf), acc);
                 add_or_update_variable("__ret__",
                     create_ast_leaf_number("FLOAT", 0, buf, NULL));
                 return 1;

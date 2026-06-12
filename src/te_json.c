@@ -24,6 +24,15 @@ static te_json_eval_fn g_eval_call_method = NULL;
  * evaluates to a string (used to pick string vs numeric JSON emission). */
 int is_string_type(ASTNode *node);
 
+/* Declared in ast.c (not in ast.h): resolution helpers used to evaluate an
+ * inline ACCESS_EXPR (map["k"] / list[i]) value to its underlying value node
+ * so JSON emission preserves its type (gotcha #5). */
+ASTNode* resolve_to_map(ASTNode *node);
+ASTNode* resolve_to_list(ASTNode *node);
+ASTNode* map_find_pair(ASTNode *map, const char *key);
+ASTNode* list_get_item(ASTNode *list, int idx);
+int      list_length(ASTNode *list);
+
 void te_json_set_eval_hooks(te_json_eval_fn call_func,
                             te_json_eval_fn call_method) {
     g_eval_call_func   = call_func;
@@ -74,7 +83,7 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
             if (r->type && strcmp(r->type, "BOOL") == 0) { tebuf_puts(b, r->value.int_value ? "true" : "false"); return; }
             char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", r->value.int_value); tebuf_puts(b, tmp); return;
         }
-        if (r->vtype == VAL_FLOAT) { char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", r->value.float_value); tebuf_puts(b, tmp); return; }
+        if (r->vtype == VAL_FLOAT) { char tmp[64]; te_fmt_double(tmp, sizeof(tmp), r->value.float_value); tebuf_puts(b, tmp); return; }
         tebuf_puts(b, "null"); return;
     }
     if (strcmp(n->type, "BOOL") == 0) {
@@ -132,7 +141,7 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
             if (v->type && strcmp(v->type, "NULL") == 0) { tebuf_puts(b, "null"); return; }
             if (v->vtype == VAL_STRING) { te_json_emit_str(b, v->value.string_value ? v->value.string_value : ""); return; }
             if (v->vtype == VAL_INT)    { char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", v->value.int_value); tebuf_puts(b, tmp); return; }
-            if (v->vtype == VAL_FLOAT)  { char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", v->value.float_value); tebuf_puts(b, tmp); return; }
+            if (v->vtype == VAL_FLOAT)  { char tmp[64]; te_fmt_double(tmp, sizeof(tmp), v->value.float_value); tebuf_puts(b, tmp); return; }
             if (v->type && (strcmp(v->type,"LIST")==0 || strcmp(v->type,"MAP")==0)) {
                 te_json_emit_node(b, (ASTNode*)(intptr_t)v->value.object_value);
                 return;
@@ -157,10 +166,42 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
                 char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)d);
                 tebuf_puts(b, tmp);
             } else {
-                char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", d);
+                char tmp[64]; te_fmt_double(tmp, sizeof(tmp), d);
                 tebuf_puts(b, tmp);
             }
         }
+        return;
+    }
+    /* gotcha #5: indexar un map/list inline como valor de un object-literal
+     * — { x: datos["k"] } / { y: items[0] }. Resolvemos el ACCESS_EXPR a su
+     * nodo-valor subyacente y lo re-emitimos para preservar su tipo
+     * (string / número / bool / mapa anidado). Antes caía al "null" final. */
+    if (strcmp(n->type, "ACCESS_EXPR") == 0) {
+        ASTNode *val = NULL;
+        ASTNode *map = resolve_to_map(n->left);
+        if (map) {
+            const char *key = NULL;
+            if (n->right && n->right->type) {
+                if (strcmp(n->right->type, "STRING") == 0) key = n->right->str_value;
+                else if (strcmp(n->right->type, "IDENTIFIER") == 0 ||
+                         strcmp(n->right->type, "ID") == 0) {
+                    Variable *kv = find_variable(n->right->id);
+                    if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+                }
+            }
+            if (key) {
+                ASTNode *pair = map_find_pair(map, key);
+                if (pair) val = pair->left;
+            }
+        } else {
+            ASTNode *list = resolve_to_list(n->left);
+            if (list && n->right) {
+                int idx = (int)evaluate_expression(n->right);
+                if (idx >= 0 && idx < list_length(list)) val = list_get_item(list, idx);
+            }
+        }
+        if (val) { te_json_emit_node(b, val); return; }
+        tebuf_puts(b, "null");
         return;
     }
     tebuf_puts(b, "null");

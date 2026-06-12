@@ -41,6 +41,12 @@ typedef enum {
 /* Resolve a type-string to its NodeKind (call once at node creation). */
 NodeKind nk_from_str(const char *type);
 
+/* Format a double as the shortest decimal string that round-trips back to the
+ * same IEEE-754 value (Python/JS style). Integer-valued doubles print without
+ * decimals ("2.0" -> "2"). Used for every float->string conversion so that
+ * println/concat/interpolation/json all agree (no "%f" zero padding). */
+void te_fmt_double(char *buf, size_t cap, double v);
+
 /* --- 1. LA DEFINICIÓN DE ASTNode --- */
 typedef struct ASTNode {
     char *type;

@@ -713,6 +713,13 @@ func_call_expr SEMICOLON { $$ = $1; }
   | FPRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("FPRINT", access, NULL); }
   
   | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET    { $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf("NUMBER",$5,NULL,NULL), $7, $9, $12); }
+  /* for(START; STOP; STEP) — sin variable de control, estilo range() de Python.
+   * START/STOP/STEP pueden ser literales o expresiones; STOP es límite exclusivo.
+   * Se sintetiza un nombre de contador oculto ("__for$N", imposible de tipear por
+   * el usuario porque '$' no es un carácter de identificador válido). */
+  | FOR LPAREN expression SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET    { static int __fc_semi=0; char __nm[40]; snprintf(__nm,sizeof(__nm),"__for$%d",__fc_semi++); $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,__nm), $3, $5, $7, $10); }
+  /* for(START, STOP, STEP) — variante con comas (range() de Python con coma). */
+  | FOR LPAREN expression COMMA expression COMMA expression RPAREN LBRACKET statement_list RBRACKET            { static int __fc_comma=0; char __nm[40]; snprintf(__nm,sizeof(__nm),"__for$%d",__fc_comma++); $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,__nm), $3, $5, $7, $10); }
   | NEW IDENTIFIER LPAREN RPAREN SEMICOLON    { /* Fase 2: class or builtin */ ClassNode *cls = find_class($2); if (cls) $$ = (ASTNode *)create_object_with_args(cls, NULL); else $$ = create_call_node($2, NULL); }
   | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN RPAREN SEMICOLON    { /* Fase 2: class or builtin */ ClassNode *cls = find_class($5); ASTNode *rhs = cls ? create_object_with_args(cls, NULL) : create_call_node($5, NULL); ASTNode* d = create_var_decl_node($2, rhs); d->value = 1; $$ = d; }
   | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN expression_list RPAREN SEMICOLON    { /* Fase 2: class or builtin (let r = new sqlserver_query(...)). */ ClassNode *cls = find_class($5); ASTNode *rhs = cls ? create_object_with_args(cls, $7) : create_call_node($5, $7); ASTNode* d = create_var_decl_node($2, rhs); d->value = 1; $$ = d; }

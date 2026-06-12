@@ -1,4 +1,4 @@
-// expect: first=Cake skip=Cafe any=1 all=1 avg=14.000000 min=Galleta max=Cake
+// expect: first=Cake skip=Cafe any=1 all=1 avg=14 min=Galleta max=Cake
 // LINQ extendido: orderByDescending, take, skip, any, all, avgBy, minBy, maxBy.
 
 class Producto {

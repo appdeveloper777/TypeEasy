@@ -64,7 +64,7 @@ RUN openssl version
 RUN cd /app/src && \
     bison -d -o parser.tab.c parser.y --warnings=none && \
     flex -o lex.yy.c parser.l && \
-    gcc -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET -c \
+    gcc -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET -DTE_ENABLE_JIT=1 -c \
     ast.c bytecode.c mysql_bridge.c postgres_bridge.c sqlserver_bridge.c db_params.c orm_bridge.c typeeasy_api.c debugger.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c te_colcache.c te_stdlib.c te_bridge.c te_async.c te_linq.c te_linq_ops.c te_math.c te_string.c te_list.c te_map.c \
     parser.tab.c lex.yy.c strvars.c && \
     cd /app && \

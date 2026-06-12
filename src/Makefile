@@ -38,7 +38,9 @@ CXX = g++
 # (breakpoints fiables + inspección de variables sin "optimized out") usar
 # `make TE_OPT=-O0`. El flag -g (símbolos) siempre está presente.
 TE_OPT ?= -O3
-CFLAGS = -Wall -g $(TE_OPT) -mavx2 -mbmi -pthread -fopenmp -DTE_HAVE_OPENMP -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET -DTE_HAVE_LIBCURL $(CFLAGS_EXTRA)
+# TE_ENABLE_JIT=1: trace JIT compilado dentro del binario (OFF en runtime salvo
+# TYPEEASY_JIT=1). Microsoft confirmo "No malware detected" para el binario.
+CFLAGS = -Wall -g $(TE_OPT) -mavx2 -mbmi -pthread -fopenmp -DTE_HAVE_OPENMP -DTE_ENABLE_JIT=1 -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET -DTE_HAVE_LIBCURL $(CFLAGS_EXTRA)
 CXXFLAGS = -Wall -g $(TE_OPT) -std=c++17 -fopenmp
 LIBS_SCRIPT = -lfl -lm -lmysqlclient -lpq -lsybdb -lpthread -ldl -lssl -lcrypto -lcurl -lgomp
 LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto -lmysqlclient -lpq -lsybdb -lcurl -lgomp

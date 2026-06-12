@@ -1,4 +1,4 @@
-// Float values print with the interpreter's default %f formatting (6 decimals).
-// expect: 3.141600
+// Float values print with shortest round-trip formatting (Python/JS style).
+// expect: 3.1416
 const PI = 3.1416;
 println(PI);

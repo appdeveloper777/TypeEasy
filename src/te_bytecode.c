@@ -2787,15 +2787,19 @@ static int bc_compile_for(ASTNode *node, Instr *out, int *pos, int max) {
     if (fv->vtype != VAL_INT) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr,"[BCFOR] fail: fv not VAL_INT (vtype=%d)\n", fv->vtype); return 0; }
 
     /* Only compile to bytecode when init/limit/step are NUMBER literals. If the
-     * limit or step is a variable/expression, bail out so the AST walker (which
-     * evaluates them fresh each run) handles it — baking a stale constant here
-     * would be wrong when the same loop node re-runs with a different value. */
+     * init, limit or step is a variable/expression, bail out so the AST walker
+     * (which evaluates them fresh each run) handles it — baking a stale constant
+     * here would be wrong when the same loop node re-runs with a different value.
+     * The literal-free `for(START; STOP; STEP)` forms can carry expression INITs,
+     * so we must guard node->left too (not only limit/step). */
     {
+        NodeKind ik = nk_of(node->left);             /* init  */
         NodeKind lk = nk_of(node->right);            /* limit */
         NodeKind sk = nk_of(update_body->left);      /* step  */
-        if ((lk != NK_NUMBER && lk != NK_INT) ||
+        if ((ik != NK_NUMBER && ik != NK_INT) ||
+            (lk != NK_NUMBER && lk != NK_INT) ||
             (sk != NK_NUMBER && sk != NK_INT)) {
-            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr,"[BCFOR] fail: non-literal limit/step (lk=%d sk=%d)\n", lk, sk);
+            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr,"[BCFOR] fail: non-literal init/limit/step (ik=%d lk=%d sk=%d)\n", ik, lk, sk);
             return 0;
         }
     }

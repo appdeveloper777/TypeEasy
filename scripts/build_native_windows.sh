@@ -61,7 +61,7 @@ fi
 # te_csv parser multihilo, te_linq_ops SIMD) tenga el mismo perfil que el build
 # de Docker. Sin esto el binario nativo Windows queda en modo serial y pierde
 # ~40% en cargas LINQ sobre CSV grandes.
-CFLAGS_NATIVE="-O3 -fopenmp -DTE_HAVE_OPENMP -mavx2 -mbmi -Wall -I. -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET ${MYSQL_CFLAGS}"
+CFLAGS_NATIVE="-O3 -fopenmp -DTE_HAVE_OPENMP -mavx2 -mbmi -Wall -I. -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET -DTE_HAVE_OPENSSL ${MYSQL_CFLAGS}"
 
 # Compatibilidad con GCC 14+ (MSYS2 actual): el codigo asume C11/POSIX implicito,
 # pero GCC 14 promovio varios warnings a errores por defecto (C23). Los demotamos
@@ -79,6 +79,14 @@ CFLAGS_NATIVE+=" -fcommon"
 # Pasamos como token bare (sin comillas) — typeeasy_main.c lo stringifica con TE_XSTR.
 TE_VER="${TYPEEASY_VERSION:-0.0.1}"
 CFLAGS_NATIVE+=" -DTYPEEASY_VERSION=${TE_VER}"
+
+# Trace JIT habilitado en el build release (Microsoft confirmo "No malware
+# detected" para el binario firmado). El JIT sigue OFF en runtime salvo que se
+# exporte TYPEEASY_JIT=1, asi que el usuario normal no nota cambio alguno.
+CFLAGS_NATIVE+=" -DTE_ENABLE_JIT=1"
+
+# Flags extra opcionales adicionales pasados por el entorno.
+CFLAGS_NATIVE+=" ${EXTRA_CFLAGS:-}"
 
 echo "=== Generando parser/lexer ==="
 bison -d -o parser.tab.c parser.y --warnings=none
