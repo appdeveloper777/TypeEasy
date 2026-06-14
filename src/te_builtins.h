@@ -82,9 +82,22 @@ typedef struct TEHostAPI {
      * registrar punteros desalineados que devuelven [] en silencio.
      * Plugins viejos que no leen este campo simplemente lo ignoran (0). */
     int      struct_size;
+
+    /* === ABI v3 — auto-cleanup de conexiones por request =============
+     * register_request_cleanup(fn): el plugin DB registra un callback que el
+     * host invoca al final de CADA request HTTP, para que cierre las
+     * conexiones abiertas durante el request que el script olvidó cerrar
+     * (return temprano, throw, error). Evita fugas que agotan el pool.
+     *
+     * db_request_phase(): devuelve 1 una vez que el servidor despacha
+     * requests, 0 durante el load global del script. Permite al plugin marcar
+     * qué conexiones son request-scoped (auto-cerrables) vs. globales
+     * (persistentes). Disponible solo si abi_version >= 3. */
+    void (*register_request_cleanup)(void (*fn)(void));
+    int  (*db_request_phase)(void);
 } TEHostAPI;
 
-#define TE_HOST_API_VERSION 2
+#define TE_HOST_API_VERSION 3
 
 /* Returns 0 on success, non-zero on error (file not found, missing
  * `te_module_register`, ABI mismatch). On error, sets __ret__ to 0;

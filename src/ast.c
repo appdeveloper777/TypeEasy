@@ -1607,8 +1607,18 @@ static void te_sym_reset_to(int initial_count);
 
 // --- INICIO MEJORA: Punteros a los manejadores de bridges ---
 static BridgeHandlers g_bridge_handlers = {NULL, NULL, NULL};
+
+/* DB connection lifecycle. 0 mientras se carga el script global; 1 una vez que
+ * el servidor empieza a despachar requests. Las conexiones abiertas con este
+ * flag en 1 son request-scoped: se cierran/devuelven al pool al final de cada
+ * request (red de seguridad si el script olvida *_close()). Las abiertas en el
+ * load global persisten durante toda la vida del proceso. Leen este flag los
+ * bridges (mysql/postgres/sqlserver) y el plugin sqlite vía host->db_request_phase. */
+int g_db_request_phase = 0;
+
 void runtime_save_initial_var_count() {
     g_initial_var_count = var_count;
+    g_db_request_phase = 1;   /* a partir de aquí, toda conexión es request-scoped */
     if (g_debug_mode) te_log_ast("Initial state saved. %d global variables retained.", g_initial_var_count);
 }
 
@@ -1667,6 +1677,17 @@ void runtime_reset_vars_to_initial_state() {
         g_stdout_buffer = NULL;
         g_stdout_size = 0;
     }
+
+    /* Auto-cierre de conexiones DB abiertas en este request que el script no
+     * cerró (return temprano, throw, o error antes del *_close()). Evita fugas
+     * que acumulan conexiones request-tras-request hasta "too many connections"
+     * en el servidor. Con el pool MySQL activo, las devuelve al pool para reuso;
+     * sin pool, las cierra. Las conexiones globales no se tocan. Los plugins
+     * (sqlite, ...) se limpian vía los hooks registrados con el host API. */
+    mysql_close_request_conns();
+    postgres_close_request_conns();
+    sqlserver_close_request_conns();
+    te_db_run_request_cleanup_hooks();
 }
 void runtime_register_bridge_handlers(BridgeHandlers handlers) {
     g_bridge_handlers.handle_chat_bridge = handlers.handle_chat_bridge;

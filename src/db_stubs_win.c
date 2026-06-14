@@ -25,3 +25,9 @@ void native_postgres_close  (ASTNode* args) { (void)args; warn_unsupported("post
 void native_sqlserver_connect(ASTNode* args) { (void)args; warn_unsupported("sqlserver_connect"); }
 void native_sqlserver_query  (ASTNode* args) { (void)args; warn_unsupported("sqlserver_query");   }
 void native_sqlserver_close  (ASTNode* args) { (void)args; warn_unsupported("sqlserver_close");   }
+
+/* Auto-cierre de conexiones por request: no-op en Windows (no hay bridges
+ * postgres/sqlserver reales en esta build). ast.c los llama incondicionalmente
+ * al final de cada request, asi que deben existir aqui para enlazar. */
+void postgres_close_request_conns(void)  { }
+void sqlserver_close_request_conns(void) { }

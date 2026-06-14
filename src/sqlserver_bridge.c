@@ -9,6 +9,11 @@
 
 #define MSSQL_POOL_SIZE 10
 static DBPROCESS* mssql_connections[MSSQL_POOL_SIZE] = {NULL};
+
+/* Auto-cleanup por request: ver mysql_bridge.c. Marca slots abiertos durante
+ * un request para liberarlos al final si el script no llamó sqlserver_close(). */
+extern int g_db_request_phase;
+static int mssql_req_scoped[MSSQL_POOL_SIZE] = {0};
 static int mssql_initialized = 0;
 
 extern ASTNode* create_ast_leaf(char *type, int value, char *str_value, char *id);
@@ -210,6 +215,7 @@ void native_sqlserver_connect(ASTNode* args) {
     }
 
     mssql_connections[slot] = dbproc;
+    mssql_req_scoped[slot] = g_db_request_phase;
     printf("[SQLServer] Connection successful (ID: %d)\n", slot); fflush(stdout);
     ASTNode* r = create_ast_leaf("NUMBER", slot, NULL, NULL);
     add_or_update_variable("__ret__", r); free_ast(r);
@@ -365,5 +371,17 @@ void native_sqlserver_close(ASTNode* args) {
     }
     dbclose(mssql_connections[conn_id]);
     mssql_connections[conn_id] = NULL;
+    mssql_req_scoped[conn_id] = 0;
     fprintf(stderr, "[SQLServer] Conexión cerrada (ID: %d)\n", conn_id);
+}
+
+/* Cierre automático al final de cada request (ver mysql_bridge.c). Cierra solo
+ * las conexiones abiertas durante este request que no se cerraron. */
+void sqlserver_close_request_conns(void) {
+    for (int i = 0; i < MSSQL_POOL_SIZE; i++) {
+        if (!mssql_connections[i] || !mssql_req_scoped[i]) continue;
+        dbclose(mssql_connections[i]);
+        mssql_connections[i] = NULL;
+        mssql_req_scoped[i] = 0;
+    }
 }

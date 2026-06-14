@@ -40,6 +40,12 @@ void te_register_ast_builtins(void);
 /* Populate the host API struct used by dynamically loaded plugins. */
 void te_fill_host_api(TEHostAPI *out);
 
+/* Auto-cleanup de conexiones por request (ABI v3). Los plugins DB registran
+ * un callback con te_db_register_request_cleanup(); el runtime los invoca al
+ * final de cada request v\u00eda te_db_run_request_cleanup_hooks(). */
+void te_db_register_request_cleanup(void (*fn)(void));
+void te_db_run_request_cleanup_hooks(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -53,6 +53,10 @@
 
 static sqlite3 *g_pool[POOL_SIZE];
 static int      g_pool_used[POOL_SIZE];
+/* Auto-cleanup por request: marca qué slots se abrieron durante un request
+ * (host->db_request_phase()==1) para cerrarlos al final si el script no llamó
+ * sqlite_close(). Los abiertos en el load global persisten. */
+static int      g_req_scoped[POOL_SIZE];
 
 /* IMPORTANTE: copiamos la struct, no el puntero — el host la pasa en su stack. */
 static TEHostAPI g_host;
@@ -71,6 +75,21 @@ static void pool_free(int slot) {
     if (slot < 0 || slot >= POOL_SIZE) return;
     if (g_pool[slot]) { sqlite3_close(g_pool[slot]); g_pool[slot] = NULL; }
     g_pool_used[slot] = 0;
+    g_req_scoped[slot] = 0;
+}
+
+/* Cierre automático al final de cada request (registrado vía host API v3).
+ * Cierra solo las conexiones abiertas durante este request que el script no
+ * cerró; las conexiones globales (abiertas en el load) se preservan. */
+static void sqlite_close_request_conns(void) {
+    for (int i = 0; i < POOL_SIZE; i++) {
+        if (g_pool[i] && g_req_scoped[i]) {
+            sqlite3_close(g_pool[i]);
+            g_pool[i] = NULL;
+            g_pool_used[i] = 0;
+            g_req_scoped[i] = 0;
+        }
+    }
 }
 
 static ASTNode *arg_at(ASTNode *args, int n) {
@@ -317,6 +336,7 @@ static int te_sqlite_connect(ASTNode *node, ASTNode *args) {
     sqlite3_exec(db, "PRAGMA foreign_keys=ON;", NULL, NULL, NULL);
 
     g_pool[slot] = db;
+    g_req_scoped[slot] = (H->db_request_phase ? H->db_request_phase() : 1);
     free(path);
     H->set_ret_int(slot);
     return 1;
@@ -609,6 +629,9 @@ void te_module_register(const TEHostAPI *host) {
     host->register_builtin("sqlite_query",   te_sqlite_query);
     host->register_builtin("sqlite_last_id", te_sqlite_last_id);
     host->register_builtin("sqlite_close",   te_sqlite_close);
+    /* ABI v3: auto-cierre de conexiones request-scoped al final de cada request. */
+    if (host->register_request_cleanup)
+        host->register_request_cleanup(sqlite_close_request_conns);
     fprintf(stderr,
         "[libte_sqlite] registered: sqlite_connect, sqlite_exec, sqlite_query, "
         "sqlite_last_id, sqlite_close\n");

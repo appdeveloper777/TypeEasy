@@ -1145,6 +1145,33 @@ static void host_free_node(ASTNode *n) {
     if (n) free_ast(n);
 }
 
+/* ABI v3 — auto-cleanup de conexiones por request.
+ * Registro de callbacks que los plugins DB (sqlite, ...) registran para que
+ * el runtime los invoque al final de cada request HTTP. Almacenamiento aquí
+ * (en el host), invocado desde runtime_reset_vars_to_initial_state (ast.c). */
+#define TE_DB_CLEANUP_MAX 16
+static void (*g_db_cleanup_hooks[TE_DB_CLEANUP_MAX])(void);
+static int g_db_cleanup_count = 0;
+
+void te_db_register_request_cleanup(void (*fn)(void)) {
+    if (!fn) return;
+    for (int i = 0; i < g_db_cleanup_count; i++)
+        if (g_db_cleanup_hooks[i] == fn) return;   /* dedupe */
+    if (g_db_cleanup_count < TE_DB_CLEANUP_MAX)
+        g_db_cleanup_hooks[g_db_cleanup_count++] = fn;
+}
+
+void te_db_run_request_cleanup_hooks(void) {
+    for (int i = 0; i < g_db_cleanup_count; i++)
+        if (g_db_cleanup_hooks[i]) g_db_cleanup_hooks[i]();
+}
+
+static void host_register_request_cleanup(void (*fn)(void)) {
+    te_db_register_request_cleanup(fn);
+}
+extern int g_db_request_phase;
+static int host_db_request_phase(void) { return g_db_request_phase; }
+
 void te_fill_host_api(TEHostAPI *out) {
     if (!out) return;
     memset(out, 0, sizeof(*out));
@@ -1160,4 +1187,7 @@ void te_fill_host_api(TEHostAPI *out) {
     /* ABI v2 */
     out->arg_map_head     = host_arg_map_head;
     out->free_node        = host_free_node;
+    /* ABI v3 */
+    out->register_request_cleanup = host_register_request_cleanup;
+    out->db_request_phase         = host_db_request_phase;
 }

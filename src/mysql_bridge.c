@@ -23,6 +23,14 @@ char* mysql_escape_cb(const char* in, void* ctx) {
 static MYSQL* connections[MYSQL_POOL_SIZE] = {NULL};
 static int next_conn_id = 0;
 
+/* Auto-cleanup por request: marca qué slots se abrieron DURANTE un request
+ * (g_db_request_phase==1) vs. en el load global (==0). Al final de cada
+ * request, mysql_close_request_conns() libera/devuelve-al-pool los que el
+ * script olvidó cerrar (return temprano, throw, error). Las conexiones
+ * globales (abiertas antes del primer request) se preservan. */
+extern int g_db_request_phase;
+static int conn_req_scoped[MYSQL_POOL_SIZE] = {0};
+
 /* Accessor público para obtener la conexión por id (usado por orm_bridge
  * para escape Dapper). Devuelve NULL si el id es inválido. */
 void* mysql_get_conn(int conn_id) {
@@ -551,6 +559,7 @@ void native_mysql_connect(ASTNode* args) {
              host ? host : "", user ? user : "", db ? db : "", port);
     int reused = pool_acquire(pool_key);
     if (reused >= 0) {
+        conn_req_scoped[reused] = g_db_request_phase;
         ASTNode* ret_node = create_ast_leaf("NUMBER", reused, NULL, NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
@@ -833,6 +842,7 @@ void native_mysql_connect(ASTNode* args) {
     }
     
     connections[conn_id] = conn;
+    conn_req_scoped[conn_id] = g_db_request_phase;
     pool_register(conn_id, pool_key);
     // next_conn_id is no longer used for allocation logic
     
@@ -1084,11 +1094,31 @@ void native_mysql_close(ASTNode* args) {
     
     /* Si el pool está activo, devolver al pool en vez de cerrar. */
     if (pool_release(conn_id)) {
+        conn_req_scoped[conn_id] = 0;
         fprintf(stderr, "[MySQL] connection returned to pool (ID: %d)\n", conn_id);
         return;
     }
 
     mysql_close(connections[conn_id]);
     connections[conn_id] = NULL;
+    conn_req_scoped[conn_id] = 0;
     fprintf(stderr, "[MySQL] connection closed (ID: %d)\n", conn_id);
+}
+
+/* Cierre automático al final de cada request (llamado desde
+ * runtime_reset_vars_to_initial_state en ast.c). Recorre los slots y libera
+ * SOLO las conexiones abiertas durante este request que no se cerraron
+ * explícitamente. Con el pool activo, las devuelve al pool para reuso; sin
+ * pool, las cierra físicamente. Las conexiones globales no se tocan. */
+void mysql_close_request_conns(void) {
+    for (int i = 0; i < MYSQL_POOL_SIZE; i++) {
+        if (!connections[i] || !conn_req_scoped[i]) continue;
+        if (pool_enabled() && pool_keys[i]) {
+            pool_in_use[i] = 0;   /* devolver al pool para reuso */
+        } else {
+            mysql_close(connections[i]);
+            connections[i] = NULL;
+        }
+        conn_req_scoped[i] = 0;
+    }
 }

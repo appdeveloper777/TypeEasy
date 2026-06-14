@@ -9,6 +9,11 @@
 #define PG_POOL_SIZE 10
 static PGconn* pg_connections[PG_POOL_SIZE] = {NULL};
 
+/* Auto-cleanup por request: ver mysql_bridge.c. Marca slots abiertos durante
+ * un request para liberarlos al final si el script no llamó postgres_close(). */
+extern int g_db_request_phase;
+static int pg_req_scoped[PG_POOL_SIZE] = {0};
+
 extern ASTNode* create_ast_leaf(char *type, int value, char *str_value, char *id);
 extern void free_ast(ASTNode *node);
 
@@ -176,6 +181,7 @@ void native_postgres_connect(ASTNode* args) {
     }
 
     pg_connections[slot] = conn;
+    pg_req_scoped[slot] = g_db_request_phase;
     printf("[Postgres] Connection successful (ID: %d)\n", slot); fflush(stdout);
     ASTNode* r = create_ast_leaf("NUMBER", slot, NULL, NULL);
     add_or_update_variable("__ret__", r); free_ast(r);
@@ -309,5 +315,17 @@ void native_postgres_close(ASTNode* args) {
     }
     PQfinish(pg_connections[conn_id]);
     pg_connections[conn_id] = NULL;
+    pg_req_scoped[conn_id] = 0;
     fprintf(stderr, "[Postgres] Conexión cerrada (ID: %d)\n", conn_id);
+}
+
+/* Cierre automático al final de cada request (ver mysql_bridge.c). Cierra solo
+ * las conexiones abiertas durante este request que no se cerraron. */
+void postgres_close_request_conns(void) {
+    for (int i = 0; i < PG_POOL_SIZE; i++) {
+        if (!pg_connections[i] || !pg_req_scoped[i]) continue;
+        PQfinish(pg_connections[i]);
+        pg_connections[i] = NULL;
+        pg_req_scoped[i] = 0;
+    }
 }
