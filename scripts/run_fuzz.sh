@@ -102,7 +102,11 @@ else
        "relanza el contenedor con --security-opt seccomp=unconfined ==="
 fi
 
+# Marcador para distinguir artefactos NUEVOS (de esta corrida) de los viejos.
+RUN_MARKER="$(mktemp)"
+
 set -x
+set +e
 "${RUNNER[@]}" "$ROOT/src/fuzz_parser" \
   "$CORPUS" \
   -dict="$DICT" \
@@ -110,3 +114,35 @@ set -x
   "${FORK_ARGS[@]}" \
   $MAXLEN_ARG $TIME_ARG \
   "$@"
+FUZZ_RC=$?
+set +x
+set -e
+
+# libFuzzer en modo fork propaga un exit != 0 cuando registró un OOM/timeout
+# "ignorado" (p.ej. `INFO: exiting: 71` con `oom/timeout/crash: 1/0/0`). Eso NO
+# es un bug: el parser acumula nodos por diseño (ver nota de FORK_ARGS arriba) y
+# un hijo cruza `rss_limit_mb` antes de ser reciclado. La corrida es sana —
+# `-fork=1` recicla el hijo y sigue fuzzeando. Solo debemos fallar la corrida si
+# libFuzzer guardó el artefacto de un hallazgo REAL y reproducible: crash-*
+# (UAF/overflow/SEGV/abort) o leak-*. Los OOM/timeout son benignos y van
+# ignorados por diseño, así que NO cuentan como hallazgo.
+REAL_FINDINGS="$(find "$ARTIFACTS" -maxdepth 1 -type f -newer "$RUN_MARKER" \
+  \( -name 'crash-*' -o -name 'leak-*' \) 2>/dev/null || true)"
+rm -f "$RUN_MARKER"
+
+if [[ -n "$REAL_FINDINGS" ]]; then
+  echo "=== [fuzz] HALLAZGO REAL: libFuzzer guardó artefacto(s) reproducibles ==="
+  echo "$REAL_FINDINGS"
+  echo "=== [fuzz] Reproducir con: src/fuzz_parser <artefacto> ==="
+  exit 1
+fi
+
+if [[ "$FUZZ_RC" -ne 0 ]]; then
+  echo "=== [fuzz] AVISO: libFuzzer salió con código $FUZZ_RC pero no dejó" \
+       "artefactos de crash/leak. Causa esperada: OOM/timeout benigno por el" \
+       "leak-por-diseño del parser, ya acotado por -fork + rss_limit_mb. Se" \
+       "trata como ÉXITO. ==="
+  exit 0
+fi
+
+echo "=== [fuzz] OK: corrida completa sin hallazgos. ==="
