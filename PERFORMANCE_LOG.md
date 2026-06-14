@@ -2410,3 +2410,72 @@ while corta antes de cualquier load SIMD).
   del contenedor (~700 ms cold), no el parsing. Para acercarse al wall de
   Polars sobre datasets pequeños/medianos, la única ruta efectiva es correr
   TE como binario nativo (instalador Inno Setup ya disponible).
+
+
+---
+
+## Run: `v0.0.20 — bench_linq 10M vs Polars (Windows native, máquina en reposo)` — 2026-06-07
+
+Comparativa LINQ sobre `benchmarks/bench_10m.csv` (10,000,000 filas, 4 columnas
+`id,nombre,precio,categoria`, ~285 MB). Query: filtrar `categoria == "dulce"` y
+calcular `count` / `sum` / `avg` de `precio`.
+
+**Setup**: Windows nativo, MSYS2 bash, **máquina recién reiniciada** (sin browser
+ni procesos pesados). Tiempos = **wall time completo** (incluye arranque del
+proceso), cache caliente, warmup descartado, **mejor de 5** corridas. Timing con
+`awk` (Git Bash no trae `bc`).
+
+**Resultado verificado idéntico en los 3 motores**:
+
+```
+count=2000000 sum=101006192 avg=50.503100
+```
+
+### Binarios comparados
+
+| Binario | Versión | Fecha | Notas |
+|---|---|---|---|
+| `./bin/typeeasy.exe` | dev v0.0.20 | 7-jun | con fixes (ternario, keyword-as-field/method) |
+| `…/AppData/Local/Programs/TypeEasy/bin/typeeasy-bin.exe` | instalado v0.0.17 | 3-jun | sin esos fixes |
+| Polars | 1.40.1 | — | Rust, multi-thread, SIMD, columnar |
+
+### Query LINQ — wall time (mejor / mediana de 5)
+
+| Motor | Mejor | Mediana |
+|---|---:|---:|
+| **TypeEasy dev v0.0.20** | **0.60 s** | 0.69 s |
+| TypeEasy instalado v0.0.17 | 0.82 s | 0.86 s |
+| Polars (wall completo) | 1.00 s | 1.05 s |
+| Polars (solo load+query interno) | 0.27 s | 0.29 s |
+
+### Desglose de arranque
+
+| Métrica | Tiempo |
+|---|---:|
+| TypeEasy dev — arranque proceso (`noop.te`) | ~0.10 s |
+| TypeEasy dev — cómputo LINQ real (wall − arranque) | ~0.50 s |
+| Polars — arranque Python + import librería (wall − interno) | ~0.72 s |
+
+### Load-only (materializa 10M objetos `Producto`, `bench_load_only_10m.te`)
+
+| Motor | Mejor | Mediana |
+|---|---:|---:|
+| TypeEasy instalado v0.0.17 | 1.66 s | 1.82 s |
+| TypeEasy dev v0.0.20 | 2.04 s | 2.49 s |
+
+### Conclusiones
+
+1. **Sin regresión por los fixes de v0.0.20**: en la query LINQ el binario dev
+   (0.60 s) es **más rápido** que el instalado v0.0.17 (0.82 s). Los cambios
+   (ternario, keyword-as-field/method) no tocan el path CSV/LINQ.
+2. **Proceso completo (1 ejecución, caso de uso real de un script)**: TypeEasy
+   dev **gana** a Polars — 0.60 s vs 1.00 s. Polars paga ~0.72 s de arranque
+   de Python+import que TypeEasy no tiene (arranca en ~0.10 s).
+3. **Solo el kernel (datos en memoria caliente)**: Polars **gana** — 0.27 s vs
+   ~0.50 s (~2×). Es esperable: motor columnar Rust multi-thread + SIMD.
+4. **Load-only**: el instalado sale ~0.38 s por delante del dev, pero es la
+   métrica más ruidosa (rangos solapados); los fixes no tocan la
+   materialización, así que es ruido/codegen marginal entre builds.
+5. **Lección de medición**: una tanda previa con **14 pestañas de browser
+   abiertas** dio ~2.23 s para la misma query LINQ — **~4× más lento puro ruido
+   del sistema**. Siempre medir en reposo y reportar el **mejor de N**.

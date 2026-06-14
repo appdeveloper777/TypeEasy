@@ -198,21 +198,35 @@ La guía incluye:
 
 ## 🎨 Soporte de VS Code (colores + debugger)
 
-El repo incluye una extensión local de VS Code que aporta **resaltado de sintaxis** y **debugger F5/F10/F11** para archivos `.te`. Para instalarla después de clonar:
+La extensión de VS Code aporta **resaltado de sintaxis / autocompletado** y **debugger F5/F10/F11** para archivos `.te`.
 
-**Linux / macOS / Git Bash:**
+### Opción A — Ya instalaste TypeEasy con el instalador (recomendado)
+
+Si instalaste `te` con el instalador de Windows o el `.deb`/tarball de Linux, la extensión viene **incluida en el paquete**. Solo abre una terminal y corre:
+
 ```bash
+te ext install
+```
+
+Reinicia VS Code y listo: colores en `.te` y **F5** para depurar. No necesitas clonar el repo.
+
+> El comando `code` debe estar en el PATH (en VS Code: `Ctrl+Shift+P` → *Shell Command: Install 'code' command in PATH*).
+
+### Opción B — Desde el repo clonado
+
+```bash
+# Linux / macOS / Git Bash
 bash scripts/install_vscode_extension.sh
 ```
 
-**Windows PowerShell:**
 ```powershell
+# Windows PowerShell
 powershell -ExecutionPolicy Bypass -File scripts\install_vscode_extension.ps1
 ```
 
 Reinicia VS Code. Abre cualquier `.te` y verás colores. Pulsa **F5** para debug con breakpoints, step-over (F10), step-in (F11) y panel de Variables expandible (listas y objetos).
 
-> Requisitos: el comando `code` debe estar en el PATH (en VS Code: `Ctrl+Shift+P` → *Shell Command: Install 'code' command in PATH*) y Docker corriendo (el debugger se ejecuta dentro del contenedor `typeeasy`).
+> Para el flujo con **F5/Docker** necesitas Docker corriendo (el debugger se ejecuta dentro del contenedor `typeeasy`). Desde la **v0.0.20** también puedes depurar **de forma nativa sin Docker** en Linux y Windows (ver más abajo).
 
 ---
 
@@ -327,13 +341,53 @@ La sesión quedó pausada en `return json(...)` (línea 4) tras un `curl`. El pa
 
 #### Checklist: qué configurar en VS Code antes de depurar un endpoint
 
-1. **Extensión instalada** — corré `bash scripts/install_vscode_extension.sh` (o el `.ps1` en PowerShell) y reiniciá VS Code.
-2. **Docker corriendo** — el debugger se ejecuta dentro del contenedor `typeeasy`; abrí Docker Desktop. **No funciona con el binario nativo en Windows** (el `--debug-port` nativo está deshabilitado en ese build).
+1. **Extensión instalada** — corré `te ext install` (si instalaste con el instalador) o `bash scripts/install_vscode_extension.sh` (desde el repo) y reiniciá VS Code.
+2. **Docker corriendo** — para depurar **endpoints HTTP** (`--api`) con F5, el debugger se ejecuta dentro del contenedor `typeeasy`; abrí Docker Desktop. (Para depurar scripts `.te` sin servidor también podés usar el **modo nativo sin Docker** descrito en la sección 9.)
 3. **Abrí la carpeta del repo** (la que tiene `docker-compose.yml`), no un `.te` suelto en otra carpeta — sin el compose, el spawn falla con `no configuration file provided: not found`.
 4. **Config de launch** — en `.vscode/launch.json` usá la entrada **"TypeEasy: debug API (GET/POST Handlers)"** (`"api": true`, `"port": 4712`, `"httpPort": 8081`).
 5. **Breakpoint en una sentencia ejecutable** del handler (la línea `return json(...)`, una asignación, etc.), no sobre un comentario ni una llave.
 6. **F5** con el `.te` del endpoint como archivo activo → esperá `Listening on http://0.0.0.0:8081` en el Debug Console.
 7. **Dispará el request** desde otra terminal: `curl http://localhost:8081/api/hola`. La ejecución se detiene en el breakpoint y el `curl` queda en espera hasta que pulses **Continue (F5)**.
+
+### 9. Depurar nativo (sin Docker)
+
+Desde la **v0.0.20** el binario nativo incluye un debugger TCP que funciona sin necesidad de Docker. Arrancas el intérprete escuchando en un puerto y conectas VS Code en modo *attach*. El flujo es el mismo en ambos sistemas; solo cambia cómo arrancas el binario.
+
+#### Linux / macOS
+
+1. Lanza el binario en modo debug — queda esperando a que el adapter conecte:
+
+```bash
+te --debug-port 4712 typeeasycode/test_custom.te
+```
+
+2. En `.vscode/launch.json` usa una config con `"attachOnly": true`. Así el adapter **no** levanta Docker: solo se conecta al proceso nativo en `127.0.0.1:4712`.
+
+```json
+{
+  "type": "typeeasy",
+  "request": "launch",
+  "name": "TypeEasy: attach nativo (sin Docker)",
+  "program": "${file}",
+  "attachOnly": true,
+  "port": 4712
+}
+```
+
+3. Pon tus breakpoints, pulsa **F5** y elige esa config. VS Code conecta al proceso nativo y se detiene en cada breakpoint, con step-over/in/out e inspección de variables igual que con Docker.
+
+#### Windows
+
+1. Lanza el binario en modo debug desde **PowerShell** o **Git Bash** — queda esperando a que el adapter conecte:
+
+```powershell
+te --debug-port 4712 typeeasycode\test_custom.te
+```
+
+2. Usa **el mismo** `.vscode/launch.json` con `"attachOnly": true` y `"port": 4712` (idéntico al de Linux). VS Code se conecta al `typeeasy-bin.exe` nativo en `127.0.0.1:4712`, sin Docker.
+3. Pon tus breakpoints, pulsa **F5** y elige esa config: mismo step-over/in/out e inspección de variables.
+
+> Para depurar **endpoints HTTP** con breakpoints dentro del handler, usa el flujo con **Docker (F5)** de la sección 8. El modo nativo es ideal para scripts y lógica `.te` sin servidor.
 
 ### Solución de problemas
 
@@ -342,9 +396,10 @@ La sesión quedó pausada en `return json(...)` (línea 4) tras un `curl`. El pa
 | `connect ECONNREFUSED 127.0.0.1:4711` o `:4712` | Puerto ocupado por un contenedor zombie. Mátalo: `docker rm -f $(docker ps -aq --filter "name=typeeasy-dap")` (Linux/macOS/Git Bash) o `docker rm -f (docker ps -aq --filter "name=typeeasy-dap")` en PowerShell. Si no, listar y matar por ID: `docker ps` → `docker rm -f <ID>`. |
 | `Bind for 0.0.0.0:4712 failed: port is already allocated` | Mismo caso: matar el contenedor anterior con `docker rm -f` (matar el proceso de VS Code **no** limpia el contenedor — lo gestiona el daemon de Docker). La extensión nueva ya etiqueta los contenedores con `--name typeeasy-dap-<pid>-<ts>` y los borra al hacer Stop limpio. |
 | Breakpoint no se activa | Verifica que la línea sea una sentencia ejecutable (no comentario, no `}` cerrado). Si una sentencia válida nunca para, exporta `TYPEEASY_DEBUG_VERBOSE=1` en el container — emitirá `[typeeasy-debugger] SKIP line<=0 kind=K type=T`: indica que el nodo AST tiene `line=0` (falta `node->line = yylineno` en el `create_*_node` de ese tipo). |
-| Sin colores en `.te` | Reinstala la extensión: `bash scripts/install_vscode_extension.sh` y reinicia VS Code |
+| Sin colores en `.te` | Reinstala la extensión: `te ext install` (instalador) o `bash scripts/install_vscode_extension.sh` (repo), y reinicia VS Code |
 | `Docker daemon not running` | Inicia Docker Desktop |
 | Modo `--api`: solo registra 1 ruta | Es por diseño: el intérprete carga **un** archivo. Usa el patrón bootstrap con `import` descrito en la sección 8. |
+| Attach nativo no conecta (`ECONNREFUSED`) | Arranca primero el binario con `--debug-port 4712` y usa el mismo `port` en el `launch.json` con `"attachOnly": true` (sección 9). |
 
 ---
 
@@ -520,6 +575,7 @@ Usuario WhatsApp → WAHA/Meta API → Adapter → Agent Gemini → Gemini AI
 
 | Guía | Descripción |
 |------|-------------|
+| [Sintaxis completa y gotchas](docs/SINTAXIS_Y_GOTCHAS.md) | Referencia exhaustiva del lenguaje `.te` con todas las trampas |
 | [Chatbot con WAHA](README_CHATBOT_WHATSAPP_WAHA_GEMINI.md) | Configuración completa con WAHA |
 | [Chatbot con Meta API](docs/META_WHATSAPP_SETUP.md) | Configuración con WhatsApp Cloud API |
 | [Crear Endpoints REST](docs/CREAR_ENDPOINTS.md) | Guía completa de APIs REST |
