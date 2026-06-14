@@ -81,14 +81,15 @@ static ASTNode *arg_at(ASTNode *args, int n) {
 
 /* ─── string buffer ────────────────────────────────────────────────── */
 
-typedef struct { char *p; size_t len, cap; } SB;
+typedef struct { char *p; size_t len, cap; int oom; } SB;
 
 static int sb_reserve(SB *b, size_t add) {
+    if (b->oom) return -1;
     if (b->len + add + 1 <= b->cap) return 0;
     size_t nc = b->cap ? b->cap : 256;
     while (nc < b->len + add + 1) nc *= 2;
     char *np = (char *)realloc(b->p, nc);
-    if (!np) return -1;
+    if (!np) { b->oom = 1; return -1; }
     b->p = np; b->cap = nc;
     return 0;
 }
@@ -560,6 +561,16 @@ static int te_sqlite_query(ASTNode *node, ASTNode *args) {
 
     if (as_xml) sb_puts(&b, "</result>");
     else        sb_putc(&b, ']');
+
+    /* OOM: en vez de devolver JSON/XML truncado en silencio, reportamos un
+     * error explícito (consistente con los bridges mysql/postgres/sqlserver). */
+    if (b.oom) {
+        if (b.p) free(b.p);
+        H->set_ret_str("{\"error\":\"memory_allocation_failed\"}");
+        free(sql);
+        if (fmt) free(fmt);
+        return 1;
+    }
 
     H->set_ret_str(b.p ? b.p : (as_xml ? "<result/>" : "[]"));
     if (b.p) free(b.p);

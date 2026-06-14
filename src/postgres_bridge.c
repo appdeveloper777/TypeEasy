@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #define PG_POOL_SIZE 10
 static PGconn* pg_connections[PG_POOL_SIZE] = {NULL};
@@ -59,35 +60,69 @@ static int pg_arg_int(ASTNode* args, int index) {
     return -1;
 }
 
-/* JSON-string-escape mínimo: backslash, comilla y control chars. */
-static void json_escape_into(const char* in, char* out, size_t out_size) {
-    size_t o = 0;
-    for (size_t i = 0; in[i] && o + 8 < out_size; i++) {
-        unsigned char c = (unsigned char)in[i];
-        if (c == '"' || c == '\\') { out[o++] = '\\'; out[o++] = c; }
-        else if (c == '\n') { out[o++] = '\\'; out[o++] = 'n'; }
-        else if (c == '\r') { out[o++] = '\\'; out[o++] = 'r'; }
-        else if (c == '\t') { out[o++] = '\\'; out[o++] = 't'; }
-        else if (c < 0x20) { o += snprintf(out + o, out_size - o, "\\u%04x", c); }
-        else out[o++] = c;
-    }
-    out[o] = '\0';
-}
+/* ---- Buffer dinámico seguro para serializar result-sets (fix Exit 139) ----
+ * Reemplaza el viejo buffer fijo de 2 MB con `off += snprintf(...)`, que era
+ * inseguro: snprintf devuelve la longitud que *habría* escrito (sin truncar),
+ * así que con columnas TEXT grandes el offset podía superar el buffer a mitad
+ * de fila → `buf+off` fuera de rango y `cap-off` (size_t) en underflow →
+ * escritura OOB → corrupción de heap. Este SB crece con realloc y marca `oom`
+ * si falla, permitiendo devolver un error en vez de caer. */
+typedef struct { char *p; size_t len; size_t cap; int oom; } SB;
 
-static void xml_escape_into(const char* in, char* out, size_t out_size) {
-    size_t o = 0;
-    for (size_t i = 0; in[i] && o + 8 < out_size; i++) {
-        char c = in[i];
+static void sb_init(SB *b) {
+    b->cap = 65536; b->len = 0; b->oom = 0;
+    b->p = (char*)malloc(b->cap);
+    if (!b->p) { b->oom = 1; b->cap = 0; }
+}
+static int sb_reserve(SB *b, size_t extra) {
+    if (b->oom) return 0;
+    if (b->len + extra + 1 <= b->cap) return 1;
+    size_t ncap = b->cap ? b->cap : 65536;
+    while (ncap < b->len + extra + 1) {
+        if (ncap > (SIZE_MAX / 2)) { b->oom = 1; return 0; }
+        ncap *= 2;
+    }
+    char *np = (char*)realloc(b->p, ncap);
+    if (!np) { b->oom = 1; return 0; }
+    b->p = np; b->cap = ncap; return 1;
+}
+static void sb_putc(SB *b, char c) { if (sb_reserve(b, 1)) b->p[b->len++] = c; }
+static void sb_putn(SB *b, const char *s, size_t n) {
+    if (!n || !sb_reserve(b, n)) return;
+    memcpy(b->p + b->len, s, n); b->len += n;
+}
+static void sb_puts(SB *b, const char *s) { if (s) sb_putn(b, s, strlen(s)); }
+
+/* Escape JSON (RFC 8259) con longitud explícita para que json_parse no se
+ * rompa al copiar TEXT con comillas, backslashes o saltos de línea. */
+static void sb_put_json_escaped_n(SB *b, const char *s, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
         switch (c) {
-            case '&':  if (o + 5 < out_size) { strcpy(out + o, "&amp;");  o += 5; } break;
-            case '<':  if (o + 4 < out_size) { strcpy(out + o, "&lt;");   o += 4; } break;
-            case '>':  if (o + 4 < out_size) { strcpy(out + o, "&gt;");   o += 4; } break;
-            case '"':  if (o + 6 < out_size) { strcpy(out + o, "&quot;"); o += 6; } break;
-            case '\'': if (o + 6 < out_size) { strcpy(out + o, "&apos;"); o += 6; } break;
-            default:   out[o++] = c;
+            case '"':  sb_putn(b, "\\\"", 2); break;
+            case '\\': sb_putn(b, "\\\\", 2); break;
+            case '\b': sb_putn(b, "\\b", 2); break;
+            case '\f': sb_putn(b, "\\f", 2); break;
+            case '\n': sb_putn(b, "\\n", 2); break;
+            case '\r': sb_putn(b, "\\r", 2); break;
+            case '\t': sb_putn(b, "\\t", 2); break;
+            default:
+                if (c < 0x20) { char u[8]; snprintf(u, sizeof u, "\\u%04x", c); sb_putn(b, u, 6); }
+                else sb_putc(b, (char)c);
         }
     }
-    out[o] = '\0';
+}
+static void sb_put_xml_escaped_n(SB *b, const char *s, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        switch (s[i]) {
+            case '&':  sb_putn(b, "&amp;", 5); break;
+            case '<':  sb_putn(b, "&lt;", 4); break;
+            case '>':  sb_putn(b, "&gt;", 4); break;
+            case '"':  sb_putn(b, "&quot;", 6); break;
+            case '\'': sb_putn(b, "&apos;", 6); break;
+            default:   sb_putc(b, s[i]); break;
+        }
+    }
 }
 
 /* libpq oid → numeric flag (matches PG type OIDs in <catalog/pg_type_d.h>) */
@@ -203,35 +238,18 @@ void native_postgres_query(ASTNode* args) {
 
     int nrows = PQntuples(res);
     int nfields = PQnfields(res);
-    size_t cap = 2 * 1024 * 1024;
-    char* buf = (char*)malloc(cap);
-    if (!buf) {
-        PQclear(res);
-        ASTNode* r = create_ast_leaf("STRING", 0, strdup("{\"error\":\"oom\"}"), NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
-        if (final_query) free(final_query);
-        return;
-    }
-    int off = 0;
     int is_xml = (strcmp(format, "xml") == 0);
 
-    if (is_xml) {
-        off += snprintf(buf + off, cap - off,
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rows>\n");
-    } else {
-        off += snprintf(buf + off, cap - off, "[");
-    }
+    /* Serialización con buffer dinámico seguro (fix segfault): sin tope de 2 MB
+     * ni "Result too large"; si la memoria falla devolvemos un error. */
+    SB sb; sb_init(&sb);
+
+    if (is_xml) sb_puts(&sb, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rows>\n");
+    else        sb_putc(&sb, '[');
 
     for (int r = 0; r < nrows; r++) {
-        if ((size_t)off > cap - 8192) {
-            snprintf(buf, cap, is_xml
-                ? "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rows>\n  <error>Result too large</error>\n</rows>"
-                : "{\"error\":\"Result too large\"}");
-            off = (int)strlen(buf);
-            break;
-        }
-        if (is_xml) off += snprintf(buf + off, cap - off, "  <row>\n");
-        else { if (r > 0) off += snprintf(buf + off, cap - off, ","); off += snprintf(buf + off, cap - off, "{"); }
+        if (is_xml) sb_puts(&sb, "  <row>\n");
+        else { if (r > 0) sb_putc(&sb, ','); sb_putc(&sb, '{'); }
 
         for (int f = 0; f < nfields; f++) {
             const char* name = PQfname(res, f);
@@ -241,36 +259,44 @@ void native_postgres_query(ASTNode* args) {
             int numeric = pg_oid_is_numeric(t);
 
             if (is_xml) {
-                off += snprintf(buf + off, cap - off, "    <%s>", name);
-                if (!isnull) {
-                    char esc[8192];
-                    xml_escape_into(val, esc, sizeof(esc));
-                    off += snprintf(buf + off, cap - off, "%s", esc);
-                }
-                off += snprintf(buf + off, cap - off, "</%s>\n", name);
+                sb_puts(&sb, "    <"); sb_puts(&sb, name); sb_putc(&sb, '>');
+                if (!isnull) sb_put_xml_escaped_n(&sb, val, strlen(val));
+                sb_puts(&sb, "</"); sb_puts(&sb, name); sb_puts(&sb, ">\n");
             } else {
-                if (f > 0) off += snprintf(buf + off, cap - off, ",");
-                off += snprintf(buf + off, cap - off, "\"%s\":", name);
-                if (isnull) off += snprintf(buf + off, cap - off, "null");
-                else if (numeric) off += snprintf(buf + off, cap - off, "%s", val);
+                if (f > 0) sb_putc(&sb, ',');
+                sb_putc(&sb, '"');
+                sb_put_json_escaped_n(&sb, name, strlen(name));
+                sb_puts(&sb, "\":");
+                if (isnull) sb_puts(&sb, "null");
+                else if (numeric) sb_puts(&sb, val);
                 else {
-                    char esc[8192];
-                    json_escape_into(val, esc, sizeof(esc));
-                    off += snprintf(buf + off, cap - off, "\"%s\"", esc);
+                    sb_putc(&sb, '"');
+                    sb_put_json_escaped_n(&sb, val, strlen(val));
+                    sb_putc(&sb, '"');
                 }
             }
         }
-        if (is_xml) off += snprintf(buf + off, cap - off, "  </row>\n");
-        else off += snprintf(buf + off, cap - off, "}");
+        if (is_xml) sb_puts(&sb, "  </row>\n");
+        else sb_putc(&sb, '}');
     }
 
-    if (is_xml) off += snprintf(buf + off, cap - off, "</rows>");
-    else off += snprintf(buf + off, cap - off, "]");
+    if (is_xml) sb_puts(&sb, "</rows>");
+    else sb_putc(&sb, ']');
 
     PQclear(res);
-    ASTNode* ret = create_ast_leaf("STRING", 0, buf, NULL);
+
+    if (sb.oom) {
+        free(sb.p);
+        ASTNode* r = create_ast_leaf("STRING", 0, strdup("{\"error\":\"memory_allocation_failed\"}"), NULL);
+        add_or_update_variable("__ret__", r); free_ast(r);
+        if (final_query) free(final_query);
+        return;
+    }
+
+    sb.p[sb.len] = '\0';
+    ASTNode* ret = create_ast_leaf("STRING", 0, sb.p, NULL);
     add_or_update_variable("__ret__", ret); free_ast(ret);
-    free(buf);
+    free(sb.p);
     if (final_query) free(final_query);
 }
 

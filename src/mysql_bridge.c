@@ -80,47 +80,71 @@ static int pool_release(int conn_id) {
     return 0;
 }
 
-// Helper: Escape XML special characters
-static void xml_escape(const char* input, char* output, size_t output_size) {
-    size_t out_pos = 0;
-    for (size_t i = 0; input[i] != '\0' && out_pos < output_size - 6; i++) {
-        switch (input[i]) {
-            case '&':
-                if (out_pos + 5 < output_size) {
-                    strcpy(output + out_pos, "&amp;");
-                    out_pos += 5;
-                }
-                break;
-            case '<':
-                if (out_pos + 4 < output_size) {
-                    strcpy(output + out_pos, "&lt;");
-                    out_pos += 4;
-                }
-                break;
-            case '>':
-                if (out_pos + 4 < output_size) {
-                    strcpy(output + out_pos, "&gt;");
-                    out_pos += 4;
-                }
-                break;
-            case '"':
-                if (out_pos + 6 < output_size) {
-                    strcpy(output + out_pos, "&quot;");
-                    out_pos += 6;
-                }
-                break;
-            case '\'':
-                if (out_pos + 6 < output_size) {
-                    strcpy(output + out_pos, "&apos;");
-                    out_pos += 6;
-                }
-                break;
+/* ---- Buffer dinámico seguro para serializar result-sets (fix Exit 139) ----
+ * Reemplaza el viejo buffer fijo de 2 MB con `offset += snprintf(...)`. El
+ * patrón antiguo era inseguro: snprintf devuelve la longitud que *habría*
+ * escrito (sin truncar), así que con columnas TEXT grandes (base64 ~52 KB) el
+ * offset podía superar el buffer a mitad de fila → `buf+offset` fuera de rango
+ * y `cap-offset` (size_t) en underflow → escritura OOB → corrupción de heap que
+ * tumbaba todo el backend. Este SB crece con realloc y marca `oom` si falla,
+ * permitiendo devolver un error en vez de caer. */
+typedef struct { char *p; size_t len; size_t cap; int oom; } SB;
+
+static void sb_init(SB *b) {
+    b->cap = 65536; b->len = 0; b->oom = 0;
+    b->p = (char*)malloc(b->cap);
+    if (!b->p) { b->oom = 1; b->cap = 0; }
+}
+static int sb_reserve(SB *b, size_t extra) {
+    if (b->oom) return 0;
+    if (b->len + extra + 1 <= b->cap) return 1;
+    size_t ncap = b->cap ? b->cap : 65536;
+    while (ncap < b->len + extra + 1) {
+        if (ncap > (SIZE_MAX / 2)) { b->oom = 1; return 0; }
+        ncap *= 2;
+    }
+    char *np = (char*)realloc(b->p, ncap);
+    if (!np) { b->oom = 1; return 0; }
+    b->p = np; b->cap = ncap; return 1;
+}
+static void sb_putc(SB *b, char c) { if (sb_reserve(b, 1)) b->p[b->len++] = c; }
+static void sb_putn(SB *b, const char *s, size_t n) {
+    if (!n || !sb_reserve(b, n)) return;
+    memcpy(b->p + b->len, s, n); b->len += n;
+}
+static void sb_puts(SB *b, const char *s) { if (s) sb_putn(b, s, strlen(s)); }
+
+/* Escapa una cadena (con longitud explícita, soporta bytes binarios) según
+ * RFC 8259 para que json_parse no se rompa al copiar TEXT/blobs con comillas,
+ * backslashes o saltos de línea. */
+static void sb_put_json_escaped_n(SB *b, const char *s, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        switch (c) {
+            case '"':  sb_putn(b, "\\\"", 2); break;
+            case '\\': sb_putn(b, "\\\\", 2); break;
+            case '\b': sb_putn(b, "\\b", 2); break;
+            case '\f': sb_putn(b, "\\f", 2); break;
+            case '\n': sb_putn(b, "\\n", 2); break;
+            case '\r': sb_putn(b, "\\r", 2); break;
+            case '\t': sb_putn(b, "\\t", 2); break;
             default:
-                output[out_pos++] = input[i];
-                break;
+                if (c < 0x20) { char u[8]; snprintf(u, sizeof u, "\\u%04x", c); sb_putn(b, u, 6); }
+                else sb_putc(b, (char)c);
         }
     }
-    output[out_pos] = '\0';
+}
+static void sb_put_xml_escaped_n(SB *b, const char *s, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        switch (s[i]) {
+            case '&':  sb_putn(b, "&amp;", 5); break;
+            case '<':  sb_putn(b, "&lt;", 4); break;
+            case '>':  sb_putn(b, "&gt;", 4); break;
+            case '"':  sb_putn(b, "&quot;", 6); break;
+            case '\'': sb_putn(b, "&apos;", 6); break;
+            default:   sb_putc(b, s[i]); break;
+        }
+    }
 }
 
 /* ---------- ORM fast path (Paso A + B) -----------------------------------
@@ -848,6 +872,25 @@ void native_mysql_query(ASTNode* args) {
     int conn_id = get_arg_int(args, 0);
     const char* query = get_arg_string(args, 1);
 
+    /* v0.0.21: si el SQL llega como concatenación/expresión (ADD), llamada
+     * anidada (CALL_FUNC) o ternario, get_arg_string() no lo resuelve y
+     * devuelve NULL → antes esto producía {"error":"invalid_query"}. Ahora lo
+     * evaluamos con get_node_string() (heap). Su ciclo de vida se enlaza más
+     * abajo al de final_query para liberarlo en todas las salidas. */
+    char* query_owned = NULL;
+    if (!query) {
+        ASTNode* qn = mysql_arg_at(args, 1);
+        if (qn) {
+            query_owned = get_node_string(qn);
+            if (query_owned && query_owned[0] != '\0') {
+                query = query_owned;
+            } else {
+                free(query_owned);
+                query_owned = NULL;
+            }
+        }
+    }
+
     /* Estilo Dapper: arg #2 puede ser un MAP de params; en ese caso arg #3 es el formato/clase. */
     int params_owned = 0;
     ASTNode* params_head = db_arg_as_map_head(args, 2, &params_owned);
@@ -876,6 +919,7 @@ void native_mysql_query(ASTNode* args) {
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
         if (params_owned && params_head) free_ast(params_head);
+        if (query_owned) free(query_owned);
         return;
     }
     
@@ -895,7 +939,13 @@ void native_mysql_query(ASTNode* args) {
     if (params_head) {
         final_query = db_substitute_params(query, params_head, mysql_escape_cb, conn);
         query = final_query;
+        if (query_owned) { free(query_owned); query_owned = NULL; }
         if (params_owned) { free_ast(params_head); params_head = NULL; }
+    } else if (query_owned) {
+        /* Sin params: reutilizamos el ciclo de vida de final_query para que la
+         * cadena evaluada se libere en cada return posterior. */
+        final_query = query_owned;
+        query_owned = NULL;
     }
 
     /* Modo ORM: si el caller pasó una clase como formato, mapeamos cada fila
@@ -943,95 +993,83 @@ void native_mysql_query(ASTNode* args) {
     
     int num_fields = mysql_num_fields(result);
     MYSQL_FIELD* fields = mysql_fetch_fields(result);
-    
-    // Allocate buffer for result (2MB for large queries)
-    char* result_buffer = (char*)malloc(2097152);
-    if (!result_buffer) {
-        mysql_free_result(result);
+
+    /* v0.0.21 (fix segfault Exit 139): serializamos en un buffer que crece de
+     * forma segura (SB). El buffer fijo anterior con `offset += snprintf(...)`
+     * desbordaba el heap cuando una fila tenía columnas TEXT grandes (base64
+     * ~52 KB). Ya no hay límite artificial de 2 MB ("Result too large"): el
+     * tamaño lo acota la memoria real, y si malloc/realloc falla devolvemos un
+     * error en vez de tumbar el proceso. */
+    SB sb; sb_init(&sb);
+
+    if (strcmp(format, "xml") == 0) {
+        sb_puts(&sb, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rows>\n");
+        MYSQL_ROW row;
+        while ((row = mysql_fetch_row(result))) {
+            unsigned long* lens = mysql_fetch_lengths(result);
+            sb_puts(&sb, "  <row>\n");
+            for (int i = 0; i < num_fields; i++) {
+                sb_puts(&sb, "    <");
+                sb_puts(&sb, fields[i].name);
+                sb_putc(&sb, '>');
+                if (row[i]) sb_put_xml_escaped_n(&sb, row[i], lens ? lens[i] : strlen(row[i]));
+                sb_puts(&sb, "</");
+                sb_puts(&sb, fields[i].name);
+                sb_puts(&sb, ">\n");
+            }
+            sb_puts(&sb, "  </row>\n");
+        }
+        sb_puts(&sb, "</rows>");
+    } else {
+        // Generate JSON (default)
+        sb_putc(&sb, '[');
+        MYSQL_ROW row;
+        int first_row = 1;
+        while ((row = mysql_fetch_row(result))) {
+            unsigned long* lens = mysql_fetch_lengths(result);
+            if (!first_row) sb_putc(&sb, ',');
+            first_row = 0;
+            sb_putc(&sb, '{');
+            for (int i = 0; i < num_fields; i++) {
+                if (i > 0) sb_putc(&sb, ',');
+                sb_putc(&sb, '"');
+                sb_put_json_escaped_n(&sb, fields[i].name, strlen(fields[i].name));
+                sb_puts(&sb, "\":");
+                if (row[i]) {
+                    size_t vlen = lens ? lens[i] : strlen(row[i]);
+                    // IS_NUM: campo numérico → sin comillas ni escape (valores ASCII seguros)
+                    if (IS_NUM(fields[i].type)) {
+                        sb_putn(&sb, row[i], vlen);
+                    } else {
+                        sb_putc(&sb, '"');
+                        sb_put_json_escaped_n(&sb, row[i], vlen);
+                        sb_putc(&sb, '"');
+                    }
+                } else {
+                    sb_puts(&sb, "null");
+                }
+            }
+            sb_putc(&sb, '}');
+        }
+        sb_putc(&sb, ']');
+    }
+
+    mysql_free_result(result);
+
+    if (sb.oom) {
+        free(sb.p);
         ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"memory_allocation_failed\"}"), NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
         if (final_query) free(final_query);
         return;
     }
-    
-    int offset = 0;
-    
-    // Check format and generate accordingly
-    size_t buffer_size = 2097152;
-    if (strcmp(format, "xml") == 0) {
-        // Generate XML
-        offset += snprintf(result_buffer + offset, buffer_size - offset, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rows>\n");
-        MYSQL_ROW row;
-        while ((row = mysql_fetch_row(result))) {
-            if (offset > buffer_size - 8192) {
-                // Clear buffer and write only valid XML error message
-                snprintf(result_buffer, buffer_size, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rows>\n  <error>Result too large</error>\n</rows>");
-                offset = strlen(result_buffer);
-                break;
-            }
-            offset += snprintf(result_buffer + offset, buffer_size - offset, "  <row>\n");
-            for (int i = 0; i < num_fields; i++) {
-                offset += snprintf(result_buffer + offset, buffer_size - offset, "    <%s>", fields[i].name);
-            if (row[i]) {
-                // Escape XML special characters
-                char escaped[8192];
-                xml_escape(row[i], escaped, sizeof(escaped));
-                offset += snprintf(result_buffer + offset, buffer_size - offset, "%s", escaped);
-            }
-            offset += snprintf(result_buffer + offset, buffer_size - offset, "</%s>\n", fields[i].name);
-            }
-            offset += snprintf(result_buffer + offset, buffer_size - offset, "  </row>\n");
-        }
-        offset += snprintf(result_buffer + offset, buffer_size - offset, "</rows>");
-    } else {
-        // Generate JSON (default)
-        offset += snprintf(result_buffer + offset, buffer_size - offset, "[");
-        MYSQL_ROW row;
-        int first_row = 1;
-        while ((row = mysql_fetch_row(result))) {
-            if (offset > buffer_size - 4096) {
-                // Clear buffer and write only error message
-                snprintf(result_buffer, buffer_size, "{\"error\":\"Result too large\"}");
-                offset = strlen(result_buffer);
-                break;
-            }
-            if (!first_row) {
-                offset += snprintf(result_buffer + offset, buffer_size - offset, ",");
-            }
-            first_row = 0;
-            offset += snprintf(result_buffer + offset, buffer_size - offset, "{");
-            for (int i = 0; i < num_fields; i++) {
-                if (i > 0) {
-                    offset += snprintf(result_buffer + offset, buffer_size - offset, ",");
-                }
-                offset += snprintf(result_buffer + offset, buffer_size - offset, "\"%s\":", fields[i].name);
-                if (row[i]) {
-                    // Check if field is numeric using IS_NUM flag
-                    // This is more reliable than checking field type
-                    if (IS_NUM(fields[i].type)) {
-                        // Numeric field - no quotes
-                        offset += snprintf(result_buffer + offset, buffer_size - offset, "%s", row[i]);
-                    } else {
-                        // String field - add quotes
-                        offset += snprintf(result_buffer + offset, buffer_size - offset, "\"%s\"", row[i]);
-                    }
-                } else {
-                    offset += snprintf(result_buffer + offset, buffer_size - offset, "null");
-                }
-            }
-            offset += snprintf(result_buffer + offset, buffer_size - offset, "}");
-        }
-        offset += snprintf(result_buffer + offset, buffer_size - offset, "]");
-    }
-    
-    mysql_free_result(result);
-    
-    //printf("[MySQL] Query ejecutado exitosamente\n");
-    ASTNode* ret_node = create_ast_leaf("STRING", 0, result_buffer, NULL);
+
+    sb.p[sb.len] = '\0';  /* sb_reserve garantiza espacio para el NUL */
+    ASTNode* ret_node = create_ast_leaf("STRING", 0, sb.p, NULL);
     add_or_update_variable("__ret__", ret_node);
     free_ast(ret_node);
-    free(result_buffer);
+    free(sb.p);
     if (final_query) free(final_query);
 }
 
