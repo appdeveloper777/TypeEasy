@@ -25,7 +25,7 @@ typedef struct TEListIdx {
     ASTNode **items;
 } TEListIdx;
 
-#define MAX_VARS 100
+/* MAX_VARS comes from ast.h — keep in sync with ast.c's vars[] size. */
 extern Variable vars[MAX_VARS];
 extern int var_count;
 extern int is_string_type(ASTNode *node);

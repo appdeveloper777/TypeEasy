@@ -1552,7 +1552,8 @@ extern int g_debug_mode;
 
 // ====================== CONSTANTES Y ESTRUCTURAS GLOBALES ======================
 #define MAX_CLASSES 50
-#define MAX_VARS 100
+/* MAX_VARS is defined canonically in ast.h (shared by every module that
+ * touches vars[]). Do NOT redefine it here. */
 static int g_initial_var_count = 0;
 // Variables globales
 Variable vars[MAX_VARS];
@@ -1981,7 +1982,7 @@ typedef struct TESymSlot {
     int idx;
 } TESymSlot;
 
-#define TE_SYM_CAP 256  /* MAX_VARS=100 → cap 256 keeps load < 0.5 */
+#define TE_SYM_CAP 4096  /* MAX_VARS=1024 → cap 4096 keeps load < 0.25 */
 static TESymSlot g_sym_slots[TE_SYM_CAP];
 static int g_sym_init = 0;
 
@@ -2039,6 +2040,29 @@ static void te_sym_reset_to(int initial_count) {
     for (int i = 0; i < initial_count && i < MAX_VARS; i++) {
         if (vars[i].id) te_sym_insert(vars[i].id, i);
     }
+}
+
+/* Block-scope unwind: free and drop every variable slot at index >= target,
+ * restoring var_count and the name->index side-index to the pre-block state.
+ * Used by the loop interpreters so a `let` declared inside a loop body reuses
+ * the same slot every iteration instead of leaking a fresh slot per iteration.
+ * Before this, each iteration's `let` appended a new slot that was never
+ * reclaimed; once var_count hit MAX_VARS the interpreter printed "too many
+ * declared variables" and then SILENTLY dropped every declaration that followed
+ * the loop (the request still returned 200 with a half-built body). Cheap
+ * no-op when the iteration declared nothing. */
+static void te_scope_unwind_to(int target) {
+    if (target < 0) target = 0;
+    if (target >= var_count) return;            /* nothing new this iteration */
+    for (int i = target; i < var_count; i++) {
+        if (vars[i].id) free(vars[i].id);
+        if (vars[i].type) free(vars[i].type);
+        if (vars[i].vtype == VAL_STRING && vars[i].value.string_value)
+            free(vars[i].value.string_value);
+        memset(&vars[i], 0, sizeof(Variable));
+    }
+    var_count = target;
+    te_sym_reset_to(target);
 }
 
 /* Rebuild the variable name->index side-index from the live vars[0..var_count).
@@ -2315,7 +2339,7 @@ static void te_value_to_variable(Variable *dst, ASTNode *value);
 
 void declare_variable(char *id, ASTNode *value, int is_const) {
     if (var_count >= MAX_VARS) {
-        printf("Error: too many declared variables.\n");
+        te_runtime_fatalf("Error: too many declared variables (limit %d).", MAX_VARS);
         return;
     }
 
@@ -2717,7 +2741,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
         te_value_to_variable(var, value);
     } else {
         if (var_count >= MAX_VARS) {
-            printf("Error: too many declared variables.\n");
+            te_runtime_fatalf("Error: too many declared variables (limit %d).", MAX_VARS);
             return;
         }
         vars[var_count].id = strdup(id);
@@ -4885,8 +4909,15 @@ static void interpret_for_in(ASTNode *node) {
         return;
     }
     ASTNode *items = listNode->left;   
+    /* Block scope: snapshot the variable count so each iteration's body-local
+     * `let`s are reclaimed before the next pass (see te_scope_unwind_to). The
+     * loop binding lives at/above this mark and is re-bound every iteration;
+     * the final iteration's locals stay live after the loop, preserving the
+     * pre-existing "value visible after the loop" behavior. */
+    int te_loop_scope_mark = var_count;
     for (ASTNode *item = items; item; item = item->next) {
         debugger_on_loop_iteration();
+        te_scope_unwind_to(te_loop_scope_mark);
         if (item->type && strcmp(item->type, "OBJECT") == 0) {
             // Get ObjectNode from extra field (where create_object_with_args stores it)
             // For backward compatibility, also check value field for objects created differently
@@ -5334,11 +5365,15 @@ void interpret_ast(ASTNode *node) {
                 if (info) { bc_exec(info->code); break; }
             }
         }
+        /* Block scope: reclaim each iteration's body-local `let`s so they do
+         * not accumulate against MAX_VARS across iterations. */
+        int te_while_scope_mark = var_count;
         while (1) {
             if (throw_flag || return_flag) break;
             int cond = evaluate_condition(node->left);
             if (!cond) break;
             debugger_on_loop_iteration();
+            te_scope_unwind_to(te_while_scope_mark);
             interpret_ast(node->right);
             if (break_flag) { break_flag = 0; break; }
             if (continue_flag) { continue_flag = 0; continue; }
@@ -5478,12 +5513,17 @@ static void interpret_for(ASTNode *node) {
         printf("Warning: FOR without body\n");
         return;
     }
+    /* Block scope: snapshot AFTER the control variable is seeded (it lives
+     * below this mark) so per-iteration body `let`s reuse one slot instead of
+     * accumulating against MAX_VARS. */
+    int te_loop_scope_mark = var_count;
     while (var->value.int_value < limite) {
         /* Interpret the whole body once per iteration. body is a
          * statement_list node; interpret_statement_list walks every statement
          * via ->left/->right recursion. (Manually chaining stmt=stmt->right
          * here double-executed the last statement.) */
         debugger_on_loop_iteration();
+        te_scope_unwind_to(te_loop_scope_mark);
         interpret_ast(body);
         if (break_flag) { break_flag = 0; break; }
         if (continue_flag) { continue_flag = 0; }

@@ -36,7 +36,8 @@
 #include <time.h>
 
 /* ---- interpreter globals we snapshot per fiber (defined in ast.c) -------- */
-#define MAX_VARS 100
+/* MAX_VARS comes from ast.h — must match ast.c's vars[] size or async fibers
+ * silently truncate the snapshot. */
 extern Variable vars[MAX_VARS];
 extern int      var_count;
 extern Variable __ret_var;

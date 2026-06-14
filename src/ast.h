@@ -5,6 +5,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Canonical interpreter variable-slot capacity.
+ * SINGLE source of truth — every module that touches the global `vars[]`
+ * array (ast.c, te_evloop.c, te_bytecode.c, debugger.c) MUST use this value.
+ * Historically these were desynced (256/100/100) which silently truncated
+ * variables in async fibers. Limit is per endpoint invocation: the var table
+ * is reset after every request, so this is NOT a cumulative cap across
+ * endpoints. NOTE: bytecode.c keeps its own unrelated `bc_vars[]` cap. */
+#ifndef MAX_VARS
+#define MAX_VARS 1024
+#endif
+
 typedef struct MethodNode MethodNode;
 typedef struct ParameterNode ParameterNode;
 
