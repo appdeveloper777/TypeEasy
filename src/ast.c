@@ -8692,6 +8692,61 @@ static void interpret_assign(ASTNode *node) {
         add_or_update_variable(var_node->id, temp_node);
         free_ast(temp_node);
     } 
+    /* `target = sourceVar;` — copiar el VALOR de otra variable. Sin esta rama
+     * un identificador desnudo caía al `else` final y se pasaba crudo a
+     * add_or_update_variable, cuyo te_value_to_variable NO tiene caso
+     * IDENTIFIER → catch-all lo guardaba como INT 0, perdiendo el valor
+     * (p.ej. `msg = x` dentro de un for-in dejaba msg en 0). Espeja la rama
+     * de copia-por-identificador de declare_variable: escalares vía nodo
+     * temporal; LIST/MAP/OBJECT/LAMBDA/NULL se aliasan por referencia (sin
+     * deep-copy, igual que el resto del intérprete). */
+    else if (strcmp(value_node->type, "IDENTIFIER") == 0 || strcmp(value_node->type, "ID") == 0) {
+        Variable *src = find_variable(value_node->id);
+        if (!src) {
+            fprintf(stderr, "Error: variable '%s' not found.\n",
+                    value_node->id ? value_node->id : "?");
+            return;
+        }
+        if (src->vtype == VAL_STRING) {
+            ASTNode *tn = create_ast_leaf("STRING", 0,
+                src->value.string_value ? src->value.string_value : "", NULL);
+            add_or_update_variable(var_node->id, tn);
+            free_ast(tn);
+        } else if (src->vtype == VAL_INT) {
+            ASTNode *tn = create_ast_leaf_number("INT", src->value.int_value, NULL, NULL);
+            add_or_update_variable(var_node->id, tn);
+            free_ast(tn);
+        } else if (src->vtype == VAL_FLOAT) {
+            char *fs = double_to_string(src->value.float_value);
+            ASTNode *tn = create_ast_leaf("FLOAT", 0, fs, NULL);
+            free(fs);
+            add_or_update_variable(var_node->id, tn);
+            free_ast(tn);
+        } else {
+            /* VAL_OBJECT: LIST/MAP/OBJECT/LAMBDA/LAZY_ITER/NULL. value.object_value
+             * es la referencia compartida (ObjectNode* para OBJECT; ASTNode* del
+             * LIST/MAP/... en el resto). Se copia el contenedor por referencia,
+             * exactamente como declare_variable. */
+            Variable *dst = find_variable_for(var_node->id);
+            if (!dst) {
+                ASTNode *nn = create_ast_leaf("NULL", 0, NULL, NULL);
+                add_or_update_variable(var_node->id, nn);
+                free_ast(nn);
+                dst = find_variable_for(var_node->id);
+            }
+            if (dst) {
+                if (dst->is_const) {
+                    te_runtime_fatalf("Error: cannot assign to constant variable '%s'.", var_node->id);
+                    return;
+                }
+                if (dst->vtype == VAL_STRING && dst->value.string_value) free(dst->value.string_value);
+                free(dst->type);
+                dst->vtype = src->vtype;
+                dst->type = strdup(src->type ? src->type : "NULL");
+                dst->value.object_value = src->value.object_value; /* alias */
+            }
+        }
+    }
     // Es un valor simple (literal, variable)
     else {
         add_or_update_variable(var_node->id, value_node);

@@ -1,0 +1,33 @@
+// expect: directa=[a] otravar=[XYZ] num=3 obj=[1,2,3]
+// Regression: assigning a variable's value to another variable (`target = src;`)
+// must copy the real value, not collapse to 0. Before the fix interpret_assign
+// passed a bare IDENTIFIER node to add_or_update_variable, whose
+// te_value_to_variable had no IDENTIFIER case → catch-all stored INT 0
+// (e.g. `msg = x` inside a for-in left msg = 0). declare_variable (let) handled
+// this; plain assignment (=) did not.
+
+// 1) Direct assign of the loop variable inside a for-in (the reported case).
+var msg = "";
+let datos = ["a", "b", "c"];
+for (let x in datos) {
+    if (msg == "") { msg = x; }   // capture first element
+}
+print("directa=[" + msg + "]");
+
+// 2) Direct assign of another (non-iteration) variable.
+let fuente = "XYZ";
+var copia = "";
+copia = fuente;
+print(" otravar=[" + copia + "]");
+
+// 3) Numeric direct assign still works (no regression).
+var n = 0;
+let valor = 3;
+n = valor;
+print(" num=" + n);
+
+// 4) Object (LIST) direct assign aliases by reference, not 0.
+let listaOrig = [1, 2, 3];
+var listaCopia = [];
+listaCopia = listaOrig;
+println(" obj=[" + listaCopia[0] + "," + listaCopia[1] + "," + listaCopia[2] + "]");
