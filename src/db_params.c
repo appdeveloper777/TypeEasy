@@ -85,6 +85,55 @@ static void buf_append(char** buf, size_t* len, size_t* cap, const char* s, size
     (*buf)[*len] = '\0';
 }
 
+/* ¿Es `s` un literal numérico (entero o flotante, con signo/exponente)? Se usa
+ * para decidir si un valor resuelto vía get_node_string puede interpolarse SIN
+ * comillas. Importa para `LIMIT @n` (MySQL rechaza `LIMIT '5'`) y para mantener
+ * columnas numéricas como números, no strings entrecomillados. */
+static int db_str_is_number(const char* s) {
+    if (!s || !*s) return 0;
+    int i = 0, digits = 0, dot = 0, exp = 0;
+    if (s[i] == '+' || s[i] == '-') i++;
+    for (; s[i]; i++) {
+        char c = s[i];
+        if (c >= '0' && c <= '9') { digits++; continue; }
+        if (c == '.' && !dot && !exp) { dot = 1; continue; }
+        if ((c == 'e' || c == 'E') && digits && !exp) {
+            exp = 1;
+            if (s[i+1] == '+' || s[i+1] == '-') i++;
+            continue;
+        }
+        return 0;
+    }
+    return digits > 0;
+}
+
+/* Emite un valor cuya forma escalar no es un leaf simple (indexación
+ * `m["k"]`/`arr[i]`, acceso a miembro sobre un MAP) resolviéndolo a su forma
+ * string vía get_node_string —que EJECUTA el acceso en el runtime— y aplicando:
+ *   vacío/NULL  -> SQL NULL  (clave ausente, índice fuera de rango, elemento null)
+ *   numérico    -> sin comillas (LIMIT/columnas numéricas correctas)
+ *   resto       -> escapado + entrecomillado
+ * Mismo enfoque que la rama CALL_FUNC; cubre la variante inline del bug donde
+ * un valor numérico de una colección se perdía como NULL. */
+static int db_emit_resolved(char** buf, size_t* len, size_t* cap,
+                            ASTNode* val, db_escape_fn escape, void* ctx) {
+    char* s = get_node_string(val);
+    if (!s || !*s) { if (s) free(s); buf_append(buf, len, cap, "NULL", 4); return 1; }
+    if (db_str_is_number(s)) {
+        buf_append(buf, len, cap, s, strlen(s));
+        free(s);
+        return 1;
+    }
+    char* esc = escape(s, ctx);
+    free(s);
+    if (!esc) { buf_append(buf, len, cap, "NULL", 4); return 1; }
+    buf_append(buf, len, cap, "'", 1);
+    buf_append(buf, len, cap, esc, strlen(esc));
+    buf_append(buf, len, cap, "'", 1);
+    free(esc);
+    return 1;
+}
+
 /* Formatea un valor TypeEasy para inlining en SQL.
  * Devuelve 1 si OK, 0 si no se pudo (caller deja literal). */
 static int append_value(char** buf, size_t* len, size_t* cap,
@@ -100,7 +149,14 @@ static int append_value(char** buf, size_t* len, size_t* cap,
     const char* vs = NULL;
     int kind = 0; /* 1=int 2=float 3=str 4=null */
 
-    if (strcmp(tipo, "NUMBER") == 0) {
+    if (strcmp(tipo, "NUMBER") == 0 || strcmp(tipo, "INT") == 0) {
+        /* "NUMBER" = literal entero del parser TypeEasy; "INT" = entero
+         * producido por json_parse() (te_json crea leaves "INT", no "NUMBER").
+         * Sin la rama "INT" un objeto reusado como bind-params —p.ej.
+         * `json_parse(mysql_query(...,"json"))[0]`— enlazaba sus columnas
+         * numéricas como SQL NULL (caían al `else` final, kind=4), mientras
+         * las columnas string sí se enlazaban. Ambos guardan el entero en
+         * val->value. */
         kind = 1; vi = val->value;
     } else if (strcmp(tipo, "STRING") == 0 || strcmp(tipo, "STRING_LITERAL") == 0) {
         kind = 3; vs = val->str_value ? val->str_value : "";
@@ -144,23 +200,41 @@ static int append_value(char** buf, size_t* len, size_t* cap,
         ASTNode* a = val->right;
         const char* attr_name = a->id ? a->id : a->str_value;
         kind = 4;
-        if (o->id && attr_name) {
-            Variable* ov = find_variable(o->id);
-            if (ov && ov->vtype == VAL_OBJECT && ov->value.object_value &&
-                ov->value.object_value->class) {
-                ObjectNode* obj = ov->value.object_value;
-                for (int i = 0; i < obj->class->attr_count; i++) {
-                    if (obj->class->attributes[i].id &&
-                        strcmp(obj->class->attributes[i].id, attr_name) == 0) {
-                        Variable* attr = &obj->attributes[i];
-                        if (attr->vtype == VAL_INT) { kind = 1; vi = attr->value.int_value; }
-                        else if (attr->vtype == VAL_FLOAT) { kind = 2; vf = attr->value.float_value; }
-                        else if (attr->vtype == VAL_STRING) { kind = 3; vs = attr->value.string_value ? attr->value.string_value : ""; }
-                        break;
-                    }
+        int handled = 0;
+        Variable* ov = (o->id) ? find_variable(o->id) : NULL;
+        /* Solo recorrer attributes[] si es un OBJECT de clase. Para un MAP
+         * (p.ej. una fila de json_parse) value.object_value es un ASTNode*, no
+         * un ObjectNode*, así que leer ->class sería un acceso mal tipado; esos
+         * casos (mapVar.clave) se resuelven abajo vía get_node_string. */
+        if (ov && ov->vtype == VAL_OBJECT && ov->type &&
+            strcmp(ov->type, "OBJECT") == 0 &&
+            ov->value.object_value && ov->value.object_value->class && attr_name) {
+            ObjectNode* obj = ov->value.object_value;
+            for (int i = 0; i < obj->class->attr_count; i++) {
+                if (obj->class->attributes[i].id &&
+                    strcmp(obj->class->attributes[i].id, attr_name) == 0) {
+                    Variable* attr = &obj->attributes[i];
+                    handled = 1; /* atributo encontrado: null/objeto -> NULL (kind=4) */
+                    if (attr->vtype == VAL_INT) { kind = 1; vi = attr->value.int_value; }
+                    else if (attr->vtype == VAL_FLOAT) { kind = 2; vf = attr->value.float_value; }
+                    else if (attr->vtype == VAL_STRING) { kind = 3; vs = attr->value.string_value ? attr->value.string_value : ""; }
+                    break;
                 }
             }
         }
+        if (!handled) {
+            /* Acceso a miembro sobre un MAP (mapVar.clave) o no resuelto:
+             * resolver por la forma string del runtime (numérico sin comillas,
+             * texto entrecomillado, ausente/null -> NULL). */
+            return db_emit_resolved(buf, len, cap, val, escape, ctx);
+        }
+    } else if (strcmp(tipo, "ACCESS_EXPR") == 0) {
+        /* Indexación inline como valor de bind-param: `{ "@x": row["activo"] }`,
+         * `{ "@x": arr[i] }`, `{ "@x": m["k"] }`. Sin esta rama caía al `else`
+         * final (kind=4) y se interpolaba NULL, perdiendo valores numéricos de
+         * una colección (variante inline del bug "número de objeto -> NULL").
+         * Se resuelve por la forma string del runtime con detección numérica. */
+        return db_emit_resolved(buf, len, cap, val, escape, ctx);
     } else if (strcmp(tipo, "CALL_FUNC") == 0 || strcmp(tipo, "CALL_METHOD") == 0) {
         /* Valor que es una llamada inline en el map, p.ej.
          * { "@c": now(), "@u": uuid_v4() }. get_node_string EJECUTA la llamada

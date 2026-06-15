@@ -156,8 +156,42 @@ int main(void) {
               "INSERT INTO ev (created, uid) VALUES ('2026-01-01T00:00:00Z', '1d360e11-94d5-4a91-9785-67b134f3911a')");
         free(sql);
     }
+    /* 9) leaf "INT" (lo que produce json_parse para enteros) -> entero, NO NULL.
+     *    Bug: un objeto reusado como bind-params, p.ej.
+     *    json_parse(mysql_query(...,"json"))[0], enlazaba sus columnas
+     *    numéricas como SQL NULL porque append_value solo conocía "NUMBER"
+     *    y los enteros de te_json son leaves "INT". Mezclamos con un string
+     *    para reflejar el caso real (activo numérico + nombre string). */
+    {
+        ASTNode *params =
+            pair("@activo", create_ast_leaf("INT", 0, NULL, NULL),
+            pair("@nombre", create_ast_leaf("STRING", 0, "x", NULL), NULL));
+        char *sql = db_substitute_params(
+            "INSERT INTO t (activo, nombre) VALUES (@activo, @nombre)",
+            params, test_escape, NULL);
+        check("int_leaf_param", sql,
+              "INSERT INTO t (activo, nombre) VALUES (0, 'x')");
+        free(sql);
+    }
+    /* 10) ACCESS_EXPR (indexación inline `row["k"]` / `arr[i]`) como valor de
+     *     param. Se resuelve por get_node_string con detección numérica:
+     *     numérico -> sin comillas; texto -> entrecomillado; vacío -> NULL.
+     *     El stub get_node_string devuelve str_value del leaf. */
+    {
+        ASTNode *params =
+            pair("@a", create_ast_leaf("ACCESS_EXPR", 0, "0", NULL),      /* numérico */
+            pair("@b", create_ast_leaf("ACCESS_EXPR", 0, "O'Hara", NULL), /* texto con comilla */
+            pair("@c", create_ast_leaf("ACCESS_EXPR", 0, NULL, NULL),     /* vacío -> NULL */
+            NULL)));
+        char *sql = db_substitute_params(
+            "INSERT INTO t (a, b, c) VALUES (@a, @b, @c)",
+            params, test_escape, NULL);
+        check("access_expr_param", sql,
+              "INSERT INTO t (a, b, c) VALUES (0, 'O''Hara', NULL)");
+        free(sql);
+    }
 
     if (g_fail) { printf("\nRESULT: FAIL\n"); return 1; }
-    printf("\nRESULT: OK (8/8)\n");
+    printf("\nRESULT: OK (10/10)\n");
     return 0;
 }
