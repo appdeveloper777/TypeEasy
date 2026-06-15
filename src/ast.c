@@ -4278,6 +4278,17 @@ double evaluate_expression(ASTNode *node) {
             Variable *v = find_variable(node->right->id);
             if (v && v->type && strcmp(v->type, "NULL") == 0) right_null = 1;
         }
+        /* Indexed / attribute access can also hold null (e.g. m["k"] == null,
+         * arr[i] == null, obj.attr == null). NK_EQ historically only knew the
+         * `null` literal and a null-typed variable, so `parsed["a"] == null`
+         * returned false even when the key held null. te_expr_is_null already
+         * resolves these shapes (it powers the `??` operator), so reuse it. */
+        if (!left_null  && node->left  &&
+            (nk_of(node->left)  == NK_ACCESS_EXPR || nk_of(node->left)  == NK_ACCESS_ATTR) &&
+            te_expr_is_null(node->left))  left_null = 1;
+        if (!right_null && node->right &&
+            (nk_of(node->right) == NK_ACCESS_EXPR || nk_of(node->right) == NK_ACCESS_ATTR) &&
+            te_expr_is_null(node->right)) right_null = 1;
         if (left_null || right_null) return (double)(left_null && right_null);
         if (is_string_type(node->left) || is_string_type(node->right)) {
              /* Ola 3 Fase A: zero-alloc string compare.
@@ -4330,6 +4341,14 @@ double evaluate_expression(ASTNode *node) {
             Variable *v = find_variable(node->right->id);
             if (v && v->type && strcmp(v->type, "NULL") == 0) right_null = 1;
         }
+        /* Mirror of NK_EQ: detect null held by indexed / attribute access so
+         * `m["k"] != null` / `obj.attr != null` are correct. */
+        if (!left_null  && node->left  &&
+            (nk_of(node->left)  == NK_ACCESS_EXPR || nk_of(node->left)  == NK_ACCESS_ATTR) &&
+            te_expr_is_null(node->left))  left_null = 1;
+        if (!right_null && node->right &&
+            (nk_of(node->right) == NK_ACCESS_EXPR || nk_of(node->right) == NK_ACCESS_ATTR) &&
+            te_expr_is_null(node->right)) right_null = 1;
         if (left_null || right_null) return (double)!(left_null && right_null);
         if (is_string_type(node->left) || is_string_type(node->right)) {
              /* Ola 3 Fase A: zero-alloc string compare (mirror of NK_EQ). */

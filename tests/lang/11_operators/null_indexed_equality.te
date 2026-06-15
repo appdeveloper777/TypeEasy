@@ -1,0 +1,18 @@
+// expect: true|false|false|true|true|false
+// Regression: `==` / `!=` must detect null held by an indexed access
+// (m["k"], arr[i]). Before the fix NK_EQ/NK_DIFF only recognised the `null`
+// literal and null-typed variables, so `parsed["a"] == null` returned false
+// even when the key held null. JSON null now parses to a NULL node, making
+// this observable via json_parse. te_expr_is_null already resolves these
+// shapes (it powers `??`); NK_EQ/NK_DIFF now reuse it.
+let m   = json_parse("{\"a\":null,\"b\":5}");
+let arr = json_parse("[null,7]");
+let aNull = (m["a"] == null);    // true
+let aNe   = (m["a"] != null);    // false
+let bNull = (m["b"] == null);    // false
+let bNe   = (m["b"] != null);    // true
+let i0    = (arr[0] == null);    // true
+let i1    = (arr[1] == null);    // false
+print(aNull); print("|"); print(aNe); print("|");
+print(bNull); print("|"); print(bNe); print("|");
+print(i0); print("|"); println(i1);
