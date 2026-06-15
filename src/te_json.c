@@ -308,7 +308,13 @@ ASTNode *te_json_parse_value(const char **p) {
     }
     if (c == 't' && strncmp(*p, "true", 4) == 0) { *p += 4; return create_ast_leaf_number("INT", 1, NULL, NULL); }
     if (c == 'f' && strncmp(*p, "false", 5) == 0) { *p += 5; return create_ast_leaf_number("INT", 0, NULL, NULL); }
-    if (c == 'n' && strncmp(*p, "null", 4) == 0) { *p += 4; return create_ast_leaf_number("INT", 0, NULL, NULL); }
+    /* JSON null → nodo NULL propio (no INT 0). Antes se colapsaba a INT 0, lo
+     * que era indistinguible de un 0 real: el model-binding de un body tipado
+     * lo convertía en el string "0" y el binder de @params lo interpolaba como
+     * '0' (rompía columnas DATE/DATETIME/ENUM bajo STRICT_TRANS_TABLES). Con un
+     * nodo NULL, te_object_from_json lo enlaza como SQL NULL y los emisores
+     * (te_json_emit_node, get_node_string) lo serializan como "null"/"". */
+    if (c == 'n' && strncmp(*p, "null", 4) == 0) { *p += 4; return create_ast_leaf("NULL", 0, NULL, NULL); }
     /* number */
     const char *start = *p;
     if (**p == '-' || **p == '+') (*p)++;

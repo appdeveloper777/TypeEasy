@@ -5645,6 +5645,11 @@ char *te_validate_body_against_class(ClassNode *cls, const char *json) {
         }
         if (!val) { TE_ADD_ERR(aname, "required field missing"); continue; }
         const char *vt = val->type ? val->type : "";
+        /* JSON null nunca es un "tipo equivocado": es ausencia de valor. Lo
+         * aceptamos para cualquier campo (el binder lo guardará como SQL NULL).
+         * Sin este skip, ahora que `null` parsea a un nodo NULL (antes INT 0),
+         * un `bool` recibido como null dispararía un 422 espurio "expected bool". */
+        if (strcmp(vt, "NULL") == 0) continue;
         int is_str = strcmp(vt, "STRING") == 0;
         int is_flt = strcmp(vt, "FLOAT") == 0;
         int is_int = strcmp(vt, "INT") == 0;
@@ -5701,6 +5706,18 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
             if (!cls->attributes[a].id || strcmp(cls->attributes[a].id, key) != 0) continue;
             Variable *dst = &obj->attributes[a];
             const char *atype = cls->attributes[a].type ? cls->attributes[a].type : "int";
+            /* JSON null → SQL NULL. Guardamos un marcador null de runtime
+             * (VAL_OBJECT con puntero NULL, la misma representación que usa
+             * `obj.attr = null`) sin importar el tipo declarado. Así el binder
+             * de @params lo interpola como SQL NULL en vez de coercerlo a "0"
+             * (string-attr) o 0 (int/float), que rompía columnas DATE/DATETIME/
+             * ENUM bajo STRICT_TRANS_TABLES con ERROR 1292. */
+            if (val->type && strcmp(val->type, "NULL") == 0) {
+                if (dst->vtype == VAL_STRING && dst->value.string_value) free(dst->value.string_value);
+                dst->vtype = VAL_OBJECT;
+                dst->value.object_value = NULL;
+                break;
+            }
             if (strcmp(atype, "string") == 0) {
                 if (dst->vtype == VAL_STRING && dst->value.string_value) free(dst->value.string_value);
                 if (strcmp(val->type, "STRING") == 0) {
