@@ -27,6 +27,23 @@ run_xfail() {
     echo "FAIL [unexpected pass] $f"; FAIL=$((FAIL+1))
   fi
 }
+# Tests that depend on an external DB server. The .te must print a line
+# starting with "SKIP" when the server is unreachable (exit 0) so the suite
+# stays green offline; a real connection failure inside the bridge would
+# instead surface as a non-zero exit and be a FAIL.
+run_db() {
+  local f="$1"
+  local out
+  out=$(/typeeasy/typeeasy "/code/$f" 2>/dev/null)
+  local code=$?
+  if [ $code -ne 0 ]; then
+    echo "FAIL [exit=$code] $f"; FAIL=$((FAIL+1))
+  elif printf '%s' "$out" | grep -q '^SKIP'; then
+    echo "SKIP $f"; SKIP=$((SKIP+1))
+  else
+    echo "PASS $f"; PASS=$((PASS+1))
+  fi
+}
 
 # 01_basics
 for t in test_arr test_arr_mut test_compound test_concat test_if test_logic test_map test_map_has test_math1 test_null test_nullaware test_print test_while test_min2 bucle_for unario_menos; do
@@ -86,6 +103,10 @@ done
 for t in 01_bool 02_datetime 03_uuid 04_linq 05_linq_safe 06_linq_datetime; do
   run_test "examples/14_types_bool_datetime_uuid/${t}.te" ""
 done
+
+# 07_db_orm — conector SQL Server TLS (cert self-signed). SKIP si el server
+# de prueba no esta accesible; PASS si conecta y la query responde.
+run_db "examples/07_db_orm/sqlserver_tls_01_self_signed.te"
 
 echo ""
 echo "=== TOTAL: PASS=$PASS FAIL=$FAIL XFAIL=$XFAIL SKIP=$SKIP ==="

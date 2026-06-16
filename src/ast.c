@@ -837,6 +837,35 @@ char* get_node_string(ASTNode* node) {
         /* Caso 1: o es IDENTIFIER → variable OBJECT. */
         if (o->id) {
             Variable *v = find_variable(o->id);
+            /* v1.0.0 fix: variable is a MAP / OBJECT_LITERAL (e.g. `r.activo`
+             * inside println/concat where r is a `{..}` literal). Its
+             * value.object_value is an ASTNode* (the map), NOT an ObjectNode*;
+             * the cast + `obj->class` below would segfault. Resolve as
+             * `r["activo"]` and stringify the value node. */
+            if (v && v->vtype == VAL_OBJECT && v->type &&
+                (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0)) {
+                ASTNode *map  = (ASTNode*)(intptr_t)v->value.object_value;
+                ASTNode *pair = (map && a->id) ? map_find_pair(map, a->id) : NULL;
+                ASTNode *val  = pair ? pair->left : NULL;
+                if (!val || !val->type) return strdup("");
+                if (strcmp(val->type, "BOOL") == 0)
+                    return strdup(val->value ? "true" : "false");
+                if (strcmp(val->type, "NULL") == 0)
+                    return strdup("null");
+                if (strcmp(val->type, "STRING") == 0 || strcmp(val->type, "DATETIME") == 0 ||
+                    strcmp(val->type, "UUID") == 0)
+                    return strdup(val->str_value ? val->str_value : "");
+                if (strcmp(val->type, "NUMBER") == 0 || strcmp(val->type, "INT") == 0) {
+                    snprintf(temp, sizeof(temp), "%d", val->value);
+                    return strdup(temp);
+                }
+                if (strcmp(val->type, "FLOAT") == 0) {
+                    te_fmt_double(temp, sizeof(temp), val->str_value ? atof(val->str_value) : 0.0);
+                    return strdup(temp);
+                }
+                /* CALL_FUNC / expression → recurse. */
+                return get_node_string(val);
+            }
             if (v && v->vtype == VAL_OBJECT) obj = v->value.object_value;
         }
         /* Caso 2: arr[i].attr — o es ACCESS_EXPR sobre LIST. */
@@ -2566,7 +2595,54 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
             vars[my_index].value.int_value = 0; // Valor de error
             return;
         }
-        
+
+        /* v1.0.0 fix: the variable is a MAP / OBJECT_LITERAL (e.g. `let x =
+         * r.activo` where r is a `{..}` literal). value.object_value is an
+         * ASTNode* (the map), NOT an ObjectNode*; the ObjectNode cast +
+         * obj->class->attr_count below would segfault. Resolve `r.a` as
+         * `r["a"]` and copy the typed value. */
+        if (v->type && (strcmp(v->type, "MAP") == 0 ||
+                        strcmp(v->type, "OBJECT_LITERAL") == 0)) {
+            ASTNode *map  = (ASTNode*)(intptr_t)v->value.object_value;
+            ASTNode *pair = (map && a->id) ? map_find_pair(map, a->id) : NULL;
+            ASTNode *val  = pair ? pair->left : NULL;
+            free(vars[my_index].type);
+            if (!val || !val->type) {
+                vars[my_index].vtype = VAL_OBJECT;
+                vars[my_index].type = strdup("NULL");
+                vars[my_index].value.object_value = NULL;
+                return;
+            }
+            if (strcmp(val->type, "BOOL") == 0) {
+                vars[my_index].type = strdup("BOOL");
+                vars[my_index].vtype = VAL_INT;
+                vars[my_index].value.int_value = val->value ? 1 : 0;
+            } else if (strcmp(val->type, "STRING") == 0 || strcmp(val->type, "DATETIME") == 0 ||
+                       strcmp(val->type, "UUID") == 0) {
+                vars[my_index].type = strdup(val->type);
+                vars[my_index].vtype = VAL_STRING;
+                vars[my_index].value.string_value = strdup(val->str_value ? val->str_value : "");
+            } else if (strcmp(val->type, "FLOAT") == 0) {
+                vars[my_index].type = strdup("FLOAT");
+                vars[my_index].vtype = VAL_FLOAT;
+                vars[my_index].value.float_value = val->str_value ? atof(val->str_value) : 0.0;
+            } else if (strcmp(val->type, "NULL") == 0) {
+                vars[my_index].type = strdup("NULL");
+                vars[my_index].vtype = VAL_OBJECT;
+                vars[my_index].value.object_value = NULL;
+            } else if (strcmp(val->type, "NUMBER") == 0 || strcmp(val->type, "INT") == 0) {
+                vars[my_index].type = strdup("INT");
+                vars[my_index].vtype = VAL_INT;
+                vars[my_index].value.int_value = val->value;
+            } else {
+                /* CALL_FUNC / expression → numeric eval fallback. */
+                vars[my_index].type = strdup("FLOAT");
+                vars[my_index].vtype = VAL_FLOAT;
+                vars[my_index].value.float_value = evaluate_expression(val);
+            }
+            return;
+        }
+
         ObjectNode *obj = v->value.object_value;
         for (int i = 0; i < obj->class->attr_count; i++) {
             if (strcmp(obj->attributes[i].id, a->id) == 0) {
@@ -4116,6 +4192,21 @@ static int te_expr_is_null(ASTNode *l) {
         if (!obj_var) return 0;
         /* `?.` on a null object → the whole access is null. */
         if (obj_var->type && strcmp(obj_var->type, "NULL") == 0) return 1;
+        /* v1.0.0: the variable holds a MAP / OBJECT_LITERAL (e.g. a `{..}`
+         * literal or a lambda param bound to a map list item). Its
+         * value.object_value is an ASTNode*, NOT an ObjectNode*; casting and
+         * reading obj->class crashes. Resolve `r.attr` as a map lookup: a
+         * missing key or an explicit null value counts as null. */
+        if (obj_var->type && (strcmp(obj_var->type, "MAP") == 0 ||
+                              strcmp(obj_var->type, "OBJECT_LITERAL") == 0)) {
+            ASTNode *map  = (ASTNode*)(intptr_t)obj_var->value.object_value;
+            ASTNode *pair = map ? map_find_pair(map, attr_ref->id) : NULL;
+            if (!pair) return 1;
+            ASTNode *val = pair->left;
+            if (!val || !val->type) return 1;
+            if (strcmp(val->type, "NULL") == 0) return 1;
+            return 0;
+        }
         if (obj_var->vtype != VAL_OBJECT || !obj_var->value.object_value) return 0;
         ObjectNode *obj = obj_var->value.object_value;
         if (!obj->class) return 0;
@@ -8795,6 +8886,33 @@ static void te_print_list_node(ASTNode *listNode, int nl) {
     if (nl) { dbg_printf("\n"); append_to_stdout("\n"); }
 }
 
+/* Resolve `var.attr` where var holds a MAP / OBJECT_LITERAL (e.g. a `{..}`
+ * literal or a lambda param bound to a map list item). Returns a newly
+ * malloc'd display string (caller frees), or NULL if var is not a map.
+ * Used by interpret_print/println to avoid casting the map's ASTNode* to
+ * ObjectNode* (which crashes when reading obj->class). */
+static char *te_map_field_display(Variable *v, const char *key) {
+    if (!v || !v->type) return NULL;
+    if (strcmp(v->type, "MAP") != 0 && strcmp(v->type, "OBJECT_LITERAL") != 0) return NULL;
+    ASTNode *map  = (ASTNode*)(intptr_t)v->value.object_value;
+    ASTNode *pair = (map && key) ? map_find_pair(map, key) : NULL;
+    ASTNode *val  = pair ? pair->left : NULL;
+    if (!val || !val->type) return strdup("null");
+    if (strcmp(val->type, "BOOL") == 0) return strdup(val->value ? "true" : "false");
+    if (strcmp(val->type, "NULL") == 0) return strdup("null");
+    if (strcmp(val->type, "STRING") == 0 || strcmp(val->type, "DATETIME") == 0 ||
+        strcmp(val->type, "UUID") == 0)
+        return strdup(val->str_value ? val->str_value : "");
+    if (strcmp(val->type, "NUMBER") == 0 || strcmp(val->type, "INT") == 0) {
+        char b[32]; snprintf(b, sizeof(b), "%d", val->value); return strdup(b);
+    }
+    if (strcmp(val->type, "FLOAT") == 0) {
+        char b[64]; te_fmt_double(b, sizeof(b), val->str_value ? atof(val->str_value) : 0.0);
+        return strdup(b);
+    }
+    { char b[64]; te_fmt_double(b, sizeof(b), evaluate_expression(val)); return strdup(b); }
+}
+
 static void interpret_print(ASTNode *node) {
     ASTNode *arg = node->left;
     if (!arg) {
@@ -8913,6 +9031,13 @@ static void interpret_print(ASTNode *node) {
         Variable *v = find_variable(o->id);
         if (!v || v->vtype != VAL_OBJECT) {
             dbg_printf("Error: object '%s' is not defined or is not an object.\n", o->id);
+            return;
+        }
+        /* v1.0.0 fix: var is a MAP / OBJECT_LITERAL → resolve `o.attr` as a
+         * map lookup instead of casting to ObjectNode* (which crashes). */
+        if (v->type && (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0)) {
+            char *s = te_map_field_display(v, a->id);
+            if (s) { dbg_printf("%s", s); append_to_stdout(s); free(s); }
             return;
         }
         ObjectNode *obj = v->value.object_value;
@@ -9415,6 +9540,14 @@ static void interpret_println(ASTNode *node) {
         if (!v || v->vtype != VAL_OBJECT) {
             dbg_printf("Error: object '%s' is not defined or is not an object.\n",
                        (o && o->id) ? o->id : "<expr>");
+            return;
+        }
+        /* v1.0.0 fix: var is a MAP / OBJECT_LITERAL → resolve `o.attr` as a
+         * map lookup instead of casting to ObjectNode* (which crashes). */
+        if (v->type && (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0)) {
+            char *s = te_map_field_display(v, a->id);
+            if (s) { dbg_printf("%s\n", s); append_to_stdout(s); append_to_stdout("\n"); free(s); }
+            else { dbg_printf("null\n"); append_to_stdout("null\n"); }
             return;
         }
         ObjectNode *obj = v->value.object_value;

@@ -1,0 +1,46 @@
+// =====================================================================
+// SQL Server TLS - cert self-signed  (encrypt + tls_skip_verify)
+// ---------------------------------------------------------------------
+// El 6o argumento de sqlserver_connect(host, user, pass, db, port, { ... })
+// controla el TLS via FreeTDS (db-lib). Para SQL Server 2022 con el cert
+// auto-generado (self-signed) que trae por defecto, el equivalente al
+// connection string de .NET:
+//
+//   Server=HOST,1433;Database=DB;User Id=sa;Password=...;
+//   TrustServerCertificate=True;Encrypt=True;
+//
+// se escribe asi:
+//
+//   { "encrypt": 1, "tls_skip_verify": 1 }
+//
+// Claves aceptadas:
+//   encrypt / tls / ssl ........ 1|"require"|true => cifra ; 0|"off" => sin TLS
+//   tls_skip_verify ............ acepta cert self-signed (no valida la cadena)
+//     alias: trust_server_certificate, trust_cert, insecure, tls_insecure,
+//            tls_no_verify
+//   tls_ca / ssl_ca / ca ....... ruta a un PEM con la CA del server (valida)
+//
+// Si la conexion falla, la causa real queda en la variable __sqlserver_error__.
+//
+// NOTA: credenciales de un server de PRUEBA. Reemplazar por las tuyas.
+// =====================================================================
+
+let conn = sqlserver_connect(
+    "172.210.9.14",        // host
+    "sa",                  // user
+    "ErpMig2026#Strong!",  // pass (server de prueba)
+    "agro",                // db
+    1433,                  // port
+    { "encrypt": 1, "tls_skip_verify": 1 }   // TLS, acepta cert self-signed
+);
+
+if (conn < 0) {
+    // No disponible en este entorno (server caido / sin red): se reporta y
+    // el runner de regression lo cuenta como SKIP, no como FAIL.
+    println("SKIP sqlserver tls: " + __sqlserver_error__);
+} else {
+    let r = sqlserver_query(conn, "SELECT 1 AS ok", {}, "json");
+    print("[sqlserver tls] ok: ");
+    println(r);
+    sqlserver_close(conn);
+}

@@ -167,6 +167,32 @@ Si necesitas personalizar el proceso de compilación, puedes modificar el `Makef
 - `CFLAGS`: Flags de compilación para C
 - `CXXFLAGS`: Flags de compilación para C++
 
+### Conector SQL Server (FreeTDS) — opcional, "para que no pese mucho"
+
+El conector `sqlserver_*()` (TLS contra SQL Server vía FreeTDS) es **opcional**
+en los builds de Windows. Las DLLs de FreeTDS + GnuTLS pesan varios MB, así que
+puedes elegir si incluirlas con la variable de entorno `TE_WITH_SQLSERVER`:
+
+| `TE_WITH_SQLSERVER` | Efecto en el build Windows |
+|---|---|
+| `auto` (default) | Incluye SQL Server **si** FreeTDS está instalado (`pacman -S mingw-w64-x86_64-freetds`); si no, usa el stub. |
+| `1` / `on` / `yes` | Exige FreeTDS; el build aborta si no está. |
+| `0` / `off` / `no` | **Nunca** enlaza FreeTDS. El `.exe` queda más liviano y el paquete NO arrastra las DLLs de FreeTDS/GnuTLS. |
+
+```bash
+# Build + paquete liviano (sin SQL Server):
+TE_WITH_SQLSERVER=0 bash scripts/build_native_windows.sh
+TE_WITH_SQLSERVER=0 bash scripts/package_windows_release.sh 0.0.1
+```
+
+Además, el instalador (`installer/windows/TypeEasy.iss`) ofrece el componente
+desmarcable **"Conector SQL Server (FreeTDS)"**: aunque el paquete incluya las
+DLLs, el usuario puede elegir el tipo de instalación *Mínima* (sin SQL Server)
+o desmarcar ese componente en *Personalizada* para no ocupar espacio.
+
+En Linux el conector usa la librería de sistema `libsybdb` (FreeTDS) enlazada
+dinámicamente; no se empaqueta, por lo que no afecta el tamaño del paquete.
+
 ### Flags requeridas para la ruta columnar SIMD (CSV/DataFrame)
 
 A partir de v0.0.14 las primitivas `te_simd_cmp_i64` y `te_simd_cmp_f64`

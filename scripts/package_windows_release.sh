@@ -107,6 +107,43 @@ if [[ -n "$MSYS_BIN" ]]; then
   done
 fi
 
+# Conector SQL Server (FreeTDS) — OPCIONAL, para que el paquete "no pese mucho".
+#   TE_WITH_SQLSERVER=0  -> NO bundlear las DLLs de FreeTDS/GnuTLS (paquete liviano).
+#   auto/1 (default)     -> si typeeasy.exe fue compilado con FreeTDS, ldd ya las
+#                           copio arriba; aqui solo reforzamos por si ldd fallo.
+# Estas DLLs son exclusivas del conector SQL Server (libsybdb + cadena GnuTLS) y
+# pesan varios MB. El instalador (TypeEasy.iss) las ofrece como componente
+# desmarcable "Conector SQL Server" para que el usuario decida en tiempo de install.
+TE_WITH_SQLSERVER="${TE_WITH_SQLSERVER:-auto}"
+SQLSERVER_DLL_GLOBS=(libsybdb*.dll libgnutls*.dll libhogweed*.dll libnettle*.dll \
+                     libtasn1*.dll libp11-kit*.dll libidn2*.dll libunistring*.dll libgmp*.dll)
+case "$TE_WITH_SQLSERVER" in
+  0|off|no|false|OFF|NO|FALSE)
+    echo "TE_WITH_SQLSERVER=$TE_WITH_SQLSERVER: removiendo DLLs de SQL Server del paquete (mas liviano)"
+    for glob in "${SQLSERVER_DLL_GLOBS[@]}"; do
+      rm -f "$PKG_DIR"/bin/$glob 2>/dev/null || true
+    done
+    ;;
+  *)
+    if [[ -n "$MSYS_BIN" ]]; then
+      copied_any=0
+      for glob in "${SQLSERVER_DLL_GLOBS[@]}"; do
+        for src in "$MSYS_BIN"/$glob; do
+          if [[ -f "$src" ]]; then
+            cp -f "$src" "$PKG_DIR/bin/"
+            copied_any=1
+          fi
+        done
+      done
+      if [[ "$copied_any" == "1" ]]; then
+        echo "Conector SQL Server: DLLs de FreeTDS/GnuTLS incluidas (componente opcional en el instalador)."
+      else
+        echo "Conector SQL Server: FreeTDS no presente en $MSYS_BIN; paquete sin sqlserver_* (usa stub)."
+      fi
+    fi
+    ;;
+esac
+
 # Override: si el caller (CI o build local) construyo una libmariadb.dll
 # contra OPENSSL via scripts/build_mariadb_openssl_dll.sh, reemplazamos la
 # de MSYS2 (Schannel) por esa. Schannel falla contra los NLB de AWS

@@ -203,7 +203,7 @@
   <header class="topbar">
     <button class="hamburger" id="hamburger" aria-label="Menú">☰</button>
     <a class="brand" href="#/home"><span class="logo">Te</span> TypeEasy</a>
-    <span class="ver" id="verBadge">v0.0.21</span>
+    <span class="ver" id="verBadge">v0.0.23</span>
     <span class="spacer"></span>
     <nav class="tnav">
       <a href="#/home" data-i18n="nav_home">Inicio</a>
@@ -563,7 +563,7 @@ PAGES.quickstart = `
 <h2>1. Instalar</h2>
 <p>Descarga el binario para tu sistema desde la página de releases:</p>
 <ul>
-  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.0.21.exe</code> (instalador) o el <code class="inline">.zip</code> portable.</li>
+  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.0.23.exe</code> (instalador) o el <code class="inline">.zip</code> portable.</li>
   <li><strong>Linux</strong>: <code class="inline">.deb</code> (Debian/Ubuntu/Mint) o el <code class="inline">.tar.gz</code> portable.</li>
 </ul>
 <p><a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">Releases en GitHub &rarr;</a></p>
@@ -2332,10 +2332,30 @@ println(filas);
 
 sqlserver_close(conn);`)}
 
+<div class="note"><strong>TLS (SQL Server 2019/2022 con cert self-signed).</strong> SQL Server 2022 exige cifrado y presenta un certificado self-signed. Pasa un 6º argumento (mapa de opciones) para controlar TLS — equivale a <code class="inline">Encrypt=True;TrustServerCertificate=True</code> / <code class="inline">sqlcmd -C</code>:</div>
+${te(`// Equivalente a Encrypt=True;TrustServerCertificate=True (sqlcmd -C)
+let conn = sqlserver_connect("127.0.0.1", "sa", "MiClave#2026", "agro", 1433,
+    { "encrypt": 1, "tls_skip_verify": 1 });
+if (conn < 0) {
+    println("Conexión falló: " + __sqlserver_error__);
+} else {
+    println(sqlserver_query(conn, "SELECT 1 AS ok", {}, "json"));
+    sqlserver_close(conn);
+}`)}
+
+<table class="ref">
+  <tr><th>Opción TLS (6º arg)</th><th>Efecto</th></tr>
+  <tr><td><code>tls</code> · <code>ssl</code> · <code>encrypt</code></td><td><code>1</code>/<code>"require"</code> exige TLS (<code>encrypt=require</code>); <code>0</code>/<code>"off"</code> deshabilita el cifrado del lado cliente.</td></tr>
+  <tr><td><code>tls_skip_verify</code> · <code>tls_insecure</code> · <code>trust_server_certificate</code></td><td><code>1</code> acepta el cert self-signed sin validarlo (= <code>TrustServerCertificate=yes</code> / <code>sqlcmd -C</code>). Implica TLS.</td></tr>
+  <tr><td><code>tls_ca</code> · <code>ca</code></td><td>Ruta a un PEM con la CA para validar la cadena del cert. Implica TLS.</td></tr>
+</table>
+
+<div class="note"><strong>Diagnóstico.</strong> <code class="inline">sqlserver_connect</code> devuelve <code class="inline">-1</code> en error y deja la causa real (handshake TLS vs login) en la variable <code class="inline">__sqlserver_error__</code>. Para el detalle del handshake de FreeTDS: <code class="inline">export TDSDUMP=/tmp/tds.log</code> antes de ejecutar.</div>
+
 <h2>Firmas</h2>
 <table class="ref">
   <tr><th>Función</th><th>Firma</th></tr>
-  <tr><td>Conectar</td><td><code>sqlite_connect(ruta)</code> · <code>mysql_connect(host, user, pass, db, port)</code> · <code>postgres_connect(host, user, pass, db, port)</code> · <code>sqlserver_connect(host, user, pass, db, port)</code></td></tr>
+  <tr><td>Conectar</td><td><code>sqlite_connect(ruta)</code> · <code>mysql_connect(host, user, pass, db, port)</code> · <code>postgres_connect(host, user, pass, db, port)</code> · <code>sqlserver_connect(host, user, pass, db, port [, opts])</code></td></tr>
   <tr><td>Ejecutar</td><td><code>sqlite_exec(db, sql)</code> · <code>sqlite_exec(db, sql, {params})</code></td></tr>
   <tr><td>Consultar</td><td><code>sqlite_query(db, sql, "json")</code> · <code>mysql_query(conn, sql, {params}, "json")</code> · <code>postgres_query(conn, sql, {params}, "json")</code> · <code>sqlserver_query(conn, sql, {params}, "json")</code></td></tr>
   <tr><td>Último id</td><td><code>sqlite_last_id(db)</code></td></tr>
@@ -2986,7 +3006,7 @@ PAGES.quickstart = `
 <h2>1. Install</h2>
 <p>Download the binary for your system from the releases page:</p>
 <ul>
-  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.0.21.exe</code> (installer) or the portable <code class="inline">.zip</code>.</li>
+  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.0.23.exe</code> (installer) or the portable <code class="inline">.zip</code>.</li>
   <li><strong>Linux</strong>: <code class="inline">.deb</code> (Debian/Ubuntu/Mint) or the portable <code class="inline">.tar.gz</code>.</li>
 </ul>
 <p><a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">Releases on GitHub &rarr;</a></p>
@@ -4736,6 +4756,26 @@ let rows = sqlserver_query(conn,
 println(rows);
 
 sqlserver_close(conn);`)}
+
+<div class="note"><strong>TLS (SQL Server 2019/2022, self-signed cert).</strong> SQL Server 2022 requires encryption and presents a self-signed certificate. Pass a 6th argument (options map) to control TLS — equivalent to <code class="inline">Encrypt=True;TrustServerCertificate=True</code> / <code class="inline">sqlcmd -C</code>:</div>
+${te(`// Equivalent to Encrypt=True;TrustServerCertificate=True (sqlcmd -C)
+let conn = sqlserver_connect("127.0.0.1", "sa", "MyPass#2026", "agro", 1433,
+    { "encrypt": 1, "tls_skip_verify": 1 });
+if (conn < 0) {
+    println("Connection failed: " + __sqlserver_error__);
+} else {
+    println(sqlserver_query(conn, "SELECT 1 AS ok", {}, "json"));
+    sqlserver_close(conn);
+}`)}
+
+<table class="ref">
+  <tr><th>TLS option (6th arg)</th><th>Effect</th></tr>
+  <tr><td><code>tls</code> · <code>ssl</code> · <code>encrypt</code></td><td><code>1</code>/<code>"require"</code> requires TLS (<code>encrypt=require</code>); <code>0</code>/<code>"off"</code> disables client-side encryption.</td></tr>
+  <tr><td><code>tls_skip_verify</code> · <code>tls_insecure</code> · <code>trust_server_certificate</code></td><td><code>1</code> accepts the self-signed cert without validating it (= <code>TrustServerCertificate=yes</code> / <code>sqlcmd -C</code>). Implies TLS.</td></tr>
+  <tr><td><code>tls_ca</code> · <code>ca</code></td><td>Path to a PEM with the CA to validate the cert chain. Implies TLS.</td></tr>
+</table>
+
+<div class="note"><strong>Diagnostics.</strong> <code class="inline">sqlserver_connect</code> returns <code class="inline">-1</code> on error and stores the real cause (TLS handshake vs login) in the <code class="inline">__sqlserver_error__</code> script variable. For the FreeTDS handshake detail: <code class="inline">export TDSDUMP=/tmp/tds.log</code> before running.</div>
 
 <h2>Signatures</h2>
 <table class="ref">

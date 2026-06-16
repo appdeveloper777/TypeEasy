@@ -32,6 +32,19 @@ ChangesEnvironment=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "spanish"; MessagesFile: "compiler:Languages\\Spanish.isl"
 
+[Types]
+Name: "full";    Description: "Instalación completa (con conector SQL Server)"
+Name: "compact"; Description: "Instalación mínima (sin SQL Server, más liviana)"
+Name: "custom";  Description: "Personalizada"; Flags: iscustom
+
+[Components]
+; 'core' siempre se instala (intérprete, CLI, ejemplos, MySQL/SQLite).
+Name: "core"; Description: "TypeEasy (intérprete + CLI)"; Types: full compact custom; Flags: fixed
+; 'sqlserver' es OPCIONAL: agrega las DLLs de FreeTDS/GnuTLS (~varios MB) para
+; el conector sqlserver_*(). Desmarcarlo deja el paquete más liviano. Solo tiene
+; efecto si el build incluyó SQL Server (si no, no hay DLLs que instalar).
+Name: "sqlserver"; Description: "Conector SQL Server (FreeTDS) — DLLs extra, varios MB"; Types: full
+
 [Tasks]
 Name: "desktopicon"; Description: "Crear acceso directo en el escritorio"; GroupDescription: "Opciones adicionales:"; Flags: unchecked
 Name: "addtopath"; Description: "Agregar TypeEasy al PATH (recomendado)"; GroupDescription: "Opciones adicionales:";
@@ -44,7 +57,20 @@ Name: "addtopath"; Description: "Agregar TypeEasy al PATH (recomendado)"; GroupD
 ;   {app}\cli\typeeasy          (bash script invocado por el .cmd via Git Bash)
 ;   {app}\cli\templates\        (scaffolds para 'typeeasy new')
 ;   {app}\vscode\typeeasy-debug.vsix  (extension VS Code; 'te ext install' la instala)
-Source: "{#SourceDir}\\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#SourceDir}\\*"; DestDir: "{app}"; Components: core; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "bin\\libsybdb*.dll,bin\\libgnutls*.dll,bin\\libhogweed*.dll,bin\\libnettle*.dll,bin\\libtasn1*.dll,bin\\libp11-kit*.dll,bin\\libidn2*.dll,bin\\libunistring*.dll,bin\\libgmp*.dll"
+; DLLs exclusivas del conector SQL Server (FreeTDS + cadena GnuTLS). Se instalan
+; solo si el usuario marca el componente 'sqlserver'. skipifsourcedoesntexist:
+; si el build fue liviano (sin FreeTDS), estas líneas no fallan, simplemente no
+; agregan nada.
+Source: "{#SourceDir}\\bin\\libsybdb*.dll";     DestDir: "{app}\\bin"; Components: sqlserver; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SourceDir}\\bin\\libgnutls*.dll";    DestDir: "{app}\\bin"; Components: sqlserver; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SourceDir}\\bin\\libhogweed*.dll";   DestDir: "{app}\\bin"; Components: sqlserver; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SourceDir}\\bin\\libnettle*.dll";    DestDir: "{app}\\bin"; Components: sqlserver; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SourceDir}\\bin\\libtasn1*.dll";     DestDir: "{app}\\bin"; Components: sqlserver; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SourceDir}\\bin\\libp11-kit*.dll";   DestDir: "{app}\\bin"; Components: sqlserver; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SourceDir}\\bin\\libidn2*.dll";      DestDir: "{app}\\bin"; Components: sqlserver; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SourceDir}\\bin\\libunistring*.dll"; DestDir: "{app}\\bin"; Components: sqlserver; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SourceDir}\\bin\\libgmp*.dll";       DestDir: "{app}\\bin"; Components: sqlserver; Flags: ignoreversion skipifsourcedoesntexist
 
 [InstallDelete]
 ; Limpia binarios .exe de versiones previas (<= 0.0.10 primera build) que

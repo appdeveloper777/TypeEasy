@@ -1,5 +1,0 @@
-let xs = [1, 2, 3];
-let z = xs.lazy();
-println("z_ok");
-let r = z.toList();
-println("len=" + r.length);

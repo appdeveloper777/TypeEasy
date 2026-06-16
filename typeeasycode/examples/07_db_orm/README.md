@@ -18,3 +18,18 @@ controla el TLS. Los 4 ejemplos cubren cada caso:
 Recomendación: para MySQL 8 con cert auto-generado self-signed usa
 **`tls_fp`** (modo 3). Mantiene el canal cifrado y detecta MITM sin
 instalar la CA en el sistema.
+
+## Conexión SQL Server TLS (cert self-signed)
+
+El 6º argumento de `sqlserver_connect(host, user, pass, db, port, { ... })`
+controla el TLS vía FreeTDS (db-lib).
+
+| Archivo | Opción | Caso de uso |
+|---------|--------|-------------|
+| [sqlserver_tls_01_self_signed.te](sqlserver_tls_01_self_signed.te) | `{ "encrypt": 1, "tls_skip_verify": 1 }` | **SQL Server 2022 self-signed** — equivalente a `Encrypt=True;TrustServerCertificate=True` |
+
+Claves aceptadas: `encrypt`/`tls`/`ssl` (`1`/`require`/`true` cifra; `0`/`off`
+sin TLS), `tls_skip_verify` (alias `trust_server_certificate`, `trust_cert`,
+`insecure`, `tls_no_verify`) para aceptar cert self-signed, y `tls_ca`/`ssl_ca`/`ca`
+para validar contra un PEM propio. Si la conexión falla, la causa real queda
+en la variable de script `__sqlserver_error__`.
