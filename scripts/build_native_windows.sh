@@ -80,10 +80,22 @@ case "$TE_WITH_SQLSERVER" in
     echo "=== TE_WITH_SQLSERVER=$TE_WITH_SQLSERVER: conector SQL Server DESHABILITADO por petición (stub, paquete más liviano) ==="
     ;;
   *)
+    # Detección de FreeTDS. OJO: el paquete MSYS2 mingw-w64-x86_64-freetds NO
+    # provee freetds.pc (pkg-config falla) y coloca el header en el subdir
+    # include/freetds/sybdb.h (no en include/sybdb.h). El bridge hace
+    # `#include <sybdb.h>`, así que cuando detectamos por ruta hay que añadir
+    # -I.../include/freetds a los CFLAGS o la compilación no encuentra el header.
+    MGW_PREFIX_U="$(cygpath -u "${MINGW_PREFIX:-/mingw64}" 2>/dev/null || echo /mingw64)"
     if pkg-config --exists freetds 2>/dev/null; then
       FREETDS_CFLAGS="$(pkg-config --cflags freetds)"
       FREETDS_LIB="$(pkg-config --libs freetds)"
-    elif [[ -f "$(cygpath -u "${MINGW_PREFIX:-/mingw64}")/include/sybdb.h" ]] || [[ -f /mingw64/include/sybdb.h ]]; then
+    elif [[ -f "$MGW_PREFIX_U/include/freetds/sybdb.h" ]] || [[ -f /mingw64/include/freetds/sybdb.h ]]; then
+      # Ubicación real en MSYS2: include/freetds/sybdb.h
+      FREETDS_INC="$MGW_PREFIX_U/include/freetds"; [[ -d "$FREETDS_INC" ]] || FREETDS_INC="/mingw64/include/freetds"
+      FREETDS_CFLAGS="-I$FREETDS_INC"
+      FREETDS_LIB="-lsybdb"
+    elif [[ -f "$MGW_PREFIX_U/include/sybdb.h" ]] || [[ -f /mingw64/include/sybdb.h ]]; then
+      # Ubicación plana (otras distros / instalación manual).
       FREETDS_LIB="-lsybdb"
     fi
     if [[ -n "$FREETDS_LIB" ]]; then
