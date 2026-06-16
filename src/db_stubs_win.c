@@ -13,6 +13,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "postgres_bridge.h"
 #include "sqlserver_bridge.h"
 
@@ -27,9 +28,43 @@ void native_postgres_query  (ASTNode* args) { (void)args; warn_unsupported("post
 void native_postgres_close  (ASTNode* args) { (void)args; warn_unsupported("postgres_close");   }
 
 #ifndef TE_WIN_HAVE_FREETDS
-void native_sqlserver_connect(ASTNode* args) { (void)args; warn_unsupported("sqlserver_connect"); }
-void native_sqlserver_query  (ASTNode* args) { (void)args; warn_unsupported("sqlserver_query");   }
-void native_sqlserver_close  (ASTNode* args) { (void)args; warn_unsupported("sqlserver_close");   }
+/* SQL Server no esta compilado en esta build (FreeTDS no estaba presente al
+ * enlazar). En vez del warning generico, explicamos la causa y la alternativa,
+ * y dejamos la causa en __sqlserver_error__ para que el .te pueda inspeccionarla
+ * igual que en el bridge real (sqlserver_connect devuelve -1). */
+static void mssql_unavailable(const char* fn) {
+    fprintf(stderr,
+        "[typeeasy] '%s' no esta disponible en esta build de Windows: el conector\n"
+        "           SQL Server requiere FreeTDS (libsybdb), que no se enlazo en este\n"
+        "           binario. Alternativas:\n"
+        "             - Usa la build de Linux (typeeasy_*.deb / .tar.gz), que SI lo trae.\n"
+        "             - O recompila en Windows con FreeTDS:\n"
+        "                 pacman -S mingw-w64-x86_64-freetds\n"
+        "                 bash scripts/build_native_windows.sh   (TE_WITH_SQLSERVER=auto)\n"
+        "           mysql_* y postgres_* no se ven afectados.\n",
+        fn);
+}
+
+void native_sqlserver_connect(ASTNode* args) {
+    (void)args;
+    mssql_unavailable("sqlserver_connect");
+    /* Exponer la causa en la variable de script, igual que el bridge real. */
+    ASTNode* e = create_ast_leaf("STRING", 0,
+        strdup("sqlserver no disponible en esta build de Windows (FreeTDS no enlazado); "
+               "usa la build Linux o recompila con mingw-w64-x86_64-freetds"), NULL);
+    add_or_update_variable("__sqlserver_error__", e); free_ast(e);
+    /* Devolver -1 (no conectado) para que `if (conn < 0)` funcione como en Linux. */
+    ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
+    add_or_update_variable("__ret__", r); free_ast(r);
+}
+void native_sqlserver_query  (ASTNode* args) {
+    (void)args;
+    mssql_unavailable("sqlserver_query");
+    ASTNode* r = create_ast_leaf("STRING", 0,
+        strdup("{\"error\":\"sqlserver_unavailable_windows_build\"}"), NULL);
+    add_or_update_variable("__ret__", r); free_ast(r);
+}
+void native_sqlserver_close  (ASTNode* args) { (void)args; mssql_unavailable("sqlserver_close"); }
 #endif
 
 /* Auto-cierre de conexiones por request: postgres es no-op en Windows (no hay

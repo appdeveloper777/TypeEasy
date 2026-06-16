@@ -49,6 +49,7 @@ jobs:
           install: >-
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-libmariadbclient
+            mingw-w64-x86_64-freetds
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-make
             mingw-w64-x86_64-cmake
@@ -119,6 +120,19 @@ jobs:
           echo "----- smoke#3 output (rc=$rc3) -----"; echo "$out3"; echo "-----------------------------------"
           [ $rc3 -eq 0 ] || { echo "FAIL: smoke#3 exit=$rc3 (multi-arg call segfault)"; exit 1; }
           echo "$out3" | grep -q "^ok-args$" || { echo "FAIL: smoke#3 sin 'ok-args'"; exit 1; }
+
+          # 4) SQL Server connector debe estar COMPILADO (FreeTDS enlazado), no el
+          #    stub "no esta disponible en esta build de Windows". No conectamos a
+          #    un server real: basta con que NO aparezca el mensaje del stub.
+          #    sqlserver_connect a un host inexistente devuelve -1 y deja la causa
+          #    en __sqlserver_error__ (bridge real) en vez del warning del stub.
+          printf 'let c = sqlserver_connect("127.0.0.1", "sa", "x", "db", 14333, { "encrypt": 0 });\nif (c < 0) { println("sqlserver-ok-real: " + __sqlserver_error__); } else { println("connected?!"); sqlserver_close(c); }\n' > .smoke/_smoke_mssql.te
+          out4="$("$BIN" .smoke/_smoke_mssql.te 2>&1)"; rc4=$?
+          echo "----- smoke#4 output (rc=$rc4) -----"; echo "$out4"; echo "-----------------------------------"
+          if echo "$out4" | grep -q "no esta disponible en esta build de Windows"; then
+            echo "FAIL: smoke#4 — sqlserver_* sigue en STUB (FreeTDS no se enlazo en el build)"; exit 1;
+          fi
+          echo "$out4" | grep -q "sqlserver-ok-real" || { echo "FAIL: smoke#4 sin 'sqlserver-ok-real' (bridge real no respondio)"; exit 1; }
 
           echo "Smoke tests OK"
         env:

@@ -2322,6 +2322,7 @@ let filas = postgres_query(conn, "SELECT * FROM clientes", "json");
 postgres_close(conn);`)}
 
 <h2>SQL Server</h2>
+<div class="note"><strong>Disponibilidad por plataforma.</strong> El conector <code class="inline">sqlserver_*</code> usa <strong>FreeTDS</strong> (db-lib). Las builds oficiales de <strong>Linux</strong> (<code class="inline">.deb</code> / <code class="inline">.tar.gz</code>) y <strong>Windows</strong> (instalador / <code class="inline">.zip</code>) lo traen incluido desde la <strong>v0.0.23</strong>. Si compilas tú mismo en Windows necesitas FreeTDS (<code class="inline">pacman -S mingw-w64-x86_64-freetds</code>); sin él, <code class="inline">sqlserver_connect</code> devuelve <code class="inline">-1</code> y <code class="inline">__sqlserver_error__</code> indica que falta el conector. <code class="inline">mysql_*</code> y <code class="inline">postgres_*</code> no dependen de FreeTDS.</div>
 ${te(`let conn = sqlserver_connect("host", "usuario", "clave", "basedatos", 1433);
 
 let filas = sqlserver_query(conn,
@@ -4747,6 +4748,7 @@ let rows = postgres_query(conn, "SELECT * FROM customers", "json");
 postgres_close(conn);`)}
 
 <h2>SQL Server</h2>
+<div class="note"><strong>Platform availability.</strong> The <code class="inline">sqlserver_*</code> connector uses <strong>FreeTDS</strong> (db-lib). The official <strong>Linux</strong> (<code class="inline">.deb</code> / <code class="inline">.tar.gz</code>) and <strong>Windows</strong> (installer / <code class="inline">.zip</code>) builds ship it from <strong>v0.0.23</strong> on. If you build Windows yourself you need FreeTDS (<code class="inline">pacman -S mingw-w64-x86_64-freetds</code>); without it, <code class="inline">sqlserver_connect</code> returns <code class="inline">-1</code> and <code class="inline">__sqlserver_error__</code> reports the missing connector. <code class="inline">mysql_*</code> and <code class="inline">postgres_*</code> do not depend on FreeTDS.</div>
 ${te(`let conn = sqlserver_connect("host", "user", "pass", "database", 1433);
 
 let rows = sqlserver_query(conn,
