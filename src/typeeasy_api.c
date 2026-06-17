@@ -495,18 +495,29 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
     /* v0.0.24: user-defined `@<name>` decorator guard. Runs a dev-defined global
      * guard lambda (e.g. `let login = fn() => { ... };` applied as `@login`)
      * before the handler. If the guard returns a falsy value (empty string, 0,
-     * false) — or is misconfigured/not found — the request fails closed with
-     * HTTP 401, mirroring the @auth reset pattern. The handler itself can read
-     * the authed identity by calling the same helper again (e.g. session_nick()). */
+     * false) — or is misconfigured/not found — the request is denied, mirroring
+     * the @auth reset pattern. The handler itself can read the authed identity by
+     * calling the same helper again (e.g. session_nick()).
+     *
+     * v0.0.26: the guard may pick the denial HTTP status by calling
+     * response_status(N) before returning a falsy value (e.g. 403, 500). If the
+     * guard does not set a status, denial defaults to 401. A not-found/not-callable
+     * guard always fails closed with 401 (its body never ran, so it cannot have
+     * chosen a status). */
     if (m->guard_name && m->guard_name[0]) {
         int ok = te_invoke_decorator_guard(m->guard_name);
         if (ok != 1) {
-            if (ok < 0) {
+            int deny_status = 401;
+            if (ok == 0) {
+                /* guard body ran and returned falsy: honor a status it set */
+                int chosen = typeeasy_http_get_status();
+                if (chosen > 0 && chosen != 200) deny_status = chosen;
+            } else {
                 fprintf(stderr,
                     "[TypeEasy] decorator guard '@%s' is not defined as a callable "
                     "lambda; denying request (fail-closed).\n", m->guard_name);
             }
-            typeeasy_http_set_status(401);
+            typeeasy_http_set_status(deny_status);
             runtime_reset_vars_to_initial_state();
             te_req_owned_free_all();
             g_te_request_active--;

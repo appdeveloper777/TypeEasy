@@ -57,6 +57,14 @@ let admin = fn() => {
     return "";
 };
 
+// Opcional: el guard puede ELEGIR el código de denegación llamando a
+// response_status(N) antes de retornar un valor falsy. Si no lo llama,
+// la denegación es 401 por defecto.
+//   let soloHorario = fn() => {
+//       if (fueraDeHorario()) { response_status(503); return ""; }  // 503
+//       return "ok";
+//   };
+
 // --- @login endpoint { ... }: el guard protege TODOS los métodos ---
 @login endpoint {
     // Pública: anulamos el guard del bloque NO es posible aquí; si querés

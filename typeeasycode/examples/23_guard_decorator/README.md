@@ -32,6 +32,28 @@ El guard se ejecuta **antes** del handler:
 | Truthy (string no vacío, número ≠ 0, objeto, etc.) | Pasa; el handler corre normalmente. |
 | El nombre no es una función definida | **401 fail-closed** (se deniega y se loguea un warning). |
 
+### Elegir el código de denegación (401 por defecto)
+
+El guard puede fijar el status de la respuesta llamando a `response_status(N)`
+**antes** de retornar un valor falsy. Si no lo llama, la denegación usa **401**:
+
+```typeeasy
+let login = fn() => {
+    let tok = request_cookie("session");
+    if (tok == "") { response_status(500); return ""; }  // deniega con 500
+    return tok;
+};
+```
+
+| Guard hace... | Respuesta al fallar |
+|---------------|---------------------|
+| `return "";` (sin `response_status`) | **401** |
+| `response_status(403); return "";` | **403** |
+| `response_status(500); return "";` | **500** |
+
+Nota: dos `return` seguidos NO funcionan (el segundo es código muerto). El guard
+solo decide truthy/falsy; el cuerpo `{"error":"unauthorized"}` lo pone el framework.
+
 Esto elimina el boilerplate repetido en cada handler:
 
 ```typeeasy

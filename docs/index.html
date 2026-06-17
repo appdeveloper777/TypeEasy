@@ -2135,6 +2135,15 @@ perfil() { return json("{\\"ok\\":true}"); }
 ${out('{"error":"unauthorized"}')}
 <div class="note">Elimina el boilerplate de <code class="inline">if (sesion == "") { response_status(401); return ...; }</code> en cada handler. Ejemplo completo: <code class="inline">examples/23_guard_decorator/</code>.</div>
 
+<h3>Elegir el código de denegación (401 por defecto)</h3>
+<p>El guard puede fijar el status llamando a <code class="inline">response_status(N)</code> <em>antes</em> de retornar un valor falsy. Si no lo llama, la denegación usa <strong>401</strong>:</p>
+${te(`let login = fn() => {
+    let tok = request_cookie("session");
+    if (tok == "") { response_status(500); return ""; }  // deniega con 500
+    return tok;
+};`)}
+<div class="note">Dos <code class="inline">return</code> seguidos no funcionan (el segundo es código muerto). El guard solo decide truthy/falsy; el cuerpo <code class="inline">{"error":"unauthorized"}</code> lo pone el framework.</div>
+
 <div class="pager">
   <a class="prev" href="#/binding">&larr; Model binding</a>
   <a href="#/cookies">Cookies y sesión &rarr;</a>
@@ -4583,6 +4592,15 @@ profile() { return json("{\\"ok\\":true}"); }
 }`)}
 ${out('{"error":"unauthorized"}')}
 <div class="note">Removes the <code class="inline">if (session == "") { response_status(401); return ...; }</code> boilerplate in every handler. Full example: <code class="inline">examples/23_guard_decorator/</code>.</div>
+
+<h3>Pick the denial status (401 by default)</h3>
+<p>The guard can set the status by calling <code class="inline">response_status(N)</code> <em>before</em> returning a falsy value. If it doesn't, denial defaults to <strong>401</strong>:</p>
+${te(`let login = fn() => {
+    let tok = request_cookie("session");
+    if (tok == "") { response_status(500); return ""; }  // deny with 500
+    return tok;
+};`)}
+<div class="note">Two consecutive <code class="inline">return</code>s do not work (the second is dead code). The guard only decides truthy/falsy; the <code class="inline">{"error":"unauthorized"}</code> body is set by the framework.</div>
 
 <div class="pager">
   <a class="prev" href="#/binding">&larr; Model binding</a>
