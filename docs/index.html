@@ -2112,6 +2112,29 @@ ${out('{"error":"unauthorized"}')}
 
 <div class="note"><strong>Secret.</strong> El secreto se lee de la variable de entorno <code class="inline">JWT_SECRET</code> (la misma para firmar y para <code class="inline">@auth</code>). Genera uno con <code class="inline">openssl rand -base64 48</code> y nunca lo pongas en el código.</div>
 
+<h2>Decorador propio <code class="inline">@&lt;nombre&gt;</code> (guard definible)</h2>
+<p>Además de <code class="inline">@auth</code>, podés definir <strong>tu propia</strong> lógica de autorización como una función global y usarla como decorador. El guard corre <em>antes</em> del handler: si devuelve un valor <strong>falsy</strong> (<code class="inline">""</code>, <code class="inline">0</code>, <code class="inline">false</code>, <code class="inline">null</code>) responde <strong>401</strong> automático y el handler no se ejecuta; si devuelve algo truthy, pasa.</p>
+${te(`// 1) defines tu guard (lo que signifique "autorizado" para vos)
+let login = fn() => {
+    let tok = request_cookie("session");
+    if (tok == "") { return ""; }   // falsy -> 401 automático
+    return tok;                      // truthy -> pasa
+};
+
+// 2) lo aplicas por método...
+@login
+[HttpGet("/api/perfil")]
+perfil() { return json("{\\"ok\\":true}"); }
+
+// ...o a TODO un bloque de una vez (un @admin per-método lo override):
+@login endpoint {
+    [HttpGet("/api/dashboard")] dashboard() { return json("{\\"ok\\":true}"); }
+    @admin
+    [HttpGet("/api/admin")]     adminArea() { return json("{\\"ok\\":true}"); }
+}`)}
+${out('{"error":"unauthorized"}')}
+<div class="note">Elimina el boilerplate de <code class="inline">if (sesion == "") { response_status(401); return ...; }</code> en cada handler. Ejemplo completo: <code class="inline">examples/23_guard_decorator/</code>.</div>
+
 <div class="pager">
   <a class="prev" href="#/binding">&larr; Model binding</a>
   <a href="#/cookies">Cookies y sesión &rarr;</a>
@@ -4537,6 +4560,29 @@ curl -i http://localhost:9000/api/profile`)}
 ${out('{"error":"unauthorized"}')}
 
 <div class="note"><strong>Secret.</strong> The secret is read from the <code class="inline">JWT_SECRET</code> environment variable (the same one to sign and for <code class="inline">@auth</code>). Generate one with <code class="inline">openssl rand -base64 48</code> and never put it in code.</div>
+
+<h2>Your own <code class="inline">@&lt;name&gt;</code> decorator (custom guard)</h2>
+<p>Besides <code class="inline">@auth</code>, you can define <strong>your own</strong> authorization logic as a global function and use it as a decorator. The guard runs <em>before</em> the handler: if it returns a <strong>falsy</strong> value (<code class="inline">""</code>, <code class="inline">0</code>, <code class="inline">false</code>, <code class="inline">null</code>) it responds with an automatic <strong>401</strong> and the handler never runs; if it returns something truthy, it passes.</p>
+${te(`// 1) define your guard (whatever "authorized" means to you)
+let login = fn() => {
+    let tok = request_cookie("session");
+    if (tok == "") { return ""; }   // falsy -> automatic 401
+    return tok;                      // truthy -> passes
+};
+
+// 2) apply it per method...
+@login
+[HttpGet("/api/profile")]
+profile() { return json("{\\"ok\\":true}"); }
+
+// ...or to a WHOLE block at once (a per-method @admin overrides it):
+@login endpoint {
+    [HttpGet("/api/dashboard")] dashboard() { return json("{\\"ok\\":true}"); }
+    @admin
+    [HttpGet("/api/admin")]     adminArea() { return json("{\\"ok\\":true}"); }
+}`)}
+${out('{"error":"unauthorized"}')}
+<div class="note">Removes the <code class="inline">if (session == "") { response_status(401); return ...; }</code> boilerplate in every handler. Full example: <code class="inline">examples/23_guard_decorator/</code>.</div>
 
 <div class="pager">
   <a class="prev" href="#/binding">&larr; Model binding</a>

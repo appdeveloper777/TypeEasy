@@ -17,11 +17,22 @@
     int g_debug_mode = 0;
     static int g_pending_auth = 0;   /* @auth decorator flag, applied to next endpoint_method */
     static int g_endpoint_auth_all = 0; /* @auth at endpoint level, applied to ALL methods */
+    /* v0.0.24 — user-defined guard at endpoint level: `@<name> endpoint { ... }`
+     * (or `endpoint @<name> { ... }`) applies the guard to every method in the
+     * block. Holds the guard function name while the block is parsed; each
+     * endpoint_methods reduction strdup's it into MethodNode.guard_name when the
+     * method has no per-method `@<name>` of its own. */
+    static char *g_endpoint_guard_all = NULL;
     /* C#/.NET-style `async` endpoint modifier. The lexer (parser.l) sets this to
      * 1 when it strips an `async` that follows ']' (an endpoint handler), and the
      * endpoint_methods reduction below copies it into MethodNode.is_async, then
      * clears it. Non-static so the lexer translation unit shares it via extern. */
     int g_pending_async = 0;
+    /* v0.0.24 — user-defined `@<name>` decorator. The grammar captures the guard
+     * function name here when a decorator_marker is reduced, and the
+     * endpoint_methods reduction transfers ownership into MethodNode.guard_name
+     * (then nulls this) so it applies to the next endpoint method only. */
+    static char *g_pending_guard = NULL;
     /* v0.1.0 — WebSocket lifecycle blocks (on_open/on_message/on_close).
      * Filled while parsing a single [WebSocket] handler body, then consumed by
      * the WS endpoint_method action. Reset at the start of each WS handler. */
@@ -70,6 +81,7 @@
 %token AGENT LISTENER BRIDGE STATE MATCH CASE
 %token NODE ENDPOINT
 %token AUTH
+%token <sval> DECORATOR
 %type <sval> method_name
 %type <sval> method_return_type
 %type <sval> type_name
@@ -100,7 +112,7 @@
 %type <node> object_literal key_value_list key_value_pair
 %type <node> node_decl
 %type <node> state_decl
-%type <node> endpoint_decl auth_endpoint_decl endpoint_methods endpoint_method
+%type <node> endpoint_decl auth_endpoint_decl guard_endpoint_decl endpoint_methods endpoint_method
 %type <node> ws_body ws_clauses ws_clause
 %type <ival> cache_decorator
 %right ARROW
@@ -131,6 +143,8 @@ program:
     | endpoint_decl           { $$ = $1; root = $$; }
     | program auth_endpoint_decl { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; root = $$; }
     | auth_endpoint_decl      { $$ = $1; root = $$; }
+    | program guard_endpoint_decl { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; root = $$; }
+    | guard_endpoint_decl     { $$ = $1; root = $$; }
     | cache_decorator endpoint_decl { if ($2 && $2->extra) ((MethodNode*)$2->extra)->cache_ttl = $1; $$ = $2; root = $$; }
     | httpget_method_decl     { $$ = $1; root = $$; }
     | cache_decorator httpget_method_decl { if ($2 && $2->extra) ((MethodNode*)$2->extra)->cache_ttl = $1; $$ = $2; root = $$; }
@@ -156,19 +170,41 @@ auth_endpoint_decl:
         { g_endpoint_auth_all = 0; $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
     ;
 
+/* v0.0.24 — user-defined guard applied to ALL methods of the block. Two
+ * spellings are accepted: `@<name> endpoint { ... }` (consistent with
+ * `@auth endpoint`) and `endpoint @<name> { ... }`. Per-method `@<name>` (if
+ * present) overrides the block-level guard for that method. */
+guard_endpoint_decl:
+      DECORATOR ENDPOINT LBRACKET { g_endpoint_guard_all = $1; } endpoint_methods RBRACKET
+        { if (g_endpoint_guard_all) free(g_endpoint_guard_all); g_endpoint_guard_all = NULL; $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
+    | ENDPOINT DECORATOR LBRACKET { g_endpoint_guard_all = $2; } endpoint_methods RBRACKET
+        { if (g_endpoint_guard_all) free(g_endpoint_guard_all); g_endpoint_guard_all = NULL; $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
+    ;
+
 endpoint_methods:
     endpoint_method
-        { if (global_methods) { global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; global_methods->is_async = g_pending_async; } g_pending_auth = 0; g_pending_async = 0; $$ = NULL; }
+        { if (global_methods) { global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; global_methods->is_async = g_pending_async; global_methods->guard_name = g_pending_guard ? g_pending_guard : (g_endpoint_guard_all ? strdup(g_endpoint_guard_all) : NULL); } g_pending_auth = 0; g_pending_async = 0; g_pending_guard = NULL; $$ = NULL; }
     | endpoint_methods endpoint_method
-        { if (global_methods) { global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; global_methods->is_async = g_pending_async; } g_pending_auth = 0; g_pending_async = 0; $$ = NULL; }
+        { if (global_methods) { global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; global_methods->is_async = g_pending_async; global_methods->guard_name = g_pending_guard ? g_pending_guard : (g_endpoint_guard_all ? strdup(g_endpoint_guard_all) : NULL); } g_pending_auth = 0; g_pending_async = 0; g_pending_guard = NULL; $$ = NULL; }
     | auth_marker
         { $$ = NULL; }
     | endpoint_methods auth_marker
+        { $$ = NULL; }
+    | decorator_marker
+        { $$ = NULL; }
+    | endpoint_methods decorator_marker
         { $$ = NULL; }
     ;
 
 auth_marker:
     AUTH { g_pending_auth = 1; }
+    ;
+
+/* v0.0.24 \u2014 user-defined `@<name>` decorator marker. Captures the guard
+ * function name; the enclosing endpoint_methods reduction attaches it to the
+ * next endpoint method's MethodNode.guard_name. */
+decorator_marker:
+    DECORATOR { if (g_pending_guard) free(g_pending_guard); g_pending_guard = $1; }
     ;
 
 endpoint_method:
@@ -310,6 +346,7 @@ httpget_method_decl:
             m->name = strdup($4);
             m->body = $9;
             m->params = $6;
+            m->guard_name = NULL;
             m->next = global_methods;
             global_methods = m;            
             $$ = NULL;           

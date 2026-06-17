@@ -1869,6 +1869,7 @@ void inherit_from(ClassNode *child, char *parent_name) {
         cm->http_method = pm->http_method ? strdup(pm->http_method) : NULL;
         cm->cache_ttl = pm->cache_ttl;
         cm->requires_auth = pm->requires_auth;
+        cm->guard_name = pm->guard_name ? strdup(pm->guard_name) : NULL;
         cm->return_type = pm->return_type ? strdup(pm->return_type) : NULL;
         cm->bc_body = NULL;            /* don't share bytecode cache */
         cm->next = NULL;
@@ -1951,6 +1952,7 @@ void add_method_to_class(ClassNode *cls, char *method, ParameterNode *params, AS
     m->route_path = NULL;
     m->http_method = NULL;
     m->cache_ttl = 0;
+    m->guard_name = NULL;
     m->return_type = return_type ? strdup(return_type) : NULL;
     m->bc_body = NULL; /* Ola 4: lazy bytecode cache */
     m->next = cls->methods;
@@ -1967,6 +1969,7 @@ void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *
     ctor->route_path = NULL;
     ctor->http_method = NULL;
     ctor->cache_ttl = 0;
+    ctor->guard_name = NULL;
     ctor->return_type = strdup("void");
     ctor->bc_body = NULL; /* Ola 4: lazy bytecode cache */
     ctor->next = class->methods;
@@ -5981,6 +5984,48 @@ static void interpret_call_expr(ASTNode *node) {
     if (res) add_or_update_variable("__ret__", res);
 }
 
+/* v0.0.24 — user-defined `@<name>` decorator guard.
+ * Resolves `name` to a global LAMBDA variable (e.g. `let login = fn() => {...}`),
+ * invokes it with no arguments inside the active request context, and reports
+ * whether the result is "truthy":
+ *   - non-empty string            -> pass (1)
+ *   - non-zero int / true bool     -> pass (1)
+ *   - non-zero float               -> pass (1)
+ *   - non-null object              -> pass (1)
+ *   - empty string "", 0, false    -> deny (0)
+ * Returns -1 when `name` does not resolve to a callable lambda (misconfigured
+ * guard). The caller fails closed (responds 401) on both 0 and -1. */
+int te_invoke_decorator_guard(const char *name) {
+    if (!name || !*name) return -1;
+
+    Variable *fv = find_variable(name);
+    if (!fv || fv->vtype != VAL_OBJECT || !fv->type ||
+        strcmp(fv->type, "LAMBDA") != 0) {
+        /* Not a lambda — guard not defined or not callable. */
+        return -1;
+    }
+
+    ASTNode *lambda = (ASTNode*)(intptr_t)fv->value.object_value;
+    ASTNode *res = call_lambda(lambda, NULL);
+    if (res) add_or_update_variable("__ret__", res);
+
+    Variable *ret = find_variable("__ret__");
+    if (!ret) return 0;
+
+    switch (ret->vtype) {
+        case VAL_STRING:
+            return (ret->value.string_value && ret->value.string_value[0]) ? 1 : 0;
+        case VAL_INT:   /* covers BOOL (stored as 0/1) */
+            return ret->value.int_value != 0 ? 1 : 0;
+        case VAL_FLOAT:
+            return ret->value.float_value != 0.0 ? 1 : 0;
+        case VAL_OBJECT:
+            return ret->value.object_value != NULL ? 1 : 0;
+        default:
+            return 0;
+    }
+}
+
 /* CSV/LINQ columnar cache + lambda specializer now live in te_colcache.{c,h}
  * (Fase 2 paso 3). Public surface declared in te_colcache.h. */
 
@@ -8200,6 +8245,58 @@ ASTNode* call_lambda(ASTNode *lambda, ASTNode *argsList) {
     return r;
 }
 
+/* ─── Parameter scoping for lambda calls ──────────────────────────────────
+ * TypeEasy stores every variable in the single global `vars[]` array; there
+ * is no per-call scope. Binding a lambda parameter therefore writes straight
+ * into that global array via add_or_update_variable(). When a parameter name
+ * coincides with an *outer* variable that happens to be const (e.g. a `let
+ * conn = mysql_connect(...)` reused as the param `conn`, or a map key whose
+ * name matches a const in scope), the binding used to abort with
+ *   "Error: cannot assign to constant variable '<name>'."
+ * (reported bugs #1 and #2 in 0.0.23). Parameters are local to the call and
+ * must *shadow* any outer variable — const or not. We save the outer slot's
+ * contents before binding and restore them once the body has run, so the
+ * outer const is untouched after the call returns. Save/restore lives on the
+ * C stack, making it re-entrant for recursive lambdas. */
+#define LAMBDA_MAX_SHADOW 64
+typedef struct { Variable *slot; Variable saved; } ParamShadow;
+
+static void te_lambda_save_shadow(const char *name, ParamShadow *sh, int *n) {
+    Variable *ex = find_variable_for(name);
+    if (!ex) return;                       /* fresh param: nothing to shadow */
+    for (int i = 0; i < *n; i++)
+        if (sh[i].slot == ex) return;      /* duplicate param name: already saved */
+    if (*n >= LAMBDA_MAX_SHADOW) return;   /* pathological arity: skip tracking */
+    ParamShadow *ps = &sh[(*n)++];
+    ps->slot  = ex;
+    ps->saved = *ex;                       /* shallow copy of the union + tags */
+    /* Deep-copy owned strings: add_or_update_variable() frees the slot's
+     * `type` (always) and `string_value` (when VAL_STRING) while binding. */
+    ps->saved.type = ex->type ? strdup(ex->type) : NULL;
+    if (ex->vtype == VAL_STRING)
+        ps->saved.value.string_value =
+            ex->value.string_value ? strdup(ex->value.string_value) : NULL;
+    ex->is_const = 0;                      /* allow the param to overwrite */
+}
+
+static void te_lambda_restore_shadows(ParamShadow *sh, int n) {
+    for (int k = n - 1; k >= 0; k--) {
+        Variable *slot = sh[k].slot;
+        /* Release the parameter value currently in the slot. */
+        free(slot->type);
+        if (slot->vtype == VAL_STRING && slot->value.string_value)
+            free(slot->value.string_value);
+        /* Restore the outer variable (ownership of saved.type / saved string
+         * transfers back to the slot). `id` was never touched. */
+        slot->is_const = sh[k].saved.is_const;
+        slot->vtype    = sh[k].saved.vtype;
+        slot->type     = sh[k].saved.type;
+        slot->value    = sh[k].saved.value;
+    }
+}
+
+static ASTNode* call_lambda_exec_body(ASTNode *lambda);
+
 static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
     if (!lambda || !lambda->id) {
         return create_ast_leaf("NULL", 0, NULL, NULL);
@@ -8208,6 +8305,8 @@ static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
     const char *params = lambda->id;
     /* Bind args a params, en orden. argsList puede ser NULL o lista por ->right. */
     ASTNode *cur_arg = argsList;
+    ParamShadow _shadows[LAMBDA_MAX_SHADOW];
+    int _nshadow = 0;
     if (params[0]) {
         const char *p = params;
         while (*p) {
@@ -8270,10 +8369,20 @@ static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
             } else {
                 valNode = create_ast_leaf("NULL", 0, NULL, NULL);
             }
+            /* Param scoping: shadow any outer var (const-safe), then bind. */
+            te_lambda_save_shadow(name, _shadows, &_nshadow);
             add_or_update_variable(name, valNode);
             if (*e == '\1') p = e + 1; else p = e;
         }
     }
+    {
+        ASTNode *_lam_res = call_lambda_exec_body(lambda);
+        te_lambda_restore_shadows(_shadows, _nshadow);
+        return _lam_res;
+    }
+}
+
+static ASTNode* call_lambda_exec_body(ASTNode *lambda) {
     /* Ejecutar el body */
     ASTNode *body = lambda->left;
     if (!body) return create_ast_leaf("NULL", 0, NULL, NULL);

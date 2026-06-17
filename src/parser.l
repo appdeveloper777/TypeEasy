@@ -230,6 +230,10 @@
 "node"                  { return NODE; }
 "@Cache"                { yylval.sval = strdup(yytext); return CACHE; }
 "@auth"                 { return AUTH; }
+ /* User-defined decorator `@<name>` (v0.0.24). Placed AFTER @Cache/@auth so
+  * those win on equal-length match (flex earliest-rule-wins). Strips the '@'
+  * and passes the bare guard-function name to the parser. */
+"@"[a-zA-Z_][a-zA-Z0-9_]* { yylval.sval = strdup(yytext + 1); return DECORATOR; }
 
 "for"                   { return FOR; }
 "foreach"               { return FOREACH; }

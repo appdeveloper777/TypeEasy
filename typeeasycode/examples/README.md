@@ -22,6 +22,7 @@ Categorias organizadas por concepto. Cada carpeta tiene su propio README.
 | `18_cors/`       | CORS: consumir la API desde otro dominio (`--cors-origin`) |
 | `21_cookies/`    | Sesión con cookies (`request_cookie` + `Set-Cookie`) |
 | `22_response_headers/` | Cabeceras de respuesta personalizadas (`response_header`) |
+| `23_guard_decorator/` | Decorador `@<nombre>` definible: guard propio → 401 automático |
 | `_scratch/`      | Tests de debug / temporales (no en regression)     |
 
 ## Como correr un test

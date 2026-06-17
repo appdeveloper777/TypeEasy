@@ -198,6 +198,10 @@ typedef struct MethodNode {
     char *http_method;   // For endpoints
     int cache_ttl;       // For endpoint cache decorator
     int requires_auth;   // For endpoint @auth decorator (Bearer JWT required)
+    char *guard_name;    // For user-defined `@<name>` decorator: name of a global
+                         // guard function/lambda. Called before the handler; if it
+                         // returns a falsy value (empty string, 0, false) the request
+                         // is answered with 401. NULL = no guard. (v0.0.24)
     int is_async;        // 1 if declared with the C#/.NET-style `async` modifier
                          // (gates cooperative request overlap on await).
     char *return_type;   // "int" | "string" | "float" | "void" | "dynamic" | NULL (legacy/internal)
@@ -232,7 +236,14 @@ void invalidate_cache(MethodNode *method);
 int   typeeasy_ws_is_lifecycle(MethodNode *method);
 char *typeeasy_ws_invoke_open(MethodNode *method);
 char *typeeasy_ws_invoke_message(MethodNode *method);
-char *typeeasy_ws_invoke_close(MethodNode *method);typedef struct ParameterNode {
+char *typeeasy_ws_invoke_close(MethodNode *method);
+/* v0.0.24 — user-defined `@<name>` decorator guard. Invokes the global guard
+ * function/lambda `name` with no args inside the active request context and
+ * reports whether it "passes". Returns: 1 = pass (truthy result), 0 = deny
+ * (falsy: empty string, 0, false, null), -1 = guard not found/not callable.
+ * Defined in ast.c. */
+int te_invoke_decorator_guard(const char *name);
+typedef struct ParameterNode {
     char *name;
     char *type;
     /* Ola 3 Fase B (perf): cached pointer to the Variable* used by this
