@@ -1350,9 +1350,32 @@ env("PUERTO", "8080");       // valor o default
 env_required("API_KEY");     // lanza error si falta`)}
 
 <h2>HTTP cliente</h2>
-${te(`let respuesta = http_get("http://api.ejemplo.com/datos");
-let r = http_post("http://api.ejemplo.com", "{\\"x\\":1}");`)}
-<div class="note"><strong>Nota.</strong> El cliente HTTP integrado es HTTP/1.0 plano (sin HTTPS). Para HTTPS usa un plugin externo.</div>
+${te(`let respuesta = http_get("https://api.ejemplo.com/datos");
+let r = http_post("https://api.ejemplo.com", "{\\"x\\":1}");`)}
+<div class="note"><strong>Nota.</strong> El cliente HTTP integrado soporta HTTPS (TLS) de forma nativa, además de cabeceras personalizadas y el código de estado de la respuesta.</div>
+
+<h3>Cabeceras personalizadas</h3>
+<p>Pásalas como último argumento, en formato <strong>string</strong> (<code class="inline">"Nombre: valor"</code> separadas por <code class="inline">\\r\\n</code>) o como <strong>mapa</strong> <code class="inline">{ "Nombre": "valor" }</code>.</p>
+${te(`// Como string (varias cabeceras separadas por \\r\\n)
+http_get("https://api.ejemplo.com/x", "X-API-Key: SECRETO\\r\\nAuthorization: Bearer TOK");
+
+// Como mapa (más legible)
+http_post("https://api.ejemplo.com/x", "{\\"a\\":1}", { "X-API-Key": "SECRETO" });
+http_request("PUT", "https://api.ejemplo.com/x", "{\\"e\\":1}", { "Authorization": "Bearer TOK" });`)}
+
+<h3>Código de estado de la respuesta</h3>
+<p><code class="inline">http_last_status()</code> devuelve el código HTTP de la última llamada (<code class="inline">200</code>, <code class="inline">404</code>, <code class="inline">500</code>…) o <code class="inline">0</code> si no hubo respuesta (fallo de red / host inexistente).</p>
+${te(`let body = http_get("https://httpbin.org/status/404");
+let code = http_last_status();   // 404
+if (code == 0) {
+    // sin conexión: reintentar más tarde
+} else if (code >= 200 && code < 300) {
+    // éxito
+} else if (code >= 400 && code < 500) {
+    // request rechazado por el servidor
+} else {
+    // error del servidor: reintentar
+}`)}
 
 <h2>Consumir un API dentro de un endpoint</h2>
 <p>Un caso típico: tu endpoint llama a otro servicio, parsea el JSON de respuesta y devuelve un resultado propio. El patrón es <code class="inline">http_get</code> &rarr; <code class="inline">json_parse</code> &rarr; <strong>guardar cada campo en una variable</strong> &rarr; <code class="inline">json(...)</code>.</p>
@@ -3820,9 +3843,32 @@ env("PORT", "8080");         // value or default
 env_required("API_KEY");     // throws if missing`)}
 
 <h2>HTTP client</h2>
-${te(`let response = http_get("http://api.example.com/data");
-let r = http_post("http://api.example.com", "{\\"x\\":1}");`)}
-<div class="note"><strong>Note.</strong> The built-in HTTP client is plain HTTP/1.0 (no HTTPS). For HTTPS use an external plugin.</div>
+${te(`let response = http_get("https://api.example.com/data");
+let r = http_post("https://api.example.com", "{\\"x\\":1}");`)}
+<div class="note"><strong>Note.</strong> The built-in HTTP client supports HTTPS (TLS) natively, plus custom request headers and the response status code.</div>
+
+<h3>Custom request headers</h3>
+<p>Pass them as the last argument, either as a <strong>string</strong> (<code class="inline">"Name: value"</code> lines separated by <code class="inline">\\r\\n</code>) or as a <strong>map</strong> <code class="inline">{ "Name": "value" }</code>.</p>
+${te(`// As a string (multiple headers separated by \\r\\n)
+http_get("https://api.example.com/x", "X-API-Key: SECRET\\r\\nAuthorization: Bearer TOK");
+
+// As a map (more readable)
+http_post("https://api.example.com/x", "{\\"a\\":1}", { "X-API-Key": "SECRET" });
+http_request("PUT", "https://api.example.com/x", "{\\"e\\":1}", { "Authorization": "Bearer TOK" });`)}
+
+<h3>Response status code</h3>
+<p><code class="inline">http_last_status()</code> returns the HTTP status code of the last call (<code class="inline">200</code>, <code class="inline">404</code>, <code class="inline">500</code>…) or <code class="inline">0</code> when there was no response (network failure / unreachable host).</p>
+${te(`let body = http_get("https://httpbin.org/status/404");
+let code = http_last_status();   // 404
+if (code == 0) {
+    // no connection: retry later
+} else if (code >= 200 && code < 300) {
+    // success
+} else if (code >= 400 && code < 500) {
+    // request rejected by the server
+} else {
+    // server error: retry
+}`)}
 
 <h2>Consuming an API inside an endpoint</h2>
 <p>A typical case: your endpoint calls another service, parses the response JSON and returns its own result. The pattern is <code class="inline">http_get</code> &rarr; <code class="inline">json_parse</code> &rarr; <strong>store each field in a variable</strong> &rarr; <code class="inline">json(...)</code>.</p>
