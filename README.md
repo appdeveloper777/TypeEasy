@@ -72,7 +72,8 @@ typeeasy --api hola.te --port 8080      # -> http://localhost:8080/
 
 Página oficial: (https://appdeveloper777.github.io/TypeEasy/#/home)
 
-<img width="1892" height="1052" alt="image" src="https://github.com/user-attachments/assets/a2f9e155-1eb7-4834-935a-e703d3f15743" />
+<img width="1536" height="1024" alt="Designer (40)" src="https://github.com/user-attachments/assets/1a2a7c54-1232-40e6-84af-7b3248276a9c" />
+
 
 
 ---
