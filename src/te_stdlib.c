@@ -265,6 +265,29 @@ ASTNode *te_resolve_arg(ASTNode *arg, const char **out_type) {
 
 
 
+/* Feature 2: normalize an HTTP-headers argument into the "Name: value\n..."
+ * wire format te_http_do() expects. Accepts either:
+ *   - a string already in "Name: value" lines (any '\n'/'\r\n' separators), or
+ *   - a map / object literal { "Name": "value", ... } which is serialized here.
+ * Returns a malloc'd string (caller frees), or NULL when there is no arg. */
+static char* te_http_headers_arg(ASTNode *n) {
+    if (!n) return NULL;
+    ASTNode *map = resolve_to_map(n);
+    if (map) {
+        TeBuf b; tebuf_init(&b);
+        for (ASTNode *pair = map->left; pair; pair = pair->right) {
+            if (!pair->id) continue;
+            char *val = get_node_string(pair->left);
+            tebuf_puts(&b, pair->id);
+            tebuf_puts(&b, ": ");
+            if (val) { tebuf_puts(&b, val); free(val); }
+            tebuf_puts(&b, "\n");
+        }
+        return b.p; /* "" for an empty map; te_http_do treats it as no headers */
+    }
+    return get_node_string(n);
+}
+
 /* ============================================================
  * te_builtin_dispatch — legacy if-chain dispatcher for builtins
  * not yet migrated to the registry. Returns 1 on hit.
@@ -675,7 +698,7 @@ int te_builtin_dispatch(ASTNode *node) {
     if (strcmp(fn, "http_get") == 0) {
         /* http_get(url) | http_get(url, headers) */
         char *url   = a0 ? get_node_string(a0) : NULL;
-        char *hdrs  = a1 ? get_node_string(a1) : NULL;
+        char *hdrs  = te_http_headers_arg(a1);
         char *body  = url ? te_http_do("GET", url, NULL, hdrs) : NULL;
         if (url) free(url);
         if (hdrs) free(hdrs);
@@ -689,7 +712,7 @@ int te_builtin_dispatch(ASTNode *node) {
         char *url  = a0 ? get_node_string(a0) : NULL;
         char *post = a1 ? get_node_string(a1) : NULL;
         ASTNode *a2 = a1 ? a1->next : NULL; /* gotcha #1: 3rd arg via ->next */
-        char *hdrs = a2 ? get_node_string(a2) : NULL;
+        char *hdrs = te_http_headers_arg(a2);
         char *body = url ? te_http_do("POST", url, post ? post : "", hdrs) : NULL;
         if (url) free(url);
         if (post) free(post);
@@ -708,7 +731,7 @@ int te_builtin_dispatch(ASTNode *node) {
         ASTNode *a2  = a1 ? a1->next : NULL; /* gotcha #1: 3rd arg via ->next */
         ASTNode *a3  = a2 ? a2->next : NULL; /* gotcha #1: 4th arg via ->next */
         char *post   = a2 ? get_node_string(a2) : NULL;
-        char *hdrs   = a3 ? get_node_string(a3) : NULL;
+        char *hdrs   = te_http_headers_arg(a3);
         char *body   = (method && url) ? te_http_do(method, url, post, hdrs) : NULL;
         if (method) free(method);
         if (url) free(url);
@@ -717,6 +740,14 @@ int te_builtin_dispatch(ASTNode *node) {
         ASTNode *r = create_ast_leaf("STRING", 0, body ? body : "", NULL);
         if (body) free(body);
         add_or_update_variable("__ret__", r);
+        return 1;
+    }
+
+    if (strcmp(fn, "http_last_status") == 0) {
+        /* Feature 1: HTTP status code of the last http_get/post/request call.
+         * 0 = no response (network failure / unreachable host). */
+        add_or_update_variable("__ret__",
+            create_ast_leaf_number("INT", te_http_last_status(), NULL, NULL));
         return 1;
     }
 

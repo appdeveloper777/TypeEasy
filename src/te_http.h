@@ -17,4 +17,9 @@
 char* te_http_do(const char *method, const char *url,
                  const char *body, const char *headers_str);
 
+/* HTTP status code of the most recent te_http_do() call.
+ * 0 means "no response" (network failure / unreachable host); otherwise it is
+ * the numeric HTTP status (200, 404, 500, ...). Exposed via http_last_status(). */
+int te_http_last_status(void);
+
 #endif /* TE_HTTP_H */

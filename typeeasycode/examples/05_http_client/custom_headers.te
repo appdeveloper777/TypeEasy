@@ -1,0 +1,71 @@
+// ============================================================
+// Cabeceras HTTP personalizadas + código de estado de la respuesta
+// ------------------------------------------------------------
+// Muestra cómo:
+//   1) Enviar cabeceras custom (Authorization, X-API-Key, ...) en
+//      http_get / http_post / http_request.
+//   2) Leer el código de estado HTTP de la última llamada con
+//      http_last_status() (200, 404, 500, ... ó 0 si no hubo respuesta).
+//
+// Servidor de prueba: httpbin.org (público). httpbin devuelve en el body
+// JSON los headers que recibió, así que podemos comprobar que llegaron.
+//
+// Correr:  te examples/05_http_client/custom_headers.te
+// ============================================================
+
+println("=== 1) Cabeceras como STRING (una o varias líneas) ===");
+// Varias cabeceras: sepáralas con "\r\n" (o "\n").
+let r1 = http_get("https://httpbin.org/get",
+                  "X-API-Key: SECRET-123\r\nAuthorization: Bearer TOKEN-XYZ");
+println("status = " + http_last_status());          // 200
+println(r1);                                          // el JSON incluye X-Api-Key y Authorization
+
+println("");
+println("=== 2) Cabeceras como MAP { \"Nombre\": \"valor\" } ===");
+// Más legible cuando son varias. TypeEasy las serializa a "Nombre: valor".
+let r2 = http_post("https://httpbin.org/post",
+                   "{\"factura\":\"F001-123\"}",
+                   { "X-API-Key": "SECRET-MAP", "Content-Type": "application/json" });
+println("status = " + http_last_status());          // 200
+println(r2);                                          // el JSON incluye X-Api-Key: SECRET-MAP
+
+println("");
+println("=== 3) http_request con método explícito + cabeceras ===");
+let r3 = http_request("PUT", "https://httpbin.org/put",
+                      "{\"estado\":\"aprobado\"}",
+                      { "Authorization": "Bearer TOKEN-PUT" });
+println("status = " + http_last_status());          // 200
+
+println("");
+println("=== 4) Distinguir éxito / error del servidor / fallo de red ===");
+// Útil en facturación: 4xx = documento rechazado (reintento inútil),
+// 5xx = error del PAC (quizá reintentar), 0 = no hubo conexión (reintentar).
+http_get("https://httpbin.org/status/200");
+println("esperado 200 -> " + http_last_status());
+
+http_get("https://httpbin.org/status/404");
+println("esperado 404 -> " + http_last_status());
+
+http_get("https://httpbin.org/status/500");
+println("esperado 500 -> " + http_last_status());
+
+http_get("https://no-existe-xyz-12345.example/");
+println("fallo de red -> " + http_last_status());   // 0
+
+println("");
+println("=== Patrón recomendado de manejo de errores ===");
+let body = http_post("https://httpbin.org/status/200",
+                     "{\"doc\":\"F001-1\"}",
+                     { "X-API-Key": "SECRET" });
+let code = http_last_status();
+if (code == 0) {
+    println("Sin conexión con el PAC: reintentar más tarde.");
+} else if (code >= 200 && code < 300) {
+    println("Documento aceptado (" + code + ").");
+} else if (code >= 400 && code < 500) {
+    println("Documento rechazado por el PAC (" + code + "): revisar payload.");
+} else {
+    println("Error del PAC (" + code + "): reintentar.");
+}
+
+println("=== FIN ===");

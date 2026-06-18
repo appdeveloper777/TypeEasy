@@ -321,6 +321,7 @@
             if (*s == '\0') break;
             switch (*s) {
                 case 'n': *w++ = '\n'; break;
+                case 'r': *w++ = '\r'; break;
                 case 't': *w++ = '\t'; break;
                 case '"': *w++ = '"'; break;
                 case '\\': *w++ = '\\'; break;
@@ -353,6 +354,7 @@
             if (*s == '\0') break;
             switch (*s) {
                 case 'n': *w++ = '\n'; break;
+                case 'r': *w++ = '\r'; break;
                 case 't': *w++ = '\t'; break;
                 case '"': *w++ = '"'; break;
                 case '\\': *w++ = '\\'; break;

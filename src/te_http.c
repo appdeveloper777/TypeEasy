@@ -41,8 +41,31 @@
   #include <openssl/err.h>
 #endif
 
-/* Minimal HTTP/1.0 client over plain TCP. Returns body as malloc'd string (caller frees), or NULL. */
-static char* te_http_request(const char *method, const char *url, const char *body) {
+/* Feature: HTTP response status code of the most recent te_http_do() call.
+ * 0 means "no response" (network failure / unreachable host); otherwise it is
+ * the numeric HTTP status (200, 404, 500, ...). Exposed to scripts via the
+ * http_last_status() builtin. The interpreter is single-threaded, so reading
+ * this global right after the call is reliable. */
+static int g_http_last_status = 0;
+int te_http_last_status(void) { return g_http_last_status; }
+
+/* Portable case-insensitive prefix compare (avoids depending on strncasecmp /
+ * <strings.h> being available identically across MinGW and glibc). */
+static int te_strncasecmp(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char ca = (unsigned char)a[i], cb = (unsigned char)b[i];
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return (int)ca - (int)cb;
+        if (ca == 0) break;
+    }
+    return 0;
+}
+
+/* Minimal HTTP/1.0 client over plain TCP. Returns body as malloc'd string (caller frees), or NULL.
+ * headers_str: "Name: value" lines separated by '\n' (a trailing '\r' is tolerated), or NULL. */
+static char* te_http_request(const char *method, const char *url, const char *body,
+                             const char *headers_str) {
     if (!url) return NULL;
 #ifdef _WIN32
     /* En Windows toda llamada a sockets requiere WSAStartup previo. El servidor
@@ -157,10 +180,36 @@ static char* te_http_request(const char *method, const char *url, const char *bo
     if (strcmp(port, use_tls ? "443" : "80") != 0) { tebuf_putc(&req, ':'); tebuf_puts(&req, port); }
     tebuf_puts(&req, "\r\n");
     tebuf_puts(&req, "User-Agent: TypeEasy/1.0\r\nAccept: */*\r\nConnection: close\r\n");
+    /* Feature 2: forward custom request headers. Each non-empty "Name: value"
+     * line (separated by '\n', tolerating a trailing '\r') is sent verbatim.
+     * If the caller provides its own Content-Type we skip the default below. */
+    int caller_set_ctype = 0;
+    if (headers_str && *headers_str) {
+        const char *p = headers_str;
+        while (*p) {
+            const char *nl = strchr(p, '\n');
+            size_t L = nl ? (size_t)(nl - p) : strlen(p);
+            while (L > 0 && (p[L-1] == '\r' || p[L-1] == ' ' || p[L-1] == '\t')) L--;
+            const char *s = p;
+            while (L > 0 && (*s == ' ' || *s == '\t')) { s++; L--; }
+            if (L > 0) {
+                if (L >= 13 && te_strncasecmp(s, "Content-Type:", 13) == 0) caller_set_ctype = 1;
+                char *line = (char*)malloc(L + 1);
+                if (line) {
+                    memcpy(line, s, L); line[L] = 0;
+                    tebuf_puts(&req, line);
+                    tebuf_puts(&req, "\r\n");
+                    free(line);
+                }
+            }
+            if (!nl) break;
+            p = nl + 1;
+        }
+    }
     if (body && *body) {
         char clbuf[64]; snprintf(clbuf, sizeof(clbuf), "Content-Length: %zu\r\n", strlen(body));
         tebuf_puts(&req, clbuf);
-        tebuf_puts(&req, "Content-Type: application/json\r\n");
+        if (!caller_set_ctype) tebuf_puts(&req, "Content-Type: application/json\r\n");
     }
     tebuf_puts(&req, "\r\n");
     if (body && *body) tebuf_puts(&req, body);
@@ -230,6 +279,12 @@ static char* te_http_request(const char *method, const char *url, const char *bo
 #else
     close(sock);
 #endif
+    /* Feature 1: capture the HTTP status code from the status line
+     * ("HTTP/1.x NNN reason"). Stays 0 (set by te_http_do) when no response. */
+    if (resp.p && resp.len > 0) {
+        const char *sp = strchr(resp.p, ' ');
+        if (sp) { int st = atoi(sp + 1); if (st > 0) g_http_last_status = st; }
+    }
     /* Strip headers: find \r\n\r\n */
     char *sep = strstr(resp.p, "\r\n\r\n");
     if (!sep) sep = strstr(resp.p, "\n\n");
@@ -330,6 +385,11 @@ static char* te_http_request_curl(const char *method, const char *url,
     if (hdrs) curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
 
     CURLcode rc = curl_easy_perform(c);
+    if (rc == CURLE_OK) {
+        long http_code = 0;
+        curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
+        g_http_last_status = (int)http_code; /* Feature 1: surface status code */
+    }
     if (hdrs) curl_slist_free_all(hdrs);
     curl_easy_cleanup(c);
     if (rc != CURLE_OK) {
@@ -343,10 +403,10 @@ static char* te_http_request_curl(const char *method, const char *url,
 /* Wrapper unico que decide entre libcurl (full features) y fallback TCP. */
 char* te_http_do(const char *method, const char *url,
                  const char *body, const char *headers_str) {
+    g_http_last_status = 0; /* reset; stays 0 on network failure / no response */
 #ifdef TE_HAVE_LIBCURL
     return te_http_request_curl(method, url, body, headers_str);
 #else
-    (void)headers_str;
-    return te_http_request(method, url, body);
+    return te_http_request(method, url, body, headers_str);
 #endif
 }

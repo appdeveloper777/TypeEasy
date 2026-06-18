@@ -1,0 +1,6 @@
+// expect: 0
+// REGRESIÓN: el lexer debe interpretar \r como carriage return (0x0D), NO como
+// una 'r' literal. Antes del fix, "\r" se lexaba como "r", de modo que la
+// comparación "\r" == "r" daba 1 (true) y los separadores "\r\n" de cabeceras
+// HTTP inyectaban una 'r' espuria. Ahora "\r" != "r" -> imprime 0.
+println("\r" == "r");
