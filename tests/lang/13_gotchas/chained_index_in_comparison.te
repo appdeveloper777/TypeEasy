@@ -1,0 +1,10 @@
+// expect: ok
+// REGRESIÓN: gotcha #22 — indexación encadenada `parsed[0]["col"]` dentro de una
+// comparación NO debe lanzar "indexed object is neither a list nor a Map".
+let raw = "[{\"n\": 3}]";
+let parsed = json_parse(raw);
+if (parsed[0]["n"] > 0) {
+    println("ok");
+} else {
+    println("FAIL");
+}

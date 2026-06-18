@@ -550,6 +550,15 @@ int main(int argc, char *argv[]) {
      * made thread-local without stale cross-thread Variable* pointers. */
     extern int g_api_mode;
     g_api_mode = api_mode;
+    /* gotcha #21: when stdout is a pipe (systemd, `te.cmd`, redirected logs),
+     * the C runtime block-buffers it, so the startup banner ("Listening ... N
+     * route(s)") only appears after the buffer fills or the process exits —
+     * making the server look hung even though it is serving. Switch stdout to
+     * unbuffered for API mode so banners and logs surface immediately. Must run
+     * before any server output. */
+    if (api_mode) {
+        setvbuf(stdout, NULL, _IONBF, 0);
+    }
     if (api_mode && !script_path) {
         fprintf(stderr, "Error: --api requiere un archivo .te (ej: typeeasy --api endpoint.te)\n");
         return 1;

@@ -1,0 +1,4 @@
+// expect: 42
+// REGRESIÓN: gotcha #19 — print(builtin(...)) con una llamada anidada NO debe
+// reportar "variable '...' is not defined"; debe ejecutar la llamada e imprimir.
+print(to_str(42));

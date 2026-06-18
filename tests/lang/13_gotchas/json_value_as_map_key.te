@@ -1,0 +1,10 @@
+// REGRESIÓN: gotcha #17 — un valor proveniente de json_parse(...) usado como
+// CLAVE de mapa NO debe lanzar "Map key must be a string"; debe coaccionarse.
+let raw = "[{\"n\": 3}]";
+let parsed = json_parse(raw);
+let row0 = parsed[0];
+let k = row0["n"];
+var m = {};
+m[k] = "val3";
+println(m["3"]);
+println(m[k]);

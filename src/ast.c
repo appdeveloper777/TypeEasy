@@ -645,6 +645,8 @@ ASTNode* resolve_to_list(ASTNode *node);
 ASTNode* resolve_to_map(ASTNode *node);
 int map_length(ASTNode *map);
 ASTNode* map_find_pair(ASTNode *map, const char *key);
+static ASTNode* resolve_access_item(ASTNode *node);
+static const char* te_map_key_coerce(ASTNode *keyNode, char *buf, size_t cap);
 static void interpret_call_method(ASTNode *node);
 
 /* Format a double as the shortest decimal string that round-trips back to the
@@ -929,15 +931,8 @@ char* get_node_string(ASTNode* node) {
         ASTNode *val = NULL;
         ASTNode *map = resolve_to_map(node->left);
         if (map) {
-            const char *key = NULL;
-            if (node->right && node->right->type) {
-                if (strcmp(node->right->type, "STRING") == 0) key = node->right->str_value;
-                else if (strcmp(node->right->type, "IDENTIFIER") == 0 ||
-                         strcmp(node->right->type, "ID") == 0) {
-                    Variable *kv = find_variable(node->right->id);
-                    if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
-                }
-            }
+            char keybuf[1024];
+            const char *key = te_map_key_coerce(node->right, keybuf, sizeof(keybuf));
             if (key) {
                 ASTNode *pair = map_find_pair(map, key);
                 if (pair) val = pair->left;
@@ -3749,6 +3744,16 @@ ASTNode* resolve_to_list(ASTNode *node) {
         if (!v || !v->type || strcmp(v->type, "LIST") != 0) return NULL;
         return (ASTNode*)(intptr_t)v->value.object_value;
     }
+    /* gotcha #22: chained indexing `parsed[0]["col"]` / `xs[i][j]` inside an
+     * expression (e.g. a comparison `chk[0]["n"] > 0`). The inner access is an
+     * ACCESS_EXPR; resolve it to the element it points at, then resolve that
+     * element to a list. Without this the outer index threw "indexed object
+     * is neither a list nor a Map" even though the standalone `let` form worked. */
+    if (node->type && strcmp(node->type, "ACCESS_EXPR") == 0) {
+        ASTNode *item = resolve_access_item(node);
+        if (item == node) return NULL; /* guard against self-loop */
+        return resolve_to_list(item);
+    }
     /* gotcha inline-index: indexar el resultado de una llamada inline
      * `f(x)[i]` / `xs.split(",")[i]`. Antes resolve_to_list solo conocía
      * literales LIST y variables; una llamada (CALL_FUNC/CALL_METHOD/...) que
@@ -3777,6 +3782,45 @@ ASTNode* resolve_to_map(ASTNode *node) {
         Variable *v = find_variable(node->id);
         if (!v || !v->type || strcmp(v->type, "MAP") != 0) return NULL;
         return (ASTNode*)(intptr_t)v->value.object_value;
+    }
+    /* gotcha #22: chained indexing `parsed[0]["col"]` resolving to a Map. */
+    if (node->type && strcmp(node->type, "ACCESS_EXPR") == 0) {
+        ASTNode *item = resolve_access_item(node);
+        if (item == node) return NULL; /* guard against self-loop */
+        return resolve_to_map(item);
+    }
+    return NULL;
+}
+
+/* gotcha #22: resolve a single ACCESS_EXPR (map["k"] or list[i]) to the element
+ * node it points at, WITHOUT requiring the surrounding statement context. Used
+ * by resolve_to_list/resolve_to_map so chained indexing works inside any
+ * expression (comparisons, arithmetic, etc.), not just standalone `let`. */
+static ASTNode* resolve_access_item(ASTNode *node) {
+    if (!node || !node->type || strcmp(node->type, "ACCESS_EXPR") != 0) return NULL;
+    /* Try Map first (string key). */
+    ASTNode *map = resolve_to_map(node->left);
+    if (map) {
+        const char *key = NULL;
+        if (node->right && node->right->type) {
+            if (strcmp(node->right->type, "STRING") == 0) key = node->right->str_value;
+            else if (strcmp(node->right->type, "IDENTIFIER") == 0 ||
+                     strcmp(node->right->type, "ID") == 0) {
+                Variable *kv = find_variable(node->right->id);
+                if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
+            }
+        }
+        if (!key) return NULL;
+        ASTNode *pair = map_find_pair(map, key);
+        return pair ? pair->left : NULL;
+    }
+    /* Else List (integer index). */
+    ASTNode *list = resolve_to_list(node->left);
+    if (list) {
+        int idx = (int)evaluate_expression(node->right);
+        int len = list_length(list);
+        if (idx < 0 || idx >= len) return NULL;
+        return list_get_item(list, idx);
     }
     return NULL;
 }
@@ -3820,6 +3864,34 @@ ASTNode* map_find_pair(ASTNode *map, const char *key) {
         cur = cur->right;
     }
     return NULL;
+}
+
+/* gotcha #17: coerce any expression used as a Map key into a plain string.
+ * Values from json_parse(mysql_query(...,"json")) and chained indexing are NOT
+ * stored as "pure" VAL_STRING, so using them directly as a Map key
+ * (`m[valor] = x` / `m[valor]`) previously threw "Map key must be a string" and
+ * forced the `("" + valor)` workaround. We now coerce: STRING literal ->
+ * str_value; IDENTIFIER bound to a VAL_STRING -> its string; anything else
+ * (numbers, concat, chained index, calls, json values) -> get_node_string().
+ * Simple cases borrow the original pointer; coerced cases are copied into `buf`.
+ * Returns the key string (never NULL for a non-NULL node). */
+static const char* te_map_key_coerce(ASTNode *keyNode, char *buf, size_t cap) {
+    if (!keyNode || !keyNode->type) return NULL;
+    if (strcmp(keyNode->type, "STRING") == 0)
+        return keyNode->str_value ? keyNode->str_value : "";
+    if (strcmp(keyNode->type, "IDENTIFIER") == 0 || strcmp(keyNode->type, "ID") == 0) {
+        Variable *kv = find_variable(keyNode->id);
+        if (kv && kv->vtype == VAL_STRING)
+            return kv->value.string_value ? kv->value.string_value : "";
+        /* else fall through (numeric var, json-string object, etc.) */
+    }
+    {
+        char *s = get_node_string(keyNode);
+        if (!s) return NULL;
+        snprintf(buf, cap, "%s", s);
+        free(s);
+        return buf;
+    }
 }
 
 /* Fase 3a: Expand string interpolation. Input contains {var} placeholders.
@@ -4155,6 +4227,47 @@ ASTNode* build_item_from_value(ASTNode *value) {
         }
     }
     return new_item;
+}
+
+/* gotcha #18: materialize an OBJECT_LITERAL ({...}) into a fresh map node whose
+ * KV values are RESOLVED to concrete leaves (string/number/float/bool/null) at
+ * call time. Pushing a literal into a list previously evaluated it as a number
+ * (-> 0) producing [0,0,...], and sharing the literal node directly would make
+ * every loop iteration observe the variable's final value. A resolved snapshot
+ * fixes both: list.push({...}) stores a usable, independent object. */
+static ASTNode* te_snapshot_object_literal(ASTNode *lit) {
+    if (!lit || !lit->type) return NULL;
+    if (strcmp(lit->type, "OBJECT_LITERAL") != 0 && strcmp(lit->type, "MAP") != 0) return NULL;
+    ASTNode *newmap = (ASTNode*)calloc(1, sizeof(ASTNode));
+    if (!newmap) return NULL;
+    newmap->type = strdup("OBJECT_LITERAL");
+    ASTNode *tail = NULL;
+    for (ASTNode *src = lit->left; src; src = src->right) {
+        if (!src->id) continue;
+        ASTNode *valNode = src->left;
+        ASTNode *leaf = NULL;
+        if (!valNode || (valNode->type && strcmp(valNode->type, "NULL") == 0)) {
+            leaf = create_ast_leaf("NULL", 0, NULL, NULL);
+        } else if (valNode->type && strcmp(valNode->type, "BOOL") == 0) {
+            leaf = create_ast_leaf_number("BOOL", valNode->value, NULL, NULL);
+        } else if (is_string_type(valNode)) {
+            char *s = get_node_string(valNode);
+            leaf = create_ast_leaf("STRING", 0, s ? s : "", NULL);
+            if (s) free(s);
+        } else {
+            double d = evaluate_expression(valNode);
+            if (d == (double)(long long)d && d >= -2147483648.0 && d <= 2147483647.0) {
+                leaf = create_ast_leaf_number("NUMBER", (int)d, NULL, NULL);
+            } else {
+                char b[64]; te_fmt_double(b, sizeof(b), d);
+                leaf = create_ast_leaf("FLOAT", 0, b, NULL);
+            }
+        }
+        ASTNode *pair = create_kv_pair_node(src->id, leaf);
+        if (!tail) newmap->left = pair; else tail->right = pair;
+        tail = pair;
+    }
+    return newmap;
 }
 
 /* Fase 7b: detect whether an expression node currently evaluates to null.
@@ -4771,12 +4884,8 @@ double evaluate_expression(ASTNode *node) {
         /* Map indexing m["key"] */
         ASTNode *map = resolve_to_map(node->left);
         if (map) {
-            const char *key = NULL;
-            if (node->right && nk_of(node->right) == NK_STRING) key = node->right->str_value;
-            else if (node->right && (nk_of(node->right) == NK_IDENTIFIER || nk_of(node->right) == NK_ID)) {
-                Variable *kv = find_variable(node->right->id);
-                if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
-            }
+            char keybuf[1024];
+            const char *key = te_map_key_coerce(node->right, keybuf, sizeof(keybuf));
             if (!key) {
                 fprintf(stderr, "Error: Map key must be a string.\n");
                 return 0;
@@ -5378,12 +5487,8 @@ void interpret_ast(ASTNode *node) {
 
         ASTNode *map = resolve_to_map(access->left);
         if (map) {
-            const char *key = NULL;
-            if (access->right && nk_of(access->right) == NK_STRING) key = access->right->str_value;
-            else if (access->right && (nk_of(access->right) == NK_IDENTIFIER || nk_of(access->right) == NK_ID)) {
-                Variable *kv = find_variable(access->right->id);
-                if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
-            }
+            char keybuf[1024];
+            const char *key = te_map_key_coerce(access->right, keybuf, sizeof(keybuf));
             if (!key) { fprintf(stderr, "Error: Map key must be a string.\n"); break; }
             ASTNode *new_val = build_item_from_value(value);
             ASTNode *pair = map_find_pair(map, key);
@@ -6459,6 +6564,21 @@ static void interpret_call_method_impl(ASTNode *node) {
             if (!arg) return;
             ASTNode *new_item = (ASTNode*)calloc(1, sizeof(ASTNode));
             memset(new_item, 0, sizeof(ASTNode));
+            if (arg->type && (strcmp(arg->type, "OBJECT_LITERAL") == 0 ||
+                              strcmp(arg->type, "MAP") == 0)) {
+                /* gotcha #18: push of a `{...}` object literal. Previously fell
+                 * through to evaluate_expression (-> 0), storing [0,0,...].
+                 * Snapshot the literal so each push is an independent, readable
+                 * map item (works with list[i]["k"], list.length, etc.). */
+                ASTNode *snap = te_snapshot_object_literal(arg);
+                free(new_item);
+                if (snap) {
+                    snap->next = NULL;
+                    te_list_append(list, snap);
+                    te_colcache_invalidate(list);
+                }
+                return;
+            }
             if (arg->type && strcmp(arg->type, "OBJECT") == 0) {
                 /* Fix: empujar objetos creados con `new ClaseX(args)`.
                  * El parser eager-construye un OBJECT ASTNode con extra=ObjectNode*
@@ -9083,15 +9203,31 @@ static void interpret_print(ASTNode *node) {
         }
         return;
     }
+    /* gotcha #19: print(builtin(...)) — a nested function call such as
+     * print(mysql_query(conn, sql, "json")) used to fall through to the
+     * `arg->id` branch and report `variable 'mysql_query' is not defined`,
+     * because a CALL_FUNC node carries the function name in arg->id. Dispatch
+     * it like CALL_METHOD and print the captured __ret__ value. */
+    if (arg->type && strcmp(arg->type, "CALL_FUNC") == 0) {
+        interpret_call_func(arg);
+        Variable *r = find_variable("__ret__");
+        if (r) {
+            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
+                te_print_list_node((ASTNode *)(intptr_t)r->value.object_value, 0);
+                return;
+            }
+            if (r->vtype == VAL_STRING) { dbg_printf("%s", r->value.string_value ? r->value.string_value : ""); append_to_stdout(r->value.string_value ? r->value.string_value : ""); return; }
+            if (r->vtype == VAL_INT)    { char b[32]; snprintf(b, sizeof(b), "%lld", r->value.int_value); dbg_printf("%s", b); append_to_stdout(b); return; }
+            if (r->vtype == VAL_FLOAT)  { char b[64]; te_fmt_double(b, sizeof(b), r->value.float_value); dbg_printf("%s", b); append_to_stdout(b); return; }
+            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) { dbg_printf("null"); append_to_stdout("null"); return; }
+        }
+        return;
+    }
     if (arg->type && strcmp(arg->type, "ACCESS_EXPR") == 0) {
         ASTNode *map = resolve_to_map(arg->left);
         if (map) {
-            const char *key = NULL;
-            if (arg->right && arg->right->type && strcmp(arg->right->type, "STRING") == 0) key = arg->right->str_value;
-            else if (arg->right && (strcmp(arg->right->type, "IDENTIFIER") == 0 || strcmp(arg->right->type, "ID") == 0)) {
-                Variable *kv = find_variable(arg->right->id);
-                if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
-            }
+            char keybuf[1024];
+            const char *key = te_map_key_coerce(arg->right, keybuf, sizeof(keybuf));
             if (!key) { dbg_printf("Error: Map key must be a string.\n"); return; }
             ASTNode *pair = map_find_pair(map, key);
             if (!pair) { dbg_printf("Error: key '%s' not found.\n", key); return; }
@@ -9492,12 +9628,8 @@ static void interpret_println(ASTNode *node) {
         /* Fase 1c: println(m["k"]) */
         ASTNode *map = resolve_to_map(arg->left);
         if (map) {
-            const char *key = NULL;
-            if (arg->right && arg->right->type && strcmp(arg->right->type, "STRING") == 0) key = arg->right->str_value;
-            else if (arg->right && (strcmp(arg->right->type, "IDENTIFIER") == 0 || strcmp(arg->right->type, "ID") == 0)) {
-                Variable *kv = find_variable(arg->right->id);
-                if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
-            }
+            char keybuf[1024];
+            const char *key = te_map_key_coerce(arg->right, keybuf, sizeof(keybuf));
             if (!key) { dbg_printf("Error: Map key must be a string.\n"); return; }
             ASTNode *pair = map_find_pair(map, key);
             if (!pair) { dbg_printf("Error: key '%s' not found.\n", key); return; }

@@ -1,0 +1,12 @@
+// REGRESIÓN: gotcha #18 — list.push({ ...literal... }) debe almacenar el objeto
+// (no [0,0,...]); list[i]["k"] y list.length deben funcionar.
+var lst = [];
+for (i = 0; 3; 1) {
+    lst.push({ id: i, label: "row" });
+}
+println(lst.length);
+let e1 = lst[1];
+println(e1["id"]);
+println(e1["label"]);
+let e2 = lst[2];
+println(e2["id"]);
