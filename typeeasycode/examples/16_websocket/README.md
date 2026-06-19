@@ -5,7 +5,7 @@ runtime nativo de TypeEasy (`api_server/te_websocket.c`).
 
 ## Sintaxis
 
-```te
+```ts
 endpoint {
     [WebSocket("/ws/echo")]
     ws_echo() {
