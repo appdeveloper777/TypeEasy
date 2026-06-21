@@ -139,7 +139,7 @@ jobs:
         run: |
           apt-get update -qq
           apt-get install -y -qq flex bison libssl-dev default-libmysqlclient-dev \
-            libcurl4-openssl-dev libpq-dev freetds-dev libsqlite3-dev python3
+            libcurl4-openssl-dev libpq-dev freetds-dev libsqlite3-dev zlib1g-dev python3
 
       - name: Build with ASan and run lang suite
         run: bash scripts/run_asan_tests.sh
@@ -179,7 +179,7 @@ jobs:
           apt-get update -qq
           apt-get install -y -qq clang flex bison libomp-dev libssl-dev \
             default-libmysqlclient-dev libcurl4-openssl-dev libpq-dev freetds-dev \
-            libsqlite3-dev util-linux
+            libsqlite3-dev zlib1g-dev util-linux
 
       - name: Build fuzzer and run bounded smoke
         run: bash scripts/run_fuzz.sh 60

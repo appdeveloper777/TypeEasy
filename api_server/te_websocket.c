@@ -389,9 +389,9 @@ void te_ws_shutdown(void) {
     pthread_mutex_unlock(&g_lock);
 }
 
-/* Civetweb pattern syntax uses '*' for "anything but / and ?". Our route uses
- * '{name}'. Translate '/ws/game/{id}' -> '/ws/game/*'. Caller frees the
- * returned buffer. */
+/* Civetweb pattern syntax uses a literal star for "anything but / and ?". Our
+ * route uses '{name}'. Translate '/ws/game/{id}' -> '/ws/game/<star>'. Caller
+ * frees the returned buffer. */
 static char *translate_to_civetweb_pattern(const char *src) {
     if (!src) return NULL;
     size_t cap = strlen(src) + 8;

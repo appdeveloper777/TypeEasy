@@ -50,7 +50,7 @@ jobs:
               apt-get update &&
               apt-get install -y --no-install-recommends \
                 flex bison libfl-dev libssl-dev default-libmysqlclient-dev \
-                libcurl4-openssl-dev libpq-dev freetds-dev &&
+                libcurl4-openssl-dev libpq-dev freetds-dev zlib1g-dev &&
               make -C /app/src clean &&
               make -C /app/src typeeasy CFLAGS_EXTRA=-DTYPEEASY_VERSION=${TYPEEASY_VERSION}
             '
