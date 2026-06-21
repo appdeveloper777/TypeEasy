@@ -1,0 +1,15 @@
+# vsce packaging excludes. Keep node_modules (we need them at runtime) and the
+# bundled LSP under lsp/. Exclude dev/lint metadata and per-OS junk.
+
+.gitignore
+.vscode/**
+.vscode-test/**
+**/tsconfig.json
+**/.eslintrc.json
+**/*.map
+**/*.test.js
+**/test/**
+**/tests/**
+**/.npmrc
+.DS_Store
+node_modules/.cache/**

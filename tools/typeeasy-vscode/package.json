@@ -1,8 +1,8 @@
 {
   "name": "typeeasy-debug",
   "displayName": "TypeEasy Debugger",
-  "description": "Debug adapter for the TypeEasy language",
-  "version": "0.0.1",
+  "description": "Debug adapter + Language Server for TypeEasy (.te files): syntax, go-to-definition, find-references, hover, completion, F5 debug.",
+  "version": "0.0.2",
   "publisher": "typeeasy",
   "engines": {
     "vscode": "^1.75.0"
@@ -17,6 +17,16 @@
     "onLanguage:typeeasy"
   ],
   "contributes": {
+    "configuration": {
+      "title": "TypeEasy",
+      "properties": {
+        "typeeasy.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the native typeeasy binary used by the LSP for --syntax-check diagnostics. Leave empty to auto-detect (Program Files\\TypeEasy\\bin\\typeeasy-bin.exe on Windows; /usr/bin/typeeasy-server on Linux). When unset and not found, diagnostics are silently disabled (go-to-definition, references and hover still work)."
+        }
+      }
+    },
     "languages": [
       {
         "id": "typeeasy",
