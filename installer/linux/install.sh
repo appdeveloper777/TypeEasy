@@ -16,6 +16,8 @@
 # Uso:
 #   sudo ./installer/linux/install.sh
 #   sudo ./installer/linux/install.sh --binary /path/to/typeeasy_api
+#   sudo ./installer/linux/install.sh --vscode-ext      # instala extensión VS Code sin preguntar
+#   sudo ./installer/linux/install.sh --no-vscode-ext   # no preguntar ni instalar la extensión
 #
 # Despues de instalar:
 #   sudo cp tus_endpoints/*.te /opt/typeeasy/apis/
@@ -33,9 +35,12 @@ REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # --- Parse args ---
 BINARY=""
+VSCODE_EXT="auto"   # auto = prompt if 'code' present; yes = always; no = never
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --binary) BINARY="$2"; shift 2 ;;
+    --vscode-ext) VSCODE_EXT="yes"; shift ;;
+    --no-vscode-ext) VSCODE_EXT="no"; shift ;;
     -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
     *) echo "Unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -79,6 +84,26 @@ echo "[install] Installing /usr/share/typeeasy/templates/ ..."
 mkdir -p /usr/share/typeeasy/templates
 cp -r "$REPO_DIR/cli/templates/." /usr/share/typeeasy/templates/
 
+# --- Install bundled VS Code extension (.vsix), if present ---
+# El .vsix lo empaqueta scripts/package_linux_release.sh en $REPO_DIR/vscode/
+# (o $REPO_DIR/share/typeeasy/vscode/ según el layout). Lo dejamos en
+# /usr/share/typeeasy/vscode para que `te ext install` y el bloque de abajo
+# lo encuentren.
+VSIX_BUNDLED=""
+for cand in \
+  "$REPO_DIR/vscode" \
+  "$REPO_DIR/share/typeeasy/vscode" \
+  "$SCRIPT_DIR/../../vscode"; do
+  [[ -d "$cand" ]] || continue
+  v="$(ls "$cand"/*.vsix 2>/dev/null | head -n1 || true)"
+  [[ -n "$v" ]] && { VSIX_BUNDLED="$v"; break; }
+done
+if [[ -n "$VSIX_BUNDLED" ]]; then
+  echo "[install] Installing VS Code extension package -> /usr/share/typeeasy/vscode/ ..."
+  mkdir -p /usr/share/typeeasy/vscode
+  install -m 644 "$VSIX_BUNDLED" "/usr/share/typeeasy/vscode/$(basename "$VSIX_BUNDLED")"
+fi
+
 # --- Install systemd unit ---
 echo "[install] Installing systemd unit ..."
 UNIT_PATH=/etc/systemd/system/typeeasy-api@.service
@@ -101,6 +126,43 @@ chown -R typeeasy:typeeasy /opt/typeeasy
 
 # --- Reload systemd ---
 systemctl daemon-reload
+
+# --- Optional: install VS Code extension for the invoking user -------------
+# VS Code extensions son per-user. Como este script corre como root via sudo,
+# usamos $SUDO_USER (si existe) para invocar 'code --install-extension' bajo
+# su HOME. Solo se ejecuta si:
+#   - hay un .vsix bundleado en /usr/share/typeeasy/vscode/
+#   - el usuario tiene 'code' en su PATH (VS Code instalado)
+#   - --vscode-ext (autoexplícito) o --no-vscode-ext NO fue pasado, y
+#     en modo interactivo respondió 'y' al prompt.
+maybe_install_vscode_ext() {
+  [[ "$VSCODE_EXT" == "no" ]] && return 0
+  local target_user="${SUDO_USER:-}"
+  [[ -z "$target_user" || "$target_user" == "root" ]] && return 0
+  local vsix
+  vsix="$(ls /usr/share/typeeasy/vscode/*.vsix 2>/dev/null | head -n1 || true)"
+  [[ -z "$vsix" ]] && return 0
+  # Verifica 'code' bajo el usuario invocador (no bajo root).
+  if ! sudo -u "$target_user" -H bash -lc 'command -v code >/dev/null 2>&1'; then
+    echo "[install] (skip) VS Code CLI 'code' no está en el PATH de $target_user; usa 'te ext install' luego."
+    return 0
+  fi
+  if [[ "$VSCODE_EXT" == "auto" ]]; then
+    if [[ ! -t 0 ]]; then
+      echo "[install] (skip) modo no-interactivo y sin --vscode-ext; usa 'te ext install' o re-ejecuta con --vscode-ext."
+      return 0
+    fi
+    read -r -p "[install] ¿Instalar extensión TypeEasy en VS Code de $target_user? [y/N] " reply
+    case "$reply" in y|Y|yes|YES) ;; *) return 0 ;; esac
+  fi
+  echo "[install] Installing VS Code extension as $target_user ..."
+  if sudo -u "$target_user" -H bash -lc "code --install-extension '$vsix' --force"; then
+    echo "[install] OK. Reinicia VS Code para activar el resaltado de .te y F5 debug."
+  else
+    echo "[install] WARN: 'code --install-extension' falló; instala manualmente con 'te ext install'."
+  fi
+}
+maybe_install_vscode_ext
 
 cat <<EOF
 

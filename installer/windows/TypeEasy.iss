@@ -48,6 +48,9 @@ Name: "sqlserver"; Description: "Conector SQL Server (FreeTDS) — DLLs extra, v
 [Tasks]
 Name: "desktopicon"; Description: "Crear acceso directo en el escritorio"; GroupDescription: "Opciones adicionales:"; Flags: unchecked
 Name: "addtopath"; Description: "Agregar TypeEasy al PATH (recomendado)"; GroupDescription: "Opciones adicionales:";
+; Instala la extensión VS Code (resaltado .te + F5 debug) usando 'code --install-extension'.
+; Solo se ofrece si 'code' está en PATH (ver VsCodeExists() en [Code]).
+Name: "vscodeext"; Description: "Instalar extensión TypeEasy en VS Code (resaltado + F5 debug)"; GroupDescription: "Opciones adicionales:"; Check: VsCodeExists
 
 [Files]
 ; Empaquetado por scripts/package_windows_release.sh:
@@ -91,6 +94,10 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
 [Run]
 Filename: "{cmd}"; Parameters: "/k cd /d ""{app}"" && .\\bin\\typeeasy.cmd --help"; Description: "Abrir TypeEasy en consola"; Flags: postinstall nowait skipifsilent
 Filename: "{cmd}"; Parameters: "/k cd /d ""{app}"" && .\\bin\\typeeasy.cmd --api .\\examples\\endpoint.te --port 9000"; Description: "Probar servidor HTTP (--api endpoint.te en :9000)"; Flags: postinstall nowait skipifsilent unchecked
+; Instala la extensión VS Code de TypeEasy (resaltado .te + F5 debug). Solo se
+; ejecuta si el usuario marcó la task 'vscodeext' (que a su vez solo se ofrece
+; si 'code' está en PATH). runhidden + nowait: no bloquea el cierre del wizard.
+Filename: "{cmd}"; Parameters: "/c code --install-extension ""{app}\\vscode\\typeeasy-debug.vsix"" --force"; StatusMsg: "Instalando extensión TypeEasy en VS Code..."; Tasks: vscodeext; Flags: runhidden waituntilterminated; Check: VsCodeExists
 
 [Code]
 function NeedsAddPath(Param: string): Boolean;
@@ -103,4 +110,41 @@ begin
     exit;
   end;
   Result := Pos(';' + Lowercase(Param) + ';', ';' + Lowercase(OrigPath) + ';') = 0;
+end;
+
+// VsCodeExists: true si encontramos el CLI 'code' (de VS Code) en PATH o en
+// rutas de instalación conocidas (User/Machine). Si devuelve false, la task
+// 'vscodeext' ni siquiera se muestra al usuario.
+function VsCodeExists(): Boolean;
+var
+  ResultCode: Integer;
+  LocalApp, ProgFiles, ProgFilesX86: string;
+begin
+  Result := False;
+  // 1) 'code' en PATH (via cmd /c where).
+  if Exec('cmd.exe', '/c where code.cmd >nul 2>nul', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
+  begin
+    Result := True;
+    exit;
+  end;
+  // 2) Instalación por-usuario (default del instalador VS Code User).
+  LocalApp := ExpandConstant('{localappdata}');
+  if FileExists(LocalApp + '\Programs\Microsoft VS Code\bin\code.cmd') then
+  begin
+    Result := True;
+    exit;
+  end;
+  // 3) Instalaciones por-máquina.
+  ProgFiles := ExpandConstant('{commonpf64}');
+  if FileExists(ProgFiles + '\Microsoft VS Code\bin\code.cmd') then
+  begin
+    Result := True;
+    exit;
+  end;
+  ProgFilesX86 := ExpandConstant('{commonpf32}');
+  if FileExists(ProgFilesX86 + '\Microsoft VS Code\bin\code.cmd') then
+  begin
+    Result := True;
+    exit;
+  end;
 end;

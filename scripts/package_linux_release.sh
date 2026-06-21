@@ -234,13 +234,39 @@ cat > "$DEB_DIR/DEBIAN/conffiles" <<EOF
 /etc/default/typeeasy-api
 EOF
 
-# Hook post-install: systemd daemon-reload (no habilita ni arranca instancias automaticamente)
+# Hook post-install: systemd daemon-reload + offer VS Code extension install.
+# La extension es per-user; intentamos instalarla para $SUDO_USER si tiene
+# 'code' en PATH. Si no es posible (no-interactivo, sin SUDO_USER, sin 'code'),
+# se imprime un hint para que el usuario corra 'te ext install' a mano.
 cat > "$DEB_DIR/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload >/dev/null 2>&1 || true
 fi
+
+VSIX="/usr/share/typeeasy/vscode/typeeasy-debug.vsix"
+if [ -f "$VSIX" ]; then
+    target_user="${SUDO_USER:-}"
+    if [ -n "$target_user" ] && [ "$target_user" != "root" ]; then
+        if su - "$target_user" -c 'command -v code >/dev/null 2>&1'; then
+            if su - "$target_user" -c "code --install-extension '$VSIX' --force" >/dev/null 2>&1; then
+                echo "TypeEasy: extension VS Code instalada para $target_user."
+                echo "          Reinicia VS Code para activar resaltado .te + F5 debug."
+            else
+                echo "TypeEasy: no se pudo instalar la extension VS Code automaticamente."
+                echo "          Ejecuta:  te ext install"
+            fi
+        else
+            echo "TypeEasy: VS Code no detectado en el PATH de $target_user."
+            echo "          Para instalar la extension despues:  te ext install"
+        fi
+    else
+        echo "TypeEasy: extension VS Code disponible en $VSIX"
+        echo "          Para instalarla en tu sesion de usuario:  te ext install"
+    fi
+fi
+
 exit 0
 EOF
 chmod 0755 "$DEB_DIR/DEBIAN/postinst"
