@@ -688,3 +688,367 @@ char *te_xlsx_to_csv_buf(const char *filename, size_t *out_len) {
     free(zip);
     return out;
 }
+
+/* ===========================================================================
+ * Escritores de documentos (export): CSV -> XLSX y texto -> PDF.
+ *
+ * Viven aquí (no en un archivo nuevo) a propósito: te_xlsx.c ya está enlazado
+ * en TODAS las rutas de build con zlib (-lz), así que añadir un .c separado
+ * arriesgaría errores de linker en CI por olvidar alguna ruta. crc32() de
+ * zlib se reutiliza para el ZIP.
+ * ======================================================================== */
+
+/* ---- little-endian writers sobre TXBuf ---------------------------------- */
+static int txb_u16(TXBuf *b, unsigned v) {
+    return txbuf_putc(b, (char)(v & 0xff)) && txbuf_putc(b, (char)((v >> 8) & 0xff));
+}
+static int txb_u32(TXBuf *b, unsigned long v) {
+    return txbuf_putc(b, (char)(v & 0xff))
+        && txbuf_putc(b, (char)((v >> 8) & 0xff))
+        && txbuf_putc(b, (char)((v >> 16) & 0xff))
+        && txbuf_putc(b, (char)((v >> 24) & 0xff));
+}
+
+/* Columna 0-based -> letra(s) de Excel (0->A, 25->Z, 26->AA). */
+static void te_col_letter(int col0, char *out) {
+    char tmp[8]; int i = 0; int n = col0 + 1;
+    while (n > 0) { int r = (n - 1) % 26; tmp[i++] = (char)('A' + r); n = (n - 1) / 26; }
+    int j; for (j = 0; j < i; j++) out[j] = tmp[i - 1 - j];
+    out[j] = '\0';
+}
+
+/* Escapa &<>"' y descarta caracteres de control no imprimibles (XML 1.0). */
+static int te_xml_escape_append(TXBuf *b, const char *s, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        switch (c) {
+            case '&': if (!txbuf_putcstr(b, "&amp;"))  return 0; break;
+            case '<': if (!txbuf_putcstr(b, "&lt;"))   return 0; break;
+            case '>': if (!txbuf_putcstr(b, "&gt;"))   return 0; break;
+            case '"': if (!txbuf_putcstr(b, "&quot;")) return 0; break;
+            case '\'':if (!txbuf_putcstr(b, "&apos;")) return 0; break;
+            default:
+                if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') break; /* skip */
+                if (!txbuf_putc(b, (char)c)) return 0;
+        }
+    }
+    return 1;
+}
+
+/* ¿La celda es un número simple? (entero o decimal, signo opcional). Se trata
+ * como texto si tiene ceros a la izquierda ("007") para no perder el formato. */
+static int te_cell_is_number(const char *s, size_t n) {
+    if (n == 0 || n > 18) return 0;
+    size_t i = 0;
+    if (s[i] == '-') { i++; if (i >= n) return 0; }
+    if (s[i] == '0' && (n - i) > 1 && s[i + 1] != '.') return 0; /* leading zero */
+    int digits = 0, dot = 0;
+    for (; i < n; i++) {
+        if (s[i] >= '0' && s[i] <= '9') digits++;
+        else if (s[i] == '.') { if (dot) return 0; dot = 1; }
+        else return 0;
+    }
+    return digits > 0;
+}
+
+static int te_xlsx_emit_cell(TXBuf *sheet, int row1, int col0, const char *txt, size_t n) {
+    if (n == 0) return 1; /* celda vacía: se omite */
+    char colL[8]; te_col_letter(col0, colL);
+    char ref[24]; snprintf(ref, sizeof ref, "%s%d", colL, row1);
+    if (te_cell_is_number(txt, n)) {
+        if (!txbuf_putcstr(sheet, "<c r=\"") || !txbuf_putcstr(sheet, ref)
+            || !txbuf_putcstr(sheet, "\"><v>") || !txbuf_puts(sheet, txt, n)
+            || !txbuf_putcstr(sheet, "</v></c>")) return 0;
+    } else {
+        if (!txbuf_putcstr(sheet, "<c r=\"") || !txbuf_putcstr(sheet, ref)
+            || !txbuf_putcstr(sheet, "\" t=\"inlineStr\"><is><t xml:space=\"preserve\">")
+            || !te_xml_escape_append(sheet, txt, n)
+            || !txbuf_putcstr(sheet, "</t></is></c>")) return 0;
+    }
+    return 1;
+}
+
+/* Añade una entrada STORED (sin comprimir) al ZIP en construcción. Registra
+ * crc/size/offset/name para la central directory posterior. */
+typedef struct { unsigned long crc, size, offset; const char *name; size_t name_len; } TeZipEnt;
+
+static int te_zip_add(TXBuf *zip, TeZipEnt *e, const char *name,
+                      const char *data, size_t len) {
+    e->name = name; e->name_len = strlen(name);
+    e->offset = (unsigned long)zip->len;
+    e->size = (unsigned long)len;
+    e->crc = (unsigned long)crc32(0L, (const unsigned char*)data, (unsigned)len);
+    if (!txb_u32(zip, 0x04034b50UL)) return 0;     /* local file header sig */
+    if (!txb_u16(zip, 20)) return 0;               /* version needed */
+    if (!txb_u16(zip, 0)) return 0;                /* flags */
+    if (!txb_u16(zip, 0)) return 0;                /* method STORED */
+    if (!txb_u16(zip, 0)) return 0;                /* mod time */
+    if (!txb_u16(zip, 0)) return 0;                /* mod date */
+    if (!txb_u32(zip, e->crc)) return 0;
+    if (!txb_u32(zip, e->size)) return 0;          /* compressed == uncompressed */
+    if (!txb_u32(zip, e->size)) return 0;
+    if (!txb_u16(zip, (unsigned)e->name_len)) return 0;
+    if (!txb_u16(zip, 0)) return 0;                /* extra len */
+    if (!txbuf_puts(zip, name, e->name_len)) return 0;
+    if (len && !txbuf_puts(zip, data, len)) return 0;
+    return 1;
+}
+
+char *te_xlsx_from_csv_buf(const char *csv, size_t csv_len, size_t *out_len) {
+    if (out_len) *out_len = 0;
+    if (!csv) { csv = ""; csv_len = 0; }
+
+    /* 1) CSV -> sheet1.xml (inline strings / números). */
+    TXBuf sheet = {0};
+    if (!txbuf_putcstr(&sheet,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n"
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
+        "<sheetData>")) { free(sheet.buf); return NULL; }
+
+    TXBuf cell = {0};
+    int inq = 0, row_open = 0, col = 0, row1 = 1, any = 0;
+    size_t i = 0;
+    int ok = 1;
+#define OPEN_ROW() do { if (!row_open) { char rb[16]; snprintf(rb,sizeof rb,"%d",row1); \
+        if(!txbuf_putcstr(&sheet,"<row r=\"")||!txbuf_putcstr(&sheet,rb)||!txbuf_putcstr(&sheet,"\">")){ok=0;} row_open=1; } } while(0)
+#define FLUSH_CELL() do { OPEN_ROW(); if(!te_xlsx_emit_cell(&sheet,row1,col,cell.buf?cell.buf:"",cell.len)){ok=0;} col++; cell.len=0; } while(0)
+#define CLOSE_ROW() do { if(row_open){ if(!txbuf_putcstr(&sheet,"</row>")){ok=0;} row_open=0; } row1++; col=0; any=0; } while(0)
+    for (i = 0; ok && i < csv_len; i++) {
+        char c = csv[i];
+        if (inq) {
+            if (c == '"') {
+                if (i + 1 < csv_len && csv[i + 1] == '"') { if(!txbuf_putc(&cell,'"')){ok=0;} i++; }
+                else inq = 0;
+            } else { if(!txbuf_putc(&cell,c)){ok=0;} }
+            continue;
+        }
+        if (c == '"') { inq = 1; any = 1; continue; }
+        if (c == ',') { FLUSH_CELL(); any = 1; continue; }
+        if (c == '\r') continue;            /* CRLF: el \n cierra la fila */
+        if (c == '\n') {
+            if (row_open || cell.len > 0 || col > 0 || any) { FLUSH_CELL(); CLOSE_ROW(); }
+            else { row1++; }                /* línea totalmente vacía */
+            continue;
+        }
+        if(!txbuf_putc(&cell,c)){ok=0;} any = 1;
+    }
+    if (ok && (cell.len > 0 || col > 0 || any || row_open)) { FLUSH_CELL(); CLOSE_ROW(); }
+#undef OPEN_ROW
+#undef FLUSH_CELL
+#undef CLOSE_ROW
+    free(cell.buf);
+    if (ok) ok = txbuf_putcstr(&sheet, "</sheetData></worksheet>");
+    if (!ok) { free(sheet.buf); return NULL; }
+
+    /* 2) Partes estáticas del paquete OOXML. */
+    static const char *CT =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n"
+        "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+        "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+        "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+        "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"
+        "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
+        "</Types>";
+    static const char *RELS =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n"
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/>"
+        "</Relationships>";
+    static const char *WB =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n"
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+        "<sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>";
+    static const char *WBRELS =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n"
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>"
+        "</Relationships>";
+
+    struct { const char *name; const char *data; size_t len; } parts[5] = {
+        { "[Content_Types].xml",        CT,        strlen(CT) },
+        { "_rels/.rels",                RELS,      strlen(RELS) },
+        { "xl/workbook.xml",            WB,        strlen(WB) },
+        { "xl/_rels/workbook.xml.rels", WBRELS,    strlen(WBRELS) },
+        { "xl/worksheets/sheet1.xml",   sheet.buf ? sheet.buf : "", sheet.len },
+    };
+
+    /* 3) Ensamblar el ZIP (STORED). */
+    TXBuf zip = {0};
+    TeZipEnt ents[5];
+    for (int k = 0; k < 5; k++) {
+        if (!te_zip_add(&zip, &ents[k], parts[k].name, parts[k].data, parts[k].len)) {
+            free(sheet.buf); free(zip.buf); return NULL;
+        }
+    }
+    unsigned long cd_off = (unsigned long)zip.len;
+    for (int k = 0; k < 5; k++) {
+        TeZipEnt *e = &ents[k];
+        if (!txb_u32(&zip, 0x02014b50UL) ||           /* central dir sig */
+            !txb_u16(&zip, 20) || !txb_u16(&zip, 20) ||/* made by / needed */
+            !txb_u16(&zip, 0)  || !txb_u16(&zip, 0)  ||/* flags / method */
+            !txb_u16(&zip, 0)  || !txb_u16(&zip, 0)  ||/* time / date */
+            !txb_u32(&zip, e->crc) || !txb_u32(&zip, e->size) || !txb_u32(&zip, e->size) ||
+            !txb_u16(&zip, (unsigned)e->name_len) ||
+            !txb_u16(&zip, 0) || !txb_u16(&zip, 0) || /* extra / comment */
+            !txb_u16(&zip, 0) || !txb_u16(&zip, 0) || /* disk / internal attrs */
+            !txb_u32(&zip, 0) || !txb_u32(&zip, e->offset) ||
+            !txbuf_puts(&zip, e->name, e->name_len)) {
+            free(sheet.buf); free(zip.buf); return NULL;
+        }
+    }
+    unsigned long cd_size = (unsigned long)zip.len - cd_off;
+    if (!txb_u32(&zip, 0x06054b50UL) ||               /* EOCD sig */
+        !txb_u16(&zip, 0) || !txb_u16(&zip, 0) ||      /* disk numbers */
+        !txb_u16(&zip, 5) || !txb_u16(&zip, 5) ||      /* entries */
+        !txb_u32(&zip, cd_size) || !txb_u32(&zip, cd_off) ||
+        !txb_u16(&zip, 0)) {                           /* comment len */
+        free(sheet.buf); free(zip.buf); return NULL;
+    }
+
+    free(sheet.buf);
+    if (out_len) *out_len = zip.len;
+    return zip.buf; /* puede ser NULL solo si todo falló (ya cubierto) */
+}
+
+/* ---- PDF (texto paginado, Helvetica) ------------------------------------ */
+
+/* Escapa ( ) \ y normaliza no-ASCII a '?' para un PDF Latin-1 simple. */
+static int te_pdf_escape_append(TXBuf *b, const char *s, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '(' || c == ')' || c == '\\') { if (!txbuf_putc(b, '\\')) return 0; if (!txbuf_putc(b, (char)c)) return 0; }
+        else if (c == '\t') { if (!txbuf_putcstr(b, "    ")) return 0; }
+        else if (c < 0x20 || c > 0x7e) { if (!txbuf_putc(b, '?')) return 0; }
+        else { if (!txbuf_putc(b, (char)c)) return 0; }
+    }
+    return 1;
+}
+
+char *te_pdf_from_text(const char *text, const char *title, size_t *out_len) {
+    if (out_len) *out_len = 0;
+    if (!text) text = "";
+
+    /* 1) Partir en líneas lógicas y envolver a ~95 chars. */
+    const int WRAP = 95;
+    char **lines = NULL; int nlines = 0, cap = 0;
+#define PUSH_LINE(PTR,LEN) do { \
+        if (nlines == cap) { cap = cap ? cap*2 : 64; char **g = (char**)realloc(lines, (size_t)cap*sizeof(char*)); if(!g){goto pdf_oom;} lines = g; } \
+        char *cp = (char*)malloc((size_t)(LEN)+1); if(!cp){goto pdf_oom;} if(LEN)memcpy(cp,(PTR),(size_t)(LEN)); cp[LEN]='\0'; lines[nlines++]=cp; } while(0)
+
+    if (title && *title) { size_t tl = strlen(title); PUSH_LINE(title, (int)tl); PUSH_LINE("", 0); }
+
+    {
+        const char *p = text;
+        while (*p) {
+            const char *nl = strchr(p, '\n');
+            size_t ll = nl ? (size_t)(nl - p) : strlen(p);
+            if (ll > 0 && p[ll ? ll - 1 : 0] == '\r') ll--; /* strip trailing CR handled below */
+            const char *line = p; size_t rem = nl ? (size_t)(nl - p) : strlen(p);
+            if (rem > 0 && line[rem - 1] == '\r') rem--;
+            if (rem == 0) { PUSH_LINE("", 0); }
+            else {
+                size_t off = 0;
+                while (off < rem) {
+                    size_t chunk = rem - off; if (chunk > (size_t)WRAP) chunk = WRAP;
+                    PUSH_LINE(line + off, (int)chunk);
+                    off += chunk;
+                }
+            }
+            if (!nl) break;
+            p = nl + 1;
+        }
+        if (*text == '\0') PUSH_LINE("", 0);
+    }
+
+    /* 2) Paginar. */
+    const int LPP = 50;            /* líneas por página */
+    const int Y_TOP = 750, X = 50, LEAD = 14;
+    int npages = (nlines + LPP - 1) / LPP; if (npages < 1) npages = 1;
+
+    /* Objetos: 1 catalog, 2 pages, 3 font, luego (page,content) por página. */
+    int nobj = 3 + npages * 2;
+    unsigned long *offs = (unsigned long*)calloc((size_t)nobj + 1, sizeof(unsigned long));
+    if (!offs) goto pdf_oom;
+
+    TXBuf pdf = {0};
+    if (!txbuf_putcstr(&pdf, "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n")) { free(offs); goto pdf_oom; }
+#define BEGIN_OBJ(N) do { offs[(N)] = (unsigned long)pdf.len; char hb[32]; snprintf(hb,sizeof hb,"%d 0 obj\n",(N)); if(!txbuf_putcstr(&pdf,hb)){free(offs);free(pdf.buf);goto pdf_oom;} } while(0)
+#define END_OBJ() do { if(!txbuf_putcstr(&pdf,"endobj\n")){free(offs);free(pdf.buf);goto pdf_oom;} } while(0)
+
+    /* obj 1: catalog */
+    BEGIN_OBJ(1); txbuf_putcstr(&pdf, "<< /Type /Catalog /Pages 2 0 R >>\n"); END_OBJ();
+
+    /* obj 2: pages (con Kids) */
+    BEGIN_OBJ(2);
+    txbuf_putcstr(&pdf, "<< /Type /Pages /Kids [");
+    for (int pg = 0; pg < npages; pg++) {
+        char kb[24]; snprintf(kb, sizeof kb, " %d 0 R", 4 + pg * 2);
+        txbuf_putcstr(&pdf, kb);
+    }
+    { char cb[48]; snprintf(cb, sizeof cb, " ] /Count %d >>\n", npages); txbuf_putcstr(&pdf, cb); }
+    END_OBJ();
+
+    /* obj 3: font Helvetica */
+    BEGIN_OBJ(3);
+    txbuf_putcstr(&pdf, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\n");
+    END_OBJ();
+
+    for (int pg = 0; pg < npages; pg++) {
+        int page_obj = 4 + pg * 2;
+        int cont_obj = 5 + pg * 2;
+
+        /* Stream de contenido de la página. */
+        TXBuf cs = {0};
+        char head[96];
+        snprintf(head, sizeof head, "BT\n/F1 11 Tf\n%d TL\n%d %d Td\n", LEAD, X, Y_TOP);
+        txbuf_putcstr(&cs, head);
+        int start = pg * LPP, end = start + LPP; if (end > nlines) end = nlines;
+        for (int li = start; li < end; li++) {
+            if (li > start) txbuf_putcstr(&cs, "T* ");
+            txbuf_putc(&cs, '(');
+            te_pdf_escape_append(&cs, lines[li], strlen(lines[li]));
+            txbuf_putcstr(&cs, ") Tj\n");
+        }
+        txbuf_putcstr(&cs, "ET\n");
+
+        BEGIN_OBJ(cont_obj);
+        { char lb[48]; snprintf(lb, sizeof lb, "<< /Length %lu >>\nstream\n", (unsigned long)cs.len); txbuf_putcstr(&pdf, lb); }
+        txbuf_puts(&pdf, cs.buf ? cs.buf : "", cs.len);
+        txbuf_putcstr(&pdf, "\nendstream\n");
+        END_OBJ();
+        free(cs.buf);
+
+        BEGIN_OBJ(page_obj);
+        { char pb[160]; snprintf(pb, sizeof pb,
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            "/Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>\n", cont_obj);
+          txbuf_putcstr(&pdf, pb); }
+        END_OBJ();
+    }
+#undef BEGIN_OBJ
+#undef END_OBJ
+
+    /* xref + trailer */
+    unsigned long xref_off = (unsigned long)pdf.len;
+    { char xb[32]; snprintf(xb, sizeof xb, "xref\n0 %d\n", nobj + 1); txbuf_putcstr(&pdf, xb); }
+    txbuf_putcstr(&pdf, "0000000000 65535 f\r\n");
+    for (int o = 1; o <= nobj; o++) {
+        char eb[24]; snprintf(eb, sizeof eb, "%010lu 00000 n\r\n", offs[o]);
+        txbuf_putcstr(&pdf, eb);
+    }
+    { char tb[96]; snprintf(tb, sizeof tb,
+        "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%lu\n%%%%EOF\n", nobj + 1, xref_off);
+      txbuf_putcstr(&pdf, tb); }
+
+    free(offs);
+    for (int k = 0; k < nlines; k++) free(lines[k]);
+    free(lines);
+    if (out_len) *out_len = pdf.len;
+    return pdf.buf;
+
+pdf_oom:
+#undef PUSH_LINE
+    for (int k = 0; k < nlines; k++) free(lines[k]);
+    free(lines);
+    return NULL;
+}

@@ -1,0 +1,47 @@
+// =============================================================
+// 25_sql_generico — versión API/endpoint del conector genérico
+//
+// Mismo patrón que sql_generico.te pero expuesto como endpoint HTTP.
+// Cambia DB_ENGINE/credenciales para apuntar a tu motor real.
+//
+// Ejecutar (demo SQLite en archivo, no requiere servidores):
+//   typeeasy --api examples/25_sql_generico/sql_generico_api.te --port 9105
+//
+// Probar:
+//   curl http://localhost:9105/api/productos
+// =============================================================
+
+load_native("sqlite");
+
+let DB_ENGINE = "sqlite";              // mysql | postgres | sqlserver | sqlite
+let DB_HOST   = "127.0.0.1";
+let DB_USER   = "root";
+let DB_PASS   = "";
+let DB_NAME   = "tienda_demo.db";      // sqlite: archivo en disco (persiste)
+let DB_PORT   = 3306;
+let DB_TLS    = 0;
+let DB_FP     = "";
+
+endpoint {
+    // Lista productos usando la fachada genérica sql_*.
+    [HttpGet("/api/productos")]
+    productos() {
+        // La conexión usa la MISMA firma para cualquier motor; el último
+        // argumento (DB_ENGINE) decide a cuál se delega.
+        let conn = sql_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME, DB_PORT, { tls: DB_TLS, tls_fp: DB_FP }, DB_ENGINE);
+        if (conn < 0) {
+            response_status(500);
+            return json("{\"error\":\"no se pudo conectar\",\"engine\":\"" + DB_ENGINE + "\"}");
+        }
+
+        // Crea la tabla si no existe y siembra datos (idempotente para la demo).
+        sql_exec(conn, "CREATE TABLE IF NOT EXISTS productos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL, precio REAL NOT NULL)", DB_ENGINE);
+        sql_exec(conn, "INSERT INTO productos (nombre, precio) SELECT 'Pan', 1.50 WHERE NOT EXISTS (SELECT 1 FROM productos)", DB_ENGINE);
+
+        let filas = sql_query(conn, "SELECT id, nombre, precio FROM productos ORDER BY precio", DB_ENGINE);
+        sql_close(conn, DB_ENGINE);
+
+        response_header("X-DB-Engine", DB_ENGINE);
+        return json(filas);
+    }
+}

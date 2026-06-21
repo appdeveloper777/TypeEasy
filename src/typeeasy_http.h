@@ -19,6 +19,15 @@ int  typeeasy_http_get_status(void);
 void typeeasy_http_set_status(int s);
 int  typeeasy_http_iter_response_header(int idx, const char **k, const char **v);
 
+/* Binary download channel: a handler can stage raw file bytes (xlsx/pdf/etc.)
+ * to be sent as the response body instead of the textual return value. The
+ * server reads these AFTER invoking the handler; NULL/0 means "no binary body,
+ * use the textual result". set_response_bytes copies the buffer. */
+#include <stddef.h>
+void        typeeasy_http_set_response_bytes(const void *buf, size_t len, const char *content_type);
+const char *typeeasy_http_get_response_bytes(size_t *out_len);
+const char *typeeasy_http_get_response_content_type(void);
+
 /* --- Debugger introspection: read live request data ---- */
 const char *typeeasy_http_get_method(void);
 const char *typeeasy_http_get_path(void);

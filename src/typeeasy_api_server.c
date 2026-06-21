@@ -800,6 +800,22 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
     char *result = typeeasy_embedded_invoke_method(m);
 
     g_runtime_recovery = NULL;
+
+    /* Binary download channel: if the handler staged raw file bytes (xlsx/pdf
+     * via xlsx_download()/pdf_download()/response_file()), copy them into a
+     * local buffer BEFORE releasing the interpreter lock — the globals holding
+     * them are reset on the next request. When present, these bytes become the
+     * response body instead of the textual `result`. */
+    size_t bin_len = 0;
+    const char *bin_src = typeeasy_http_get_response_bytes(&bin_len);
+    char *bin_body = NULL; char *bin_ct = NULL;
+    if (bin_src) {
+        bin_body = (char *)malloc(bin_len ? bin_len : 1);
+        if (bin_body && bin_len) memcpy(bin_body, bin_src, bin_len);
+        const char *ct = typeeasy_http_get_response_content_type();
+        bin_ct = strdup(ct ? ct : "application/octet-stream");
+    }
+
     const char *ctype;
     if (g_response_is_raw_text) {
         ctype = "text/plain; charset=utf-8";
@@ -810,6 +826,11 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
 
     if (!result) result = strdup("");
     int len = (int)strlen(result);
+
+    /* Binary body overrides the textual one (and its content-type). */
+    const char *body_ptr = result;
+    int body_len = len;
+    if (bin_body) { ctype = bin_ct; body_ptr = bin_body; body_len = (int)bin_len; }
 
     /* Honor the response status set by the interpreter (response_status())
      * or by automatic typed-body validation (HTTP 422). */
@@ -876,12 +897,14 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
               TE_CORS_EXTRA_HEADERS
               "%s"
               "\r\n",
-              status, reason, ctype, len, cors_org,
+              status, reason, ctype, body_len, cors_org,
               extra_headers ? extra_headers : "");
-    if (len > 0) mg_write(conn, result, len);
+    if (body_len > 0) mg_write(conn, body_ptr, body_len);
 
     free(extra_headers);
     free(result);
+    free(bin_body);
+    free(bin_ct);
     TE_REQ_DONE(status);
     return 1;
 }

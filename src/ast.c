@@ -25,6 +25,7 @@
 #include "te_json.h"
 #include "te_bytecode.h"
 #include "te_csv.h"
+#include "te_xlsx.h"
 #include "te_colcache.h"
 #include "te_stdlib.h"
 #include "te_linq.h"
@@ -1052,6 +1053,16 @@ static TeKV *g_req_params  = NULL;
 static int   g_resp_status = 200;
 static TeKV *g_resp_headers = NULL;
 
+/* Binary download channel. When a handler calls xlsx_download()/pdf_download()/
+ * response_file(), the bytes of the file live here (binary-safe, explicit
+ * length) along with the Content-Type to emit. The embedded API server checks
+ * this AFTER invoking the handler and, when set, writes these raw bytes as the
+ * body (via mg_write) instead of the textual __ret__ string — so .xlsx (ZIP)
+ * and .pdf payloads keep embedded NUL bytes intact. Reset every request. */
+static char  *g_resp_body = NULL;
+static size_t g_resp_body_len = 0;
+static char  *g_resp_content_type = NULL;
+
 /* Response content-type intent. When a handler does `return "text"` (or any
  * bare scalar/string value rather than json()/xml()), the embedded server must
  * answer with Content-Type: text/plain instead of application/json. This flag
@@ -1113,6 +1124,8 @@ void typeeasy_http_reset(void) {
     te_kv_free_list(&g_resp_headers);
     g_resp_status = 200;
     g_response_is_raw_text = 0;
+    free(g_resp_body); g_resp_body = NULL; g_resp_body_len = 0;
+    free(g_resp_content_type); g_resp_content_type = NULL;
 }
 void typeeasy_http_set_method(const char *m) { free(g_req_method); g_req_method = m ? strdup(m) : NULL; }
 void typeeasy_http_set_path  (const char *p) { free(g_req_path);   g_req_path   = p ? strdup(p) : NULL; }
@@ -1140,6 +1153,25 @@ int  typeeasy_http_iter_response_header(int idx, const char **k, const char **v)
     while (c) { if (i == idx) { if (k) *k = c->k; if (v) *v = c->v; return 1; } c = c->next; i++; }
     return 0;
 }
+
+/* Binary download channel (see g_resp_body declaration above). The setter
+ * copies the bytes (caller keeps ownership of its buffer). Passing buf=NULL
+ * clears any pending binary body. */
+void typeeasy_http_set_response_bytes(const void *buf, size_t len, const char *content_type) {
+    free(g_resp_body); g_resp_body = NULL; g_resp_body_len = 0;
+    free(g_resp_content_type); g_resp_content_type = NULL;
+    if (!buf) return;
+    g_resp_body = (char*)malloc(len ? len : 1);
+    if (!g_resp_body) return;
+    if (len) memcpy(g_resp_body, buf, len);
+    g_resp_body_len = len;
+    g_resp_content_type = content_type ? strdup(content_type) : NULL;
+}
+const char *typeeasy_http_get_response_bytes(size_t *out_len) {
+    if (out_len) *out_len = g_resp_body_len;
+    return g_resp_body;
+}
+const char *typeeasy_http_get_response_content_type(void) { return g_resp_content_type; }
 
 /* Debugger introspection */
 const char *typeeasy_http_get_method(void) { return g_req_method; }
@@ -1329,6 +1361,118 @@ static void native_response_header(ASTNode *arg) {
     te_set_ret_int(0);
 }
 
+/* ===== File-download builtins ============================================
+ * Permiten que un endpoint devuelva un archivo binario (Excel / PDF). Los
+ * bytes se generan en memoria y se entregan al servidor por el canal binario
+ * (typeeasy_http_set_response_bytes); también se fija Content-Disposition:
+ * attachment para que el navegador descargue con el nombre dado.
+ *
+ *   xlsx_download(csvString [, "archivo.xlsx"])
+ *   pdf_download(textoConSaltosDeLinea [, "archivo.pdf"])
+ *   response_file("/ruta/al/archivo" [, "nombre-descarga.ext"])
+ *
+ * El handler luego simplemente hace `return "";` (o cualquier string); el
+ * servidor ignora ese cuerpo textual cuando hay un cuerpo binario pendiente.
+ * ========================================================================= */
+
+/* Fija Content-Disposition: attachment; filename="..." si filename no es NULL. */
+static void te_set_attachment_header(const char *filename) {
+    if (!filename || !*filename) return;
+    char hv[512];
+    /* filename sin comillas/CR/LF para no romper la cabecera */
+    char safe[256]; size_t j = 0;
+    for (const char *p = filename; *p && j < sizeof(safe) - 1; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\r' || c == '\n' || c < 0x20) continue;
+        safe[j++] = (char)c;
+    }
+    safe[j] = '\0';
+    snprintf(hv, sizeof hv, "attachment; filename=\"%s\"", safe);
+    te_kv_add(&g_resp_headers, "Content-Disposition", hv);
+}
+
+static void native_xlsx_download(ASTNode *arg) {
+    char *csv = arg ? get_node_string(arg) : NULL;
+    char *fname = (arg && arg->next) ? get_node_string(arg->next) : NULL;
+    size_t len = 0;
+    char *xlsx = te_xlsx_from_csv_buf(csv ? csv : "", csv ? strlen(csv) : 0, &len);
+    if (xlsx) {
+        typeeasy_http_set_response_bytes(xlsx, len,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        te_set_attachment_header((fname && *fname) ? fname : "download.xlsx");
+        free(xlsx);
+    } else {
+        g_resp_status = 500;
+    }
+    if (csv) free(csv);
+    if (fname) free(fname);
+    te_set_ret_string("");
+}
+
+static void native_pdf_download(ASTNode *arg) {
+    char *text = arg ? get_node_string(arg) : NULL;
+    char *fname = (arg && arg->next) ? get_node_string(arg->next) : NULL;
+    size_t len = 0;
+    char *pdf = te_pdf_from_text(text ? text : "", NULL, &len);
+    if (pdf) {
+        typeeasy_http_set_response_bytes(pdf, len, "application/pdf");
+        te_set_attachment_header((fname && *fname) ? fname : "download.pdf");
+        free(pdf);
+    } else {
+        g_resp_status = 500;
+    }
+    if (text) free(text);
+    if (fname) free(fname);
+    te_set_ret_string("");
+}
+
+/* Adivina el MIME por extensión del nombre/ruta. */
+static int te_path_iendswith(const char *s, const char *suf) {
+    if (!s || !suf) return 0;
+    size_t ls = strlen(s), lf = strlen(suf);
+    if (lf > ls) return 0;
+    const char *p = s + (ls - lf);
+    for (size_t i = 0; i < lf; i++) {
+        char a = p[i], b = suf[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+        if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+        if (a != b) return 0;
+    }
+    return 1;
+}
+static const char *te_guess_mime(const char *path) {
+    if (!path) return "application/octet-stream";
+    if (te_path_iendswith(path, ".xlsx") || te_path_iendswith(path, ".xlsm"))
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    if (te_path_iendswith(path, ".pdf"))  return "application/pdf";
+    if (te_path_iendswith(path, ".csv"))  return "text/csv; charset=utf-8";
+    if (te_path_iendswith(path, ".json")) return "application/json";
+    if (te_path_iendswith(path, ".txt"))  return "text/plain; charset=utf-8";
+    if (te_path_iendswith(path, ".png"))  return "image/png";
+    if (te_path_iendswith(path, ".jpg") || te_path_iendswith(path, ".jpeg")) return "image/jpeg";
+    if (te_path_iendswith(path, ".zip"))  return "application/zip";
+    return "application/octet-stream";
+}
+
+static void native_response_file(ASTNode *arg) {
+    char *path  = arg ? get_node_string(arg) : NULL;
+    char *fname = (arg && arg->next) ? get_node_string(arg->next) : NULL;
+    if (!path || !*path) { g_resp_status = 404; if (path) free(path); if (fname) free(fname); te_set_ret_string(""); return; }
+    FILE *f = fopen(path, "rb");
+    if (!f) { g_resp_status = 404; free(path); if (fname) free(fname); te_set_ret_string(""); return; }
+    fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+    if (sz < 0) sz = 0;
+    if (sz > (64L << 20)) { /* 64 MiB cap */ fclose(f); g_resp_status = 413; free(path); if (fname) free(fname); te_set_ret_string(""); return; }
+    char *buf = (char*)malloc((size_t)sz ? (size_t)sz : 1);
+    size_t rd = buf ? fread(buf, 1, (size_t)sz, f) : 0;
+    fclose(f);
+    if (!buf) { g_resp_status = 500; free(path); if (fname) free(fname); te_set_ret_string(""); return; }
+    typeeasy_http_set_response_bytes(buf, rd, te_guess_mime(path));
+    if (fname && *fname) te_set_attachment_header(fname);
+    free(buf); free(path); if (fname) free(fname);
+    te_set_ret_string("");
+}
+
 /* ===== WebSocket builtins (impl in api_server/te_websocket.c) ===== */
 extern int te_ws_subscribe_current(const char *channel);
 extern int te_ws_send_current(const char *msg);
@@ -1355,6 +1499,136 @@ static void native_request_ws_id(ASTNode *arg) {
     (void)arg;
     char buf[32]; te_ws_current_id_str(buf, sizeof(buf));
     te_set_ret_string(buf);
+}
+
+/* ===== Generic SQL facade (sql_connect / sql_query / sql_close) ============
+ * Estos son builtins NUEVOS que delegan en los conectores existentes segun un
+ * argumento extra `engine` al final. NO modifican los conectores especificos
+ * (mysql, postgres, sqlserver, sqlite): esos siguen funcionando exactamente
+ * igual y se pueden seguir usando directo.
+ *
+ *   let c = sql_connect(host, user, pass, db, port, { tls, tls_fp }, "mysql");
+ *   let r = sql_query(c, "SELECT 1", "mysql");
+ *   sql_close(c, "mysql");
+ *
+ * engine: mysql|mariadb , postgres|postgresql|pg , sqlserver|mssql ,
+ * sqlite|sqlite3. El selector `engine` se DESACOPLA de la cadena de argumentos
+ * antes de delegar, de modo que el conector subyacente recibe exactamente los
+ * mismos argumentos posicionales que ya esperaba (host..opts ; conn,sql ; conn).
+ *
+ * SQLite es un PLUGIN (se registra en el hash table como sqlite_connect,
+ * sqlite_query, sqlite_close), no un simbolo enlazado: se delega via
+ * te_builtin_lookup(). Para sqlite, la "base de datos" (arg #4, indice 3) es la
+ * ruta del archivo .db; el resto de argumentos (host/user/pass/port/opts) se
+ * ignoran. */
+typedef enum { TE_SQL_UNKNOWN, TE_SQL_MYSQL, TE_SQL_PG, TE_SQL_MSSQL, TE_SQL_SQLITE } TeSqlEngine;
+
+static TeSqlEngine te_sql_engine_parse(const char *s) {
+    if (!s) return TE_SQL_UNKNOWN;
+    char b[24]; size_t j = 0;
+    for (; s[j] && j < sizeof(b) - 1; j++) { char c = s[j]; if (c >= 'A' && c <= 'Z') c = (char)(c + 32); b[j] = c; }
+    b[j] = '\0';
+    if (!strcmp(b, "mysql") || !strcmp(b, "mariadb")) return TE_SQL_MYSQL;
+    if (!strcmp(b, "postgres") || !strcmp(b, "postgresql") || !strcmp(b, "pg")) return TE_SQL_PG;
+    if (!strcmp(b, "sqlserver") || !strcmp(b, "mssql") || !strcmp(b, "sql_server")) return TE_SQL_MSSQL;
+    if (!strcmp(b, "sqlite") || !strcmp(b, "sqlite3")) return TE_SQL_SQLITE;
+    return TE_SQL_UNKNOWN;
+}
+
+/* Devuelve el nodo de argumento en la posición `n` (0-based) recorriendo la
+ * cadena lineal (sucesor = ->next o, si falta, ->right). */
+static ASTNode *te_arg_at(ASTNode *arg, int n) {
+    int i = 0;
+    for (ASTNode *c = arg; c; c = c->next ? c->next : c->right) { if (i == n) return c; i++; }
+    return NULL;
+}
+
+/* Invoca un builtin registrado en el hash table (p.ej. los del plugin sqlite).
+ * Devuelve 1 si se ejecutó, 0 si no estaba registrado (plugin no cargado). */
+static int te_call_registry(const char *name, ASTNode *args) {
+    TEBuiltinFn fn = te_builtin_lookup(name);
+    if (!fn) { fprintf(stderr, "[sql] '%s' no disponible (¿está cargado el plugin sqlite?)\n", name); return 0; }
+    ASTNode self = (ASTNode){0}; self.id = (char*)name;
+    fn(&self, args);
+    return 1;
+}
+
+/* Desacopla el último argumento (selector engine) de la cadena. Devuelve el
+ * motor y, vía out-params, lo necesario para re-enlazarlo tras delegar. La
+ * cadena de args es lineal (sucesor = ->next o, si falta, ->right), y en modo
+ * API los handlers corren bajo un lock global (un solo intérprete a la vez),
+ * por lo que mutar/restaurar el enlace dentro de la misma llamada es seguro. */
+static TeSqlEngine te_sql_detach_engine(ASTNode *arg, ASTNode **prev_out,
+                                        ASTNode **tail_out, int *used_next) {
+    *prev_out = NULL; *tail_out = NULL; *used_next = 0;
+    if (!arg) return TE_SQL_UNKNOWN;
+    ASTNode *prev = NULL, *cur = arg, *next;
+    while ((next = cur->next ? cur->next : cur->right)) { prev = cur; cur = next; }
+    TeSqlEngine e = te_sql_engine_parse(te_arg_string(cur));
+    if (prev) {
+        if (prev->next) { *used_next = 1; prev->next = NULL; }
+        else            { *used_next = 0; prev->right = NULL; }
+    }
+    *prev_out = prev; *tail_out = cur;
+    return e;
+}
+static void te_sql_reattach(ASTNode *prev, ASTNode *tail, int used_next) {
+    if (!prev || !tail) return;
+    if (used_next) prev->next = tail; else prev->right = tail;
+}
+
+static void native_sql_connect(ASTNode *arg) {
+    ASTNode *prev, *tail; int un = 0;
+    TeSqlEngine e = te_sql_detach_engine(arg, &prev, &tail, &un);
+    switch (e) {
+        case TE_SQL_MYSQL: native_mysql_connect(arg);     break;
+        case TE_SQL_PG:    native_postgres_connect(arg);  break;
+        case TE_SQL_MSSQL: native_sqlserver_connect(arg); break;
+        case TE_SQL_SQLITE: /* sqlite_connect(path): la BD es el arg #4 (índice 3). */
+            if (!te_call_registry("sqlite_connect", te_arg_at(arg, 3))) te_set_ret_int(-1);
+            break;
+        default: fprintf(stderr, "[sql_connect] engine desconocido (usa mysql|postgres|sqlserver|sqlite)\n"); te_set_ret_int(-1); break;
+    }
+    te_sql_reattach(prev, tail, un);
+}
+static void native_sql_query(ASTNode *arg) {
+    ASTNode *prev, *tail; int un = 0;
+    TeSqlEngine e = te_sql_detach_engine(arg, &prev, &tail, &un);
+    switch (e) {
+        case TE_SQL_MYSQL: native_mysql_query(arg);     break;
+        case TE_SQL_PG:    native_postgres_query(arg);  break;
+        case TE_SQL_MSSQL: native_sqlserver_query(arg); break;
+        case TE_SQL_SQLITE: if (!te_call_registry("sqlite_query", arg)) te_set_ret_string(""); break;
+        default: fprintf(stderr, "[sql_query] engine desconocido\n"); te_set_ret_string(""); break;
+    }
+    te_sql_reattach(prev, tail, un);
+}
+/* sql_exec: para DML/DDL. En MySQL/PostgreSQL/SQL Server no hay un exec aparte
+ * (su *_query ya ejecuta INSERT/UPDATE/DDL), así que delega ahí; en SQLite usa
+ * el sqlite_exec del plugin (distinto de sqlite_query, que es solo SELECT). */
+static void native_sql_exec(ASTNode *arg) {
+    ASTNode *prev, *tail; int un = 0;
+    TeSqlEngine e = te_sql_detach_engine(arg, &prev, &tail, &un);
+    switch (e) {
+        case TE_SQL_MYSQL: native_mysql_query(arg);     break;
+        case TE_SQL_PG:    native_postgres_query(arg);  break;
+        case TE_SQL_MSSQL: native_sqlserver_query(arg); break;
+        case TE_SQL_SQLITE: if (!te_call_registry("sqlite_exec", arg)) te_set_ret_int(-1); break;
+        default: fprintf(stderr, "[sql_exec] engine desconocido\n"); te_set_ret_int(-1); break;
+    }
+    te_sql_reattach(prev, tail, un);
+}
+static void native_sql_close(ASTNode *arg) {
+    ASTNode *prev, *tail; int un = 0;
+    TeSqlEngine e = te_sql_detach_engine(arg, &prev, &tail, &un);
+    switch (e) {
+        case TE_SQL_MYSQL: native_mysql_close(arg);     break;
+        case TE_SQL_PG:    native_postgres_close(arg);  break;
+        case TE_SQL_MSSQL: native_sqlserver_close(arg); break;
+        case TE_SQL_SQLITE: te_call_registry("sqlite_close", arg); break;
+        default: te_set_ret_int(0); break;
+    }
+    te_sql_reattach(prev, tail, un);
 }
 
 int call_native_function(const char *name, ASTNode *arg) {
@@ -1394,6 +1668,9 @@ int call_native_function(const char *name, ASTNode *arg) {
     if (strcmp(name, "request_params") == 0) { native_request_params_all(arg); return 1; }
     if (strcmp(name, "response_status")== 0) { native_response_status(arg);return 1; }
     if (strcmp(name, "response_header")== 0) { native_response_header(arg);return 1; }
+    if (strcmp(name, "xlsx_download")  == 0) { native_xlsx_download(arg);  return 1; }
+    if (strcmp(name, "pdf_download")   == 0) { native_pdf_download(arg);   return 1; }
+    if (strcmp(name, "response_file")  == 0) { native_response_file(arg);  return 1; }
     if (strcmp(name, "debug_log")      == 0) { native_debug_log(arg);      return 1; }
     if (strcmp(name, "ws_subscribe")   == 0) { native_ws_subscribe(arg);   return 1; }
     if (strcmp(name, "ws_send")        == 0) { native_ws_send(arg);        return 1; }
@@ -1421,6 +1698,11 @@ int call_native_function(const char *name, ASTNode *arg) {
     if (strcmp(name, "sqlserver_connect") == 0) { native_sqlserver_connect(arg); return 1; }
     if (strcmp(name, "sqlserver_query") == 0)   { native_sqlserver_query(arg);   return 1; }
     if (strcmp(name, "sqlserver_close") == 0)   { native_sqlserver_close(arg);   return 1; }
+    /* Facade SQL genérico (delega según el engine final; no altera los de arriba) */
+    if (strcmp(name, "sql_connect") == 0) { native_sql_connect(arg); return 1; }
+    if (strcmp(name, "sql_query") == 0)   { native_sql_query(arg);   return 1; }
+    if (strcmp(name, "sql_exec") == 0)    { native_sql_exec(arg);    return 1; }
+    if (strcmp(name, "sql_close") == 0)   { native_sql_close(arg);   return 1; }
     return 0;
 }
 
@@ -2175,6 +2457,8 @@ typedef struct TeReqState {
     size_t req_body_len;
     TeKV *req_query, *req_headers, *req_params, *resp_headers;
     int   resp_status, raw_text;
+    char *resp_body, *resp_content_type;   /* binary download channel (owned) */
+    size_t resp_body_len;
 } TeReqState;
 
 static void te_var_free_owned(Variable *v) {
@@ -2236,6 +2520,9 @@ void *te_reqstate_save(void) {
     g_req_body_len = 0;
     g_req_query = g_req_headers = g_req_params = g_resp_headers = NULL;
     g_resp_status = 200; g_response_is_raw_text = 0;
+    s->resp_body = g_resp_body; s->resp_body_len = g_resp_body_len;
+    s->resp_content_type = g_resp_content_type;
+    g_resp_body = NULL; g_resp_body_len = 0; g_resp_content_type = NULL;
     return s;
 }
 
@@ -2280,6 +2567,9 @@ void te_reqstate_restore(void *st) {
     g_req_query  = s->req_query;  g_req_headers = s->req_headers;
     g_req_params = s->req_params; g_resp_headers = s->resp_headers;
     g_resp_status = s->resp_status; g_response_is_raw_text = s->raw_text;
+    free(g_resp_body); free(g_resp_content_type);
+    g_resp_body = s->resp_body; g_resp_body_len = s->resp_body_len;
+    g_resp_content_type = s->resp_content_type;
     free(s);
 }
 

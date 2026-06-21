@@ -39,6 +39,24 @@ char *te_xlsx_to_csv_buf(const char *filename, size_t *out_len);
  * para uploads HTTP donde el archivo llega en el body. */
 char *te_xlsx_bytes_to_csv_buf(const char *zip, size_t zip_len, size_t *out_len);
 
+/* ------------------------------------------------------------------------
+ * Escritores de documentos (export). Producen los BYTES de un archivo en
+ * memoria para que un endpoint pueda devolver una descarga binaria.
+ * El caller toma posesión del buffer (free()). Devuelven NULL si falla.
+ * ----------------------------------------------------------------------*/
+
+/* Construye un .xlsx (OOXML, una hoja) a partir de un buffer CSV (RFC 4180).
+ * Cada línea es una fila; las celdas puramente numéricas se escriben como
+ * número, el resto como texto (inlineStr). `*out_len` recibe el tamaño en
+ * bytes del .xlsx resultante. */
+char *te_xlsx_from_csv_buf(const char *csv, size_t csv_len, size_t *out_len);
+
+/* Construye un PDF (texto, fuente Helvetica, paginado) a partir de `text`
+ * (líneas separadas por '\n'). `title` es opcional (se imprime como primera
+ * línea en negrita-ish; puede ser NULL). `*out_len` recibe el tamaño del PDF. */
+char *te_pdf_from_text(const char *text, const char *title, size_t *out_len);
+
+
 #ifdef __cplusplus
 }
 #endif
