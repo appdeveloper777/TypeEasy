@@ -4,7 +4,7 @@ TypeEasy permite recibir archivos `.csv` y `.xlsx` desde un cliente HTTP y
 materializarlos en una lista tipada con la **misma sintaxis** que ya se usa
 para leer desde disco:
 
-```typeeasy
+```ts
 let productos = from "request:body", Producto;
 ```
 
