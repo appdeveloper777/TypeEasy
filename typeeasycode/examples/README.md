@@ -12,6 +12,7 @@ Categorias organizadas por concepto. Cada carpeta tiene su propio README.
 | `04_stdlib_io/`  | JSON, file I/O, string interp, try/catch, imports  |
 | `05_http_client/`| Cliente HTTP / HTTPS contra el server `--api`      |
 | `06_csv/`        | Lectura CSV (`from "file.csv", Class`)             |
+| `06b_xlsx/`      | Lectura Excel (`from "file.xlsx", Class`) — misma sintaxis que CSV |
 | `07_db_orm/`     | Bridges MySQL/Postgres/SQL Server (Dapper-style)   |
 | `08_bytecode/`   | Backend de bytecode VM                             |
 | `09_ml/`         | Dataset / model / train / predict / plot           |
@@ -23,6 +24,7 @@ Categorias organizadas por concepto. Cada carpeta tiene su propio README.
 | `21_cookies/`    | Sesión con cookies (`request_cookie` + `Set-Cookie`) |
 | `22_response_headers/` | Cabeceras de respuesta personalizadas (`response_header`) |
 | `23_guard_decorator/` | Decorador `@<nombre>` definible: guard propio → 401 automático |
+| `24_upload/`     | Upload CSV/XLSX a endpoint → lista tipada (`from "request:body", Class`) |
 | `_scratch/`      | Tests de debug / temporales (no en regression)     |
 
 ## Como correr un test

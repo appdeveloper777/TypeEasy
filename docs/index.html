@@ -360,6 +360,8 @@ window.NAV_ES = [
   { group: "Datos y consultas", items: [
     ["linq", "LINQ (consultas)"],
     ["csv", "Leer CSV"],
+    ["xlsx", "Leer Excel (.xlsx)"],
+    ["upload", "Subir CSV/XLSX a un endpoint"],
     ["mysql", "MySQL"],
   ]},
   { group: "Avanzado", items: [
@@ -418,6 +420,8 @@ window.NAV_EN = [
   { group: "Data & queries", items: [
     ["linq", "LINQ (queries)"],
     ["csv", "Read CSV"],
+    ["xlsx", "Read Excel (.xlsx)"],
+    ["upload", "Upload CSV/XLSX to an endpoint"],
     ["mysql", "MySQL"],
   ]},
   { group: "Advanced", items: [
@@ -1788,6 +1792,118 @@ println("total = " + total);                   // 33`)}
 
 <div class="pager">
   <a class="prev" href="#/linq">&larr; LINQ</a>
+  <a href="#/xlsx">Leer Excel &rarr;</a>
+</div>
+`;
+
+PAGES.xlsx = `
+<h1>Leer Excel (.xlsx)</h1>
+<p class="lead">Carga la primera hoja de un libro Excel a una lista de objetos usando <strong>la misma sintaxis</strong> que CSV: <code class="inline">from "archivo.xlsx", Clase</code>.</p>
+
+<h2>Cómo funciona</h2>
+<ol>
+  <li>El intérprete detecta la extensión <code class="inline">.xlsx</code> / <code class="inline">.xlsm</code>.</li>
+  <li>Abre el archivo como ZIP, descomprime <code class="inline">xl/sharedStrings.xml</code> y <code class="inline">xl/worksheets/sheet1.xml</code> con zlib.</li>
+  <li>Materializa un CSV en memoria (RFC 4180) y lo entrega al lector CSV existente.</li>
+  <li>A partir de ahí todo funciona igual: LINQ (<code class="inline">sumBy</code>, <code class="inline">where</code>, <code class="inline">orderBy</code>), modo columnar (<code class="inline">as dataframe</code>), iteración con <code class="inline">for</code>, <code class="inline">.length</code>.</li>
+</ol>
+
+<h2>Ejemplo</h2>
+${te(`class Producto {
+    nombre : string;
+    precio : int;
+
+    __constructor(nombre : string, precio : int) {
+        this.nombre = nombre;
+        this.precio = precio;
+    }
+}
+
+let productos = from "productos.xlsx", Producto;
+println(productos.length);
+
+for (let p in productos) {
+    println(p.nombre + " -> " + p.precio);
+}`)}
+
+<h2>Modo DataFrame (columnar)</h2>
+<p>Igual que con CSV, <code class="inline">as dataframe</code> evita materializar objetos y aplica los agregados sobre buffers columnar:</p>
+${te(`let productos = from "productos.xlsx", Producto as dataframe;
+
+println(productos.length);                              // total filas
+println(productos.sumBy(fn(p) => p.precio));            // suma de precios
+println(productos.countWhere(fn(p) => p.precio >= 50)); // cuántos caros`)}
+
+<div class="note"><strong>Limitaciones intencionales.</strong> Solo se lee la primera hoja; las fechas vienen como serial OADate (sin formateo); las fórmulas usan el valor cacheado <code class="inline">&lt;v&gt;</code>; tipos soportados: string (shared / inline), numérico, booleano (0/1).</div>
+
+<div class="pager">
+  <a class="prev" href="#/csv">&larr; Leer CSV</a>
+  <a href="#/upload">Subir CSV/XLSX &rarr;</a>
+</div>
+`;
+
+PAGES.upload = `
+<h1>Subir CSV / XLSX a un endpoint</h1>
+<p class="lead">El mismo <code class="inline">from</code> también lee el archivo desde el cuerpo del request usando la pseudo-URI <code class="inline">"request:body"</code>. Sirve para endpoints que reciben uploads.</p>
+
+<h2>Detección automática</h2>
+<ul>
+  <li><strong>XLSX</strong>: el sniffer reconoce la firma ZIP (<code class="inline">PK\\x03\\x04</code>) al inicio del payload y aplica el conversor XLSX → CSV en memoria.</li>
+  <li><strong>CSV</strong>: cualquier otro contenido se interpreta como CSV UTF-8.</li>
+  <li><strong>multipart/form-data</strong>: si el <code class="inline">Content-Type</code> indica multipart, el intérprete extrae el primer file part (típico de un <code class="inline">&lt;input type="file"&gt;</code>) y aplica la detección sobre esos bytes.</li>
+</ul>
+
+<h2>Endpoint mínimo</h2>
+${te(`class Producto {
+    nombre : string;
+    precio : int;
+
+    __constructor(nombre : string, precio : int) {
+        this.nombre = nombre;
+        this.precio = precio;
+    }
+}
+
+endpoint {
+    [HttpPost("/api/productos")]
+    subirProductos() {
+        // Mismo from de siempre, pero el archivo viene en el body.
+        let productos = from "request:body", Producto;
+        return json("{\\"total\\":" + productos.length + "}");
+    }
+}`)}
+
+<h2>Probarlo con curl</h2>
+${te(`# CSV crudo
+curl -X POST --data-binary @productos.csv \\
+     -H "Content-Type: text/csv" \\
+     http://localhost:9101/api/productos
+
+# XLSX crudo
+curl -X POST --data-binary @productos.xlsx \\
+     -H "Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" \\
+     http://localhost:9101/api/productos
+
+# multipart (como un <form> de navegador)
+curl -X POST -F "archivo=@productos.xlsx" \\
+     http://localhost:9101/api/productos`, "bash")}
+
+<h2>Variante DataFrame para agregados</h2>
+${te(`endpoint {
+    [HttpPost("/api/productos/resumen")]
+    resumen() {
+        let df = from "request:body", Producto as dataframe;
+        let total = df.length;
+        let suma  = df.sumBy(fn(p) => p.precio);
+        let max   = df.maxBy(fn(p) => p.precio);
+        return json("{\\"total\\":" + total + ",\\"suma\\":" + suma + ",\\"max\\":" + max + "}");
+    }
+}`)}
+
+<div class="note"><strong>Tamaño máximo.</strong> El server descarta cuerpos mayores que <code class="inline">TYPEEASY_MAX_BODY</code> bytes (default <strong>1 MiB</strong>). Para subir archivos más grandes, exporta la variable con un valor mayor antes de levantar el server (<code class="inline">TYPEEASY_MAX_BODY=$((16*1024*1024))</code>).</div>
+
+<div class="pager">
+  <a class="prev" href="#/xlsx">&larr; Leer Excel</a>
   <a href="#/mysql">MySQL &rarr;</a>
 </div>
 `;
@@ -1867,7 +1983,7 @@ ${te(`mysql_close(conn);`)}
 <div class="note"><strong>TLS.</strong> <code class="inline">mysql_connect</code> admite un 6º argumento opcional (map) para opciones TLS — útil para servicios gestionados como TiDB Cloud. Nunca pongas credenciales reales en el código: léelas de variables de entorno con <code class="inline">env_required("DB_PASS")</code>.</div>
 
 <div class="pager">
-  <a class="prev" href="#/csv">&larr; Leer CSV</a>
+  <a class="prev" href="#/upload">&larr; Subir CSV/XLSX</a>
   <a href="#/errors">Manejo de errores &rarr;</a>
 </div>
 `;

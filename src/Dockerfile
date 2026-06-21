@@ -7,8 +7,9 @@ FROM gcc:13.2.0 AS base
 
 # Instala las herramientas que ambos componentes necesitan
 # libsqlite3-dev: necesario para compilar el plugin nativo libte_sqlite.so
+# zlib1g-dev: necesario para te_xlsx.c (lectura de archivos .xlsx)
 RUN apt-get update && \
-    apt-get install -y flex bison libssl-dev default-libmysqlclient-dev libcurl4-openssl-dev libpq-dev freetds-dev libsqlite3-dev && \
+    apt-get install -y flex bison libssl-dev default-libmysqlclient-dev libcurl4-openssl-dev libpq-dev freetds-dev libsqlite3-dev zlib1g-dev && \
     apt-get clean
 
 WORKDIR /app
@@ -65,14 +66,14 @@ RUN cd /app/src && \
     bison -d -o parser.tab.c parser.y --warnings=none && \
     flex -o lex.yy.c parser.l && \
     gcc -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET -DTE_ENABLE_JIT=1 -c \
-    ast.c bytecode.c mysql_bridge.c postgres_bridge.c sqlserver_bridge.c db_params.c orm_bridge.c typeeasy_api.c debugger.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c te_colcache.c te_stdlib.c te_bridge.c te_async.c te_linq.c te_linq_ops.c te_math.c te_string.c te_list.c te_map.c \
+    ast.c bytecode.c mysql_bridge.c postgres_bridge.c sqlserver_bridge.c db_params.c orm_bridge.c typeeasy_api.c debugger.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c te_xlsx.c te_colcache.c te_stdlib.c te_bridge.c te_async.c te_linq.c te_linq_ops.c te_math.c te_string.c te_list.c te_map.c \
     parser.tab.c lex.yy.c strvars.c && \
     cd /app && \
     gcc -I/app/api_server -I/app/src -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET \
     /app/api_server/servidor_api.c /app/api_server/typeeasy.c /app/api_server/civetweb.c /app/api_server/te_websocket.c \
     /app/src/ast.o /app/src/bytecode.o /app/src/mysql_bridge.o /app/src/postgres_bridge.o /app/src/sqlserver_bridge.o /app/src/db_params.o /app/src/orm_bridge.o \
-    /app/src/typeeasy_api.o /app/src/debugger.o /app/src/te_builtins.o /app/src/te_http.o /app/src/te_json.o /app/src/te_bytecode.o /app/src/te_csv.o /app/src/te_colcache.o /app/src/te_stdlib.o /app/src/te_bridge.o /app/src/te_async.o /app/src/te_linq.o /app/src/te_linq_ops.o /app/src/te_math.o /app/src/te_string.o /app/src/te_list.o /app/src/te_map.o /app/src/parser.tab.o /app/src/lex.yy.o /app/src/strvars.o \
-    -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto -lmysqlclient -lpq -lsybdb -lfl -lm
+    /app/src/typeeasy_api.o /app/src/debugger.o /app/src/te_builtins.o /app/src/te_http.o /app/src/te_json.o /app/src/te_bytecode.o /app/src/te_csv.o /app/src/te_xlsx.o /app/src/te_colcache.o /app/src/te_stdlib.o /app/src/te_bridge.o /app/src/te_async.o /app/src/te_linq.o /app/src/te_linq_ops.o /app/src/te_math.o /app/src/te_string.o /app/src/te_list.o /app/src/te_map.o /app/src/parser.tab.o /app/src/lex.yy.o /app/src/strvars.o \
+    -o /app/typeeasy_api -lpthread -ldl -lssl -lcrypto -lmysqlclient -lpq -lsybdb -lfl -lm -lz
 
 # =================================================================
 # ETAPA 4: IMAGEN FINAL PARA LA API (Lista para producción)
@@ -83,7 +84,7 @@ WORKDIR /app
 
 # Instala las librerías SSL de runtime Y la librería de Flex (libfl2)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libssl3 libfl2 default-libmysqlclient-dev libpq5 libsybdb5 libcurl4 libgomp1 ca-certificates && \
+    apt-get install -y --no-install-recommends libssl3 libfl2 default-libmysqlclient-dev libpq5 libsybdb5 libcurl4 libgomp1 zlib1g ca-certificates && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -112,7 +113,7 @@ WORKDIR /typeeasy
 
 # Instala la librería 'libfl' que falta (+ gdbserver para depuración remota)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libfl2 default-libmysqlclient-dev libpq5 libsybdb5 libssl3 libcurl4 libgomp1 libsqlite3-0 ca-certificates wabt gdbserver && \
+    apt-get install -y --no-install-recommends libfl2 default-libmysqlclient-dev libpq5 libsybdb5 libssl3 libcurl4 libgomp1 libsqlite3-0 zlib1g ca-certificates wabt gdbserver && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

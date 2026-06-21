@@ -1,0 +1,25 @@
+// leer_excel.te — Lectura basica de un archivo .xlsx con la misma
+// sintaxis usada para CSV. La primera hoja del libro es interpretada
+// como una tabla con encabezado.
+
+class Producto {
+  nombre : string;
+  precio : int;
+
+  __constructor(nombre : string, precio : int) {
+    this.nombre = nombre;
+    this.precio = precio;
+  }
+}
+
+let productos = from "productos.xlsx", Producto;
+
+println("Total de productos:");
+println(productos.length);
+println("");
+println("Listado:");
+for (let p in productos) {
+  print(p.nombre);
+  print(" -> ");
+  println(p.precio);
+}

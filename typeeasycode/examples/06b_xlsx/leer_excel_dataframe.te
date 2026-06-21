@@ -1,0 +1,28 @@
+// leer_excel_dataframe.te — El mismo archivo .xlsx cargado en modo
+// columnar. Las operaciones LINQ agregadas (sumBy/avgBy/minBy/maxBy)
+// se ejecutan directamente sobre las columnas, sin materializar wrappers
+// por fila. Util para hojas con miles/millones de filas.
+
+class Producto {
+  nombre : string;
+  precio : int;
+
+  __constructor(nombre : string, precio : int) {
+    this.nombre = nombre;
+    this.precio = precio;
+  }
+}
+
+let productos = from "productos.xlsx", Producto as dataframe;
+
+println("Filas cargadas:");
+println(productos.length);
+
+println("Suma de precios:");
+println(productos.sumBy(p => p.precio));
+
+println("Promedio:");
+println(productos.avgBy(p => p.precio));
+
+println("Maximo:");
+println(productos.maxBy(p => p.precio));

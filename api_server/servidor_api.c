@@ -646,7 +646,9 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
                                  req_info->http_headers[i].value);
     }
 
-    /* Populate body (POST/PUT/PATCH). Cap at 1 MiB. */
+    /* Populate body (POST/PUT/PATCH). Cap at 1 MiB. Binary-safe storage so
+     * file uploads (xlsx/zip, octet-stream, multipart blobs) keep embedded
+     * NUL bytes intact for `from "request:body", Class;`. */
     long long clen = req_info->content_length;
     if (clen > 0 && clen < (1 << 20)) {
         char *body = (char*)malloc((size_t)clen + 1);
@@ -654,7 +656,7 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
             int n = mg_read(conn, body, (size_t)clen);
             if (n < 0) n = 0;
             body[n] = '\0';
-            typeeasy_http_set_body(body);
+            typeeasy_http_set_body_n(body, (size_t)n);
             free(body);
         }
     }

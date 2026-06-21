@@ -1045,6 +1045,7 @@ typedef struct TeKV { char *k; char *v; struct TeKV *next; } TeKV;
 static char *g_req_method = NULL;
 static char *g_req_path   = NULL;
 static char *g_req_body   = NULL;
+static size_t g_req_body_len = 0;   /* binary-safe length; strlen() not used (body may contain NULs, e.g. xlsx upload) */
 static TeKV *g_req_query   = NULL;
 static TeKV *g_req_headers = NULL;
 static TeKV *g_req_params  = NULL;
@@ -1105,7 +1106,7 @@ static const char *te_kv_find_ci(TeKV *head, const char *k) {
 void typeeasy_http_reset(void) {
     free(g_req_method); g_req_method = NULL;
     free(g_req_path);   g_req_path   = NULL;
-    free(g_req_body);   g_req_body   = NULL;
+    free(g_req_body);   g_req_body   = NULL;  g_req_body_len = 0;
     te_kv_free_list(&g_req_query);
     te_kv_free_list(&g_req_headers);
     te_kv_free_list(&g_req_params);
@@ -1115,7 +1116,20 @@ void typeeasy_http_reset(void) {
 }
 void typeeasy_http_set_method(const char *m) { free(g_req_method); g_req_method = m ? strdup(m) : NULL; }
 void typeeasy_http_set_path  (const char *p) { free(g_req_path);   g_req_path   = p ? strdup(p) : NULL; }
-void typeeasy_http_set_body  (const char *b) { free(g_req_body);   g_req_body   = b ? strdup(b) : NULL; }
+/* Binary-safe body setter: keeps explicit length so callers can store payloads
+ * with embedded NUL bytes (e.g. .xlsx uploads = ZIP). The buffer is always
+ * NUL-terminated past the end so string-style accessors (request_body()) still
+ * work for textual bodies. */
+void typeeasy_http_set_body_n(const void *buf, size_t len) {
+    free(g_req_body); g_req_body = NULL; g_req_body_len = 0;
+    if (!buf) return;
+    g_req_body = (char*)malloc(len + 1);
+    if (!g_req_body) return;
+    if (len) memcpy(g_req_body, buf, len);
+    g_req_body[len] = '\0';
+    g_req_body_len = len;
+}
+void typeeasy_http_set_body  (const char *b) { typeeasy_http_set_body_n(b, b ? strlen(b) : 0); }
 void typeeasy_http_add_query (const char *k, const char *v) { te_kv_add(&g_req_query,  k, v); }
 void typeeasy_http_add_header(const char *k, const char *v) { te_kv_add(&g_req_headers, k, v); }
 void typeeasy_http_add_param (const char *k, const char *v) { te_kv_add(&g_req_params,  k, v); }
@@ -1131,6 +1145,10 @@ int  typeeasy_http_iter_response_header(int idx, const char **k, const char **v)
 const char *typeeasy_http_get_method(void) { return g_req_method; }
 const char *typeeasy_http_get_path  (void) { return g_req_path;   }
 const char *typeeasy_http_get_body  (void) { return g_req_body;   }
+const char *typeeasy_http_get_body_n(size_t *out_len) {
+    if (out_len) *out_len = g_req_body_len;
+    return g_req_body;
+}
 static int te_kv_iter(TeKV *head, int idx, const char **k, const char **v) {
     int i = 0; for (TeKV *c = head; c; c = c->next, ++i) {
         if (i == idx) { if (k) *k = c->k; if (v) *v = c->v; return 1; }
@@ -2154,6 +2172,7 @@ typedef struct TeReqState {
     char     *claims;         /* g_current_claims (owned) */
     /* http context (ownership moved out of the globals) */
     char *req_method, *req_path, *req_body;
+    size_t req_body_len;
     TeKV *req_query, *req_headers, *req_params, *resp_headers;
     int   resp_status, raw_text;
 } TeReqState;
@@ -2209,10 +2228,12 @@ void *te_reqstate_save(void) {
     g_current_claims = NULL;
 
     s->req_method = g_req_method; s->req_path = g_req_path; s->req_body = g_req_body;
+    s->req_body_len = g_req_body_len;
     s->req_query  = g_req_query;  s->req_headers = g_req_headers;
     s->req_params = g_req_params; s->resp_headers = g_resp_headers;
     s->resp_status = g_resp_status; s->raw_text = g_response_is_raw_text;
     g_req_method = g_req_path = g_req_body = NULL;
+    g_req_body_len = 0;
     g_req_query = g_req_headers = g_req_params = g_resp_headers = NULL;
     g_resp_status = 200; g_response_is_raw_text = 0;
     return s;
@@ -2255,6 +2276,7 @@ void te_reqstate_restore(void *st) {
     te_kv_free_list(&g_req_query); te_kv_free_list(&g_req_headers);
     te_kv_free_list(&g_req_params); te_kv_free_list(&g_resp_headers);
     g_req_method = s->req_method; g_req_path = s->req_path; g_req_body = s->req_body;
+    g_req_body_len = s->req_body_len;
     g_req_query  = s->req_query;  g_req_headers = s->req_headers;
     g_req_params = s->req_params; g_resp_headers = s->resp_headers;
     g_resp_status = s->resp_status; g_response_is_raw_text = s->raw_text;
@@ -7629,16 +7651,23 @@ static void interpret_var_decl(ASTNode *node) {
      * by te_csv_lazy_resolve_all(). Performing the I/O HERE (instead of in
      * parse_file) makes user `let t0=now_ms(); let xs=from "x.csv",T;`
      * brackets measure the actual load time. Zero overhead for non-CSV
-     * decls: one strcmp on value_node->type. */
+     * decls: one strcmp on value_node->type.
+     *
+     * v1.1.x: for `from "request:body", T;` the loader keeps the CSV_LOAD
+     * descriptor attached (value_node->extra stays non-NULL) so each
+     * handler invocation re-loads from the current request body. In that
+     * case we MUST NOT replace value_node — the placeholder needs to live
+     * for the next invocation. */
     if (value_node && value_node->type && strcmp(value_node->type, "CSV_LOAD") == 0) {
         ASTNode *loaded = te_csv_runtime_load(value_node);
         if (loaded) {
-            /* Free the small placeholder shell (its type/extra were freed
-             * inside te_csv_runtime_load). */
-            if (value_node->type) free(value_node->type);
-            if (value_node->id) free(value_node->id);
-            free(value_node);
-            node->left = loaded;
+            if (value_node->extra == NULL) {
+                /* Static load: consume placeholder once. */
+                if (value_node->type) free(value_node->type);
+                if (value_node->id) free(value_node->id);
+                free(value_node);
+                node->left = loaded;
+            }
             value_node = loaded;
         }
     }

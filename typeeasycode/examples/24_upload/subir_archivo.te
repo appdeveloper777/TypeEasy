@@ -1,0 +1,103 @@
+// =============================================================
+// 24_upload/subir_archivo.te
+//
+// Endpoint que recibe un archivo CSV o XLSX en el cuerpo del
+// request y lo materializa como una lista tipada de objetos
+// `Producto`, usando exactamente la misma sintaxis que
+// `from "productos.xlsx", Producto;` pero con la pseudo-URI
+// especial `"request:body"`.
+//
+// El intérprete detecta automáticamente el formato (XLSX si el
+// payload empieza con la firma ZIP `PK\x03\x04`, CSV en
+// cualquier otro caso) y soporta:
+//
+//   • Upload "crudo" (Content-Type: text/csv o application/...)
+//     con el archivo en el body sin envoltorios.
+//   • multipart/form-data con un campo de tipo file (toma el
+//     primer file part encontrado).
+//
+// -------------------------------------------------------------
+// Ejecutar:
+//   typeeasy --api examples/24_upload/subir_archivo.te --port 9101
+//
+// Probar con CSV crudo:
+//   curl -X POST --data-binary @typeeasycode/examples/24_upload/productos.csv \
+//        -H "Content-Type: text/csv" \
+//        http://localhost:9101/api/productos
+//
+// Probar con XLSX crudo:
+//   curl -X POST --data-binary @typeeasycode/examples/06b_xlsx/productos.xlsx \
+//        -H "Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" \
+//        http://localhost:9101/api/productos
+//
+// Probar con multipart (como lo manda un <form> de navegador):
+//   curl -X POST -F "archivo=@typeeasycode/examples/06b_xlsx/productos.xlsx" \
+//        http://localhost:9101/api/productos
+// =============================================================
+
+class Producto {
+    nombre : string;
+    precio : int;
+
+    __constructor(nombre : string, precio : int) {
+        this.nombre = nombre;
+        this.precio = precio;
+    }
+}
+
+endpoint {
+
+    // 1) Carga directa a lista tipada — modo objeto.
+    [HttpPost("/api/productos")]
+    subirProductos() {
+        // Misma sintaxis que `from "productos.xlsx", Producto;`
+        // pero leyendo el archivo desde el body del request.
+        let productos = from "request:body", Producto;
+
+        debug_log(concat("upload: ", productos.length, " productos"));
+
+        // Construir respuesta JSON sin librerías extra.
+        let total = productos.length;
+        var body  = "[";
+        var first = 1;
+        for (let p in productos) {
+            if (first == 1) {
+                first = 0;
+            } else {
+                body = concat(body, ",");
+            }
+            body = concat(
+                body,
+                "{\"nombre\":\"", p.nombre,
+                "\",\"precio\":", p.precio, "}"
+            );
+        }
+        body = concat(body, "]");
+
+        let resp = concat(
+            "{\"total\":", total,
+            ",\"productos\":", body, "}"
+        );
+        return json(resp);
+    }
+
+    // 2) Carga como DataFrame columnar — pensado para agregados
+    //    sobre archivos grandes sin materializar objetos.
+    [HttpPost("/api/productos/resumen")]
+    resumenProductos() {
+        let df = from "request:body", Producto as dataframe;
+
+        let total  = df.length;
+        let suma   = df.sumBy(p => p.precio);
+        let maximo = df.maxBy(p => p.precio);
+        let promedio = df.avgBy(p => p.precio);
+
+        let resp = concat(
+            "{\"total\":", total,
+            ",\"suma_precios\":", suma,
+            ",\"max\":", maximo,
+            ",\"promedio\":", promedio, "}"
+        );
+        return json(resp);
+    }
+}

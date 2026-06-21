@@ -735,7 +735,8 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
             int n = mg_read(conn, body, (size_t)clen);
             if (n < 0) n = 0;
             body[n] = '\0';
-            typeeasy_http_set_body(body);
+            /* Binary-safe: uploads (xlsx/zip) contain NUL bytes. */
+            typeeasy_http_set_body_n(body, (size_t)n);
             free(body);
         }
     }

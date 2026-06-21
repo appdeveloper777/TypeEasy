@@ -8,6 +8,7 @@
 #include "te_csv.h"
 #include "ast.h"
 #include "te_colcache.h"
+#include "te_xlsx.h"
 
 #include <ctype.h>
 #include <fcntl.h>
@@ -94,6 +95,248 @@ extern ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, c
 extern ObjectNode *create_object(ClassNode *class);
 extern void te_colcache_build(ASTNode *list_head, ClassNode *cls);
 extern void te_colcache_attach_prebuilt(ASTNode *list_head, struct TeColCache *c);
+
+/* HTTP request bridges (impl in src/ast.c). Used by the "request:body" pseudo-
+ * filename path so endpoints can do `from "request:body", Class;` to parse an
+ * uploaded CSV/XLSX directly from the HTTP body or a multipart file part. */
+extern const char *typeeasy_http_get_body_n(size_t *out_len);
+extern const char *typeeasy_http_get_header(const char *k);
+
+/* True if `filename` is the pseudo-URI that asks for the request body. */
+static int te_csv_is_request_uri(const char *filename) {
+    if (!filename) return 0;
+    /* Case-insensitive prefix match. */
+    const char *p = filename;
+    const char *q = "request:";
+    while (*q) {
+        char a = *p++; char b = *q++;
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+/* Extract `boundary=...` value from a Content-Type header. Handles quoted
+ * tokens and stops at the next `;`. Returns malloc'd string or NULL. */
+static char *te_csv_get_boundary(const char *ct) {
+    if (!ct) return NULL;
+    const char *p = ct;
+    while (*p) {
+        /* find 'boundary' token (case-insensitive) */
+        const char *b = p;
+        const char *k = "boundary";
+        while (*b && *k) {
+            char a = *b; char c = *k;
+            if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+            if (a != c) break;
+            b++; k++;
+        }
+        if (!*k) { /* matched 'boundary' */
+            while (*b == ' ' || *b == '\t') b++;
+            if (*b != '=') { p = b; continue; }
+            b++;
+            while (*b == ' ' || *b == '\t') b++;
+            int quoted = 0;
+            if (*b == '"') { quoted = 1; b++; }
+            const char *e = b;
+            while (*e) {
+                if (quoted && *e == '"') break;
+                if (!quoted && (*e == ';' || *e == ' ' || *e == '\t' || *e == '\r' || *e == '\n')) break;
+                e++;
+            }
+            size_t n = (size_t)(e - b);
+            if (!n) return NULL;
+            char *out = (char*)malloc(n + 1);
+            if (!out) return NULL;
+            memcpy(out, b, n); out[n] = '\0';
+            return out;
+        }
+        p++;
+    }
+    return NULL;
+}
+
+/* Locate the first multipart file part inside `body`. Returns 1 on success,
+ * setting `*out_data`/`*out_len` to a slice INSIDE `body` (no allocation) and
+ * `*out_filename` to a freshly malloc'd filename (or NULL if the part had none).
+ * Returns 0 if no part is found; in that case the caller should treat the body
+ * as the raw upload. */
+static int te_csv_multipart_first_file(const char *body, size_t body_len,
+                                       const char *boundary,
+                                       const char **out_data, size_t *out_len,
+                                       char **out_filename) {
+    *out_data = NULL; *out_len = 0; *out_filename = NULL;
+    if (!body || !boundary || !*boundary) return 0;
+    size_t blen = strlen(boundary);
+    /* delimiter is "--BOUNDARY" optionally followed by CRLF or "--" (end). */
+    char *delim = (char*)malloc(blen + 3);
+    if (!delim) return 0;
+    delim[0] = '-'; delim[1] = '-';
+    memcpy(delim + 2, boundary, blen); delim[blen + 2] = '\0';
+    size_t dlen = blen + 2;
+
+    size_t i = 0;
+    while (i + dlen <= body_len) {
+        if (memcmp(body + i, delim, dlen) != 0) { i++; continue; }
+        /* skip delimiter */
+        i += dlen;
+        /* end marker? */
+        if (i + 2 <= body_len && body[i] == '-' && body[i+1] == '-') { free(delim); return 0; }
+        /* skip optional CRLF / LF */
+        if (i + 1 < body_len && body[i] == '\r' && body[i+1] == '\n') i += 2;
+        else if (i < body_len && body[i] == '\n') i += 1;
+        /* parse part headers until empty line. */
+        char *filename = NULL;
+        while (i < body_len) {
+            /* find end of header line */
+            size_t j = i;
+            while (j < body_len && body[j] != '\n') j++;
+            size_t line_len = j - i;
+            if (line_len > 0 && body[i + line_len - 1] == '\r') line_len--;
+            if (line_len == 0) { /* end of headers */
+                i = (j < body_len) ? j + 1 : j;
+                break;
+            }
+            /* Look for filename= in this line (case-insensitive). */
+            for (size_t k = 0; k + 9 <= line_len; k++) {
+                const char *p = body + i + k;
+                /* match "filename=" */
+                static const char *kw = "filename=";
+                int ok = 1;
+                for (int m = 0; m < 9; m++) {
+                    char a = p[m]; char b = kw[m];
+                    if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+                    if (a != b) { ok = 0; break; }
+                }
+                if (!ok) continue;
+                const char *vp = p + 9;
+                size_t avail = line_len - (size_t)(vp - (body + i));
+                int quoted = 0;
+                if (avail && *vp == '"') { quoted = 1; vp++; avail--; }
+                size_t fl = 0;
+                while (fl < avail) {
+                    char c = vp[fl];
+                    if (quoted && c == '"') break;
+                    if (!quoted && (c == ';' || c == ' ' || c == '\t')) break;
+                    fl++;
+                }
+                if (fl > 0) {
+                    if (filename) free(filename);
+                    filename = (char*)malloc(fl + 1);
+                    if (filename) { memcpy(filename, vp, fl); filename[fl] = '\0'; }
+                }
+                break;
+            }
+            i = (j < body_len) ? j + 1 : j;
+        }
+        /* Now i points at the start of the part body. Find the next
+         * "\r\n--BOUNDARY" sequence. */
+        size_t k = i;
+        while (k + dlen + 2 <= body_len) {
+            if (body[k] == '\r' && k + 1 < body_len && body[k+1] == '\n'
+                && memcmp(body + k + 2, delim, dlen) == 0) {
+                *out_data = body + i;
+                *out_len  = k - i;
+                *out_filename = filename;
+                free(delim);
+                return 1;
+            }
+            /* Also accept LF-only delimiter line. */
+            if (body[k] == '\n' && memcmp(body + k + 1, delim, dlen) == 0) {
+                *out_data = body + i;
+                *out_len  = k - i;
+                *out_filename = filename;
+                free(delim);
+                return 1;
+            }
+            k++;
+        }
+        /* Malformed: no closing delimiter. Free filename and bail. */
+        if (filename) free(filename);
+        free(delim);
+        return 0;
+    }
+    free(delim);
+    return 0;
+}
+
+/* Returns 1 if `s` ends in ".xlsx" or ".xlsm" (case-insensitive). */
+static int te_csv_ext_is_xlsx(const char *s) {
+    if (!s) return 0;
+    size_t n = strlen(s);
+    if (n < 5) return 0;
+    const char *e = s + n - 5;
+    return ((e[0] == '.') &&
+            (e[1] == 'x' || e[1] == 'X') &&
+            (e[2] == 'l' || e[2] == 'L') &&
+            (e[3] == 's' || e[3] == 'S') &&
+            (e[4] == 'x' || e[4] == 'X' || e[4] == 'm' || e[4] == 'M'));
+}
+
+/* Materialize a heap CSV buffer from the current HTTP request body.
+ * Recognises raw bodies and multipart/form-data uploads. If the (sniffed or
+ * filename-hinted) payload is an XLSX, it is transparently converted to CSV
+ * via te_xlsx_bytes_to_csv_buf. Returns malloc'd buffer (caller frees) or
+ * NULL on error. */
+static char *te_csv_load_from_request(size_t *out_len) {
+    if (out_len) *out_len = 0;
+    size_t body_len = 0;
+    const char *body = typeeasy_http_get_body_n(&body_len);
+    if (!body || body_len == 0) {
+        fprintf(stderr, "CSVError: request body vacío (¿endpoint sin upload?).\n");
+        return NULL;
+    }
+    const char *ct = typeeasy_http_get_header("Content-Type");
+
+    /* Default: payload is the entire body. */
+    const char *payload = body;
+    size_t plen = body_len;
+    char *upload_name = NULL;
+
+    /* Try multipart extraction if Content-Type says so. */
+    if (ct && (strstr(ct, "multipart/") || strstr(ct, "MULTIPART/"))) {
+        char *boundary = te_csv_get_boundary(ct);
+        if (boundary) {
+            const char *fp = NULL; size_t fl = 0; char *fn = NULL;
+            if (te_csv_multipart_first_file(body, body_len, boundary,
+                                            &fp, &fl, &fn)) {
+                payload = fp; plen = fl; upload_name = fn;
+            }
+            free(boundary);
+        }
+    }
+
+    /* Sniff: ZIP magic 'PK\x03\x04' OR filename ends in .xlsx. */
+    int is_xlsx = 0;
+    if (plen >= 4 && payload[0] == 'P' && payload[1] == 'K'
+        && (unsigned char)payload[2] == 0x03 && (unsigned char)payload[3] == 0x04) {
+        is_xlsx = 1;
+    } else if (te_csv_ext_is_xlsx(upload_name)) {
+        is_xlsx = 1;
+    }
+
+    char *out = NULL;
+    if (is_xlsx) {
+        size_t csv_len = 0;
+        out = te_xlsx_bytes_to_csv_buf(payload, plen, &csv_len);
+        if (out_len) *out_len = csv_len;
+    } else {
+        /* Copy bytes into a fresh, NUL-terminated buffer so the rest of the
+         * CSV pipeline can scan it independently of the request lifetime. */
+        out = (char*)malloc(plen + 1);
+        if (out) {
+            if (plen) memcpy(out, payload, plen);
+            out[plen] = '\0';
+            if (out_len) *out_len = plen;
+        }
+    }
+    if (upload_name) free(upload_name);
+    if (!out) {
+        fprintf(stderr, "CSVError: no se pudo extraer el archivo del request body.\n");
+    }
+    return out;
+}
+
 
 /* Small FNV-1a duplicate (te_str_hash in ast.c is file-static). */
 static uint64_t te_str_hash(const char *s) {
@@ -2587,8 +2830,40 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
     /* Usar pread en lugar de mmap para evitar page-fault overhead en Docker
      * overlay FS / WSL2 9P. Ver comentario en csv_read_file(). */
     int src_is_mmap = 0;
-    char *resolved = csv_resolve_path(filename);
-    char *src = csv_read_file(resolved ? resolved : filename, &len, &src_is_mmap);
+    char *resolved = NULL;
+    char *src = NULL;
+
+    /* v1.1.x: pseudo-URI "request:body" lee el archivo desde el body HTTP
+     * actual (raw o multipart/form-data). Permite endpoints que aceptan
+     * upload directo:
+     *     [HttpPost("/upload")]
+     *     subir() {
+     *         let productos = from "request:body", Producto;
+     *         ...
+     *     }
+     * El sniffer detecta XLSX por magic ZIP y aplica el converter
+     * transparentemente; cualquier otra cosa se trata como CSV. */
+    if (te_csv_is_request_uri(filename)) {
+        src = te_csv_load_from_request(&len);
+        if (!src) exit(1);
+        src_is_mmap = 0;
+    } else {
+        resolved = csv_resolve_path(filename);
+        /* v1.0.x: soporte XLSX. Si el archivo termina en .xlsx/.xlsm, convertimos
+         * la primera hoja a un buffer CSV en memoria y seguimos el pipeline normal.
+         * `src` es malloc'd y vive lo que dura el proceso (las strings de los
+         * objetos apuntan dentro), igual que en el path CSV pread. */
+        if (te_xlsx_filename_matches(filename)) {
+            src = te_xlsx_to_csv_buf(resolved ? resolved : filename, &len);
+            if (!src) {
+                if (resolved) free(resolved);
+                exit(1);
+            }
+            src_is_mmap = 0;
+        } else {
+            src = csv_read_file(resolved ? resolved : filename, &len, &src_is_mmap);
+        }
+    }
     if (!src) {
         fprintf(stderr, "IOError: no se pudo abrir/mapear el archivo CSV '%s'.\n", filename);
         if (resolved) free(resolved);
@@ -3307,7 +3582,13 @@ void te_csv_lazy_resolve_all(ASTNode *root) {
  * CSV_LOAD placeholder on var_decl->left. Performs the actual I/O now so
  * that user `now_ms()` brackets around `from` statements measure correctly.
  * Returns the loaded list ASTNode (caller should patch var_decl->left).
- * The CSV_LOAD placeholder itself is consumed (freed). */
+ * The CSV_LOAD placeholder itself is consumed (freed).
+ *
+ * v1.1.x: for the pseudo-URI "request:..." we KEEP the descriptor attached
+ * (placeholder->extra stays set). interpret_var_decl checks `extra` after
+ * the call and, when still non-NULL, skips the placeholder-replacement step
+ * so the next handler invocation re-loads from the (then-current) request
+ * body instead of caching the first request's data. */
 ASTNode *te_csv_runtime_load(ASTNode *placeholder) {
     if (!placeholder || !placeholder->type) return NULL;
     if (strcmp(placeholder->type, "CSV_LOAD") != 0) return NULL;
@@ -3325,13 +3606,20 @@ ASTNode *te_csv_runtime_load(ASTNode *placeholder) {
     /* Apply per-call columnar decision; loader resets g_te_csv_columnar_next. */
     g_te_csv_columnar_next = cd->columnar_decision;
 
+    int is_request = te_csv_is_request_uri(cd->filename);
+
     ASTNode *loaded = cd->is_dataframe
         ? from_csv_to_dataframe(cd->filename, cls)
         : from_csv_to_list(cd->filename, cls);
 
     g_te_csv_columnar_next = -1;
 
-    /* Free descriptor + tag (placeholder will be replaced by caller). */
+    if (is_request) {
+        /* Keep descriptor attached: each handler invocation re-loads. */
+        return loaded;
+    }
+
+    /* Static path: free descriptor + tag (placeholder will be replaced). */
     free(cd->filename);
     free(cd->class_name);
     free(cd);
