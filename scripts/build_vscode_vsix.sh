@@ -67,6 +67,25 @@ echo "=== npm install (production) in bundled LSP ==="
 echo "=== npm install (production) in extension ==="
 ( cd "$EXT_DIR" && npm install --omit=dev --no-audit --no-fund --silent )
 
+# Guard: the .vsix is useless for go-to-definition/references unless the
+# language-server + language-client runtime deps actually travel inside it.
+# Fail the build loudly here rather than silently shipping a navigation-less
+# extension (which is exactly what happened before this check existed).
+for dep in \
+  "$BUNDLED_LSP/node_modules/vscode-languageserver/package.json" \
+  "$BUNDLED_LSP/node_modules/vscode-languageserver-textdocument/package.json" \
+  "$EXT_DIR/node_modules/vscode-languageclient/package.json"; do
+  if [[ ! -f "$dep" ]]; then
+    echo "ERROR: required runtime dependency missing after npm install: $dep" >&2
+    echo "       The packaged extension would not provide .te navigation." >&2
+    exit 1
+  fi
+done
+if [[ ! -f "$BUNDLED_LSP/server.js" ]]; then
+  echo "ERROR: bundled LSP server.js missing at $BUNDLED_LSP/server.js" >&2
+  exit 1
+fi
+
 echo "=== Packaging VS Code extension from: $EXT_DIR ==="
 ( cd "$EXT_DIR" && npx --yes @vscode/vsce package \
     --allow-missing-repository --no-yarn --skip-license -o "$OUT" >/dev/null )

@@ -76,6 +76,22 @@ jobs:
           # finds the DLL without depending on $RUNNER_TEMP/cygpath.
           echo "LIBMARIADB_OPENSSL_DLL=dist/external/libmariadb.dll" >> "$GITHUB_ENV"
 
+      - name: Setup Node.js (for VS Code extension)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build VS Code extension (.vsix with bundled LSP)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Built here with Git-bash + setup-node (the MSYS2 shell used for the
+          # native build has no Node). package_windows_release.sh picks this up
+          # via TYPEEASY_VSIX instead of trying to build it without Node.
+          bash scripts/build_vscode_vsix.sh dist/typeeasy-debug.vsix
+          test -f dist/typeeasy-debug.vsix
+          echo "TYPEEASY_VSIX=dist/typeeasy-debug.vsix" >> "$GITHUB_ENV"
+
       - name: Build native TypeEasy and package folder
         shell: msys2 {0}
         env:
@@ -83,7 +99,6 @@ jobs:
         run: |
           bash scripts/build_native_windows.sh
           bash scripts/package_windows_release.sh "${{ steps.meta.outputs.version }}"
-
       - name: Smoke test (let / var / const must not segfault)
         shell: msys2 {0}
         run: |

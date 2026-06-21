@@ -61,6 +61,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y dpkg-dev
 
+      - name: Setup Node.js (for VS Code extension)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build VS Code extension (.vsix with bundled LSP)
+        run: |
+          set -euo pipefail
+          bash scripts/build_vscode_vsix.sh dist/typeeasy-debug.vsix
+          test -f dist/typeeasy-debug.vsix
+          echo "TYPEEASY_VSIX=dist/typeeasy-debug.vsix" >> "$GITHUB_ENV"
+
       - name: Package tar.gz and .deb
         run: bash scripts/package_linux_release.sh "${{ steps.meta.outputs.version }}"
 
