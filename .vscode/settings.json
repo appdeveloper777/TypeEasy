@@ -1,10 +1,58 @@
 {
-    "C_Cpp.errorSquiggles": "disabled",
+    // C/C++ IntelliSense: enabled for navigation (go-to-def, find-refs, hover,
+    // inlay hints). Configuration lives in .vscode/c_cpp_properties.json and,
+    // when present, build/compile_commands.json (generated via
+    // `bash scripts/gen_compile_commands.sh`).
+    "C_Cpp.errorSquiggles": "enabledIfIncludesResolve",
+    "C_Cpp.intelliSenseEngine": "default",
+    "C_Cpp.intelliSenseEngineFallback": "enabled",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+    "C_Cpp.inlayHints.parameterNames.enabled": true,
+    "C_Cpp.inlayHints.autoDeclarationTypes.enabled": true,
+    "C_Cpp.inlayHints.referenceOperator.enabled": true,
+    "C_Cpp.workspaceSymbols": "All",
+    "C_Cpp.autoAddFileAssociations": false,
+    "C_Cpp.loggingLevel": "Warning",
+
+    // clangd (optional, if the clangd extension is installed). Reads .clangd
+    // at the repo root + build/compile_commands.json. Disable the Microsoft
+    // C/C++ IntelliSense engine if you switch to clangd to avoid double
+    // diagnostics ("C_Cpp.intelliSenseEngine": "disabled").
+    "clangd.arguments": [
+        "--background-index",
+        "--clang-tidy",
+        "--header-insertion=never",
+        "--completion-style=detailed",
+        "--compile-commands-dir=${workspaceFolder}/build"
+    ],
+
+    // Search/file noise reduction so go-to-symbol and Ctrl+P stay fast.
+    "search.exclude": {
+        "**/.debug": true,
+        "**/build": true,
+        "**/dist": true,
+        "**/.report": true,
+        "**/typeeasycode;C": true,
+        "**/chess;C": true,
+        "**/ERP;C": true,
+        "**/*.o": true,
+        "**/parser.tab.c": true,
+        "**/parser.tab.h": true,
+        "**/lex.yy.c": true
+    },
+    "files.watcherExclude": {
+        "**/.debug/**": true,
+        "**/build/**": true,
+        "**/dist/**": true,
+        "**/*.o": true
+    },
+
     "files.associations": {
         "*.embeddedhtml": "html",
         "*.te": "typeeasy",
         "*.y": "c",
         "*.l": "c",
+        "*.inl": "c",
         "random": "c",
         "xlocale": "c"
     }

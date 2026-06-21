@@ -1,0 +1,52 @@
+# clangd config for the TypeEasy interpreter (src/ + api_server/).
+#
+# clangd reads compile_commands.json if present (recommended: run
+# `bash scripts/gen_compile_commands.sh` once to generate it inside the Docker
+# build image). Without compile_commands.json clangd falls back to these flags,
+# which mirror src/Makefile so go-to-definition, find-references and inline
+# diagnostics still work for the engine sources.
+
+CompileFlags:
+  Add:
+    - -std=gnu11
+    - -Wall
+    - -I.
+    - -Isrc
+    - -Iapi_server
+    - -DUSE_OPENSSL
+    - -DNO_SSL_DL
+    - -DOPENSSL_API_1_1
+    - -DUSE_WEBSOCKET
+    - -DTE_HAVE_LIBCURL
+    - -DTE_HAVE_OPENMP
+    - -DTE_ENABLE_JIT=1
+    - -D_GNU_SOURCE
+    - -D_POSIX_C_SOURCE=200809L
+  Remove:
+    # MSVC flags that may leak in from compile_commands.json on Windows builds.
+    - -fno-semantic-interposition
+    - -mavx2
+    - -mbmi
+    - -fopenmp
+
+Index:
+  Background: Build
+  StandardLibrary: Yes
+
+Diagnostics:
+  ClangTidy:
+    Add:
+      - bugprone-*
+      - performance-*
+      - portability-*
+      - readability-misleading-indentation
+      - readability-non-const-parameter
+    Remove:
+      - bugprone-easily-swappable-parameters
+      - readability-magic-numbers
+      - bugprone-implicit-widening-of-multiplication-result
+
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes

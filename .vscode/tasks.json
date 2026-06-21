@@ -2,6 +2,21 @@
   "version": "2.0.0",
   "tasks": [
     {
+      // Genera build/compile_commands.json usando bear dentro del Docker de CI.
+      // Imprescindible para que clangd y la extensión C/C++ tengan navegación
+      // exacta (go-to-definition, find-references, hover) sobre todo el motor.
+      // Re-ejecutar cuando se agregan/quitan .c del motor o cambian flags.
+      "label": "intellisense: regenerate compile_commands.json",
+      "type": "shell",
+      "command": "bash",
+      "args": ["scripts/gen_compile_commands.sh"],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
       // Reconstruye la imagen del intérprete (incluye gdbserver desde el Dockerfile).
       // Ejecutar manualmente cuando cambies código C o el Dockerfile.
       "label": "debug: rebuild typeeasy image",
