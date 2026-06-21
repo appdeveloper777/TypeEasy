@@ -250,6 +250,7 @@ if [ -f "$VSIX" ]; then
     target_user="${SUDO_USER:-}"
     if [ -n "$target_user" ] && [ "$target_user" != "root" ]; then
         if su - "$target_user" -c 'command -v code >/dev/null 2>&1'; then
+            su - "$target_user" -c "code --uninstall-extension typeeasy.typeeasy-debug" >/dev/null 2>&1 || true
             if su - "$target_user" -c "code --install-extension '$VSIX' --force" >/dev/null 2>&1; then
                 echo "TypeEasy: extension VS Code instalada para $target_user."
                 echo "          Reinicia VS Code para activar resaltado .te + F5 debug."

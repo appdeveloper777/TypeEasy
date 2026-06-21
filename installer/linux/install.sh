@@ -156,6 +156,9 @@ maybe_install_vscode_ext() {
     case "$reply" in y|Y|yes|YES) ;; *) return 0 ;; esac
   fi
   echo "[install] Installing VS Code extension as $target_user ..."
+  # Desinstala primero para forzar un refresco limpio aunque la versión no
+  # haya cambiado (evita que VS Code conserve una copia cacheada).
+  sudo -u "$target_user" -H bash -lc "code --uninstall-extension typeeasy.typeeasy-debug" >/dev/null 2>&1 || true
   if sudo -u "$target_user" -H bash -lc "code --install-extension '$vsix' --force"; then
     echo "[install] OK. Reinicia VS Code para activar el resaltado de .te y F5 debug."
   else

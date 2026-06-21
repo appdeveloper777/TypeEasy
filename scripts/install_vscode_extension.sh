@@ -15,6 +15,9 @@ cd "$EXT_DIR"
 echo "Packaging extension..."
 npx --yes @vscode/vsce package --allow-missing-repository --no-yarn --skip-license -o /tmp/typeeasy-debug.vsix >/dev/null
 echo "Installing extension..."
+# Uninstall first so VS Code always picks up the new build even if the
+# version number did not change (avoids stale-extension caching).
+code --uninstall-extension typeeasy.typeeasy-debug >/dev/null 2>&1 || true
 code --install-extension /tmp/typeeasy-debug.vsix --force
 rm -f /tmp/typeeasy-debug.vsix
 echo

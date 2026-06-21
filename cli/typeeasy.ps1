@@ -158,6 +158,9 @@ function Cmd-Ext {
     }
     if (-not $vsix) { Die "No bundled .vsix found. Reinstall TypeEasy (the package ships the extension)." }
     Info "Installing VS Code extension: $vsix"
+    # Uninstall first so VS Code always picks up the new build even if the
+    # version number did not change (avoids stale-extension caching).
+    & code --uninstall-extension typeeasy.typeeasy-debug 2>$null
     & code --install-extension $vsix --force
     Info "Done. Restart VS Code to activate TypeEasy colors + debugger."
 }

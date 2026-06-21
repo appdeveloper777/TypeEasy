@@ -15,6 +15,9 @@ try {
     Write-Host "Packaging extension..."
     npx --yes @vscode/vsce package --allow-missing-repository --no-yarn --skip-license -o $env:TEMP\typeeasy-debug.vsix | Out-Null
     Write-Host "Installing extension..."
+    # Uninstall first so VS Code always picks up the new build even if the
+    # version number did not change (avoids stale-extension caching).
+    & code --uninstall-extension typeeasy.typeeasy-debug 2>$null
     code --install-extension $env:TEMP\typeeasy-debug.vsix --force
     Remove-Item $env:TEMP\typeeasy-debug.vsix -ErrorAction SilentlyContinue
     Write-Host "`nDone. Restart VS Code to activate TypeEasy syntax highlighting." -ForegroundColor Green

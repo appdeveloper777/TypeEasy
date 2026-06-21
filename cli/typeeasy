@@ -590,6 +590,9 @@ _ext_install() {
   fi
 
   info "Installing VS Code extension: $vsix"
+  # Uninstall first so VS Code always picks up the new build even if the
+  # version number did not change (avoids stale-extension caching).
+  code --uninstall-extension typeeasy.typeeasy-debug >/dev/null 2>&1 || true
   code --install-extension "$vsix" --force
   info "Done. Restart VS Code to activate TypeEasy colors + debugger."
 }

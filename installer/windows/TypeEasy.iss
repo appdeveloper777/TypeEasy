@@ -97,6 +97,9 @@ Filename: "{cmd}"; Parameters: "/k cd /d ""{app}"" && .\\bin\\typeeasy.cmd --api
 ; Instala la extensión VS Code de TypeEasy (resaltado .te + F5 debug). Solo se
 ; ejecuta si el usuario marcó la task 'vscodeext' (que a su vez solo se ofrece
 ; si 'code' está en PATH). runhidden + nowait: no bloquea el cierre del wizard.
+; Desinstalamos primero para forzar un refresco limpio aunque la versión no
+; haya cambiado (evita que VS Code conserve una copia cacheada).
+Filename: "{cmd}"; Parameters: "/c code --uninstall-extension typeeasy.typeeasy-debug"; StatusMsg: "Actualizando extensión TypeEasy en VS Code..."; Tasks: vscodeext; Flags: runhidden waituntilterminated; Check: VsCodeExists
 Filename: "{cmd}"; Parameters: "/c code --install-extension ""{app}\\vscode\\typeeasy-debug.vsix"" --force"; StatusMsg: "Instalando extensión TypeEasy en VS Code..."; Tasks: vscodeext; Flags: runhidden waituntilterminated; Check: VsCodeExists
 
 [Code]
