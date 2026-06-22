@@ -105,3 +105,15 @@ src/fuzz_parser
 
 # App privada (no es parte del core TypeEasy, repo aparte)
 ERP/
+
+# Artefactos locales (pruebas, repros, submission AV) — no van al repo
+_av_submit/
+win_test/
+_repro/
+_gd.txt
+_gp.txt
+_rel2.txt
+_runs.txt
+_wwin.txt
+scripts/_smoke_export.sh
+test_export.te
