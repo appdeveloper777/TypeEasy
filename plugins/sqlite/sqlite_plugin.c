@@ -3,7 +3,7 @@
  *
  * Builtins expuestos:
  *   sqlite_connect("path/to.db" | ":memory:")           -> int slot   (-1 en error)
- *   sqlite_exec(slot, sql [, {params}])                 -> int rows_affected (-1 en err)
+ *   sqlite_exec(slot, sql [, {params}])                 -> int rows_affected, o {"error":"..."} en fallo
  *   sqlite_query(slot, sql [, {params}] [, "json"|"xml"]) -> string en __ret__
  *   sqlite_last_id(slot)                                -> int last_insert_rowid
  *   sqlite_close(slot)                                  -> int 0
@@ -378,9 +378,17 @@ static int te_sqlite_exec(ASTNode *node, ASTNode *args) {
         int rc = sqlite3_exec(g_pool[slot], sql, NULL, NULL, &errmsg);
         free(sql);
         if (rc != SQLITE_OK) {
+            /* Devolvemos {"error":"..."} en __ret__ (no -1) para homogeneizar
+             * con el slow path, sqlite_query y mysql_query. Antes este path
+             * devolvia -1 y el detalle solo iba al log: un INSERT/UPDATE
+             * rechazado por constraint (NOT NULL, UNIQUE, ...) parecia exitoso
+             * desde el codigo -> perdida silenciosa de datos en SQLite/offline. */
+            char ebuf[512];
+            snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
+                     errmsg ? errmsg : "unknown");
             fprintf(stderr, "[sqlite_exec] error: %s\n", errmsg ? errmsg : "unknown");
             if (errmsg) sqlite3_free(errmsg);
-            H->set_ret_int(-1);
+            H->set_ret_str(ebuf);
             return 1;
         }
         H->set_ret_int(sqlite3_changes(g_pool[slot]));
