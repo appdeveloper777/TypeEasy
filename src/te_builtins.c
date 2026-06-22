@@ -101,9 +101,11 @@ int te_load_native_module(const char *name_or_path) {
      */
     const char *raw = name_or_path;
     char buf[1024];
+    buf[0] = '\0';
     void *h = NULL;
     if (strchr(raw, '/') || strstr(raw, ".so")) {
-        h = dlopen(raw, RTLD_NOW | RTLD_GLOBAL);
+        snprintf(buf, sizeof(buf), "%s", raw);
+        h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
     } else {
         const char *candidates[] = {
             "./libte_%s.so",
@@ -169,6 +171,13 @@ int te_load_native_module(const char *name_or_path) {
         dlclose(h);
         return -3;
     }
+    /* Diagnostic: print WHICH file was loaded. A stale plugin shadowing the
+     * bundled one (e.g. an old libte_*.so left in the CWD or ~/.te/packages,
+     * compiled against a different TEHostAPI) is the usual cause of "queries
+     * run but return [] / 0" — its register reads the host API at wrong
+     * offsets. This line lets users spot the wrong path immediately. */
+    fprintf(stderr, "[load_native] '%s' loaded from: %s\n",
+            name_or_path, buf[0] ? buf : raw);
     /* Static storage so the pointer remains valid even if the plugin
      * (incorrectly) keeps a reference instead of copying the struct. */
     static TEHostAPI host;
@@ -201,11 +210,13 @@ int te_load_native_module(const char *name_or_path) {
      * → use as-is. Bare name → try several candidate locations. */
     const char *raw = name_or_path;
     char buf[1024];
+    buf[0] = '\0';
     HMODULE h = NULL;
 
     int looks_like_path = (strchr(raw, '/') || strchr(raw, '\\') ||
                            strstr(raw, ".dll") || strstr(raw, ".DLL"));
     if (looks_like_path) {
+        snprintf(buf, sizeof(buf), "%s", raw);
         h = te_load_dll_with_deps(raw);
     } else {
         const char *patterns[] = {
@@ -281,6 +292,13 @@ int te_load_native_module(const char *name_or_path) {
         FreeLibrary(h);
         return -3;
     }
+    /* Diagnostic: print WHICH .dll was loaded. A stale plugin shadowing the
+     * bundled one (e.g. an old libte_*.dll left in the CWD or
+     * %USERPROFILE%\.te\packages, compiled against a different TEHostAPI) is
+     * the usual cause of "queries run but return [] / 0": its register reads
+     * the host API at wrong offsets. This line surfaces the wrong path. */
+    fprintf(stderr, "[load_native] '%s' loaded from: %s\n",
+            name_or_path, buf[0] ? buf : raw);
     /* Static storage so the pointer remains valid even if a plugin keeps
      * a reference instead of copying the struct (see mongo plugin gotcha). */
     static TEHostAPI host;
