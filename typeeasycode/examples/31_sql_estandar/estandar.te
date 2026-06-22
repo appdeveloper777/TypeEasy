@@ -1,0 +1,61 @@
+// =============================================================
+// 31_sql_estandar — ESTANDAR de respuesta SQL con { success }
+//
+// Regla de equipo: TODAS las queries se chequean con `r.success`, NUNCA con
+// ("" + r).contains("error"). El envelope da un bool real, portable entre
+// motores (sqlite/mysql/postgres/sqlserver) y sin falsos positivos.
+//
+//   OK     -> { success: true,  data: <resultado tal cual> }
+//   fallo  -> { success: false, error: "<mensaje>" }
+//
+// Ejecutar:
+//   typeeasy examples/31_sql_estandar/estandar.te
+// =============================================================
+
+load_native("sqlite");
+sql_set_envelope(true);              // estandar de la app: envelope en todas las queries
+
+let ENGINE = "sqlite";
+let c = sql_connect("", "", "", ":memory:", 0, { }, ENGINE);
+
+let cr = sql_exec(c, "CREATE TABLE prod (id INTEGER PRIMARY KEY, sku TEXT UNIQUE NOT NULL)", { }, ENGINE);
+
+// --- INSERT valido -> r.success = true ---
+let r1 = sql_exec(c, "INSERT INTO prod (id, sku) VALUES (1, 'A1')", { }, ENGINE);
+if (r1.success) { print(concat("INSERT valido     -> OK    data=", r1.data)); }
+
+// --- INSERT duplicado (viola UNIQUE) -> r.success = false ---
+let r2 = sql_exec(c, "INSERT INTO prod (id, sku) VALUES (2, 'A1')", { }, ENGINE);
+if (!r2.success) { print(concat("INSERT duplicado  -> ERROR error=", r2.error)); }   // <- ASI: success
+
+// --- SELECT -> r.data trae las filas (JSON) ---
+let r3 = sql_query(c, "SELECT id, sku FROM prod", { }, ENGINE);
+if (r3.success) { print(concat("SELECT            -> OK    data=", r3.data)); }
+
+// ============================================================
+// OVERRIDE POR-LLAMADA (el 5to arg bool gana sobre el flag global)
+// ============================================================
+
+// true -> fuerza envelope SOLO en esta llamada (aunque el global estuviera OFF)
+print("Override true (envelope):");
+let env = sql_query(c, "SELECT id FROM prod", { }, ENGINE, true);
+print(concat("  success=", env.success, " data=", env.data));
+// false -> fuerza CRUDO SOLO en esta llamada (aunque el global este ON)
+print("Override false (crudo):");
+let crudo = sql_query(c, "SELECT id FROM prod", { }, ENGINE, false);
+print(concat("  crudo=", crudo));        // [{"id":1}] sin envelope
+
+sql_close(c, ENGINE);
+
+// ============================================================
+// COMPARACION: viejo (contains) vs estandar (success)
+// ============================================================
+//
+//   // ANTES (fragil, no portable, falso positivo si el dato trae "error"):
+//   let r = sql_exec(conn, sql, params, ENGINE);
+//   if (("" + r).contains("\"error\"")) { ... }
+//
+//   // ESTANDAR (claro, portable, bool real):
+//   let r = sql_exec(conn, sql, params, ENGINE);
+//   if (!r.success) { response_status(500); return concat("{\"error\":\"", r.error, "\"}"); }
+//   return r.data;

@@ -1,0 +1,66 @@
+// =============================================================
+// 31b_sql_estandar_api — patron repository + endpoints con el estandar { success }
+//
+// El controlador y el repo usan r.success (NO contains). Demuestra el contrato
+// uniforme en endpoints reales con SQLite (corre sin servidores externos).
+//
+// Ejecutar:
+//   typeeasy --api examples/31_sql_estandar/estandar_api.te --port 9131
+// Probar:
+//   curl -X POST http://localhost:9131/api/productos -H "Content-Type: application/json" -d '{"sku":"A1","nombre":"Pan"}'
+//   curl -X POST http://localhost:9131/api/productos -H "Content-Type: application/json" -d '{"sku":"A1","nombre":"Dup"}'   # -> 500 (UNIQUE)
+//   curl http://localhost:9131/api/productos
+// =============================================================
+
+load_native("sqlite");
+sql_set_envelope(true);              // estandar de la app
+
+let ENGINE = "sqlite";
+let DBFILE = "estandar_demo.db";
+
+let _abrir = fn() => {
+    let conn = sql_connect("", "", "", DBFILE, 0, { }, ENGINE);
+    sql_exec(conn, "CREATE TABLE IF NOT EXISTS productos (id INTEGER PRIMARY KEY AUTOINCREMENT, sku TEXT UNIQUE NOT NULL, nombre TEXT NOT NULL)", { }, ENGINE);
+    return conn;
+};
+
+// --- CAPA REPOSITORY (devuelve el envelope tal cual) ---
+let ProductoRepo_Crear = fn(input) => {
+    let conn = _abrir();
+    let r = sql_exec(conn,
+        "INSERT INTO productos (sku, nombre) VALUES (@sku, @nombre)",
+        { "@sku": input["sku"], "@nombre": input["nombre"] }, ENGINE);
+    sql_close(conn, ENGINE);
+    return r;     // { success:true, data:N } | { success:false, error:"..." }
+};
+
+let ProductoRepo_Listar = fn() => {
+    let conn = _abrir();
+    let r = sql_query(conn, "SELECT id, sku, nombre FROM productos ORDER BY id", { }, ENGINE);
+    sql_close(conn, ENGINE);
+    return r;     // { success:true, data:"[...]" }
+};
+
+// --- CAPA HTTP (controladores delgados: chequean r.success, NO contains) ---
+endpoint {
+    [HttpPost("/api/productos")]
+    async ProductoCrear() {
+        let input = json_parse(request_body());
+        let r = ProductoRepo_Crear(input);
+        if (!r.success) {
+            response_status(500);
+            return concat("{\"ok\":false,\"error\":\"", r.error, "\"}");
+        }
+        return concat("{\"ok\":true,\"filas\":", r.data, "}");
+    }
+
+    [HttpGet("/api/productos")]
+    async ProductoListar() {
+        let r = ProductoRepo_Listar();
+        if (!r.success) {
+            response_status(500);
+            return concat("{\"error\":\"", r.error, "\"}");
+        }
+        return r.data;      // data ya es JSON array
+    }
+}
