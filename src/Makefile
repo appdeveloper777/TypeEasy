@@ -38,9 +38,21 @@ CXX = g++
 # (breakpoints fiables + inspección de variables sin "optimized out") usar
 # `make TE_OPT=-O0`. El flag -g (símbolos) siempre está presente.
 TE_OPT ?= -O3
+# Flags SIMD dependientes de la arquitectura. -mavx2/-mbmi solo existen en
+# x86/x86_64 y habilitan las rutas SIMD del motor (gated por __AVX2__). En
+# ARM/aarch64 (Android, Raspberry Pi, Apple Silicon en Docker, runners arm64)
+# esos flags no existen y romperian el build; al omitirlos el motor cae
+# automaticamente a su camino escalar equivalente (te_colcache.c, ast.c).
+# Se puede forzar manualmente con `make TE_ARCH_FLAGS="..."`.
+UNAME_M := $(shell uname -m 2>/dev/null)
+ifeq ($(filter x86_64 amd64 i686 i386,$(UNAME_M)),)
+  TE_ARCH_FLAGS ?=
+else
+  TE_ARCH_FLAGS ?= -mavx2 -mbmi
+endif
 # TE_ENABLE_JIT=1: trace JIT compilado dentro del binario (OFF en runtime salvo
 # TYPEEASY_JIT=1). Microsoft confirmo "No malware detected" para el binario.
-CFLAGS = -Wall -g $(TE_OPT) -mavx2 -mbmi -pthread -fopenmp -DTE_HAVE_OPENMP -DTE_ENABLE_JIT=1 -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET -DTE_HAVE_LIBCURL $(CFLAGS_EXTRA)
+CFLAGS = -Wall -g $(TE_OPT) $(TE_ARCH_FLAGS) -pthread -fopenmp -DTE_HAVE_OPENMP -DTE_ENABLE_JIT=1 -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET -DTE_HAVE_LIBCURL $(CFLAGS_EXTRA)
 CXXFLAGS = -Wall -g $(TE_OPT) -std=c++17 -fopenmp
 LIBS_SCRIPT = -lfl -lm -lmysqlclient -lpq -lsybdb -lpthread -ldl -lssl -lcrypto -lcurl -lgomp -lz
 LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto -lmysqlclient -lpq -lsybdb -lcurl -lgomp -lz

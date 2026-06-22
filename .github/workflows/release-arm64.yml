@@ -1,0 +1,117 @@
+name: Release - Linux ARM64 Installer
+
+# Instalador nativo para Linux aarch64 / ARM64 (Raspberry Pi 64-bit, AWS
+# Graviton, Ampere, Android via Termux/proot, Apple Silicon en contenedores).
+# El motor cae automaticamente a su camino escalar: el Makefile detecta la
+# arquitectura y NO pasa -mavx2/-mbmi en ARM (los bloques SIMD estan gated por
+# __AVX2__ con fallback escalar en te_colcache.c / ast.c).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version a publicar (sin prefijo v)"
+        required: false
+        default: "0.0.1"
+
+permissions:
+  contents: write
+
+jobs:
+  release-arm64:
+    # Runner nativo ARM64 (gratis para repos publicos). Compila aarch64 sin
+    # emulacion, mucho mas rapido y fiable que QEMU.
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_NAME}" == v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="0.0.1"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version objetivo (arm64): ${VERSION}"
+
+      - name: Build TypeEasy binary inside reproducible Docker image (arm64)
+        # gcc:13.2.0 es una imagen multi-arch: en un runner arm64 se descarga la
+        # variante aarch64 y produce un binario ARM64 nativo. Sin -mavx2: el
+        # Makefile detecta uname -m y omite los flags x86 automaticamente.
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/app \
+            -w /app \
+            -e TYPEEASY_VERSION="${{ steps.meta.outputs.version }}" \
+            gcc:13.2.0 \
+            bash -c '
+              echo "build arch: $(uname -m)" &&
+              apt-get update &&
+              apt-get install -y --no-install-recommends \
+                flex bison libfl-dev libssl-dev default-libmysqlclient-dev \
+                libcurl4-openssl-dev libpq-dev freetds-dev zlib1g-dev &&
+              make -C /app/src clean &&
+              make -C /app/src typeeasy CFLAGS_EXTRA=-DTYPEEASY_VERSION=${TYPEEASY_VERSION}
+            '
+          file src/typeeasy
+          ls -lh src/typeeasy
+
+      - name: Install packaging tools (host)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev gcc libsqlite3-dev unzip curl
+
+      - name: Setup Node.js (for VS Code extension)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build VS Code extension (.vsix with bundled LSP)
+        run: |
+          set -euo pipefail
+          bash scripts/build_vscode_vsix.sh dist/typeeasy-debug.vsix
+          test -f dist/typeeasy-debug.vsix
+          echo "TYPEEASY_VSIX=dist/typeeasy-debug.vsix" >> "$GITHUB_ENV"
+
+      - name: Package tar.gz and .deb (arm64)
+        # ARCH=arm64 -> el plugin sqlite se reconstruye nativo aarch64 (mismo
+        # commit que el binario, ABI-matched) y los artefactos llevan el sufijo
+        # arm64 en su nombre y en el campo Architecture del .deb.
+        run: ARCH=arm64 bash scripts/package_linux_release.sh "${{ steps.meta.outputs.version }}"
+
+      - name: Rename SHA256SUMS (avoid clobbering the amd64 release asset)
+        # release-linux y release-arm64 publican en la MISMA GitHub Release; sin
+        # renombrar, el SHA256SUMS de arm64 sobreescribiria el de amd64.
+        run: |
+          mv "dist/linux/SHA256SUMS-${{ steps.meta.outputs.version }}.txt" \
+             "dist/linux/SHA256SUMS-${{ steps.meta.outputs.version }}-arm64.txt"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: typeeasy-linux-arm64-v${{ steps.meta.outputs.version }}
+          path: |
+            dist/linux/TypeEasy-${{ steps.meta.outputs.version }}-linux-arm64.tar.gz
+            dist/linux/typeeasy_${{ steps.meta.outputs.version }}_arm64.deb
+            dist/linux/SHA256SUMS-${{ steps.meta.outputs.version }}-arm64.txt
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/linux/TypeEasy-${{ steps.meta.outputs.version }}-linux-arm64.tar.gz
+            dist/linux/typeeasy_${{ steps.meta.outputs.version }}_arm64.deb
+            dist/linux/SHA256SUMS-${{ steps.meta.outputs.version }}-arm64.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true

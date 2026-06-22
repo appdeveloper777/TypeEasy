@@ -20,6 +20,12 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#if defined(__linux__)
+/* struct statfs / statfs() para detectar V9FS (WSL2 bind-mount) en csv_read_file.
+ * En x86_64 glibc llegaba transitivamente por otros headers, pero en aarch64 no:
+ * sin esto el build ARM falla con "storage size of 'sfs' isn't known". */
+#include <sys/vfs.h>
+#endif
 
 /* ---------- Platform preamble (mirrors ast.c) ------------------------- */
 #if defined(__linux__) && defined(__x86_64__)
