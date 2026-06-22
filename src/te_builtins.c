@@ -107,19 +107,28 @@ int te_load_native_module(const char *name_or_path) {
         snprintf(buf, sizeof(buf), "%s", raw);
         h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
     } else {
-        const char *candidates[] = {
-            "./libte_%s.so",
-            "/usr/local/lib/libte_%s.so",
-            "/usr/lib/libte_%s.so",
-            "/typeeasy/libte_%s.so",
-            NULL
-        };
-        for (int i = 0; candidates[i] && !h; i++) {
-            snprintf(buf, sizeof(buf), candidates[i], raw);
-            h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
+        /* Resolution order (first match wins). The BUNDLED plugin shipped next
+         * to THIS binary is tried before the CWD and the user package store, so
+         * a stale libte_*.so left in either of those (compiled against a
+         * different TEHostAPI) can no longer shadow the ABI-matched one — that
+         * was the cause of "sqlite queries run but return []/0". An explicit
+         * TE_PLUGIN_PATH still wins over everything. */
+
+        /* 1. TE_PLUGIN_PATH (explicit override; colon-separated dirs). */
+        const char *envp = getenv("TE_PLUGIN_PATH");
+        if (envp) {
+            char tmp[2048];
+            strncpy(tmp, envp, sizeof(tmp) - 1);
+            tmp[sizeof(tmp) - 1] = '\0';
+            char *saveptr = NULL;
+            for (char *tok = strtok_r(tmp, ":", &saveptr); tok && !h;
+                 tok = strtok_r(NULL, ":", &saveptr)) {
+                snprintf(buf, sizeof(buf), "%s/libte_%s.so", tok, raw);
+                h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
+            }
         }
-        /* Next to the binary: <exe_dir>/../plugins/<name>/libte_<name>.so and
-         * <exe_dir>/../plugins/libte_<name>.so (portable tarball / installer layout). */
+        /* 2. Next to the binary (bundled, ABI-matched with this engine):
+         *    <exe_dir>/../plugins/<name>/, <exe_dir>/../plugins/, <exe_dir>/. */
         if (!h) {
             char exepath[1024];
             ssize_t n = readlink("/proc/self/exe", exepath, sizeof(exepath) - 1);
@@ -134,29 +143,34 @@ int te_load_native_module(const char *name_or_path) {
                         snprintf(buf, sizeof(buf), "%s/../plugins/libte_%s.so", exepath, raw);
                         h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
                     }
+                    if (!h) {
+                        snprintf(buf, sizeof(buf), "%s/libte_%s.so", exepath, raw);
+                        h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
+                    }
                 }
             }
         }
+        /* 3. System install dirs, then CWD (lowest priority so a stray ./ DLL
+         *    cannot shadow the bundled one). */
+        if (!h) {
+            const char *candidates[] = {
+                "/usr/local/lib/libte_%s.so",
+                "/usr/lib/libte_%s.so",
+                "/typeeasy/libte_%s.so",
+                "./libte_%s.so",
+                NULL
+            };
+            for (int i = 0; candidates[i] && !h; i++) {
+                snprintf(buf, sizeof(buf), candidates[i], raw);
+                h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
+            }
+        }
+        /* 4. User package store (~/.te/packages). */
         if (!h) {
             const char *home = getenv("HOME");
             if (home) {
                 snprintf(buf, sizeof(buf), "%s/.te/packages/%s/libte_%s.so", home, raw, raw);
                 h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
-            }
-        }
-        /* TE_PLUGIN_PATH override (colon-separated dirs). */
-        if (!h) {
-            const char *envp = getenv("TE_PLUGIN_PATH");
-            if (envp) {
-                char tmp[2048];
-                strncpy(tmp, envp, sizeof(tmp) - 1);
-                tmp[sizeof(tmp) - 1] = '\0';
-                char *saveptr = NULL;
-                for (char *tok = strtok_r(tmp, ":", &saveptr); tok && !h;
-                     tok = strtok_r(NULL, ":", &saveptr)) {
-                    snprintf(buf, sizeof(buf), "%s/libte_%s.so", tok, raw);
-                    h = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
-                }
             }
         }
     }
@@ -219,21 +233,30 @@ int te_load_native_module(const char *name_or_path) {
         snprintf(buf, sizeof(buf), "%s", raw);
         h = te_load_dll_with_deps(raw);
     } else {
-        const char *patterns[] = {
-            ".\\libte_%s.dll",
-            ".\\te_%s.dll",
-            "libte_%s.dll",
-            "te_%s.dll",
-            NULL
-        };
-        for (int i = 0; patterns[i] && !h; i++) {
-            snprintf(buf, sizeof(buf), patterns[i], raw);
-            h = te_load_dll_with_deps(buf);
+        /* Resolution order (first match wins). The BUNDLED plugin shipped next
+         * to THIS .exe is tried before the CWD and %USERPROFILE%\.te\packages,
+         * so a stale libte_*.dll left in either (compiled against a different
+         * TEHostAPI) can no longer shadow the ABI-matched one — that was the
+         * cause of "sqlite queries run but return []/0". An explicit
+         * TE_PLUGIN_PATH still wins over everything. */
+
+        /* 1. TE_PLUGIN_PATH (explicit override; semicolon-separated dirs). */
+        const char *envp = getenv("TE_PLUGIN_PATH");
+        if (envp) {
+            char tmp[2048];
+            strncpy(tmp, envp, sizeof(tmp) - 1);
+            tmp[sizeof(tmp) - 1] = '\0';
+            char *ctx = NULL;
+            for (char *tok = strtok_s(tmp, ";", &ctx); tok && !h;
+                 tok = strtok_s(NULL, ";", &ctx)) {
+                snprintf(buf, sizeof(buf), "%s\\libte_%s.dll", tok, raw);
+                h = te_load_dll_with_deps(buf);
+            }
         }
-        /* Next to the .exe (typical install layout:
-         *   bin/typeeasy-bin.exe + bin/libte_<name>.dll
-         *   bin/typeeasy-bin.exe + ../plugins/<name>/libte_<name>.dll
-         *   bin/typeeasy-bin.exe + ../plugins/libte_<name>.dll). */
+        /* 2. Next to the .exe (bundled, ABI-matched with this engine):
+         *      <exe_dir>\libte_<name>.dll
+         *      <exe_dir>\..\plugins\<name>\libte_<name>.dll
+         *      <exe_dir>\..\plugins\libte_<name>.dll  */
         if (!h) {
             char exepath[1024];
             DWORD n = GetModuleFileNameA(NULL, exepath, (DWORD)sizeof(exepath));
@@ -254,28 +277,28 @@ int te_load_native_module(const char *name_or_path) {
                 }
             }
         }
-        /* User-scope package store: %USERPROFILE%\.te\packages\<name>\libte_<name>.dll */
+        /* 3. CWD-relative / bare name (lowest priority so a stray .\ DLL cannot
+         *    shadow the bundled one). */
+        if (!h) {
+            const char *patterns[] = {
+                ".\\libte_%s.dll",
+                ".\\te_%s.dll",
+                "libte_%s.dll",
+                "te_%s.dll",
+                NULL
+            };
+            for (int i = 0; patterns[i] && !h; i++) {
+                snprintf(buf, sizeof(buf), patterns[i], raw);
+                h = te_load_dll_with_deps(buf);
+            }
+        }
+        /* 4. User-scope package store: %USERPROFILE%\.te\packages\<name>\libte_<name>.dll */
         if (!h) {
             const char *up = getenv("USERPROFILE");
             if (!up) up = getenv("HOME");
             if (up) {
                 snprintf(buf, sizeof(buf), "%s\\.te\\packages\\%s\\libte_%s.dll", up, raw, raw);
                 h = te_load_dll_with_deps(buf);
-            }
-        }
-        /* TE_PLUGIN_PATH override (semicolon-separated dirs). */
-        if (!h) {
-            const char *envp = getenv("TE_PLUGIN_PATH");
-            if (envp) {
-                char tmp[2048];
-                strncpy(tmp, envp, sizeof(tmp) - 1);
-                tmp[sizeof(tmp) - 1] = '\0';
-                char *ctx = NULL;
-                for (char *tok = strtok_s(tmp, ";", &ctx); tok && !h;
-                     tok = strtok_s(NULL, ";", &ctx)) {
-                    snprintf(buf, sizeof(buf), "%s\\libte_%s.dll", tok, raw);
-                    h = te_load_dll_with_deps(buf);
-                }
             }
         }
     }
