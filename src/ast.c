@@ -3939,6 +3939,34 @@ int is_string_type(ASTNode *node) {
     if (node->type && strcmp(node->type, "ADD") == 0) {
         if (is_string_type(node->left) || is_string_type(node->right)) return 1;
     }
+    /* Bracket access m["key"] / arr[i] cuyo valor es string. ACCESS_ATTR
+     * (punto) ya estaba cubierto arriba; sin esto, `return obj["k"]` y los
+     * contextos string que dependen de is_string_type no reconocian el corchete
+     * y caian a la ruta numerica (que devuelve 0 con error). */
+    if (node->type && strcmp(node->type, "ACCESS_EXPR") == 0) {
+        ASTNode *map = resolve_to_map(node->left);
+        if (map) {
+            char keybuf[1024];
+            const char *key = te_map_key_coerce(node->right, keybuf, sizeof(keybuf));
+            if (key) {
+                ASTNode *pair = map_find_pair(map, key);
+                if (pair && pair->left && pair->left->type) {
+                    const char *vt = pair->left->type;
+                    if (strcmp(vt, "STRING") == 0 || strcmp(vt, "DATETIME") == 0 ||
+                        strcmp(vt, "UUID") == 0) return 1;
+                }
+            }
+            return 0;
+        }
+        ASTNode *list = resolve_to_list(node->left);
+        if (list && node->right) {
+            int idx = (int)evaluate_expression(node->right);
+            if (idx >= 0 && idx < list_length(list)) {
+                ASTNode *item = list_get_item(list, idx);
+                if (item && item->type && strcmp(item->type, "STRING") == 0) return 1;
+            }
+        }
+    }
     if (node->type && strcmp(node->type, "STRING_INTERP") == 0) return 1;
     return 0;
 }
@@ -8910,6 +8938,20 @@ static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
             memcpy(name, p, n); name[n] = '\0';
             /* Construir un ASTNode "valor concreto" para este param */
             ASTNode *valNode = NULL;
+            /* Bugfix v0.0.29: pasar un objeto/map/list por VARIABLE (no literal)
+             * a un lambda. Cuando cur_arg es un IDENTIFIER que resuelve a una
+             * variable VAL_OBJECT, hay que reconstruir el ASTNode equivalente
+             * y enlazarlo (alias, como literales OBJECT/LIST). Sin esto el arg
+             * caia al `else` final -> evaluate_expression -> se coercia a numero
+             * y el objeto llegaba vacio dentro de la funcion (rompia el patron
+             * "repository": Repo(body) / Repo(p)). Los escalares no se ven
+             * afectados: solo capturamos identificadores de tipo VAL_OBJECT. */
+            Variable *obj_var = NULL;
+            if (cur_arg && cur_arg->type && cur_arg->id &&
+                (strcmp(cur_arg->type, "IDENTIFIER") == 0 || strcmp(cur_arg->type, "ID") == 0)) {
+                Variable *v = find_variable(cur_arg->id);
+                if (v && v->vtype == VAL_OBJECT) obj_var = v;
+            }
             if (cur_arg) {
                 /* v1.0.0: list items can be CALL_FUNC/CALL_METHOD (e.g.
                  * `[uuid_v4(), uuid_v4(), ...]` was materialized without
@@ -8932,6 +8974,19 @@ static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
                     } else if (rr && rr->vtype == VAL_FLOAT) {
                         char buf[64]; te_fmt_double(buf, sizeof(buf), rr->value.float_value);
                         valNode = create_ast_leaf("FLOAT", 0, buf, NULL);
+                    } else {
+                        valNode = create_ast_leaf("NULL", 0, NULL, NULL);
+                    }
+                } else if (obj_var) {
+                    /* IDENTIFIER -> variable VAL_OBJECT: reconstruir el nodo
+                     * equivalente para que te_value_to_variable reponga el mismo
+                     * (type, object_value) en el parametro. "OBJECT" guarda un
+                     * ObjectNode* (envolver con create_object_node); MAP/LIST/
+                     * LAMBDA/LAZY_ITER guardan el propio ASTNode (aliasar). */
+                    if (obj_var->type && strcmp(obj_var->type, "OBJECT") == 0) {
+                        valNode = create_object_node(obj_var->value.object_value);
+                    } else if (obj_var->value.object_value) {
+                        valNode = (ASTNode *)(intptr_t)obj_var->value.object_value;
                     } else {
                         valNode = create_ast_leaf("NULL", 0, NULL, NULL);
                     }
@@ -10569,6 +10624,28 @@ static void interpret_return_node(ASTNode *node) {
 
     if (ret_expr) {
        // fprintf(stderr, "[DEBUG] interpret_return_node: executing return expression type=%s\n", return_node->type); fflush(stderr);
+        /* Bugfix v0.0.29: `return obj["k"]` / `return obj.k` cuyo valor es
+         * string. La ruta numerica (interpret_ast -> evaluate_expression ->
+         * NK_ACCESS_EXPR) emite "value at Map[...] is a string" y devuelve 0,
+         * asi que la funcion retornaba 0 en vez del string. Capturamos el valor
+         * con el getter string-aware (el mismo que usa concat/print, que ya
+         * funcionaba) y lo guardamos en __ret__ como STRING, evitando la ruta
+         * numerica. Solo aplica cuando el acceso ES string (is_string_type),
+         * para no convertir retornos numericos en texto. */
+        if (ret_expr->type &&
+            (strcmp(ret_expr->type, "ACCESS_EXPR") == 0 ||
+             strcmp(ret_expr->type, "ACCESS_ATTR") == 0) &&
+            is_string_type(ret_expr)) {
+            char *s = get_node_string(ret_expr);
+            ASTNode *leaf = create_ast_leaf("STRING", 0, s ? s : "", NULL);
+            add_or_update_variable("__ret__", leaf);
+            free_ast(leaf);
+            free(s);
+            return_node = ret_expr;
+            g_response_is_raw_text = 1;
+            return_flag = 1;
+            return;
+        }
         interpret_ast(ret_expr);
         //fprintf(stderr, "[DEBUG] interpret_return_node: expression executed\n"); fflush(stderr);
         /* A nested call inside the return expression (e.g. `return Math.sqrt(x)`

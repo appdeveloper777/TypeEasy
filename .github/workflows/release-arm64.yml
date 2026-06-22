@@ -44,25 +44,22 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Version objetivo (arm64): ${VERSION}"
 
-      - name: Build TypeEasy binary inside reproducible Docker image (arm64)
-        # gcc:13.2.0 es una imagen multi-arch: en un runner arm64 se descarga la
-        # variante aarch64 y produce un binario ARM64 nativo. Sin -mavx2: el
-        # Makefile detecta uname -m y omite los flags x86 automaticamente.
+      - name: Build TypeEasy binary natively on the arm64 runner
+        # El runner ubuntu-24.04-arm ES aarch64 nativo y trae gcc-13 por
+        # defecto, asi que compilamos directo SIN Docker. Esto evita depender
+        # de Docker Hub (que devolvio HTTP 520 en releases previas) y ademas es
+        # mas rapido. Sin -mavx2: el Makefile detecta uname -m y omite los flags
+        # x86 en ARM (los bloques SIMD caen al fallback escalar via __AVX2__).
         run: |
-          docker run --rm \
-            -v "${{ github.workspace }}":/app \
-            -w /app \
-            -e TYPEEASY_VERSION="${{ steps.meta.outputs.version }}" \
-            gcc:13.2.0 \
-            bash -c '
-              echo "build arch: $(uname -m)" &&
-              apt-get update &&
-              apt-get install -y --no-install-recommends \
-                flex bison libfl-dev libssl-dev default-libmysqlclient-dev \
-                libcurl4-openssl-dev libpq-dev freetds-dev zlib1g-dev &&
-              make -C /app/src clean &&
-              make -C /app/src typeeasy CFLAGS_EXTRA=-DTYPEEASY_VERSION=${TYPEEASY_VERSION}
-            '
+          echo "build arch: $(uname -m)"
+          gcc --version | head -1
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential flex bison libfl-dev libssl-dev \
+            default-libmysqlclient-dev libcurl4-openssl-dev libpq-dev \
+            freetds-dev zlib1g-dev
+          make -C src clean
+          make -C src typeeasy CFLAGS_EXTRA=-DTYPEEASY_VERSION=${{ steps.meta.outputs.version }}
           file src/typeeasy
           ls -lh src/typeeasy
 

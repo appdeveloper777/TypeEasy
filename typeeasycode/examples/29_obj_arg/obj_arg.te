@@ -1,0 +1,47 @@
+// =============================================================
+// 29_obj_arg — pasar objetos/maps como argumento de función
+//
+// Antes de v0.0.29, pasar una VARIABLE que contenía un objeto/map/list a un
+// lambda hacía que llegara vacía dentro de la función (se coercía a número).
+// Los escalares (string/int/float) sí se pasaban bien. Esto bloqueaba el
+// patrón "repository" (Repo(body) / Repo(p)). v0.0.29 lo arregla: el objeto
+// se enlaza por referencia (alias), igual que un literal { ... }.
+//
+// Ejecutar:
+//   typeeasy examples/29_obj_arg/obj_arg.te
+// =============================================================
+
+// --- 1) Pasar un objeto por variable y leer sus claves dentro ---
+let probar = fn(obj) => {
+    // obj llega COMPLETO (antes imprimía vacío)
+    print(concat("dentro fn -> nombre=", obj["nombre"]));
+    return obj["nombre"];   // v0.0.29: retornar un string desde un map ya funciona
+};
+
+let p = { "nombre": "Juan" };
+print(concat("antes  fn -> nombre=", p["nombre"]));
+let r = probar(p);
+print(concat("retorno -> ", r));   // -> Juan (antes imprimía 0)
+
+// --- 2) Mezclar objeto + escalares en la misma llamada ---
+let crear = fn(o, etiqueta, cantidad) => {
+    print(concat("sku=", o["sku"], " etiqueta=", etiqueta,
+                 " cant=", to_string(cantidad + 1)));
+};
+let prod = { "sku": "A1" };
+crear(prod, "Pan", 3);
+
+// --- 3) Patrón repository: el objeto recibido como mapa de @params ---
+// (controlador delgado -> función que recibe el `body` u objeto completo)
+let RepoCrear = fn(input) => {
+    // input["codigo"] / input["nombre"] llegan con valor: ya se pueden usar
+    // como mapa de parámetros nombrados en sql_query / sql_exec.
+    let params = { "@cod": input["codigo"], "@nom": input["nombre"] };
+    print(concat("INSERT params -> @cod=", params["@cod"],
+                 " @nom=", params["@nom"]));
+    // En un endpoint real:
+    //   sql_exec(conn, "INSERT INTO t(cod,nom) VALUES(@cod,@nom)", params, ENGINE);
+};
+
+let body = { "codigo": "P-100", "nombre": "Lapicero" };
+RepoCrear(body);   // antes llegaba vacío; ahora enlaza correctamente
