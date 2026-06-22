@@ -1951,13 +1951,19 @@ extern int g_debug_mode;
 /* --- ELIMINADOS: g_runtime y los prototipos del servidor --- */
 
 // ====================== CONSTANTES Y ESTRUCTURAS GLOBALES ======================
-#define MAX_CLASSES 50
 /* MAX_VARS is defined canonically in ast.h (shared by every module that
  * touches vars[]). Do NOT redefine it here. */
 static int g_initial_var_count = 0;
 // Variables globales
 Variable vars[MAX_VARS];
-ClassNode *classes[MAX_CLASSES];
+/* Registro global de clases. Antes era un array FIJO `ClassNode *classes[50]`:
+ * al pasar de 50 clases, add_class descartaba las nuevas en silencio ->
+ * find_class devolvia NULL -> el model binding (body : Clase) deserializaba a
+ * un objeto VACIO sin error 422. En ERPs con muchas clases importadas, las
+ * registradas "tarde" (#51+) perdian el binding. Ahora es un array DINAMICO que
+ * crece con realloc en add_class: sin limite practico de clases. */
+ClassNode **classes = NULL;
+int classes_cap = 0;
 Variable __ret_var; // Global variable for return values
 int __ret_var_active = 0; // Flag to indicate if __ret_var holds a valid value
 int var_count = 0;
@@ -2250,9 +2256,17 @@ void inherit_from(ClassNode *child, char *parent_name) {
 }
 
 void add_class(ClassNode *class) {
-    if (class_count < MAX_CLASSES) {
-        classes[class_count++] = class;
+    if (class_count >= classes_cap) {
+        int newcap = classes_cap ? classes_cap * 2 : 64;
+        ClassNode **grown = realloc(classes, (size_t)newcap * sizeof(*grown));
+        if (!grown) {
+            fprintf(stderr, "[add_class] sin memoria al ampliar el registro de clases (count=%d)\n", class_count);
+            return;
+        }
+        classes = grown;
+        classes_cap = newcap;
     }
+    classes[class_count++] = class;
 }
 
 ClassNode *find_class(char *name) {

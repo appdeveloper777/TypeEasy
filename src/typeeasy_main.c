@@ -275,7 +275,7 @@ static int run_syntax_check(const char *path) {
  *          functions:[{name,params,line}], variables:[{name,type,line}]} */
 extern Variable vars[];
 extern int var_count;
-extern ClassNode *classes[];
+extern ClassNode **classes;
 extern int class_count;
 
 static int run_symbols(const char *path) {
