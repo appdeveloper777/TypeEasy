@@ -1,0 +1,53 @@
+// =============================================================
+// 30_sql_envelope — respuesta SQL uniforme { success, data | error }
+//
+// Con sql_set_envelope(true), TODAS las llamadas sql_query/sql_exec (de
+// cualquier motor: sqlite/mysql/postgres/sqlserver) devuelven un objeto
+// uniforme con un campo booleano `success`:
+//
+//   OK     -> { success: true,  data: <resultado tal cual: [...] | {affected_rows} | N> }
+//   fallo  -> { success: false, error: "<mensaje>" }
+//
+// Asi `r.success` es siempre un bool real y no necesitas ("" + r).contains(...).
+// Es opt-in: OFF por defecto (no rompe el codigo existente).
+//
+// Ejecutar:
+//   typeeasy examples/30_sql_envelope/sql_envelope.te
+// =============================================================
+
+load_native("sqlite");
+sql_set_envelope(true);          // <-- activa el estandar para todos los motores
+
+let ENGINE = "sqlite";
+let c = sql_connect("", "", "", ":memory:", 0, { }, ENGINE);
+
+// --- DDL ---
+let r0 = sql_exec(c, "CREATE TABLE t (id INTEGER PRIMARY KEY, req TEXT NOT NULL)", { }, ENGINE);
+print(concat("CREATE     -> success=", r0.success));
+
+// --- INSERT OK ---
+let r1 = sql_exec(c, "INSERT INTO t (id, req) VALUES (1, 'x')", { }, ENGINE);
+print(concat("INSERT OK  -> success=", r1.success, " data=", r1.data));   // data = filas afectadas
+
+// --- INSERT que viola NOT NULL: success=false, error con el mensaje ---
+let r2 = sql_exec(c, "INSERT INTO t (id, req) VALUES (2, NULL)", { }, ENGINE);
+if (!r2.success) {
+    print(concat("INSERT BAD -> success=", r2.success, " error=", r2.error));
+}
+
+// --- SELECT: data trae las filas tal cual ---
+let r3 = sql_query(c, "SELECT id, req FROM t", { }, ENGINE);
+let filas = r3.data;
+print(concat("SELECT     -> success=", r3.success, " data=", filas));
+
+// --- Override por-llamada: el 5to arg bool gana sobre el flag global ---
+// Aqui el flag global esta ON, pero forzamos crudo SOLO en esta llamada:
+let crudo = sql_query(c, "SELECT id FROM t", { }, ENGINE, false);
+print(concat("OVERRIDE(false) -> crudo=", crudo));   // [{"id":1}] sin envelope
+
+sql_close(c, ENGINE);
+
+// --- Patron repository con el envelope (sin contains/starts_with) ---
+// let r = sql_exec(conn, sql, params, ENGINE);
+// if (!r.success) { response_status(500); return concat("{\"error\":\"", r.error, "\"}"); }
+// return r.data;   // para SELECT ya es JSON; o usa json_parse(r.data) si necesitas las filas

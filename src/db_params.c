@@ -24,6 +24,11 @@ int g_db_empty_as_null = 0;
  * string JSON con {"error":...} fijamos response_status(500) para que el
  * server no responda 200 OK con un 'falso exito'. */
 int g_db_strict_errors = 0;
+/* Flag opt-in: si != 0, sql_query/sql_exec (la fachada generica) envuelven su
+ * resultado en { success:bool, data|error }. Se activa con sql_set_envelope()
+ * o env TYPEEASY_SQL_ENVELOPE=1. OFF por defecto. */
+int g_db_envelope = 0;
+
 ASTNode* db_arg_as_map_head(ASTNode* args, int idx, int* out_owned) {
     if (out_owned) *out_owned = 0;
     ASTNode* cur = args;

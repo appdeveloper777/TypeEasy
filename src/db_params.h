@@ -51,4 +51,10 @@ extern int g_db_empty_as_null;
  * decide que hacer (chequearlo, ignorarlo, lanzar throw, etc.). */
 extern int g_db_strict_errors;
 
+/* Flag opt-in: si != 0, la fachada generica sql_query/sql_exec envuelve el
+ * resultado en { success:bool, data|error } uniforme para todos los motores.
+ * Se cambia con sql_set_envelope() (o env TYPEEASY_SQL_ENVELOPE=1). OFF por
+ * defecto: no rompe el codigo existente. */
+extern int g_db_envelope;
+
 #endif /* DB_PARAMS_H */

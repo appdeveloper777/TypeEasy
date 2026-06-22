@@ -1571,6 +1571,72 @@ static void te_sql_strict_check_ret(void) {
     if (strstr(s, "\"error\"")) typeeasy_http_set_status(500);
 }
 
+/* Estandar opt-in (sql_set_envelope(true) / env TYPEEASY_SQL_ENVELOPE=1):
+ * envuelve el resultado CRUDO de cualquier motor con un campo booleano `success`
+ * uniforme, SIN reestructurar el payload (el resultado se queda IGUAL bajo
+ * `data`):
+ *   OK     -> { success:true,  data:<resultado actual: [...] | {affected_rows} | N> }
+ *   fallo  -> { success:false, error:"..." }
+ * Asi `r.success` es siempre un bool real y `r.error` siempre accesible, con el
+ * mismo formato en SQLite/MySQL/PostgreSQL/SQL Server. OFF por defecto: no rompe
+ * el codigo existente. Se ejecuta en la fachada (un solo punto) sobre el __ret__
+ * que dejo el bridge/plugin.
+ * `force`: -1 = usar el flag global g_db_envelope; 0 = forzar OFF; 1 = forzar ON.
+ * El override por-llamada (5to arg bool de sql_query/sql_exec) gana sobre el
+ * flag global de la app. */
+static void te_sql_envelope_wrap(int force) {
+    extern int g_db_envelope;
+    int on = (force < 0) ? g_db_envelope : (force ? 1 : 0);
+    if (!on) return;
+    Variable *r = find_variable("__ret__");
+    if (!r) return;
+
+    ASTNode *env = (ASTNode*)calloc(1, sizeof(ASTNode));
+    if (!env) return;
+    env->type = strdup("OBJECT_LITERAL");
+    ASTNode *tail = NULL;
+    #define ENV_ADD(p) do { ASTNode *_pp=(p); if(!env->left) env->left=_pp; else tail->right=_pp; tail=_pp; } while(0)
+    #define ENV_BOOL(b) create_ast_leaf_number("BOOL", (b)?1:0, NULL, NULL)
+
+    if (r->vtype == VAL_INT) {
+        /* SQLite exec OK: __ret__ es int = filas afectadas. */
+        ENV_ADD(create_kv_pair_node("success", ENV_BOOL(1)));
+        ENV_ADD(create_kv_pair_node("data",
+                create_ast_leaf_number("INT", (int)r->value.int_value, NULL, NULL)));
+    } else if (r->vtype == VAL_STRING && r->value.string_value) {
+        const char *s = r->value.string_value;
+        const char *t = s;
+        while (*t == ' ' || *t == '\t' || *t == '\n' || *t == '\r') t++;
+        if (strncmp(t, "{\"error\"", 8) == 0) {
+            /* Fallo: extraemos el MENSAJE de {"error":"..."} para `error`. */
+            const char *pp = t;
+            ASTNode *inner = te_json_parse_value(&pp);
+            ASTNode *ep = inner ? map_find_pair(inner, "error") : NULL;
+            char *msg = (ep && ep->left) ? get_node_string(ep->left) : strdup(s);
+            ENV_ADD(create_kv_pair_node("success", ENV_BOOL(0)));
+            ENV_ADD(create_kv_pair_node("error", create_ast_leaf("STRING", 0, msg ? msg : "", NULL)));
+            if (msg) free(msg);
+            if (inner) free_ast(inner);
+        } else {
+            /* OK: `data` lleva el STRING crudo tal cual (array de filas
+             * '[...]', '{affected_rows,...}', etc.). No lo reestructuramos: el
+             * resultado se queda IGUAL, solo envuelto. Para SELECT ya es JSON
+             * valido -> `return r.data` lo devuelve directo; si quieres las
+             * filas estructuradas usa json_parse(r.data). */
+            ENV_ADD(create_kv_pair_node("success", ENV_BOOL(1)));
+            ENV_ADD(create_kv_pair_node("data", create_ast_leaf("STRING", 0, s, NULL)));
+        }
+    } else {
+        ENV_ADD(create_kv_pair_node("success", ENV_BOOL(1)));
+    }
+    #undef ENV_BOOL
+    #undef ENV_ADD
+    /* __ret__ toma ownership de `env` (te_value_to_variable guarda el ASTNode
+     * como object_value para OBJECT_LITERAL); el string viejo se libera dentro
+     * de add_or_update_variable. */
+    add_or_update_variable("__ret__", env);
+}
+
 /* Desacopla el último argumento (selector engine) de la cadena. Devuelve el
  * motor y, vía out-params, lo necesario para re-enlazarlo tras delegar. La
  * cadena de args es lineal (sucesor = ->next o, si falta, ->right), y en modo
@@ -1595,6 +1661,32 @@ static void te_sql_reattach(ASTNode *prev, ASTNode *tail, int used_next) {
     if (used_next) prev->next = tail; else prev->right = tail;
 }
 
+/* Override opcional del envelope por-llamada: un 5to argumento booleano DESPUES
+ * del ENGINE -> sql_query(c, sql, {}, ENGINE, true|false). Gana sobre el flag
+ * global. Si el ultimo arg ya es un engine valido, no hay override (compat).
+ * Devuelve: -1 = sin override (usar flag global); 0 = forzar OFF; 1 = forzar ON.
+ * Cuando hay override, lo DESACOPLA de la cadena (via *prev_out/*tail_out) para
+ * que el bridge no lo vea; el caller lo re-engancha con te_sql_reattach. */
+static int te_arg_is_truthy(ASTNode *a); /* fwd: definido mas abajo */
+static int te_sql_detach_envelope_override(ASTNode *arg, ASTNode **prev_out,
+                                           ASTNode **tail_out, int *used_next) {
+    *prev_out = NULL; *tail_out = NULL; *used_next = 0;
+    if (!arg) return -1;
+    ASTNode *prev = NULL, *cur = arg, *next;
+    while ((next = cur->next ? cur->next : cur->right)) { prev = cur; cur = next; }
+    if (!prev) return -1; /* hace falta al menos engine + override */
+    /* Si el ULTIMO arg ya es un engine valido, no hay override (compat). */
+    if (te_sql_engine_parse(te_arg_string(cur)) != TE_SQL_UNKNOWN) return -1;
+    /* El ultimo no es engine; el PENULTIMO debe serlo para que 'cur' sea el
+     * override booleano. */
+    if (te_sql_engine_parse(te_arg_string(prev)) == TE_SQL_UNKNOWN) return -1;
+    int force = te_arg_is_truthy(cur) ? 1 : 0;
+    if (prev->next) { *used_next = 1; prev->next = NULL; }
+    else            { *used_next = 0; prev->right = NULL; }
+    *prev_out = prev; *tail_out = cur;
+    return force;
+}
+
 static void native_sql_connect(ASTNode *arg) {
     ASTNode *prev, *tail; int un = 0;
     TeSqlEngine e = te_sql_detach_engine(arg, &prev, &tail, &un);
@@ -1610,6 +1702,8 @@ static void native_sql_connect(ASTNode *arg) {
     te_sql_reattach(prev, tail, un);
 }
 static void native_sql_query(ASTNode *arg) {
+    ASTNode *ovp, *ovt; int ovu = 0;
+    int force = te_sql_detach_envelope_override(arg, &ovp, &ovt, &ovu);
     ASTNode *prev, *tail; int un = 0;
     TeSqlEngine e = te_sql_detach_engine(arg, &prev, &tail, &un);
     switch (e) {
@@ -1620,11 +1714,15 @@ static void native_sql_query(ASTNode *arg) {
         default: fprintf(stderr, "[sql_query] engine desconocido\n"); te_set_ret_string(""); break;
     }
     te_sql_reattach(prev, tail, un);
+    te_sql_reattach(ovp, ovt, ovu);
+    te_sql_envelope_wrap(force);   /* opt-in: { success, data | error }; override por-llamada gana */
 }
 /* sql_exec: para DML/DDL. En MySQL/PostgreSQL/SQL Server no hay un exec aparte
  * (su *_query ya ejecuta INSERT/UPDATE/DDL), así que delega ahí; en SQLite usa
  * el sqlite_exec del plugin (distinto de sqlite_query, que es solo SELECT). */
 static void native_sql_exec(ASTNode *arg) {
+    ASTNode *ovp, *ovt; int ovu = 0;
+    int force = te_sql_detach_envelope_override(arg, &ovp, &ovt, &ovu);
     ASTNode *prev, *tail; int un = 0;
     TeSqlEngine e = te_sql_detach_engine(arg, &prev, &tail, &un);
     switch (e) {
@@ -1635,6 +1733,8 @@ static void native_sql_exec(ASTNode *arg) {
         default: fprintf(stderr, "[sql_exec] engine desconocido\n"); te_set_ret_int(-1); break;
     }
     te_sql_reattach(prev, tail, un);
+    te_sql_reattach(ovp, ovt, ovu);
+    te_sql_envelope_wrap(force);   /* opt-in: { success, data | error }; override por-llamada gana */
 }
 static void native_sql_close(ASTNode *arg) {
     ASTNode *prev, *tail; int un = 0;
@@ -1703,6 +1803,11 @@ static void native_sql_set_empty_as_null(ASTNode *arg) {
 static void native_sql_set_strict_errors(ASTNode *arg) {
     g_db_strict_errors = te_arg_is_truthy(arg);
     te_set_ret_int(g_db_strict_errors);
+}
+static void native_sql_set_envelope(ASTNode *arg) {
+    extern int g_db_envelope;
+    g_db_envelope = te_arg_is_truthy(arg);
+    te_set_ret_int(g_db_envelope);
 }
 
 int call_native_function(const char *name, ASTNode *arg) {
@@ -1779,6 +1884,7 @@ int call_native_function(const char *name, ASTNode *arg) {
     if (strcmp(name, "sql_close") == 0)   { native_sql_close(arg);   return 1; }
     if (strcmp(name, "sql_set_empty_as_null") == 0) { native_sql_set_empty_as_null(arg); return 1; }
     if (strcmp(name, "sql_set_strict_errors") == 0) { native_sql_set_strict_errors(arg); return 1; }
+    if (strcmp(name, "sql_set_envelope") == 0) { native_sql_set_envelope(arg); return 1; }
     return 0;
 }
 

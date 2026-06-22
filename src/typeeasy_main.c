@@ -426,10 +426,13 @@ int main(int argc, char *argv[]) {
     {
         extern int g_db_empty_as_null;
         extern int g_db_strict_errors;
+        extern int g_db_envelope;
         const char* e1 = getenv("TYPEEASY_SQL_EMPTY_AS_NULL");
         if (e1 && (!strcmp(e1, "1") || !strcmp(e1, "true") || !strcmp(e1, "yes"))) g_db_empty_as_null = 1;
         const char* e2 = getenv("TYPEEASY_SQL_STRICT_ERRORS");
         if (e2 && (!strcmp(e2, "1") || !strcmp(e2, "true") || !strcmp(e2, "yes"))) g_db_strict_errors = 1;
+        const char* e3 = getenv("TYPEEASY_SQL_ENVELOPE");
+        if (e3 && (!strcmp(e3, "1") || !strcmp(e3, "true") || !strcmp(e3, "yes"))) g_db_envelope = 1;
     }
 
     /* --version / -v / --help / -h: respondidos antes de parsear nada mas. */
