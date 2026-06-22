@@ -50,14 +50,22 @@ jobs:
         # de Docker Hub (que devolvio HTTP 520 en releases previas) y ademas es
         # mas rapido. Sin -mavx2: el Makefile detecta uname -m y omite los flags
         # x86 en ARM (los bloques SIMD caen al fallback escalar via __AVX2__).
+        #
+        # IMPORTANTE: usamos libmariadb-dev (+ -compat) en vez de
+        # default-libmysqlclient-dev. En Ubuntu el paquete default apunta a
+        # MySQL 8 (Oracle), que NO define los simbolos de MariaDB Connector/C
+        # que usa mysql_bridge.c (MARIADB_OPT_TLS_PEER_FP, MYSQL_OPT_SSL_ENFORCE,
+        # MYSQL_OPT_SSL_VERIFY_SERVER_CERT, mysql_optionsv) -> el build fallaba.
+        # libmariadb-dev-compat provee libmysqlclient.so para el -lmysqlclient.
+        # El .deb ya declara Depends: libmariadb3, asi que el runtime es MariaDB.
         run: |
           echo "build arch: $(uname -m)"
           gcc --version | head -1
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential flex bison libfl-dev libssl-dev \
-            default-libmysqlclient-dev libcurl4-openssl-dev libpq-dev \
-            freetds-dev zlib1g-dev
+            libmariadb-dev libmariadb-dev-compat libcurl4-openssl-dev \
+            libpq-dev freetds-dev zlib1g-dev
           make -C src clean
           make -C src typeeasy CFLAGS_EXTRA=-DTYPEEASY_VERSION=${{ steps.meta.outputs.version }}
           file src/typeeasy
