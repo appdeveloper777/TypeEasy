@@ -58,6 +58,8 @@ jobs:
             flex
             bison
             make
+            unzip
+            curl
 
       - name: Build OpenSSL-based libmariadb.dll
         shell: msys2 {0}

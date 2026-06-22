@@ -160,23 +160,30 @@ echo "Contenido final de bin/:"
 ls -lh "$PKG_DIR/bin/"
 
 # Plugins nativos (load_native("sqlite") -> plugins/sqlite/libte_sqlite.dll).
-# Si no existe la DLL, intentamos construirla con la amalgamation (requiere MSYS2 gcc).
+# El plugin DEBE reconstruirse del mismo commit que el .exe: un libte_sqlite.dll
+# viejo tiene otra ABI del host y hace que sqlite_query/sqlite_exec devuelvan
+# []/0 en silencio. Por eso forzamos rebuild y FALLAMOS si no se puede (mejor
+# no publicar instalador que publicar uno con plugin stale/ausente).
 SQLITE_DLL="$ROOT_DIR/plugins/sqlite/libte_sqlite.dll"
+rm -f "$SQLITE_DLL"   # forzar rebuild fresco, ABI-matched con este .exe
+if ! command -v gcc >/dev/null 2>&1; then
+  echo "ERROR: gcc no encontrado; no se puede construir el plugin sqlite (libte_sqlite.dll)." >&2
+  exit 1
+fi
+echo "Compilando plugin sqlite (amalgamation)..."
+if ! bash "$ROOT_DIR/plugins/sqlite/build_windows.sh"; then
+  echo "ERROR: build del plugin sqlite falló. Abortando para no publicar un instalador" >&2
+  echo "       con el .exe nuevo y un libte_sqlite.dll viejo/ausente." >&2
+  exit 1
+fi
 if [[ ! -f "$SQLITE_DLL" ]]; then
-  if command -v gcc >/dev/null 2>&1; then
-    echo "Compilando plugin sqlite (amalgamation)..."
-    bash "$ROOT_DIR/plugins/sqlite/build_windows.sh" || \
-      echo "WARN: build del plugin sqlite falló; el paquete no incluirá libte_sqlite.dll" >&2
-  else
-    echo "WARN: gcc no encontrado, se omite plugin sqlite. Compila manualmente con plugins/sqlite/build_windows.sh" >&2
-  fi
+  echo "ERROR: build del plugin sqlite no produjo libte_sqlite.dll." >&2
+  exit 1
 fi
-if [[ -f "$SQLITE_DLL" ]]; then
-  cp "$SQLITE_DLL" "$PKG_DIR/plugins/sqlite/libte_sqlite.dll"
-  cp "$ROOT_DIR/plugins/sqlite/README.md" "$PKG_DIR/plugins/sqlite/" 2>/dev/null || true
-  echo "Plugin sqlite incluido:"
-  ls -lh "$PKG_DIR/plugins/sqlite/"
-fi
+cp "$SQLITE_DLL" "$PKG_DIR/plugins/sqlite/libte_sqlite.dll"
+cp "$ROOT_DIR/plugins/sqlite/README.md" "$PKG_DIR/plugins/sqlite/" 2>/dev/null || true
+echo "Plugin sqlite incluido (rebuild fresco):"
+ls -lh "$PKG_DIR/plugins/sqlite/"
 
 cat > "$PKG_DIR/README-WINDOWS.txt" <<EOF
 TypeEasy Windows Package v${VERSION}

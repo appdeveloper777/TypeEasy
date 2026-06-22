@@ -59,7 +59,7 @@ jobs:
       - name: Install packaging tools (host)
         run: |
           sudo apt-get update
-          sudo apt-get install -y dpkg-dev
+          sudo apt-get install -y dpkg-dev gcc libsqlite3-dev unzip curl
 
       - name: Setup Node.js (for VS Code extension)
         uses: actions/setup-node@v4

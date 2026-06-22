@@ -73,23 +73,30 @@ if [[ -f "$ROOT_DIR/typeeasycode/endpoint.te" ]]; then
 fi
 
 # Plugins nativos (load_native("sqlite") -> plugins/sqlite/libte_sqlite.so).
-# Si no existe el .so, intentamos construirlo con la amalgamation (requiere gcc).
+# El plugin DEBE reconstruirse del mismo commit que el binario: un .so viejo
+# tiene otra ABI del host y hace que sqlite_query/sqlite_exec devuelvan []/0 en
+# silencio. Forzamos rebuild y FALLAMOS si no se puede (no publicar un paquete
+# con binario nuevo + plugin stale/ausente).
 SQLITE_SO="$ROOT_DIR/plugins/sqlite/libte_sqlite.so"
+rm -f "$SQLITE_SO"   # forzar rebuild fresco, ABI-matched con este binario
+if ! command -v gcc >/dev/null 2>&1; then
+  echo "ERROR: gcc no encontrado; no se puede construir el plugin sqlite (libte_sqlite.so)." >&2
+  exit 1
+fi
+echo "Compilando plugin sqlite (amalgamation)..."
+if ! bash "$ROOT_DIR/plugins/sqlite/build_linux.sh"; then
+  echo "ERROR: build del plugin sqlite falló. Abortando para no publicar un paquete" >&2
+  echo "       con el binario nuevo y un libte_sqlite.so viejo/ausente." >&2
+  exit 1
+fi
 if [[ ! -f "$SQLITE_SO" ]]; then
-  if command -v gcc >/dev/null 2>&1; then
-    echo "Compilando plugin sqlite (amalgamation)..."
-    bash "$ROOT_DIR/plugins/sqlite/build_linux.sh" || \
-      echo "WARN: build del plugin sqlite falló; el paquete no incluirá libte_sqlite.so" >&2
-  else
-    echo "WARN: gcc no encontrado, se omite plugin sqlite. Compila manualmente con plugins/sqlite/build_linux.sh" >&2
-  fi
+  echo "ERROR: build del plugin sqlite no produjo libte_sqlite.so." >&2
+  exit 1
 fi
-if [[ -f "$SQLITE_SO" ]]; then
-  cp "$SQLITE_SO" "$PKG_DIR/plugins/sqlite/libte_sqlite.so"
-  cp "$ROOT_DIR/plugins/sqlite/README.md" "$PKG_DIR/plugins/sqlite/" 2>/dev/null || true
-  echo "Plugin sqlite incluido (tarball):"
-  ls -lh "$PKG_DIR/plugins/sqlite/"
-fi
+cp "$SQLITE_SO" "$PKG_DIR/plugins/sqlite/libte_sqlite.so"
+cp "$ROOT_DIR/plugins/sqlite/README.md" "$PKG_DIR/plugins/sqlite/" 2>/dev/null || true
+echo "Plugin sqlite incluido (tarball, rebuild fresco):"
+ls -lh "$PKG_DIR/plugins/sqlite/"
 
 cat > "$PKG_DIR/README-LINUX.txt" <<EOF
 TypeEasy Linux Package v${VERSION} (${ARCH})
