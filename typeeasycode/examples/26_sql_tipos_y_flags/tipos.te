@@ -1,0 +1,59 @@
+// =============================================================
+// 26_sql_tipos_y_flags — tipos de columnas + flags opt-in del binder
+//
+// Demuestra:
+//   - Tipos en una clase modelo: string / int / float / bool.
+//   - Binding de @named params con la fachada generica sql_*.
+//   - sql_set_empty_as_null(true): un "" de un form se guarda como NULL
+//     (en columnas numericas/fecha) en vez de '' (que rompe en MySQL STRICT).
+//   - sql_set_strict_errors(true): en modo --api, un error de query fija
+//     HTTP 500 en vez de devolver 200 OK silencioso.
+//
+// Ejecutar (demo SQLite, no requiere servidores):
+//   typeeasy examples/26_sql_tipos_y_flags/tipos.te
+// =============================================================
+
+load_native("sqlite");
+
+// --- Modelo con TIPOS explicitos -----------------------------
+class Producto {
+    nombre: string;
+    precio: float;
+    stock: int;
+    activo: bool;
+}
+
+// --- Flags opt-in (encender una vez al arranque) -------------
+// "" -> NULL en columnas no-string; evita COALESCE(NULLIF(...)) en cada query.
+sql_set_empty_as_null(true);
+// error de query -> HTTP 500 automatico en modo --api (no-op en CLI).
+sql_set_strict_errors(true);
+
+let DB_ENGINE = "sqlite";
+let conn = sql_connect("", "", "", ":memory:", 0, { }, DB_ENGINE);
+
+sql_exec(conn,
+    "CREATE TABLE productos (id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+    "nombre TEXT NOT NULL, precio REAL, stock INTEGER, activo INTEGER)",
+    DB_ENGINE);
+
+// Insert con tipos: string, float, int, bool (se enlaza como 0/1).
+sql_exec(conn,
+    "INSERT INTO productos (nombre, precio, stock, activo) " +
+    "VALUES (@nombre, @precio, @stock, @activo)",
+    { "@nombre": "Lapiz", "@precio": 1.50, "@stock": 100, "@activo": true },
+    DB_ENGINE);
+
+// Insert donde el "form" mando "" para precio/stock (campos opcionales):
+// con sql_set_empty_as_null(true) entran como NULL, no como '' (no rompe).
+sql_exec(conn,
+    "INSERT INTO productos (nombre, precio, stock, activo) " +
+    "VALUES (@nombre, @precio, @stock, @activo)",
+    { "@nombre": "Cuaderno", "@precio": "", "@stock": "", "@activo": false },
+    DB_ENGINE);
+
+let filas = sql_query(conn, "SELECT id, nombre, precio, stock, activo FROM productos ORDER BY id", DB_ENGINE);
+println("productos: " + filas);
+
+sql_close(conn, DB_ENGINE);
+println("OK");

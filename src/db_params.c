@@ -5,6 +5,25 @@
 #include <ctype.h>
 #include <stdint.h>
 
+/* === Flag opt-in: tratar el STRING vacio ("") como SQL NULL ================
+ * Por default 0 = comportamiento legacy (interpola ''). Cuando se enciende
+ * con sql_set_empty_as_null(true) (o via env TYPEEASY_SQL_EMPTY_AS_NULL=1),
+ * un parametro STRING cuyo valor es "" se emite como SQL NULL en vez de ''.
+ *
+ * Por que existe: forms HTML mandan "" para columnas opcionales numericas/
+ * fecha; con STRICT_TRANS_TABLES, '' en INT/DATE lanza ERROR 1292 y aborta
+ * el INSERT/UPDATE. La forma legacy obliga a envolver cada columna en
+ *   COALESCE(NULLIF(@col,''),<default>)
+ * en cada query. Activar este flag elimina toda esa ceremonia.
+ *
+ * Ademas, hace consistente el comportamiento con la rama ACCESS_EXPR (que
+ * YA tratasta el vacio como NULL via db_emit_resolved): con el flag, ambos
+ * caminos coinciden. */
+int g_db_empty_as_null = 0;
+/* Flag opt-in: en modo --api, si un query falla, ademas de devolver el
+ * string JSON con {"error":...} fijamos response_status(500) para que el
+ * server no responda 200 OK con un 'falso exito'. */
+int g_db_strict_errors = 0;
 ASTNode* db_arg_as_map_head(ASTNode* args, int idx, int* out_owned) {
     if (out_owned) *out_owned = 0;
     ASTNode* cur = args;
@@ -271,6 +290,11 @@ static int append_value(char** buf, size_t* len, size_t* cap,
             buf_append(buf, len, cap, tmp, (size_t)n);
             return 1;
         case 3: {
+            /* Opt-in: STRING vacio "" -> NULL (vease g_db_empty_as_null arriba). */
+            if (g_db_empty_as_null && (!vs || !*vs)) {
+                buf_append(buf, len, cap, "NULL", 4);
+                return 1;
+            }
             char* esc = escape(vs, ctx);
             if (!esc) { buf_append(buf, len, cap, "NULL", 4); return 1; }
             buf_append(buf, len, cap, "'", 1);

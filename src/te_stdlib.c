@@ -541,8 +541,23 @@ int te_builtin_dispatch(ASTNode *node) {
     }
 
     /* ===== Crypto / encoding stdlib (mayo 2026) =====
-     * sha256(s), md5_hex(s), hmac_sha256(key, msg),
+     * sha1(s)/sha1_hex(s), sha256(s), md5_hex(s), hmac_sha256(key, msg),
      * base64_encode(s), base64_decode(s). Devuelven STRING. */
+    if (strcmp(fn, "sha1") == 0 || strcmp(fn, "sha1_hex") == 0) {
+        /* SHA-1 hex (40 chars). Necesario para interoperar con apps legacy:
+         * p.ej. FacturaScripts almacena password = SHA1(plain). El digest
+         * crudo no sirve a TypeEasy (los strings se truncan en NULs), asi
+         * que solo exponemos la forma hex; sha1() y sha1_hex() son alias. */
+        char *s = a0 ? get_node_string(a0) : NULL;
+        unsigned char md[SHA_DIGEST_LENGTH];
+        SHA1((const unsigned char*)(s ? s : ""), s ? strlen(s) : 0, md);
+        char hex[SHA_DIGEST_LENGTH * 2 + 1];
+        for (int i = 0; i < SHA_DIGEST_LENGTH; i++) sprintf(hex + i*2, "%02x", md[i]);
+        hex[SHA_DIGEST_LENGTH*2] = 0;
+        if (s) free(s);
+        add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, hex, NULL));
+        return 1;
+    }
     if (strcmp(fn, "sha256") == 0) {
         char *s = a0 ? get_node_string(a0) : NULL;
         unsigned char md[SHA256_DIGEST_LENGTH];

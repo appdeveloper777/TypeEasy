@@ -1,5 +1,6 @@
 #include "postgres_bridge.h"
 #include "db_params.h"
+#include "typeeasy_http.h"   /* typeeasy_http_set_status() para strict-errors */
 #include <libpq-fe.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -238,6 +239,8 @@ void native_postgres_query(ASTNode* args) {
         PQclear(res);
         ASTNode* r = create_ast_leaf("STRING", 0, strdup(err), NULL);
         add_or_update_variable("__ret__", r); free_ast(r);
+        /* Strict mode solo aplica en --api; en CLI es no-op (ver mysql_bridge.c). */
+        { extern int g_api_mode; if (g_db_strict_errors && g_api_mode) typeeasy_http_set_status(500); }
         if (final_query) free(final_query);
         return;
     }

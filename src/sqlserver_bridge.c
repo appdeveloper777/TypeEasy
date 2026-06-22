@@ -1,5 +1,6 @@
 #include "sqlserver_bridge.h"
 #include "db_params.h"
+#include "typeeasy_http.h"   /* typeeasy_http_set_status() para strict-errors */
 #include <sybfront.h>
 #include <sybdb.h>
 #include <stdio.h>
@@ -471,6 +472,8 @@ void native_sqlserver_query(ASTNode* args) {
     if (dbcmd(db, (char*)query) == FAIL || dbsqlexec(db) == FAIL) {
         ASTNode* r = create_ast_leaf("STRING", 0, strdup("{\"error\":\"query_failed\"}"), NULL);
         add_or_update_variable("__ret__", r); free_ast(r);
+        /* Strict mode solo aplica en --api; en CLI es no-op. */
+        { extern int g_api_mode; if (g_db_strict_errors && g_api_mode) typeeasy_http_set_status(500); }
         if (final_query) free(final_query);
         return;
     }

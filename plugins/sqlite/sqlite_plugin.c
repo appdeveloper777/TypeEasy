@@ -391,28 +391,41 @@ static int te_sqlite_exec(ASTNode *node, ASTNode *args) {
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(g_pool[slot], sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
+        /* Devolvemos el error en __ret__ ademas de stderr para homogeneizar
+         * con mysql_query/postgres_query: handlers que esperan SELECT pueden
+         * detectar la falla con res.contains("\"error\"") en vez de recibir
+         * silenciosamente -1 (que se confundia con 'no afecto filas'). */
+        char ebuf[512];
+        snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
+                 sqlite3_errmsg(g_pool[slot]));
         fprintf(stderr, "[sqlite_exec] prepare error: %s\n", sqlite3_errmsg(g_pool[slot]));
         if (stmt) sqlite3_finalize(stmt);
         if (owned) H->free_node(params);
         free(sql);
-        H->set_ret_int(-1);
+        H->set_ret_str(ebuf);
         return 1;
     }
     rc = bind_params_from_head(stmt, params);
     if (owned) H->free_node(params);
     if (rc != SQLITE_OK) {
+        char ebuf[512];
+        snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
+                 sqlite3_errmsg(g_pool[slot]));
         fprintf(stderr, "[sqlite_exec] bind error: %s\n", sqlite3_errmsg(g_pool[slot]));
         sqlite3_finalize(stmt);
         free(sql);
-        H->set_ret_int(-1);
+        H->set_ret_str(ebuf);
         return 1;
     }
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+        char ebuf[512];
+        snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
+                 sqlite3_errmsg(g_pool[slot]));
         fprintf(stderr, "[sqlite_exec] step error: %s\n", sqlite3_errmsg(g_pool[slot]));
         sqlite3_finalize(stmt);
         free(sql);
-        H->set_ret_int(-1);
+        H->set_ret_str(ebuf);
         return 1;
     }
     int changes = sqlite3_changes(g_pool[slot]);
@@ -489,21 +502,31 @@ static int te_sqlite_query(ASTNode *node, ASTNode *args) {
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(g_pool[slot], sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
+        /* Devolvemos {"error":...} (NO "[]") para que el handler pueda
+         * detectar la falla. Antes esto causaba un falso "sin resultados"
+         * (p.ej. login devolvia "credenciales invalidas" en lugar de 500
+         * cuando el SQL referenciaba una funcion inexistente como sha1()). */
+        char ebuf[512];
+        snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
+                 sqlite3_errmsg(g_pool[slot]));
         fprintf(stderr, "[sqlite_query] prepare error: %s\n", sqlite3_errmsg(g_pool[slot]));
         if (stmt) sqlite3_finalize(stmt);
         free(sql); if (fmt) free(fmt);
         if (params_owned) H->free_node(params);
-        H->set_ret_str(as_xml ? "<result/>" : "[]");
+        H->set_ret_str(ebuf);
         return 1;
     }
     if (params) {
         rc = bind_params_from_head(stmt, params);
         if (params_owned) H->free_node(params);
         if (rc != SQLITE_OK) {
+            char ebuf[512];
+            snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
+                     sqlite3_errmsg(g_pool[slot]));
             fprintf(stderr, "[sqlite_query] bind error: %s\n", sqlite3_errmsg(g_pool[slot]));
             sqlite3_finalize(stmt);
             free(sql); if (fmt) free(fmt);
-            H->set_ret_str(as_xml ? "<result/>" : "[]");
+            H->set_ret_str(ebuf);
             return 1;
         }
     }
@@ -575,7 +598,18 @@ static int te_sqlite_query(ASTNode *node, ASTNode *args) {
         row_n++;
     }
     if (rc != SQLITE_DONE) {
+        /* Step fallo a mitad de la iteracion: en vez de devolver filas
+         * parciales + silencio, reportamos el error para no quedarnos con
+         * datos a medias (consistente con mysql/postgres). */
+        char ebuf[512];
+        snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
+                 sqlite3_errmsg(g_pool[slot]));
         fprintf(stderr, "[sqlite_query] step error: %s\n", sqlite3_errmsg(g_pool[slot]));
+        sqlite3_finalize(stmt);
+        if (b.p) free(b.p);
+        free(sql); if (fmt) free(fmt);
+        H->set_ret_str(ebuf);
+        return 1;
     }
     sqlite3_finalize(stmt);
 

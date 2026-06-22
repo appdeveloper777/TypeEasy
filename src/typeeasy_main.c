@@ -418,6 +418,20 @@ int main(int argc, char *argv[]) {
         g_debug_mode = 1;
     }
 
+    /* Flags opt-in del binder/errores SQL (declarados en db_params.h). Por
+     * defecto OFF (compat); se pueden encender por env sin tocar el .te:
+     *   TYPEEASY_SQL_EMPTY_AS_NULL=1  - STRING "" -> SQL NULL
+     *   TYPEEASY_SQL_STRICT_ERRORS=1  - error de query -> HTTP 500 auto
+     * Tambien se pueden encender desde el script con sql_set_*().            */
+    {
+        extern int g_db_empty_as_null;
+        extern int g_db_strict_errors;
+        const char* e1 = getenv("TYPEEASY_SQL_EMPTY_AS_NULL");
+        if (e1 && (!strcmp(e1, "1") || !strcmp(e1, "true") || !strcmp(e1, "yes"))) g_db_empty_as_null = 1;
+        const char* e2 = getenv("TYPEEASY_SQL_STRICT_ERRORS");
+        if (e2 && (!strcmp(e2, "1") || !strcmp(e2, "true") || !strcmp(e2, "yes"))) g_db_strict_errors = 1;
+    }
+
     /* --version / -v / --help / -h: respondidos antes de parsear nada mas. */
 #ifndef TYPEEASY_VERSION
 #define TYPEEASY_VERSION 0.0.1

@@ -1,5 +1,6 @@
 #include "mysql_bridge.h"
 #include "db_params.h"
+#include "typeeasy_http.h"   /* typeeasy_http_set_status() para sql_set_strict_errors */
 #include <mysql/mysql.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -973,6 +974,15 @@ void native_mysql_query(ASTNode* args) {
         ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup(error_buffer), NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
+        /* Strict mode (opt-in, solo modo --api): que un fallo de query NO
+         * termine respondiendo 200 OK silenciosamente. Fijamos response_status
+         * (500) para que el server responda 500 si el handler no toca el
+         * status. El handler sigue pudiendo inspeccionar el string y
+         * sobreescribir con un response_status() distinto (p.ej. 409 para
+         * UNIQUE violation). En CLI (g_api_mode=0) el flag es no-op: no hay
+         * respuesta HTTP que cambiar, el script ve el mismo {"error":...}. */
+        extern int g_api_mode;
+        if (g_db_strict_errors && g_api_mode) typeeasy_http_set_status(500);
         if (final_query) free(final_query);
         return;
     }

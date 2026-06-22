@@ -35,4 +35,20 @@ typedef char* (*db_escape_fn)(const char* in, void* ctx);
 char* db_substitute_params(const char* sql, ASTNode* params_head,
                            db_escape_fn escape, void* ctx);
 
+/* Flag opt-in: si != 0, los parametros STRING cuyo valor es "" se enlazan
+ * como SQL NULL en vez de ''. Se cambia desde TypeEasy con el builtin
+ * sql_set_empty_as_null(true) (o env TYPEEASY_SQL_EMPTY_AS_NULL=1). Pensado
+ * para eliminar la ceremonia COALESCE(NULLIF(@col,''),...) cuando un form
+ * manda "" a columnas numericas/fecha bajo STRICT_TRANS_TABLES. */
+extern int g_db_empty_as_null;
+
+/* Flag opt-in: si != 0 Y el proceso corre en modo --api (g_api_mode=1), un
+ * fallo de query (mysql/postgres) fija automaticamente response_status(500)
+ * ademas de devolver el string {"error":...}. Se cambia con sql_set_strict_
+ * errors() (o env TYPEEASY_SQL_STRICT_ERRORS=1). Evita responder HTTP 200 OK
+ * cuando la fila no se guardo. En CLI scripts es no-op: no hay respuesta
+ * HTTP que cambiar, el script sigue recibiendo el mismo string de error y
+ * decide que hacer (chequearlo, ignorarlo, lanzar throw, etc.). */
+extern int g_db_strict_errors;
+
 #endif /* DB_PARAMS_H */

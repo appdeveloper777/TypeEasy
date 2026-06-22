@@ -1,0 +1,31 @@
+// =============================================================
+// 28_hashing — funciones hash de la stdlib (sha1, sha256, md5, hmac)
+//
+// sha1(s) / sha1_hex(s) son alias y devuelven el hash SHA-1 en hex (40 chars).
+// Util para interoperar con sistemas legacy que guardan password = SHA1(plain)
+// (p.ej. FacturaScripts y muchos PHP antiguos).
+//
+// Ejecutar:
+//   typeeasy examples/28_hashing/hashing.te
+// =============================================================
+
+let plain = "admin";
+
+println("sha1     : " + sha1(plain));        // d033e22ae348aeb5660fc2140aec35850c4da997
+println("sha1_hex : " + sha1_hex(plain));    // (alias, mismo resultado)
+println("sha256   : " + sha256(plain));
+println("md5_hex  : " + md5_hex(plain));
+println("hmac     : " + hmac_sha256("secret-key", plain));
+
+// Verificacion estilo login legacy (comparar contra el hash guardado):
+let stored = "d033e22ae348aeb5660fc2140aec35850c4da997";
+if (sha1(plain) == stored) {
+    println("login: OK (hash coincide)");
+} else {
+    println("login: credenciales invalidas");
+}
+
+// Nota: SQLite NO trae la funcion SQL sha1(); hashea en TypeEasy y pasa el
+// resultado como parametro, en vez de "WHERE pass = sha1(@x)":
+//   let h = sha1(req_param("pass"));
+//   sql_query(conn, "SELECT id FROM users WHERE pass = @h", { "@h": h }, "sqlite");

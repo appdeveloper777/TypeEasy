@@ -1553,6 +1553,24 @@ static int te_call_registry(const char *name, ASTNode *args) {
     return 1;
 }
 
+/* Strict-errors hook para el plugin SQLite: el plugin (cargado dinamicamente)
+ * no enlaza contra typeeasy_http_set_status, asi que el strict-mode se aplica
+ * AQUI, en la fachada generica, INSPECCIONANDO el __ret__ que dejo el plugin.
+ * Si contiene un objeto JSON con "error" y estamos en modo --api con el flag
+ * encendido, fijamos response_status(500). MySQL/Postgres/SQL Server lo hacen
+ * en su bridge nativo; SQLite lo hace aqui despues de la delegacion. */
+static void te_sql_strict_check_ret(void) {
+    extern int g_api_mode;
+    extern int g_db_strict_errors;
+    if (!g_db_strict_errors || !g_api_mode) return;
+    Variable *r = find_variable("__ret__");
+    if (!r || r->vtype != VAL_STRING || !r->value.string_value) return;
+    const char *s = r->value.string_value;
+    /* Heuristica conservadora: el plugin emite '{"error":"..."}'. Buscamos
+     * '"error"' con comillas para no falsear sobre claves tipo "errors". */
+    if (strstr(s, "\"error\"")) typeeasy_http_set_status(500);
+}
+
 /* Desacopla el último argumento (selector engine) de la cadena. Devuelve el
  * motor y, vía out-params, lo necesario para re-enlazarlo tras delegar. La
  * cadena de args es lineal (sucesor = ->next o, si falta, ->right), y en modo
@@ -1598,7 +1616,7 @@ static void native_sql_query(ASTNode *arg) {
         case TE_SQL_MYSQL: native_mysql_query(arg);     break;
         case TE_SQL_PG:    native_postgres_query(arg);  break;
         case TE_SQL_MSSQL: native_sqlserver_query(arg); break;
-        case TE_SQL_SQLITE: if (!te_call_registry("sqlite_query", arg)) te_set_ret_string(""); break;
+        case TE_SQL_SQLITE: if (!te_call_registry("sqlite_query", arg)) te_set_ret_string(""); else te_sql_strict_check_ret(); break;
         default: fprintf(stderr, "[sql_query] engine desconocido\n"); te_set_ret_string(""); break;
     }
     te_sql_reattach(prev, tail, un);
@@ -1613,7 +1631,7 @@ static void native_sql_exec(ASTNode *arg) {
         case TE_SQL_MYSQL: native_mysql_query(arg);     break;
         case TE_SQL_PG:    native_postgres_query(arg);  break;
         case TE_SQL_MSSQL: native_sqlserver_query(arg); break;
-        case TE_SQL_SQLITE: if (!te_call_registry("sqlite_exec", arg)) te_set_ret_int(-1); break;
+        case TE_SQL_SQLITE: if (!te_call_registry("sqlite_exec", arg)) te_set_ret_int(-1); else te_sql_strict_check_ret(); break;
         default: fprintf(stderr, "[sql_exec] engine desconocido\n"); te_set_ret_int(-1); break;
     }
     te_sql_reattach(prev, tail, un);
@@ -1629,6 +1647,62 @@ static void native_sql_close(ASTNode *arg) {
         default: te_set_ret_int(0); break;
     }
     te_sql_reattach(prev, tail, un);
+}
+
+/* === Flags opt-in del binder/errores ======================================
+ * Estos builtins cambian flags globales en db_params.c que ajustan el
+ * comportamiento de los conectores SQL existentes SIN romper apps que ya
+ * funcionan (los flags arrancan en 0 = comportamiento legacy):
+ *
+ *   sql_set_empty_as_null(true)   - STRING vacio ""  -> SQL NULL en INSERT/
+ *                                    UPDATE (consistente con ACCESS_EXPR).
+ *                                    Elimina la ceremonia COALESCE(NULLIF(...)).
+ *                                    Aplica SIEMPRE (CLI y --api): solo afecta
+ *                                    como se construye el SQL.
+ *
+ *   sql_set_strict_errors(true)   - SOLO MODO --api: un fallo de query fija
+ *                                    response_status(500) automaticamente para
+ *                                    evitar el 'falso exito' 200 OK cuando el
+ *                                    handler no inspecciona el {"error":...}.
+ *                                    En CLI es no-op (no hay respuesta HTTP
+ *                                    que cambiar); el script ve el mismo string
+ *                                    de error que ya recibia y decide que hacer.
+ *
+ * Idealmente se llaman una sola vez al arranque del script. Ambos aceptan
+ * un valor truthy (NUMBER != 0, STRING "1"/"true"/"yes") y devuelven el
+ * estado nuevo del flag (0/1). */
+static int te_arg_is_truthy(ASTNode *a) {
+    if (!a || !a->type) return 0;
+    if (strcmp(a->type, "NUMBER") == 0 || strcmp(a->type, "INT") == 0) return a->value != 0;
+    if (strcmp(a->type, "BOOL") == 0) return a->value != 0;
+    if (strcmp(a->type, "STRING") == 0) {
+        const char *s = a->str_value ? a->str_value : "";
+        /* te_ascii_casecmp esta definido arriba en este mismo archivo; usar
+         * strcasecmp() de <strings.h> aqui rompe el build en Windows/MSVC
+         * (alli es _stricmp). En MinGW funciona pero preferimos el helper
+         * propio para no depender de POSIX en ninguna ruta de build. */
+        return !strcmp(s, "1") || !te_ascii_casecmp(s, "true") || !te_ascii_casecmp(s, "yes") || !te_ascii_casecmp(s, "on");
+    }
+    if (strcmp(a->type, "IDENTIFIER") == 0 || strcmp(a->type, "ID") == 0) {
+        Variable *v = a->id ? find_variable(a->id) : NULL;
+        if (!v) return 0;
+        if (v->vtype == VAL_INT) return v->value.int_value != 0;
+        if (v->vtype == VAL_STRING) {
+            const char *s = v->value.string_value ? v->value.string_value : "";
+            return !strcmp(s, "1") || !te_ascii_casecmp(s, "true") || !te_ascii_casecmp(s, "yes") || !te_ascii_casecmp(s, "on");
+        }
+    }
+    return 0;
+}
+extern int g_db_empty_as_null;
+extern int g_db_strict_errors;
+static void native_sql_set_empty_as_null(ASTNode *arg) {
+    g_db_empty_as_null = te_arg_is_truthy(arg);
+    te_set_ret_int(g_db_empty_as_null);
+}
+static void native_sql_set_strict_errors(ASTNode *arg) {
+    g_db_strict_errors = te_arg_is_truthy(arg);
+    te_set_ret_int(g_db_strict_errors);
 }
 
 int call_native_function(const char *name, ASTNode *arg) {
@@ -1703,6 +1777,8 @@ int call_native_function(const char *name, ASTNode *arg) {
     if (strcmp(name, "sql_query") == 0)   { native_sql_query(arg);   return 1; }
     if (strcmp(name, "sql_exec") == 0)    { native_sql_exec(arg);    return 1; }
     if (strcmp(name, "sql_close") == 0)   { native_sql_close(arg);   return 1; }
+    if (strcmp(name, "sql_set_empty_as_null") == 0) { native_sql_set_empty_as_null(arg); return 1; }
+    if (strcmp(name, "sql_set_strict_errors") == 0) { native_sql_set_strict_errors(arg); return 1; }
     return 0;
 }
 
@@ -2279,19 +2355,42 @@ ObjectNode *create_object(ClassNode *class) {
     for (int i = 0; i < class->attr_count; i++) {
         obj->attributes[i].id    = strdup(class->attributes[i].id);
         obj->attributes[i].type  = strdup(class->attributes[i].type);
+        /* Sufijo '?' = opcional/nullable: stripear para elegir el vtype por el
+         * tipo base. Sin esto `string?`/`int?` no matcheaban ningun strcmp y
+         * caian al default int (un `string?` quedaba como INT 0 -> "0"). */
+        const char *raw_t = class->attributes[i].type ? class->attributes[i].type : "int";
+        size_t tl = strlen(raw_t);
+        int optional = (tl > 0 && raw_t[tl - 1] == '?');
+        char base_t[32];
+        const char *bt = raw_t;
+        if (optional) {
+            size_t n2 = tl - 1; if (n2 >= sizeof(base_t)) n2 = sizeof(base_t) - 1;
+            memcpy(base_t, raw_t, n2); base_t[n2] = '\0'; bt = base_t;
+        }
         // Inicialización por defecto (ej. int 0)
-        if (strcmp(class->attributes[i].type, "string") == 0 ||
-            strcmp(class->attributes[i].type, "uuid") == 0 ||
-            strcmp(class->attributes[i].type, "datetime") == 0) {
+        if (strcmp(bt, "string") == 0 ||
+            strcmp(bt, "uuid") == 0 ||
+            strcmp(bt, "datetime") == 0) {
             /* v1.0.0: uuid/datetime are storage-aliased to STRING. */
             obj->attributes[i].vtype = VAL_STRING;
             obj->attributes[i].value.string_value = strdup("");
-        } else if (strcmp(class->attributes[i].type, "float") == 0) {
+        } else if (strcmp(bt, "float") == 0) {
             obj->attributes[i].vtype = VAL_FLOAT;
             obj->attributes[i].value.float_value = 0.0;
         } else {
             obj->attributes[i].vtype = VAL_INT;
             obj->attributes[i].value.int_value = 0;
+        }
+        /* Campo opcional ('?') SIN default declarado: arranca como NULL de
+         * runtime (VAL_OBJECT con puntero NULL), de modo que si el body POST
+         * no trae la clave, el binder de @params lo inserta como SQL NULL en
+         * vez de 0/'' (que rompe columnas tipadas bajo STRICT). Un default
+         * explicito (abajo) lo sobreescribe. */
+        if (optional && !(class->attr_defaults && class->attr_defaults[i])) {
+            if (obj->attributes[i].vtype == VAL_STRING && obj->attributes[i].value.string_value)
+                free(obj->attributes[i].value.string_value);
+            obj->attributes[i].vtype = VAL_OBJECT;
+            obj->attributes[i].value.object_value = NULL;
         }
         /* Apply declared default value (C#-style field initializer), e.g.
          * `private int _total = 0;` or `public string name = "";`. Runs
@@ -6167,19 +6266,51 @@ char *te_validate_body_against_class(ClassNode *cls, const char *json) {
 
     for (int a = 0; a < cls->attr_count; a++) {
         const char *aname = cls->attributes[a].id;
-        const char *atype = cls->attributes[a].type ? cls->attributes[a].type : "int";
+        const char *atype_raw = cls->attributes[a].type ? cls->attributes[a].type : "int";
         if (!aname) continue;
+
+        /* Sufijo '?' = campo OPCIONAL (nullable), estilo TS/Kotlin:
+         *   class Producto { nombre: string?; stock: int?; }
+         * Un campo opcional nunca es "required field missing" y un "" no es
+         * error de tipo: se trata como ausencia de valor (NULL/default). El
+         * tipo base (sin '?') se usa para validar el tipo cuando SÍ viene un
+         * valor no vacío. */
+        size_t atlen = strlen(atype_raw);
+        int field_optional = (atlen > 0 && atype_raw[atlen - 1] == '?');
+        char atype_buf[32];
+        const char *atype = atype_raw;
+        if (field_optional) {
+            size_t n2 = atlen - 1; if (n2 >= sizeof(atype_buf)) n2 = sizeof(atype_buf) - 1;
+            memcpy(atype_buf, atype_raw, n2); atype_buf[n2] = '\0';
+            atype = atype_buf;
+        }
+
         ASTNode *val = NULL;
         for (ASTNode *pair = root->left; pair; pair = pair->right) {
             if (pair->id && strcmp(pair->id, aname) == 0) { val = pair->left; break; }
         }
-        if (!val) { TE_ADD_ERR(aname, "required field missing"); continue; }
+        /* Tolerancia: un campo es opcional si lo marca con '?' O si el flag
+         * global "forms tolerantes" (sql_set_empty_as_null / env
+         * TYPEEASY_SQL_EMPTY_AS_NULL) esta activo. En ese caso, ausencia y "" no
+         * son error (el binder guarda NULL/default). Sin '?' ni flag, se
+         * mantiene el comportamiento estricto FastAPI: declarar tipo => requerido. */
+        extern int g_db_empty_as_null;
+        int lenient = field_optional || g_db_empty_as_null;
+        if (!val) {
+            if (lenient) continue;                   /* opcional: no requerido */
+            TE_ADD_ERR(aname, "required field missing");
+            continue;
+        }
         const char *vt = val->type ? val->type : "";
         /* JSON null nunca es un "tipo equivocado": es ausencia de valor. Lo
          * aceptamos para cualquier campo (el binder lo guardará como SQL NULL).
          * Sin este skip, ahora que `null` parsea a un nodo NULL (antes INT 0),
          * un `bool` recibido como null dispararía un 422 espurio "expected bool". */
         if (strcmp(vt, "NULL") == 0) continue;
+        /* Un STRING vacio "" en un campo opcional (o bajo el flag) tampoco es
+         * error de tipo: es ausencia de valor (se guardara NULL). */
+        if (lenient && strcmp(vt, "STRING") == 0 &&
+            (!val->str_value || !*val->str_value)) continue;
         int is_str = strcmp(vt, "STRING") == 0;
         int is_flt = strcmp(vt, "FLOAT") == 0;
         int is_int = strcmp(vt, "INT") == 0;
@@ -6235,7 +6366,19 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
         for (int a = 0; a < cls->attr_count; a++) {
             if (!cls->attributes[a].id || strcmp(cls->attributes[a].id, key) != 0) continue;
             Variable *dst = &obj->attributes[a];
-            const char *atype = cls->attributes[a].type ? cls->attributes[a].type : "int";
+            const char *atype_raw = cls->attributes[a].type ? cls->attributes[a].type : "int";
+            /* Sufijo '?' = opcional/nullable: stripear para coercer por el tipo
+             * base. Sin esto, un campo `string?`/`int?` no matcheaba ningun
+             * strcmp y caia al default int (corrompiendo strings). */
+            size_t atlen = strlen(atype_raw);
+            int field_optional = (atlen > 0 && atype_raw[atlen - 1] == '?');
+            char atype_buf[32];
+            const char *atype = atype_raw;
+            if (field_optional) {
+                size_t n2 = atlen - 1; if (n2 >= sizeof(atype_buf)) n2 = sizeof(atype_buf) - 1;
+                memcpy(atype_buf, atype_raw, n2); atype_buf[n2] = '\0';
+                atype = atype_buf;
+            }
             /* JSON null → SQL NULL. Guardamos un marcador null de runtime
              * (VAL_OBJECT con puntero NULL, la misma representación que usa
              * `obj.attr = null`) sin importar el tipo declarado. Así el binder
@@ -6243,6 +6386,16 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
              * (string-attr) o 0 (int/float), que rompía columnas DATE/DATETIME/
              * ENUM bajo STRICT_TRANS_TABLES con ERROR 1292. */
             if (val->type && strcmp(val->type, "NULL") == 0) {
+                if (dst->vtype == VAL_STRING && dst->value.string_value) free(dst->value.string_value);
+                dst->vtype = VAL_OBJECT;
+                dst->value.object_value = NULL;
+                break;
+            }
+            /* "" en un campo opcional (o bajo el flag global) -> NULL, igual que
+             * el null JSON: evita coercer "" a 0 / '' en columnas numericas. */
+            extern int g_db_empty_as_null;
+            if ((field_optional || g_db_empty_as_null) && val->type &&
+                strcmp(val->type, "STRING") == 0 && (!val->str_value || !*val->str_value)) {
                 if (dst->vtype == VAL_STRING && dst->value.string_value) free(dst->value.string_value);
                 dst->vtype = VAL_OBJECT;
                 dst->value.object_value = NULL;

@@ -1,0 +1,79 @@
+// =============================================================
+// 27_model_binding — binding tipado de un body POST a una clase
+//
+// Un endpoint POST mapea el JSON/form del body a una clase modelo con tipos.
+// La validacion es estilo FastAPI: declarar un tipo => campo REQUERIDO.
+//
+// Para campos OPCIONALES hay dos formas:
+//   1) Por campo, con el sufijo '?' (recomendado, explicito):
+//        nombre: string;   stock: int?;   descripcion: string?;
+//      Un campo '?' ausente o "" NO es error: se guarda como NULL/default.
+//   2) Global, con sql_set_empty_as_null(true): vuelve TODA la validacion
+//      tolerante (ausencia y "" no son error en ningun campo). Util para
+//      forms HTML que mandan "" en campos vacios.
+//
+// Ejecutar:
+//   typeeasy --api examples/27_model_binding/binding_api.te --port 9106
+//
+// Probar:
+//   # nombre y precio requeridos -> 201
+//   curl -X POST http://localhost:9106/api/productos \
+//        -H "Content-Type: application/json" -d '{"nombre":"Pan","precio":1.5}'
+//   # falta 'precio' (requerido) -> 422 {"field":"precio","issue":"required field missing"}
+//   curl -i -X POST http://localhost:9106/api/productos \
+//        -H "Content-Type: application/json" -d '{"nombre":"Pan"}'
+//   # stock="" (opcional con '?') -> 201, se guarda NULL
+//   curl -X POST http://localhost:9106/api/productos \
+//        -H "Content-Type: application/json" -d '{"nombre":"Leche","precio":2.5,"stock":""}'
+// =============================================================
+
+load_native("sqlite");
+
+// Solo auto-500 en error de query (modo --api). NO activamos empty_as_null
+// global: la opcionalidad se expresa por campo con '?' (mas explicito).
+sql_set_strict_errors(true);
+
+// Tipos con campos OPCIONALES marcados con '?':
+//   nombre   -> requerido (string)    falta => 422
+//   precio   -> requerido (float)     falta => 422
+//   stock    -> opcional   (int?)     puede faltar o venir "" => NULL
+//   descripcion -> opcional (string?) puede faltar o venir "" => NULL
+class Producto {
+    nombre: string;
+    precio: float;
+    stock: int?;
+    descripcion: string?;
+}
+
+let conn = sql_connect("", "", "", "binding_demo.db", 0, { }, "sqlite");
+sql_exec(conn,
+    "CREATE TABLE IF NOT EXISTS productos (id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+    "nombre TEXT NOT NULL, precio REAL NOT NULL, stock INTEGER, descripcion TEXT)",
+    "sqlite");
+sql_close(conn, "sqlite");
+
+endpoint {
+    // El body se enlaza a Producto; con el flag, precio/stock/activo son
+    // opcionales (no 422 si faltan o llegan "").
+    [HttpPost("/api/productos")]
+    crear(p: Producto) {
+        let c = sql_connect("", "", "", "binding_demo.db", 0, { }, "sqlite");
+        sql_exec(c,
+            "INSERT INTO productos (nombre, precio, stock, descripcion) " +
+            "VALUES (@nombre, @precio, @stock, @descripcion)",
+            { "@nombre": p.nombre, "@precio": p.precio, "@stock": p.stock, "@descripcion": p.descripcion },
+            "sqlite");
+        let id = sqlite_last_id(c);
+        sql_close(c, "sqlite");
+        response_status(201);
+        return json("{\"id\":" + id + ",\"nombre\":\"" + p.nombre + "\"}");
+    }
+
+    [HttpGet("/api/productos")]
+    listar() {
+        let c = sql_connect("", "", "", "binding_demo.db", 0, { }, "sqlite");
+        let filas = sql_query(c, "SELECT id, nombre, precio, stock, descripcion FROM productos ORDER BY id", "sqlite");
+        sql_close(c, "sqlite");
+        return json(filas);
+    }
+}
