@@ -86,9 +86,14 @@ Name: "{autoprograms}\\TypeEasy"; Filename: "{app}\\bin\\typeeasy.cmd"; WorkingD
 Name: "{autodesktop}\\TypeEasy"; Filename: "{app}\\bin\\typeeasy.cmd"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Registry]
-; Agrega {app}\bin al PATH del usuario para que `typeeasy hola.te` funcione desde cualquier consola.
+; Agrega {app}\bin al PATH del usuario para que `typeeasy hola.te` funcione desde
+; cualquier consola. IMPORTANTE: lo ANTEPONEMOS ({app}\bin;{olddata}) en vez de
+; agregarlo al final. Asi la version recien instalada SIEMPRE gana sobre cualquier
+; copia vieja de typeeasy-bin.exe que haya quedado antes en el PATH (instalaciones
+; previas en otra carpeta). Antes se agregaba al final y un binario 0.0.x viejo
+; podia ganar -> `--version` reportaba la version antigua.
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
-    ValueData: "{olddata};{app}\\bin"; \
+    ValueData: "{app}\\bin;{olddata}"; \
     Check: NeedsAddPath(ExpandConstant('{app}\\bin')); Tasks: addtopath
 
 [Run]
@@ -112,7 +117,12 @@ begin
     Result := True;
     exit;
   end;
-  Result := Pos(';' + Lowercase(Param) + ';', ';' + Lowercase(OrigPath) + ';') = 0;
+  // Solo NO agregamos si {app}\bin YA esta al FRENTE del PATH (entonces ya gana).
+  // Si esta en medio o al final (instalacion previa que lo agregaba al final),
+  // devolvemos True para anteponerlo y que la version recien instalada gane.
+  // En el peor caso queda una entrada duplicada al final (inofensiva: la del
+  // frente tiene prioridad); el siguiente install ya la ve al frente y no repite.
+  Result := Pos(Lowercase(Param) + ';', Lowercase(OrigPath) + ';') <> 1;
 end;
 
 // VsCodeExists: true si encontramos el CLI 'code' (de VS Code) en PATH o en
