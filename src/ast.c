@@ -29,6 +29,7 @@
 #include "te_colcache.h"
 #include "te_stdlib.h"
 #include "te_linq.h"
+#include "te_linq_ops.h"
 #include "te_math.h"
 #include "te_string.h"
 #include "te_list.h"
@@ -1584,6 +1585,10 @@ static void te_sql_strict_check_ret(void) {
  * `force`: -1 = usar el flag global g_db_envelope; 0 = forzar OFF; 1 = forzar ON.
  * El override por-llamada (5to arg bool de sql_query/sql_exec) gana sobre el
  * flag global de la app. */
+/* Forward decl: te_invalidate_map_cache se define mas abajo (~L4196) pero se usa
+ * aqui en el path de error del envelope; sin este prototipo clang asume retorno
+ * int -> "conflicting types" (error duro, no solo warning como en gcc). */
+void te_invalidate_map_cache(ASTNode *root);
 static void te_sql_envelope_wrap(int force) {
     extern int g_db_envelope;
     int on = (force < 0) ? g_db_envelope : (force ? 1 : 0);
