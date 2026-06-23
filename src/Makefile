@@ -12,7 +12,30 @@ MAIN_AGENT_OBJ = $(MAIN_AGENT_C:.c=.o)
 BISON_FILE = parser.y
 FLEX_FILE = parser.l
 # Archivos del motor incluyendo la nueva API embebida
-MOTOR_C_FILES = ast.c bytecode.c mysql_bridge.c postgres_bridge.c sqlserver_bridge.c db_params.c orm_bridge.c typeeasy_api.c typeeasy_api_server.c wasm_backend.c debugger.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c te_xlsx.c te_colcache.c te_stdlib.c te_bridge.c te_async.c te_evloop.c te_linq.c te_linq_ops.c te_math.c te_string.c te_list.c te_map.c
+#
+# Conectores SQL OPCIONALES (default ON = build actual SIN cambios). Apagarlos
+# permite un binario "sqlite-only" (p.ej. Android NDK/Bionic) que NO enlaza las
+# libs pesadas de glibc. Ejemplo Android: make typeeasy WITH_MYSQL=0 WITH_PG=0 \
+#   WITH_SYBASE=0 WITH_CURL=0 WITH_OPENMP=0. Con todo en 1, db_stubs_optional.c
+# compila a NADA y se enlazan los bridges reales (cero cambio de comportamiento).
+WITH_MYSQL  ?= 1
+WITH_PG     ?= 1
+WITH_SYBASE ?= 1
+WITH_CURL   ?= 1
+WITH_OPENMP ?= 1
+
+MOTOR_C_FILES = ast.c bytecode.c db_params.c orm_bridge.c typeeasy_api.c typeeasy_api_server.c wasm_backend.c debugger.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c te_xlsx.c te_colcache.c te_stdlib.c te_bridge.c te_async.c te_evloop.c te_linq.c te_linq_ops.c te_math.c te_string.c te_list.c te_map.c db_stubs_optional.c
+
+# Bridge real solo si su motor esta ON; si no, db_stubs_optional.c aporta stubs.
+ifeq ($(WITH_MYSQL),1)
+  MOTOR_C_FILES += mysql_bridge.c
+endif
+ifeq ($(WITH_PG),1)
+  MOTOR_C_FILES += postgres_bridge.c
+endif
+ifeq ($(WITH_SYBASE),1)
+  MOTOR_C_FILES += sqlserver_bridge.c
+endif
 MOTOR_OBJS = $(MOTOR_C_FILES:.c=.o)
 
 BISON_C = parser.tab.c
@@ -52,10 +75,48 @@ else
 endif
 # TE_ENABLE_JIT=1: trace JIT compilado dentro del binario (OFF en runtime salvo
 # TYPEEASY_JIT=1). Microsoft confirmo "No malware detected" para el binario.
-CFLAGS = -Wall -g $(TE_OPT) $(TE_ARCH_FLAGS) -pthread -fopenmp -DTE_HAVE_OPENMP -DTE_ENABLE_JIT=1 -I../api_server -I/usr/include/postgresql -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET -DTE_HAVE_LIBCURL $(CFLAGS_EXTRA)
+#
+# --- Defines + libs por feature (segun WITH_*). Default ON = build de siempre.
+TE_DB_CFLAGS =
+TE_DB_LIBS =
+ifeq ($(WITH_MYSQL),1)
+  TE_DB_CFLAGS += -DWITH_MYSQL
+  TE_DB_LIBS += -lmysqlclient
+endif
+ifeq ($(WITH_PG),1)
+  TE_DB_CFLAGS += -DWITH_PG -I/usr/include/postgresql
+  TE_DB_LIBS += -lpq
+endif
+ifeq ($(WITH_SYBASE),1)
+  TE_DB_CFLAGS += -DWITH_SYBASE
+  TE_DB_LIBS += -lsybdb
+endif
+ifeq ($(WITH_CURL),1)
+  TE_CURL_CFLAGS = -DTE_HAVE_LIBCURL
+  TE_CURL_LIBS = -lcurl
+else
+  TE_CURL_CFLAGS =
+  TE_CURL_LIBS =
+endif
+ifeq ($(WITH_OPENMP),1)
+  TE_OMP_CFLAGS = -fopenmp -DTE_HAVE_OPENMP
+  TE_OMP_LIBS = -lgomp
+else
+  TE_OMP_CFLAGS =
+  TE_OMP_LIBS =
+endif
+
+CFLAGS = -Wall -g $(TE_OPT) $(TE_ARCH_FLAGS) -pthread $(TE_OMP_CFLAGS) -DTE_ENABLE_JIT=1 -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET $(TE_DB_CFLAGS) $(TE_CURL_CFLAGS) $(CFLAGS_EXTRA)
 CXXFLAGS = -Wall -g $(TE_OPT) -std=c++17 -fopenmp
-LIBS_SCRIPT = -lfl -lm -lmysqlclient -lpq -lsybdb -lpthread -ldl -lssl -lcrypto -lcurl -lgomp -lz
-LIBS_AGENT = -lfl -lpthread -ldl -lm -lssl -lcrypto -lmysqlclient -lpq -lsybdb -lcurl -lgomp -lz
+# -lfl (runtime de flex) no existe en algunos toolchains (p.ej. Android NDK).
+# parser.l define su propio yywrap(), asi que se puede enlazar sin -lfl pasando
+# TE_FL_LIBS= (vacio). Default: -lfl (build de siempre intacto).
+TE_FL_LIBS ?= -lfl
+# Android Bionic trae pthread DENTRO de libc (no hay libpthread.a en el NDK r23+),
+# asi que ahi se enlaza con TE_PTHREAD_LIBS= (vacio). Default: -lpthread (glibc).
+TE_PTHREAD_LIBS ?= -lpthread
+LIBS_SCRIPT = $(TE_FL_LIBS) -lm $(TE_DB_LIBS) $(TE_PTHREAD_LIBS) -ldl -lssl -lcrypto $(TE_CURL_LIBS) $(TE_OMP_LIBS) -lz
+LIBS_AGENT = $(TE_FL_LIBS) $(TE_PTHREAD_LIBS) -ldl -lm -lssl -lcrypto $(TE_DB_LIBS) $(TE_CURL_LIBS) $(TE_OMP_LIBS) -lz
 
 # --- OBJETIVO PRINCIPAL ---
 all: $(EXEC_SCRIPT) $(EXEC_AGENT)

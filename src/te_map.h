@@ -13,5 +13,8 @@
 #include "ast.h"
 
 int te_map_method_dispatch(ASTNode *node, ASTNode *map);
+/* Definida en ast.c; declararla aqui evita la declaracion implicita en te_map.c
+ * (error duro en clang 16+, p.ej. el NDK de Android usa clang 17). */
+ASTNode *map_find_pair(ASTNode *map, const char *key);
 
 #endif /* TE_MAP_H */

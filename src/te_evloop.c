@@ -53,9 +53,17 @@ extern int      g_call_depth;
   static long long te_now_ms(void) { return (long long)GetTickCount64(); }
   static void      te_msleep(int ms) { Sleep((DWORD)(ms < 0 ? 0 : ms)); }
 #else
-  #include <ucontext.h>
+  /* POSIX. ucontext (getcontext/makecontext/swapcontext) provee los fibers
+   * reales (suspend/resume), pero Android Bionic NO implementa esas funciones.
+   * En Android se compila un fallback SINCRONO: las tareas async corren hasta
+   * completarse (sin solape). glibc/macOS conservan los fibers reales. El NDK
+   * define __ANDROID__ automaticamente, asi que no hace falta flag de Makefile. */
   #include <time.h>
   #include <unistd.h>
+  #if !defined(__ANDROID__) && !defined(TE_NO_UCONTEXT)
+    #define TE_EVLOOP_UCTX 1
+    #include <ucontext.h>
+  #endif
   static long long te_now_ms(void) {
       struct timespec ts;
       clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -199,7 +207,7 @@ typedef struct {
     CtxSnapshot  ctx;       /* parked interpreter scope */
 #if defined(_WIN32)
     void        *os_fiber;  /* LPVOID from CreateFiber */
-#else
+#elif defined(TE_EVLOOP_UCTX)
     ucontext_t   uctx;
     char        *stack;
 #endif
@@ -212,7 +220,7 @@ static int    g_loop_active = 0;      /* re-entrancy guard for the driver */
 #if defined(_WIN32)
 static void *g_sched_fiber = NULL;    /* the scheduler's fiber (this drain) */
 static int   g_we_converted = 0;      /* did WE ConvertThreadToFiber this drain? */
-#else
+#elif defined(TE_EVLOOP_UCTX)
 static ucontext_t g_sched_uctx;       /* scheduler resume point */
 #endif
 
@@ -226,7 +234,10 @@ static int fiber_valid(int id) {
     return id >= 0 && id < TE_FIBER_MAX && g_fibers[id].in_use;
 }
 
-/* Run the current fiber's lambda body, then return to the scheduler for good. */
+/* Run the current fiber's lambda body, then return to the scheduler for good.
+ * Solo se usa con fibers reales (Windows o ucontext); en el fallback sincrono
+ * la tarea se corre directo en fiber_resume(). */
+#if defined(_WIN32) || defined(TE_EVLOOP_UCTX)
 static void fiber_body(void) {
     Fiber *f = g_current;
     if (f) {
@@ -255,6 +266,7 @@ static void fiber_trampoline(void) {
     fiber_body();
 }
 #endif
+#endif /* fibers reales */
 
 /* Suspend the running fiber and return to the scheduler. On resume, the
  * scheduler has already restored this fiber's interpreter context. */
@@ -264,23 +276,26 @@ static void fiber_yield(void) {
     ctx_save(&f->ctx);
 #if defined(_WIN32)
     SwitchToFiber(g_sched_fiber);
-#else
+#elif defined(TE_EVLOOP_UCTX)
     swapcontext(&f->uctx, &g_sched_uctx);
 #endif
-    /* resumed here later */
+    /* resumed here later (fallback sincrono: g_current siempre es NULL, este
+     * camino no se alcanza). */
 }
 
 /* Scheduler -> fiber. Restores the fiber's context, runs it until it yields
  * or finishes, then control returns here. */
 static void fiber_resume(Fiber *f) {
     ctx_restore(&f->ctx);
-    g_current = f;
 #if defined(_WIN32)
+    g_current = f;
     if (!f->os_fiber) {
         f->os_fiber = CreateFiber(TE_FIBER_STACK_SIZE_WIN, fiber_trampoline, f);
     }
     SwitchToFiber(f->os_fiber);
-#else
+    g_current = NULL;
+#elif defined(TE_EVLOOP_UCTX)
+    g_current = f;
     if (!f->started && !f->stack) {
         f->stack = (char *)malloc(TE_FIBER_STACK_SIZE);
         getcontext(&f->uctx);
@@ -290,8 +305,16 @@ static void fiber_resume(Fiber *f) {
         makecontext(&f->uctx, fiber_trampoline, 0);
     }
     swapcontext(&g_sched_uctx, &f->uctx);
-#endif
     g_current = NULL;
+#else
+    /* Fallback sin ucontext (Android Bionic): corre la tarea hasta completarse
+     * AQUI mismo. g_current queda NULL, asi que sleep_async/read_file_async usan
+     * su camino bloqueante; las tareas no se solapan (aceptable offline). */
+    f->started = 1;
+    ASTNode *r = f->lambda ? call_lambda(f->lambda, NULL) : NULL;
+    f->result  = r;
+    f->state   = FB_DONE;
+#endif
 }
 
 /* Make sure the scheduler context exists (Windows must convert the thread to a
@@ -381,7 +404,7 @@ static ASTNode *fiber_take_result(int id) {
         r = f->result ? evloop_clone_value(f->result) : NULL;
 #if defined(_WIN32)
         if (f->os_fiber) { DeleteFiber(f->os_fiber); f->os_fiber = NULL; }
-#else
+#elif defined(TE_EVLOOP_UCTX)
         if (f->stack) { free(f->stack); f->stack = NULL; }
 #endif
         ctx_free(&f->ctx);     /* release the fiber's parked scope copy */

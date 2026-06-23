@@ -330,6 +330,9 @@ void add_method_to_class(ClassNode *class,
                              ParameterNode *params,
                              ASTNode *body,
                              char *return_type);
+/* Constructor de clase (usado por parser.y). El prototipo evita la declaracion
+ * implicita -> error duro en clang 16+ (p.ej. el NDK de Android usa clang 17). */
+void add_constructor_to_class(ClassNode *class, ParameterNode *params, ASTNode *body);
 ObjectNode *create_object(ClassNode *class);
 /* item #6 (leak audit): libera un ObjectNode malloc'd por create_object. */
 void free_object_node(ObjectNode *obj);

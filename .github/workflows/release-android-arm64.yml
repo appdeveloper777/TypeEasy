@@ -1,0 +1,154 @@
+name: Release - Android ARM64 (Bionic)
+
+# Build nativo Android (Bionic libc) aarch64 / arm64-v8a, perfil "sqlite-only",
+# pensado para empaquetar DENTRO de un APK (Capacitor) y ejecutar on-device para
+# un POS/ERP offline:
+#   - libtypeeasy.so : ELF PIE (Bionic), sin glibc ni libs pesadas
+#     (mysql/pq/sybdb/curl/gomp). OpenSSL enlazado ESTATICO -> sha1()/sha256()/
+#     md5_hex()/JWT funcionan. Se nombra lib*.so para que Android lo extraiga a
+#     nativeLibraryDir (ejecutable bajo W^X de Android 10+).
+#   - libte_sqlite.so : plugin SQLite (amalgamation embebida) android-arm64.
+#
+# NO altera los builds existentes (release-linux / release-arm64): usa el perfil
+# opt-in WITH_*=0 del Makefile (default ON queda intacto).
+#
+# Cross-compila en x86_64 con el Android NDK preinstalado en el runner
+# (ANDROID_NDK_LATEST_HOME). Publica typeeasy-<ver>-android-arm64.tar.gz.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version a publicar (sin prefijo v)"
+        required: false
+        default: "0.0.1"
+      android_api:
+        description: "minSdk / API level (24+)"
+        required: false
+        default: "24"
+
+permissions:
+  contents: write
+
+jobs:
+  release-android-arm64:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_NAME}" == v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="0.0.1"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version objetivo (android-arm64): ${VERSION}"
+
+      - name: Install host build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential flex bison curl perl make unzip file
+
+      - name: Resolve Android NDK
+        id: ndk
+        shell: bash
+        run: |
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}}"
+          if [[ -z "$NDK" || ! -d "$NDK" ]]; then
+            echo "No preinstalled NDK; installing via sdkmanager..."
+            yes | sdkmanager "ndk;26.3.11579264" >/dev/null
+            NDK="$ANDROID_HOME/ndk/26.3.11579264"
+          fi
+          echo "ndk=$NDK" >> "$GITHUB_OUTPUT"
+          echo "Using NDK: $NDK"
+
+      - name: Cross-compile TypeEasy + SQLite plugin (android-arm64, PIE)
+        env:
+          NDK: ${{ steps.ndk.outputs.ndk }}
+          ANDROID_API: ${{ github.event.inputs.android_api || '24' }}
+          TYPEEASY_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          bash scripts/build_android_arm64.sh
+          echo "--- artefactos ---"
+          ls -lh dist/android-arm64
+          file dist/android-arm64/libtypeeasy.so
+          file dist/android-arm64/libte_sqlite.so
+
+      - name: Package tar.gz (android-arm64)
+        id: pkg
+        run: |
+          set -euo pipefail
+          VER="${{ steps.meta.outputs.version }}"
+          STAGE="dist/android-arm64/typeeasy-${VER}-android-arm64"
+          mkdir -p "$STAGE/jniLibs/arm64-v8a"
+          cp dist/android-arm64/libtypeeasy.so "$STAGE/jniLibs/arm64-v8a/"
+          cp dist/android-arm64/libte_sqlite.so "$STAGE/jniLibs/arm64-v8a/"
+          cat > "$STAGE/README-android.md" <<'EOF'
+          # TypeEasy — Android arm64 (Bionic), perfil sqlite-only
+
+          Contenido:
+            jniLibs/arm64-v8a/libtypeeasy.so   ELF PIE (el "ejecutable" del server)
+            jniLibs/arm64-v8a/libte_sqlite.so  plugin SQLite (dlopen en runtime)
+
+          ## Empaquetar en un APK (Capacitor / Android)
+          1. Copia `jniLibs/arm64-v8a/*.so` a `android/app/src/main/jniLibs/arm64-v8a/`.
+             Android los extrae a `nativeLibraryDir` (ejecutable bajo el W^X de
+             Android 10+; `filesDir` NO lo es).
+          2. Desde un plugin Capacitor/Android, ejecuta el binario al arrancar:
+
+             ```kotlin
+             val nativeDir = applicationInfo.nativeLibraryDir
+             val bin = "$nativeDir/libtypeeasy.so"
+             val pb = ProcessBuilder(
+                 bin, "--api", "app.te", "--port", "8765", "--host", "127.0.0.1"
+             )
+             pb.environment()["DB_ENGINE"] = "sqlite"
+             pb.environment()["DB_SQLITE_PATH"] = "${filesDir}/app.db"
+             // el plugin se busca junto al binario (nativeLibraryDir)
+             pb.directory(File(nativeDir))
+             pb.redirectErrorStream(true)
+             val proc = pb.start()
+             ```
+          3. Apunta el WebView a `http://127.0.0.1:8765`.
+
+          ## Notas
+          - Perfil sqlite-only: mysql/postgres/sqlserver/curl NO estan compilados
+            (degradan con mensaje claro). Usa `DB_ENGINE=sqlite`.
+          - OpenSSL va estatico: `sha1()/sha256()/md5_hex()` y JWT funcionan offline.
+          - El motor usa el camino escalar (sin AVX2) en arm64.
+          EOF
+          tar -C dist/android-arm64 -czf "dist/android-arm64/typeeasy-${VER}-android-arm64.tar.gz" \
+            "typeeasy-${VER}-android-arm64"
+          ( cd dist/android-arm64 && sha256sum "typeeasy-${VER}-android-arm64.tar.gz" \
+              > "SHA256SUMS-${VER}-android-arm64.txt" )
+          ls -lh dist/android-arm64
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: typeeasy-android-arm64-v${{ steps.meta.outputs.version }}
+          path: |
+            dist/android-arm64/typeeasy-${{ steps.meta.outputs.version }}-android-arm64.tar.gz
+            dist/android-arm64/SHA256SUMS-${{ steps.meta.outputs.version }}-android-arm64.txt
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/android-arm64/typeeasy-${{ steps.meta.outputs.version }}-android-arm64.tar.gz
+            dist/android-arm64/SHA256SUMS-${{ steps.meta.outputs.version }}-android-arm64.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true

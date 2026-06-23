@@ -4,6 +4,10 @@ src/parser.tab.c
 src/parser.tab.h
 src/parser.output
 
+# Cross-compile Android (cache de NDK/OpenSSL y artefactos de release)
+.android-deps/
+dist/
+
 # Ejecutables
 typeeasy
 !cli/typeeasy

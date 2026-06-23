@@ -340,6 +340,7 @@ MethodNode* typeeasy_find_method(const char* function_name) {
 extern ObjectNode *te_object_from_json(ClassNode *cls, const char *json);
 extern char       *te_validate_body_against_class(ClassNode *cls, const char *json);
 extern void        typeeasy_http_set_status(int s);
+extern int         typeeasy_http_get_status(void);
 extern ClassNode  *find_class(char *name);
 extern const char *typeeasy_http_get_body(void);
 extern const char *typeeasy_http_find_param(const char *k);
