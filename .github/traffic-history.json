@@ -317,5 +317,16 @@
       "count": 69,
       "uniques": 3
     }
+  },
+  {
+    "timestamp": "2026-06-22T00:00:00Z",
+    "clones": {
+      "count": 222,
+      "uniques": 41
+    },
+    "views": {
+      "count": 112,
+      "uniques": 3
+    }
   }
 ]
