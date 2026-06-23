@@ -1,0 +1,26 @@
+// Regression repro for the --api SQL-envelope result-set bleed.
+// A guard lambda and the handler BOTH use local names c/r/d. Before the fix,
+// the handler's `r.data` returned the guard's rows (GUARD) because the
+// MAP/LIST/LAMBDA fast-path in interpret_var_decl appended the new slot
+// without refreshing the name->index symtab. Expected: HANDLER.
+load_native("sqlite");
+
+let guard = fn() => {
+    let c = sql_connect("", "", "", "/tmp/bugtest.db", 0, { }, "sqlite");
+    let r = sql_query(c, "SELECT 'GUARD' AS who", { }, "sqlite", true);
+    let d = r.data;
+    sql_close(c, "sqlite");
+    return d;
+};
+
+endpoint {
+    [HttpGet("/test")]
+    Test() {
+        let g = guard();
+        let c = sql_connect("", "", "", "/tmp/bugtest.db", 0, { }, "sqlite");
+        let r = sql_query(c, "SELECT 'HANDLER' AS who", { }, "sqlite", true);
+        let d = r.data;
+        sql_close(c, "sqlite");
+        return json(d);
+    }
+}

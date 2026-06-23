@@ -1616,7 +1616,7 @@ static void te_sql_envelope_wrap(int force) {
             ENV_ADD(create_kv_pair_node("success", ENV_BOOL(0)));
             ENV_ADD(create_kv_pair_node("error", create_ast_leaf("STRING", 0, msg ? msg : "", NULL)));
             if (msg) free(msg);
-            if (inner) free_ast(inner);
+            if (inner) { te_invalidate_map_cache(inner); free_ast(inner); }
         } else {
             /* OK: `data` lleva el STRING crudo tal cual (array de filas
              * '[...]', '{affected_rows,...}', etc.). No lo reestructuramos: el
@@ -8555,6 +8555,15 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value; // Apunta al nodo LIST
                 vars[var_count++] = *var;
                 free(var);
+                /* Bugfix: actualizar el side-index nombre->indice. Sin esto,
+                 * un `let x = <call que devuelve LIST/MAP/LAMBDA>` agregaba el
+                 * slot pero NO refrescaba el hash, asi que un find_variable(x)
+                 * posterior devolvia un binding viejo del mismo nombre (p.ej.
+                 * el `r` de un lambda guard previo en modo --api -> los datos
+                 * de una query se "pegaban" a la siguiente). Las ramas
+                 * STRING/INT/FLOAT no se veian porque pasan por
+                 * declare_variable, que si inserta en el symtab. */
+                te_sym_insert(vars[var_count - 1].id, var_count - 1);
                // printf("[DEBUG] interpret_var_decl: declared LIST variable\n"); fflush(stdout);
                 // Limpia la variable de retorno
                 if (__ret_var_active) {
@@ -8577,6 +8586,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value;
                 vars[var_count++] = *var;
                 free(var);
+                te_sym_insert(vars[var_count - 1].id, var_count - 1); /* Bugfix: ver LIST */
                 if (__ret_var_active) {
                     if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
                     if (__ret_var.id) free(__ret_var.id);
@@ -8599,6 +8609,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value;
                 vars[var_count++] = *var;
                 free(var);
+                te_sym_insert(vars[var_count - 1].id, var_count - 1); /* Bugfix: ver LIST */
                 if (__ret_var_active) {
                     if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
                     if (__ret_var.id) free(__ret_var.id);

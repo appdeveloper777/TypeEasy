@@ -1,0 +1,50 @@
+// regression: SQL standard envelope { success, data | error } assertions
+// Prints "DBSTD_RESULT: PASS" only if every assertion holds.
+load_native("sqlite");
+sql_set_envelope(true);
+
+let ENGINE = "sqlite";
+var fails = 0;
+
+let c = sql_connect("", "", "", ":memory:", 0, { }, ENGINE);
+let cr = sql_exec(c, "CREATE TABLE prod (id INTEGER PRIMARY KEY, sku TEXT UNIQUE NOT NULL)", { }, ENGINE);
+
+// 1) CREATE wrapped -> success true
+if (!cr.success) { fails = fails + 1; print("FAIL: create.success not true"); }
+
+// 2) INSERT valido -> success true, data = 1 affected
+let r1 = sql_exec(c, "INSERT INTO prod (id, sku) VALUES (1, 'A1')", { }, ENGINE);
+if (!r1.success) { fails = fails + 1; print("FAIL: insert.success not true"); }
+if (("" + r1.data) != "1") { fails = fails + 1; print(concat("FAIL: insert.data != 1 -> ", r1.data)); }
+
+// 3) INSERT duplicado (UNIQUE) -> success false, error contiene UNIQUE
+// NOTA: los metodos (.contains/.starts_with) SOLO funcionan sobre una variable
+// identificador, NO sobre una expresion parentizada como ("" + x).contains(...).
+// Por eso se asigna a una variable simple primero.
+let r2 = sql_exec(c, "INSERT INTO prod (id, sku) VALUES (2, 'A1')", { }, ENGINE);
+if (r2.success) { fails = fails + 1; print("FAIL: dup insert.success should be false"); }
+let e2 = "" + r2.error;
+let hasUnique = e2.contains("UNIQUE");
+if (!hasUnique) { fails = fails + 1; print(concat("FAIL: dup.error missing UNIQUE -> ", r2.error)); }
+
+// 4) SELECT -> success true, data trae la fila
+let r3 = sql_query(c, "SELECT id, sku FROM prod", { }, ENGINE);
+if (!r3.success) { fails = fails + 1; print("FAIL: select.success not true"); }
+let d3 = "" + r3.data;
+let hasRow = d3.contains("A1");
+if (!hasRow) { fails = fails + 1; print(concat("FAIL: select.data missing row -> ", r3.data)); }
+
+// 5) override true -> envelope aun con flag global (ya ON) -> success accesible
+let env = sql_query(c, "SELECT id FROM prod", { }, ENGINE, true);
+if (!env.success) { fails = fails + 1; print("FAIL: override(true).success not true"); }
+
+// 6) override false -> CRUDO: array JSON sin success
+let crudo = sql_query(c, "SELECT id FROM prod", { }, ENGINE, false);
+let cs = "" + crudo;
+let isArr = cs.starts_with("[");
+if (!isArr) { fails = fails + 1; print(concat("FAIL: override(false) not raw array -> ", crudo)); }
+
+sql_close(c, ENGINE);
+
+if (fails == 0) { print("DBSTD_RESULT: PASS"); }
+if (fails != 0) { print(concat("DBSTD_RESULT: FAIL (", fails, ")")); }
