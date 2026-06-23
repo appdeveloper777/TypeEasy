@@ -1,0 +1,17 @@
+// regression: una llamada-statement a un LAMBDA cuyo retorno se DESCARTA debe
+// ejecutarse (no eliminarse como codigo muerto). Repro del bug v0.0.29:
+// `wrapper(...)` fire-and-forget con efecto secundario se omitia en silencio.
+// Imprime "BARELAMBDA_RESULT: PASS" solo si los 3 efectos ocurrieron.
+var hits = 0;
+let bump = fn(n) => { hits = hits + n; return hits; };
+
+bump(1);           // descartado -> debe ejecutarse
+bump(10);          // descartado -> debe ejecutarse
+let r = bump(100); // capturado  -> debe ejecutarse
+
+var fails = 0;
+if (hits != 111) { fails = fails + 1; print(concat("FAIL: hits != 111 -> ", hits)); }
+if (("" + r) != "111") { fails = fails + 1; print(concat("FAIL: captured r != 111 -> ", r)); }
+
+if (fails == 0) { print("BARELAMBDA_RESULT: PASS"); }
+if (fails != 0) { print(concat("BARELAMBDA_RESULT: FAIL (", fails, ")")); }

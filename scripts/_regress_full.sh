@@ -69,6 +69,17 @@ else
 fi
 
 echo "==================================================================="
+echo " STAGE 5b  Bare lambda call (discarded result must still run)"
+echo "==================================================================="
+BARELAMBDA_OUT="$( cd /tmp && /app/src/typeeasy /app/tests/regress/bare_lambda_call.te 2>&1 )"
+echo "$BARELAMBDA_OUT"
+if echo "$BARELAMBDA_OUT" | grep -q "BARELAMBDA_RESULT: PASS"; then
+  BARELAMBDA_OK=0; echo "bare-lambda: PASS"
+else
+  BARELAMBDA_OK=1; echo "bare-lambda: FAIL"
+fi
+
+echo "==================================================================="
 echo " STAGE 6   API envelope bleed (same-named locals across guard+handler)"
 echo "==================================================================="
 APIBLEED_OUT="$( bash /app/tests/regress/run_api_bleed.sh /app/src/typeeasy /app/tests/regress/api_envelope_bleed.te 8088 2>&1 )"
@@ -111,6 +122,7 @@ echo " REGRESSION SUMMARY"
 echo "==================================================================="
 if [ "${CLANG_OK:-2}" = "0" ]; then echo " clang strict build:    PASS"; elif [ "${CLANG_OK:-2}" = "2" ]; then echo " clang strict build:    SKIP (no clang/omp.h)"; else echo " clang strict build:    FAIL"; fi
 if [ "${DBSTD_OK:-1}" = "0" ]; then echo " db-standard (success): PASS"; else echo " db-standard (success): FAIL"; fi
+if [ "${BARELAMBDA_OK:-1}" = "0" ]; then echo " bare-lambda call:      PASS"; else echo " bare-lambda call:      FAIL"; fi
 if [ "${APIBLEED_OK:-1}" = "0" ]; then echo " api-bleed (--api):     PASS"; else echo " api-bleed (--api):     FAIL"; fi
 if [ "$RC_TOTAL" = "0" ]; then
   echo " valgrind leaks:        no runtime (envelope/sql) leaks"
@@ -118,7 +130,7 @@ else
   echo " valgrind leaks:        runtime leak detected (see above)"
 fi
 echo "==================================================================="
-if [ "${CLANG_OK:-2}" != "1" ] && [ "${DBSTD_OK:-1}" = "0" ] && [ "${APIBLEED_OK:-1}" = "0" ] && [ "$RC_TOTAL" = "0" ]; then
+if [ "${CLANG_OK:-2}" != "1" ] && [ "${DBSTD_OK:-1}" = "0" ] && [ "${BARELAMBDA_OK:-1}" = "0" ] && [ "${APIBLEED_OK:-1}" = "0" ] && [ "$RC_TOTAL" = "0" ]; then
   echo " RESULT: GREEN"; exit 0
 else
   echo " RESULT: RED"; exit 1

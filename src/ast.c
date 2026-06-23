@@ -6034,7 +6034,22 @@ void interpret_ast(ASTNode *node) {
              * For METHOD_CALL_ALONE the arg list lives in node->right; we
              * also accept node->left for legacy paths. */
             ASTNode *a = node->right ? node->right : node->left;
-            call_native_function(node->id, a);
+            /* Bugfix: una llamada-statement a una variable de tipo LAMBDA
+             * (p.ej. `my_exec(...)` donde my_exec = fn(...) => {...}) debe
+             * INVOCAR el lambda. Sin esto cae a call_native_function, que es
+             * no-op para un nombre desconocido -> la llamada (y sus efectos
+             * secundarios: INSERT/UPDATE via un wrapper db_exec) se descarta
+             * en silencio. Solo pasaba cuando el retorno se descartaba; con
+             * `let r = my_exec(...)` funcionaba porque va por
+             * evaluate_expression -> interpret_call_func (que ya maneja LAMBDA). */
+            Variable *fv = node->id ? find_variable(node->id) : NULL;
+            if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0) {
+                ASTNode *lambda = (ASTNode*)(intptr_t)fv->value.object_value;
+                ASTNode *r = call_lambda(lambda, a);
+                if (r) add_or_update_variable("__ret__", r);
+            } else {
+                call_native_function(node->id, a);
+            }
         }
         break;
     }
