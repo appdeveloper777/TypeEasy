@@ -91,6 +91,17 @@ else
 fi
 
 echo "==================================================================="
+echo " STAGE 6b  WebSocket attach ([WebSocket] route must be served, not 404)"
+echo "==================================================================="
+WSATTACH_OUT="$( bash /app/tests/regress/run_ws_attach.sh /app/src/typeeasy /app/tests/regress/ws_attach.te 8097 2>&1 )"
+echo "$WSATTACH_OUT"
+if echo "$WSATTACH_OUT" | grep -q "WSATTACH_RESULT: PASS"; then
+  WSATTACH_OK=0; echo "ws-attach: PASS"
+else
+  WSATTACH_OK=1; echo "ws-attach: FAIL"
+fi
+
+echo "==================================================================="
 echo " STAGE 7   Valgrind leak-check (key scripts)"
 echo "==================================================================="
 VG="valgrind --error-exitcode=99 --leak-check=full --show-leak-kinds=definite,indirect --errors-for-leak-kinds=definite --track-origins=yes -q"
@@ -124,13 +135,14 @@ if [ "${CLANG_OK:-2}" = "0" ]; then echo " clang strict build:    PASS"; elif [ 
 if [ "${DBSTD_OK:-1}" = "0" ]; then echo " db-standard (success): PASS"; else echo " db-standard (success): FAIL"; fi
 if [ "${BARELAMBDA_OK:-1}" = "0" ]; then echo " bare-lambda call:      PASS"; else echo " bare-lambda call:      FAIL"; fi
 if [ "${APIBLEED_OK:-1}" = "0" ]; then echo " api-bleed (--api):     PASS"; else echo " api-bleed (--api):     FAIL"; fi
+if [ "${WSATTACH_OK:-1}" = "0" ]; then echo " ws-attach (--api):     PASS"; else echo " ws-attach (--api):     FAIL"; fi
 if [ "$RC_TOTAL" = "0" ]; then
   echo " valgrind leaks:        no runtime (envelope/sql) leaks"
 else
   echo " valgrind leaks:        runtime leak detected (see above)"
 fi
 echo "==================================================================="
-if [ "${CLANG_OK:-2}" != "1" ] && [ "${DBSTD_OK:-1}" = "0" ] && [ "${BARELAMBDA_OK:-1}" = "0" ] && [ "${APIBLEED_OK:-1}" = "0" ] && [ "$RC_TOTAL" = "0" ]; then
+if [ "${CLANG_OK:-2}" != "1" ] && [ "${DBSTD_OK:-1}" = "0" ] && [ "${BARELAMBDA_OK:-1}" = "0" ] && [ "${APIBLEED_OK:-1}" = "0" ] && [ "${WSATTACH_OK:-1}" = "0" ] && [ "$RC_TOTAL" = "0" ]; then
   echo " RESULT: GREEN"; exit 0
 else
   echo " RESULT: RED"; exit 1

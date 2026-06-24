@@ -66,6 +66,12 @@ typedef struct MN {
     char *http_method;
     int cache_ttl;
     int requires_auth;   /* @auth decorator (added in src/ast.h) */
+    char *guard_name;    /* user-defined `@<name>` guard (added v0.0.24 in src/ast.h).
+                          * MUST be mirrored here: omitting it shifts every field
+                          * after it — most critically `next` — so the route loop
+                          * reads `bc_body` as the next pointer, terminating after
+                          * the first method ([WS] no WebSocket routes found) or
+                          * dereferencing a bytecode sentinel as MN* (startup SEGV). */
     int is_async;        /* `async` modifier (added in src/ast.h) */
     char *return_type;
     void *bc_body;       /* cached bytecode (NULL / 0x1 sentinel / BCInfo*) */

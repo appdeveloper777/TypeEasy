@@ -1,0 +1,30 @@
+// Regression fixture for the WebSocket-attach bug (issue: "[WebSocket] endpoints
+// are parsed but never served -> handshake 404").
+//
+// This is a *small* standalone app on purpose: the original bug had two faces,
+// both rooted in the stale `MN` struct mirror in api_server/te_websocket.c
+// (missing `guard_name`, which shifted `next` onto `bc_body`):
+//   1. te_ws_register_routes() walked `next` at the wrong offset, stopped after
+//      the first method and printed "[WS] no WebSocket routes found" -> 404.
+//   2. small apps segfaulted on startup when `bc_body` was a bytecode sentinel
+//      dereferenced as MN*.
+//
+// If the mirror diverges from struct MethodNode again, this app either crashes
+// on startup or fails to attach the WS handler, and run_ws_attach.sh reports FAIL.
+
+endpoint {
+
+    [HttpGet("/api/health")]
+    health() {
+        return json("{\"ok\":1,\"app\":\"ws_attach\"}");
+    }
+
+    [WebSocket("/ws/test")]
+    ws_test() {
+        let msg = request_body();
+        ws_subscribe("t");
+        ws_send(concat("echo: ", msg));
+        ws_broadcast("t", msg);
+    }
+
+}
