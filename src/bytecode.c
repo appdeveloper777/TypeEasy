@@ -186,7 +186,7 @@ void compile(ASTNode *node) {
     }
 
     else {
-        printf("[WARNING] Nodo no manejado en compile(): %s\n", node->type);
+        printf("[WARNING] Unhandled node in compile(): %s\n", node->type);
     }
 }
 

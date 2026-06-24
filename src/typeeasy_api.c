@@ -173,29 +173,29 @@ int typeeasy_embedded_load_script(TypeEasyEmbeddedContext* ctx, const char* scri
     // Abrir archivo
     FILE* file = fopen(script_path, "r");
     if (!file) {
-        fprintf(stderr, "[TYPEEASY_API] Error al abrir: %s\n", script_path);
+        fprintf(stderr, "[TYPEEASY_API] Error opening: %s\n", script_path);
         perror("fopen");
         return 0;
     }
     
-    printf("[TYPEEASY_API] Archivo abierto correctamente\n");
+    printf("[TYPEEASY_API] File opened successfully\n");
     
     // Configurar yyin para el parser de Flex (aunque parse_file lo hace, es bueno asegurarse)
     yyin = file;
     
-    printf("[TYPEEASY_API] Llamando a parse_file()...\n");
+    printf("[TYPEEASY_API] Calling parse_file()...\n");
     
     // Parsear archivo
     ASTNode* ast = parse_file(file);
     fclose(file);
     
     if (!ast) {
-        fprintf(stderr, "[TYPEEASY_API] ERROR: parse_file() retornó NULL para: %s\n", script_path);
-        fprintf(stderr, "[TYPEEASY_API] El archivo contiene errores de sintaxis y no se cargará.\n");
-        // Crear un AST dummy para evitar crashes posteriores
+        fprintf(stderr, "[TYPEEASY_API] ERROR: parse_file() returned NULL for: %s\n", script_path);
+        fprintf(stderr, "[TYPEEASY_API] The file contains syntax errors and will not be loaded.\n");
+        // Create a dummy AST to avoid later crashes
         ast = create_ast_node("STATEMENT_LIST", NULL, NULL);
         if (!ast) {
-            fprintf(stderr, "[TYPEEASY_API] CRITICAL: No se pudo crear AST dummy\n");
+            fprintf(stderr, "[TYPEEASY_API] CRITICAL: could not create dummy AST\n");
             return 0;
         }
     }
@@ -215,7 +215,7 @@ int typeeasy_embedded_load_script(TypeEasyEmbeddedContext* ctx, const char* scri
     ctx->scripts = script;
     ctx->script_count++;
     
-    printf("[TYPEEASY_API] Ejecutando scope global...\n");
+    printf("[TYPEEASY_API] Running global scope...\n");
     
     // CRITICAL: Activar __ret_var antes de ejecutar scope global
     if (!__ret_var_active) {
@@ -233,7 +233,7 @@ int typeeasy_embedded_load_script(TypeEasyEmbeddedContext* ctx, const char* scri
     // Ejecutar scope global para inicializar clases, variables globales, etc.
     interpret_ast(ast);
     
-    fprintf(stderr, "[DEBUG] DESPUÉS de interpret_ast(scope global): __ret_var_active=%d\n", __ret_var_active);
+    fprintf(stderr, "[DEBUG] AFTER interpret_ast(global scope): __ret_var_active=%d\n", __ret_var_active);
     
     // Snapshot DESPUES del bootstrap: top-level `let`/`var` quedan por debajo
     // del marcador y sobreviven a runtime_reset_vars_to_initial_state() entre
@@ -274,7 +274,7 @@ char* typeeasy_embedded_discover(TypeEasyEmbeddedContext* ctx, const char* scrip
     // Verificar que el script esté cargado
     LoadedScript* script = find_loaded_script(ctx, script_path);
     if (!script) {
-        fprintf(stderr, "[TYPEEASY_API] Script no cargado: %s\n", script_path);
+        fprintf(stderr, "[TYPEEASY_API] Script not loaded: %s\n", script_path);
         return NULL;
     }
     
@@ -610,12 +610,12 @@ char* typeeasy_embedded_invoke(TypeEasyEmbeddedContext* ctx, const char* script_
     if (!ctx || !script_path || !function_name) return NULL;
     LoadedScript* script = find_loaded_script(ctx, script_path);
     if (!script) {
-        if (te_verbose()) fprintf(stderr, "[TYPEEASY_API] Script no cargado: %s\n", script_path);
+        if (te_verbose()) fprintf(stderr, "[TYPEEASY_API] Script not loaded: %s\n", script_path);
         return NULL;
     }
     MethodNode* m = typeeasy_find_method(function_name);
     if (!m) {
-        if (te_verbose()) fprintf(stderr, "[TYPEEASY_API] Función no encontrada: %s\n", function_name);
+        if (te_verbose()) fprintf(stderr, "[TYPEEASY_API] Function not found: %s\n", function_name);
         return NULL;
     }
     if (te_verbose()) printf("[TYPEEASY_API] Invocando: %s\n", function_name);

@@ -621,14 +621,14 @@ static int te_xlsx_parse_sheet(const char *xml, size_t xml_len,
 char *te_xlsx_bytes_to_csv_buf(const char *zip, size_t zip_len, size_t *out_len) {
     if (out_len) *out_len = 0;
     if (!zip || zip_len < 22) {
-        fprintf(stderr, "XLSXError: buffer XLSX vacío o demasiado corto.\n");
+        fprintf(stderr, "XLSXError: empty or too-short XLSX buffer.\n");
         return NULL;
     }
     const unsigned char *ubuf = (const unsigned char*)zip;
 
     /* Validar firma local (PK\x03\x04) o EOCD presente. */
     if (zip[0] != 'P' || zip[1] != 'K') {
-        fprintf(stderr, "XLSXError: el buffer no parece un archivo ZIP/XLSX.\n");
+        fprintf(stderr, "XLSXError: buffer does not look like a ZIP/XLSX file.\n");
         return NULL;
     }
 
@@ -639,7 +639,7 @@ char *te_xlsx_bytes_to_csv_buf(const char *zip, size_t zip_len, size_t *out_len)
     if (ss_xml) {
         if (!te_xlsx_parse_shared_strings(ss_xml, ss_len, &ss)) {
             free(ss_xml); txss_free(&ss);
-            fprintf(stderr, "XLSXError: error parseando sharedStrings.xml.\n");
+            fprintf(stderr, "XLSXError: error parsing sharedStrings.xml.\n");
             return NULL;
         }
         free(ss_xml);
@@ -653,7 +653,7 @@ char *te_xlsx_bytes_to_csv_buf(const char *zip, size_t zip_len, size_t *out_len)
     }
     if (!sh_xml) {
         fprintf(stderr,
-            "XLSXError: el buffer no contiene xl/worksheets/sheet1.xml.\n");
+            "XLSXError: buffer does not contain xl/worksheets/sheet1.xml.\n");
         txss_free(&ss); return NULL;
     }
 
@@ -664,7 +664,7 @@ char *te_xlsx_bytes_to_csv_buf(const char *zip, size_t zip_len, size_t *out_len)
 
     if (!ok) {
         free(csv.buf);
-        fprintf(stderr, "XLSXError: error parseando worksheet.\n");
+        fprintf(stderr, "XLSXError: error parsing worksheet.\n");
         return NULL;
     }
     if (out_len) *out_len = csv.len;
@@ -681,7 +681,7 @@ char *te_xlsx_to_csv_buf(const char *filename, size_t *out_len) {
     size_t zip_len = 0;
     char *zip = te_xlsx_slurp(filename, &zip_len);
     if (!zip) {
-        fprintf(stderr, "XLSXError: no se pudo abrir '%s'.\n", filename);
+        fprintf(stderr, "XLSXError: could not open '%s'.\n", filename);
         return NULL;
     }
     char *out = te_xlsx_bytes_to_csv_buf(zip, zip_len, out_len);

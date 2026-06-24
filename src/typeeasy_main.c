@@ -53,13 +53,13 @@ static int convert_wat_to_wasm(const char *wat_path, const char *wasm_path) {
     char command[1024];
     int written = snprintf(command, sizeof(command), "wat2wasm \"%s\" -o \"%s\"", wat_path, wasm_path);
     if (written < 0 || written >= (int)sizeof(command)) {
-        fprintf(stderr, "[WASM] Error: comando wat2wasm demasiado largo.\n");
+        fprintf(stderr, "[WASM] Error: wat2wasm command too long.\n");
         return 0;
     }
 
     int result = system(command);
     if (result != 0) {
-        fprintf(stderr, "[WASM] Error: no se pudo ejecutar wat2wasm. Instala WABT o usa --emit-wat.\n");
+        fprintf(stderr, "[WASM] Error: could not run wat2wasm. Install WABT or use --emit-wat.\n");
         return 0;
     }
     return 1;
@@ -138,7 +138,7 @@ static ASTNode *parse_string(const char *src) {
  * expression, otherwise execute as a statement. Persists vars/classes
  * between iterations because we never reset them. */
 static int run_repl(void) {
-    fprintf(stdout, "TypeEasy REPL — escribe :help para ayuda, :quit para salir.\n");
+    fprintf(stdout, "TypeEasy REPL — type :help for help, :quit to exit.\n");
     fflush(stdout);
     runtime_save_initial_var_count();
     char buf[8192];
@@ -154,9 +154,9 @@ static int run_repl(void) {
         if (n == 0) continue;
         if (strcmp(buf, ":quit") == 0 || strcmp(buf, ":q") == 0) break;
         if (strcmp(buf, ":help") == 0) {
-            fprintf(stdout, "Comandos: :quit  :help  :vars\n"
-                            "Cualquier otra cosa se evalúa como TypeEasy.\n"
-                            "Termina expresiones con `;`. Para imprimir, usa println(...).\n");
+            fprintf(stdout, "Commands: :quit  :help  :vars\n"
+                            "Anything else is evaluated as TypeEasy.\n"
+                            "End expressions with `;`. To print, use println(...).\n");
             continue;
         }
         if (strcmp(buf, ":vars") == 0) {
@@ -191,13 +191,13 @@ static int run_repl(void) {
         }
         ASTNode *ast = parse_string(src);
         if (!ast) {
-            fprintf(stderr, "(error de sintaxis)\n");
+            fprintf(stderr, "(syntax error)\n");
             continue;
         }
         interpret_ast(ast);
         if (throw_flag) {
             const char *m = get_throw_message();
-            fprintf(stderr, "Uncaught: %s\n", m ? m : "(sin mensaje)");
+            fprintf(stderr, "Uncaught: %s\n", m ? m : "(no message)");
             throw_flag = 0;
         }
     }
@@ -357,7 +357,7 @@ static void test_runner_register_globals(void) {
 
 static int run_test_file(const char *path) {
     FILE *fp = fopen(path, "r");
-    if (!fp) { fprintf(stderr, "  ERROR: no se pudo abrir %s\n", path); return 0; }
+    if (!fp) { fprintf(stderr, "  ERROR: could not open %s\n", path); return 0; }
     g_test_failed = 0;
     g_test_assertions = 0;
     test_runner_register_globals();
@@ -368,7 +368,7 @@ static int run_test_file(const char *path) {
     int ok = 1;
     if (throw_flag) {
         const char *m = get_throw_message();
-        fprintf(stdout, "  THROW: %s\n", m ? m : "(sin mensaje)");
+        fprintf(stdout, "  THROW: %s\n", m ? m : "(no message)");
         throw_flag = 0;
         ok = 0;
     }
@@ -381,7 +381,7 @@ static int run_test_file(const char *path) {
 static int run_test_runner(const char *dir) {
     if (!dir) dir = ".";
     DIR *d = opendir(dir);
-    if (!d) { fprintf(stderr, "Error: no se pudo abrir directorio '%s'\n", dir); return 1; }
+    if (!d) { fprintf(stderr, "Error: could not open directory '%s'\n", dir); return 1; }
     runtime_save_initial_var_count();
     int total = 0, passed = 0;
     struct dirent *ent;
@@ -396,7 +396,7 @@ static int run_test_runner(const char *dir) {
         if (nfiles < 1024) files[nfiles++] = strdup(path);
     }
     closedir(d);
-    fprintf(stdout, "Ejecutando %d test files en %s\n", nfiles, dir);
+    fprintf(stdout, "Running %d test files in %s\n", nfiles, dir);
     for (int i = 0; i < nfiles; i++) {
         fprintf(stdout, "  %s ... ", files[i]);
         fflush(stdout);
@@ -407,7 +407,7 @@ static int run_test_runner(const char *dir) {
         runtime_reset_vars_to_initial_state();
         free(files[i]);
     }
-    fprintf(stdout, "\nResumen: %d/%d passed\n", passed, total);
+    fprintf(stdout, "\nSummary: %d/%d passed\n", passed, total);
     return (passed == total) ? 0 : 1;
 }
 
@@ -449,23 +449,23 @@ int main(int argc, char *argv[]) {
         }
         if (strcmp(argv[vi], "--help") == 0 || strcmp(argv[vi], "-h") == 0) {
             printf("TypeEasy %s\n", TE_VERSION_STR);
-            printf("Uso: %s <archivo.te> [opciones]\n", argv[0]);
-            printf("Opciones:\n");
-            printf("  --version, -v          Muestra la version y sale\n");
-            printf("  --help, -h             Muestra esta ayuda\n");
-            printf("  --repl                 Inicia el REPL interactivo\n");
-            printf("  --test [dir]           Ejecuta tests *_test.te\n");
-            printf("  --syntax-check <f>     Valida sintaxis (JSON output)\n");
-            printf("  --symbols <f>          Lista simbolos (JSON output)\n");
-            printf("  --emit-wat <f> [-o]    Genera WebAssembly text\n");
-            printf("  --emit-wasm <f> [-o]   Genera WebAssembly binary\n");
-            printf("  --debug                Activa logs de debug\n");
-            printf("  --debug-port <p>       Inicia debug server DAP en puerto p\n");
-            printf("  --api [-p PORT]        Levanta servidor HTTP con los endpoints del .te\n");
-            printf("  --dev                  Modo dev: hot-reload + errores 500 con file:line\n");
-            printf("  --port <p>             Puerto para --api (default 8080)\n");
-            printf("  --host <h>             Host bind para --api (default 0.0.0.0)\n");
-            printf("  --cors-origin <url>    Origen permitido CORS (default *)\n");
+            printf("Usage: %s <file.te> [options]\n", argv[0]);
+            printf("Options:\n");
+            printf("  --version, -v          Show the version and exit\n");
+            printf("  --help, -h             Show this help\n");
+            printf("  --repl                 Start the interactive REPL\n");
+            printf("  --test [dir]           Run *_test.te tests\n");
+            printf("  --syntax-check <f>     Validate syntax (JSON output)\n");
+            printf("  --symbols <f>          List symbols (JSON output)\n");
+            printf("  --emit-wat <f> [-o]    Generate WebAssembly text\n");
+            printf("  --emit-wasm <f> [-o]   Generate WebAssembly binary\n");
+            printf("  --debug                Enable debug logs\n");
+            printf("  --debug-port <p>       Start DAP debug server on port p\n");
+            printf("  --api [-p PORT]        Start HTTP server with the .te endpoints\n");
+            printf("  --dev                  Dev mode: hot-reload + 500 errors with file:line\n");
+            printf("  --port <p>             Port for --api (default 8080)\n");
+            printf("  --host <h>             Bind host for --api (default 0.0.0.0)\n");
+            printf("  --cors-origin <url>    Allowed CORS origin (default *)\n");
             return 0;
         }
     }
@@ -473,9 +473,9 @@ int main(int argc, char *argv[]) {
     clock_t inicio = clock();
     
     if (argc < 2) {
-        fprintf(stderr, "Uso: %s <archivo.te> [--discover | --invoke <funcName> | --run | --emit-wat | --emit-wasm [-o salida]]\n", argv[0]);
-        fprintf(stderr, "     %s --emit-wat <archivo.te> [-o salida.wat]\n", argv[0]);
-        fprintf(stderr, "     %s --emit-wasm <archivo.te> [-o salida.wasm]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <file.te> [--discover | --invoke <funcName> | --run | --emit-wat | --emit-wasm [-o output]]\n", argv[0]);
+        fprintf(stderr, "     %s --emit-wat <file.te> [-o output.wat]\n", argv[0]);
+        fprintf(stderr, "     %s --emit-wasm <file.te> [-o output.wasm]\n", argv[0]);
         return 1;
     }
 
@@ -537,7 +537,7 @@ int main(int argc, char *argv[]) {
             api_cors_origin = argv[i] + 14;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "Error: -o requiere una ruta de salida.\n");
+                fprintf(stderr, "Error: -o requires an output path.\n");
                 return 1;
             }
             output_path = argv[++i];
@@ -556,7 +556,7 @@ int main(int argc, char *argv[]) {
         if (repl_mode || test_mode) {
             /* OK: REPL/test no requieren script */
         } else {
-            fprintf(stderr, "Error: se requiere un archivo .te.\n");
+            fprintf(stderr, "Error: a .te file is required.\n");
             return 1;
         }
     }
@@ -577,16 +577,16 @@ int main(int argc, char *argv[]) {
         setvbuf(stdout, NULL, _IONBF, 0);
     }
     if (api_mode && !script_path) {
-        fprintf(stderr, "Error: --api requiere un archivo .te (ej: typeeasy --api endpoint.te)\n");
+        fprintf(stderr, "Error: --api requires a .te file (e.g.: typeeasy --api endpoint.te)\n");
         return 1;
     }
     if ((syntax_check_mode || symbols_mode) && !script_path) {
-        fprintf(stderr, "Error: --syntax-check / --symbols requieren un archivo.\n");
+        fprintf(stderr, "Error: --syntax-check / --symbols require a file.\n");
         return 1;
     }
 
     if (emit_wat_mode && emit_wasm_mode) {
-        fprintf(stderr, "Error: usa --emit-wat o --emit-wasm, no ambos.\n");
+        fprintf(stderr, "Error: use --emit-wat or --emit-wasm, not both.\n");
         return 1;
     }
 
@@ -624,7 +624,7 @@ int main(int argc, char *argv[]) {
     // 2. Parsear el archivo
     FILE *file = fopen(script_path, "r");
     if (!file) {
-        perror("Error al abrir el archivo");
+        perror("Error opening file");
         return 1;
     }
 
@@ -643,7 +643,7 @@ int main(int argc, char *argv[]) {
         if (emit_wasm_mode) {
             int written = snprintf(temp_wat_path, sizeof(temp_wat_path), "%s.wat.tmp", output_path);
             if (written < 0 || written >= (int)sizeof(temp_wat_path)) {
-                fprintf(stderr, "[WASM] Error: ruta temporal demasiado larga.\n");
+                fprintf(stderr, "[WASM] Error: temporary path too long.\n");
                 free_ast(script_ast);
                 return 1;
             }
@@ -677,7 +677,7 @@ int main(int argc, char *argv[]) {
             if (argc >= 4) {
                 invoke_func = argv[3];
             } else {
-                fprintf(stderr, "Error: --invoke requiere el nombre de la función.\n");
+                fprintf(stderr, "Error: --invoke requires the function name.\n");
                 return 1;
             }
         } else if (strcmp(argv[2], "--run") == 0) {
@@ -730,7 +730,7 @@ int main(int argc, char *argv[]) {
         extern char *get_throw_message(void);
         if (throw_flag) {
             const char *m = get_throw_message();
-            fprintf(stderr, "Uncaught: %s\n", m ? m : "(sin mensaje)");
+            fprintf(stderr, "Uncaught: %s\n", m ? m : "(no message)");
             return 1;
         }
     }
@@ -809,7 +809,7 @@ int main(int argc, char *argv[]) {
             m = m->next;
         }
         if (!found) {
-            fprintf(stderr, "Error: Función '%s' no encontrada.\n", invoke_func);
+            fprintf(stderr, "Error: Function '%s' not found.\n", invoke_func);
             return 1;
         }
     }
@@ -827,7 +827,7 @@ int main(int argc, char *argv[]) {
     if (g_debug_mode) {
         clock_t fin = clock();
         double tiempo = (double)(fin - inicio) / CLOCKS_PER_SEC;
-        printf("Tiempo de ejecución: %.6f segundos\n", tiempo);
+        printf("Execution time: %.6f seconds\n", tiempo);
     }
 
     debugger_terminate(0);

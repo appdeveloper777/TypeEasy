@@ -289,7 +289,7 @@ static char *te_csv_load_from_request(size_t *out_len) {
     size_t body_len = 0;
     const char *body = typeeasy_http_get_body_n(&body_len);
     if (!body || body_len == 0) {
-        fprintf(stderr, "CSVError: request body vacío (¿endpoint sin upload?).\n");
+        fprintf(stderr, "CSVError: empty request body (endpoint without upload?).\n");
         return NULL;
     }
     const char *ct = typeeasy_http_get_header("Content-Type");
@@ -338,7 +338,7 @@ static char *te_csv_load_from_request(size_t *out_len) {
     }
     if (upload_name) free(upload_name);
     if (!out) {
-        fprintf(stderr, "CSVError: no se pudo extraer el archivo del request body.\n");
+        fprintf(stderr, "CSVError: could not extract the file from the request body.\n");
     }
     return out;
 }
@@ -2598,7 +2598,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                     long v = 0;
                     if (raw[0] == '\0') {
                         if (!attr_nullable[a]) {
-                            fprintf(stderr, "CSVError: fila %d, columna '%s' (int) está vacía.\n",
+                            fprintf(stderr, "CSVError: row %d, column '%s' (int) is empty.\n",
                                     row_idx, header[c]);
                             exit(1);
                         }
@@ -2607,7 +2607,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                         char *endp = NULL;
                         v = strtol(raw, &endp, 10);
                         if (endp == raw || (endp && *endp != '\0')) {
-                            fprintf(stderr, "CSVError: fila %d, columna '%s': '%s' no es int.\n",
+                            fprintf(stderr, "CSVError: row %d, column '%s': '%s' is not int.\n",
                                     row_idx, header[c], raw);
                             exit(1);
                         }
@@ -2616,7 +2616,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                         out->gcol_i[a][r] = (int64_t)v;
                 } else if (attr_kind[a] == 1 /*STRING*/) {
                     if (raw[0] == '\0' && !attr_nullable[a]) {
-                        fprintf(stderr, "CSVError: fila %d: atributo '%s' (no nullable) sin valor.\n",
+                        fprintf(stderr, "CSVError: row %d: attribute '%s' (not nullable) has no value.\n",
                                 row_idx, cfg->cls->attributes[a].id);
                         exit(1);
                     }
@@ -2627,7 +2627,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                     double v = 0.0;
                     if (raw[0] == '\0') {
                         if (!attr_nullable[a]) {
-                            fprintf(stderr, "CSVError: fila %d, columna '%s' (float) está vacía.\n",
+                            fprintf(stderr, "CSVError: row %d, column '%s' (float) is empty.\n",
                                     row_idx, header[c]);
                             exit(1);
                         }
@@ -2635,7 +2635,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                         char *endp = NULL;
                         v = strtod(raw, &endp);
                         if (endp == raw) {
-                            fprintf(stderr, "CSVError: fila %d, columna '%s': '%s' no es float.\n",
+                            fprintf(stderr, "CSVError: row %d, column '%s': '%s' is not float.\n",
                                     row_idx, header[c], raw);
                             exit(1);
                         }
@@ -2871,7 +2871,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         }
     }
     if (!src) {
-        fprintf(stderr, "IOError: no se pudo abrir/mapear el archivo CSV '%s'.\n", filename);
+        fprintf(stderr, "IOError: could not open/map the CSV file '%s'.\n", filename);
         if (resolved) free(resolved);
         exit(1);
     }
@@ -2888,7 +2888,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
     int header_n = 0;
     char **header = csv_next_record(src, len, &pos, &header_n);
     if (!header) {
-        fprintf(stderr, "CSVError: archivo '%s' está vacío.\n", filename);
+        fprintf(stderr, "CSVError: file '%s' is empty.\n", filename);
         exit(1);
     }
 
@@ -3531,7 +3531,7 @@ void te_csv_lazy_resolve_all(ASTNode *root) {
         ClassNode *cls = find_class(e->class_name);
 
         if (!vname || !cls) {
-            if (!cls) fprintf(stderr, "Clase '%s' no encontrada.\n", e->class_name);
+            if (!cls) fprintf(stderr, "Class '%s' not found.\n", e->class_name);
             free(e->filename); free(e->class_name);
             continue;
         }
@@ -3603,7 +3603,7 @@ ASTNode *te_csv_runtime_load(ASTNode *placeholder) {
 
     ClassNode *cls = find_class(cd->class_name);
     if (!cls) {
-        fprintf(stderr, "Clase '%s' no encontrada.\n", cd->class_name);
+        fprintf(stderr, "Class '%s' not found.\n", cd->class_name);
         free(cd->filename); free(cd->class_name); free(cd);
         placeholder->extra = NULL;
         return NULL;

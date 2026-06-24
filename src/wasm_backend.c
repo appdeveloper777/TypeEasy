@@ -231,7 +231,7 @@ static void emit_stmt(WasmContext *ctx, ASTNode *node) {
 
 int wasm_emit_wat(ASTNode *root, const char *output_path) {
     if (!root || !output_path) {
-        fprintf(stderr, "[WASM] Error: AST o ruta de salida invalida.\n");
+        fprintf(stderr, "[WASM] Error: invalid AST or output path.\n");
         return 0;
     }
 
@@ -245,7 +245,7 @@ int wasm_emit_wat(ASTNode *root, const char *output_path) {
 
     ctx.out = fopen(output_path, "w");
     if (!ctx.out) {
-        perror("[WASM] Error al crear archivo WAT");
+        perror("[WASM] Error creating WAT file");
         return 0;
     }
 

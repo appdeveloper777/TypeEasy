@@ -1548,7 +1548,7 @@ static ASTNode *te_arg_at(ASTNode *arg, int n) {
  * Devuelve 1 si se ejecutó, 0 si no estaba registrado (plugin no cargado). */
 static int te_call_registry(const char *name, ASTNode *args) {
     TEBuiltinFn fn = te_builtin_lookup(name);
-    if (!fn) { fprintf(stderr, "[sql] '%s' no disponible (¿está cargado el plugin sqlite?)\n", name); return 0; }
+    if (!fn) { fprintf(stderr, "[sql] '%s' not available (is the sqlite plugin loaded?)\n", name); return 0; }
     ASTNode self = (ASTNode){0}; self.id = (char*)name;
     fn(&self, args);
     return 1;
@@ -1702,7 +1702,7 @@ static void native_sql_connect(ASTNode *arg) {
         case TE_SQL_SQLITE: /* sqlite_connect(path): la BD es el arg #4 (índice 3). */
             if (!te_call_registry("sqlite_connect", te_arg_at(arg, 3))) te_set_ret_int(-1);
             break;
-        default: fprintf(stderr, "[sql_connect] engine desconocido (usa mysql|postgres|sqlserver|sqlite)\n"); te_set_ret_int(-1); break;
+        default: fprintf(stderr, "[sql_connect] unknown engine (use mysql|postgres|sqlserver|sqlite)\n"); te_set_ret_int(-1); break;
     }
     te_sql_reattach(prev, tail, un);
 }
@@ -1716,7 +1716,7 @@ static void native_sql_query(ASTNode *arg) {
         case TE_SQL_PG:    native_postgres_query(arg);  break;
         case TE_SQL_MSSQL: native_sqlserver_query(arg); break;
         case TE_SQL_SQLITE: if (!te_call_registry("sqlite_query", arg)) te_set_ret_string(""); else te_sql_strict_check_ret(); break;
-        default: fprintf(stderr, "[sql_query] engine desconocido\n"); te_set_ret_string(""); break;
+        default: fprintf(stderr, "[sql_query] unknown engine\n"); te_set_ret_string(""); break;
     }
     te_sql_reattach(prev, tail, un);
     te_sql_reattach(ovp, ovt, ovu);
@@ -1735,7 +1735,7 @@ static void native_sql_exec(ASTNode *arg) {
         case TE_SQL_PG:    native_postgres_query(arg);  break;
         case TE_SQL_MSSQL: native_sqlserver_query(arg); break;
         case TE_SQL_SQLITE: if (!te_call_registry("sqlite_exec", arg)) te_set_ret_int(-1); else te_sql_strict_check_ret(); break;
-        default: fprintf(stderr, "[sql_exec] engine desconocido\n"); te_set_ret_int(-1); break;
+        default: fprintf(stderr, "[sql_exec] unknown engine\n"); te_set_ret_int(-1); break;
     }
     te_sql_reattach(prev, tail, un);
     te_sql_reattach(ovp, ovt, ovu);
@@ -2371,7 +2371,7 @@ void add_class(ClassNode *class) {
         int newcap = classes_cap ? classes_cap * 2 : 64;
         ClassNode **grown = realloc(classes, (size_t)newcap * sizeof(*grown));
         if (!grown) {
-            fprintf(stderr, "[add_class] sin memoria al ampliar el registro de clases (count=%d)\n", class_count);
+            fprintf(stderr, "[add_class] out of memory while growing the class registry (count=%d)\n", class_count);
             return;
         }
         classes = grown;

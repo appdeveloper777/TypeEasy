@@ -174,7 +174,7 @@ void native_postgres_connect(ASTNode* args) {
 
     PGconn* conn = PQconnectdb(conninfo);
     if (PQstatus(conn) != CONNECTION_OK) {
-        fprintf(stderr, "[Postgres] Error de conexión: %s\n", PQerrorMessage(conn));
+        fprintf(stderr, "[Postgres] connection error: %s\n", PQerrorMessage(conn));
         PQfinish(conn);
         ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
         add_or_update_variable("__ret__", r); free_ast(r);
@@ -313,13 +313,13 @@ void native_postgres_query(ASTNode* args) {
 void native_postgres_close(ASTNode* args) {
     int conn_id = pg_arg_int(args, 0);
     if (conn_id < 0 || conn_id >= PG_POOL_SIZE || !pg_connections[conn_id]) {
-        fprintf(stderr, "[Postgres] Conexión inválida (ID: %d)\n", conn_id);
+        fprintf(stderr, "[Postgres] invalid connection (ID: %d)\n", conn_id);
         return;
     }
     PQfinish(pg_connections[conn_id]);
     pg_connections[conn_id] = NULL;
     pg_req_scoped[conn_id] = 0;
-    fprintf(stderr, "[Postgres] Conexión cerrada (ID: %d)\n", conn_id);
+    fprintf(stderr, "[Postgres] connection closed (ID: %d)\n", conn_id);
 }
 
 /* Cierre automático al final de cada request (ver mysql_bridge.c). Cierra solo

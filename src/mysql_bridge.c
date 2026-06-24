@@ -366,7 +366,7 @@ ASTNode* mysql_query_result(int conn_id, const char* query) {
         
         // Debug: mostrar campos de la primera fila
         /*if (!first_row) {
-            printf("[MySQL DEBUG] Campos de la primera fila:\n");
+            printf("[MySQL DEBUG] Fields of the first row:\n");
             for (int i = 0; i < num_fields; i++) {
                 printf("  Campo %d: name='%s', value='%s', type=%d\n", 
                        i, fields[i].name, row[i] ? row[i] : "NULL", fields[i].type);
@@ -482,7 +482,7 @@ static int get_arg_int(ASTNode* args, int index) {
             }
             /*
             else {
-                printf("[DEBUG] Variable NO encontrada: %s\n", current->str_value);
+                printf("[DEBUG] Variable NOT found: %s\n", current->str_value);
             }*/
         }
     }
@@ -512,9 +512,9 @@ static int get_arg_int(ASTNode* args, int index) {
         // printf("[DEBUG] looking up IDENTIFIER variable: %s\n", current->id);
         Variable* v = find_variable(current->id);
         /*if (v) {
-            printf("[DEBUG] Variable encontrada: %s, tipo=%d, valor=%d\n", current->id, v->vtype, v->value.int_value);
+            printf("[DEBUG] Variable found: %s, type=%d, value=%d\n", current->id, v->vtype, v->value.int_value);
         } else {
-            printf("[DEBUG] Variable NO encontrada: %s\n", current->id);
+            printf("[DEBUG] Variable NOT found: %s\n", current->id);
         }*/
         if (v && v->vtype == VAL_INT) {
             return v->value.int_value;

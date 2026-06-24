@@ -27,7 +27,7 @@ int main(int argc, char **argv) {
         g_script_path = script_path;
         yyin = fopen(script_path, "r");
         if (!yyin) {
-            perror("No se pudo abrir el archivo");
+            perror("Could not open file");
             return 1;
         }
     }

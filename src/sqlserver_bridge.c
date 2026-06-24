@@ -253,7 +253,7 @@ static int mssql_apply_tls_conf(const char* host, int port, int encrypt_mode,
              mssql_tmpdir(), (int)TE_GETPID(), slot);
     FILE* f = fopen(path, "w");
     if (!f) {
-        fprintf(stderr, "[SQLServer] no se pudo crear conf temporal '%s'\n", path);
+        fprintf(stderr, "[SQLServer] could not create temporary conf '%s'\n", path);
         return 0;
     }
     snprintf(server_out, server_sz, "typeeasy_mssql_%d", slot);
@@ -334,8 +334,8 @@ void native_sqlserver_connect(ASTNode* args) {
         } else if (strcmp(k, "tls_ca") == 0 || strcmp(k, "ssl_ca") == 0 || strcmp(k, "ca") == 0) {
             if (v_is_str && v_str) opt_ca = v_str;
         } else if (strcmp(k, "tls_fp") == 0 || strcmp(k, "tls_peer_fp") == 0 || strcmp(k, "fingerprint") == 0) {
-            fprintf(stderr, "[SQLServer] aviso: 'tls_fp' no está soportado por FreeTDS; "
-                            "use 'tls_ca' (validar contra CA) o 'tls_skip_verify' (aceptar self-signed).\n");
+            fprintf(stderr, "[SQLServer] warning: 'tls_fp' is not supported by FreeTDS; "
+                            "use 'tls_ca' (validate against CA) or 'tls_skip_verify' (accept self-signed).\n");
             opt_skip_verify = 1;  /* mejor esfuerzo: cifrar y aceptar el cert */
         }
     }
@@ -357,7 +357,7 @@ void native_sqlserver_connect(ASTNode* args) {
 
     if (!mssql_initialized) {
         if (dbinit() == FAIL) {
-            fprintf(stderr, "[SQLServer] dbinit() falló\n");
+            fprintf(stderr, "[SQLServer] dbinit() failed\n");
             ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
             add_or_update_variable("__ret__", r); free_ast(r);
             return;
@@ -413,7 +413,7 @@ void native_sqlserver_connect(ASTNode* args) {
     dbloginfree(login);
     if (!dbproc) {
         char where[160];
-        snprintf(where, sizeof(where), "dbopen() falló (host=%s:%d, encrypt=%s)",
+        snprintf(where, sizeof(where), "dbopen() failed (host=%s:%d, encrypt=%s)",
                  host, port, encrypt_mode == 0 ? "off" : (encrypt_mode == 2 ? "require" : "request"));
         mssql_report_failure(where);
         ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
@@ -422,7 +422,7 @@ void native_sqlserver_connect(ASTNode* args) {
     }
     if (dbuse(dbproc, (char*)db) == FAIL) {
         char where[160];
-        snprintf(where, sizeof(where), "dbuse(%s) falló", db);
+        snprintf(where, sizeof(where), "dbuse(%s) failed", db);
         mssql_report_failure(where);
         dbclose(dbproc);
         ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
@@ -584,13 +584,13 @@ void native_sqlserver_query(ASTNode* args) {
 void native_sqlserver_close(ASTNode* args) {
     int conn_id = ms_arg_int(args, 0);
     if (conn_id < 0 || conn_id >= MSSQL_POOL_SIZE || !mssql_connections[conn_id]) {
-        fprintf(stderr, "[SQLServer] Conexión inválida (ID: %d)\n", conn_id);
+        fprintf(stderr, "[SQLServer] invalid connection (ID: %d)\n", conn_id);
         return;
     }
     dbclose(mssql_connections[conn_id]);
     mssql_connections[conn_id] = NULL;
     mssql_req_scoped[conn_id] = 0;
-    fprintf(stderr, "[SQLServer] Conexión cerrada (ID: %d)\n", conn_id);
+    fprintf(stderr, "[SQLServer] connection closed (ID: %d)\n", conn_id);
 }
 
 /* Cierre automático al final de cada request (ver mysql_bridge.c). Cierra solo
