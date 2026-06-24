@@ -172,6 +172,30 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
         }
         return;
     }
+    /* Bug fix (0.0.31): object-property access used as a map-literal value,
+     * e.g. json({ req: b.req, num: b.num }) where `b` is a model-bound object.
+     * Without this, ACCESS_ATTR (the `obj.field` node) fell through to the
+     * final "null". Resolve it the same way concat()/get_node_string() and the
+     * DB binder do: string attributes via get_node_string(), numeric ones via
+     * evaluate_expression(), so the serialized JSON value preserves its type
+     * (consistent with the 0.0.29 fix for objects-as-arguments). */
+    if (strcmp(n->type, "ACCESS_ATTR") == 0) {
+        if (is_string_type(n)) {
+            char *s = get_node_string(n);
+            te_json_emit_str(b, s ? s : "");
+            if (s) free(s);
+        } else {
+            double d = evaluate_expression(n);
+            if (d == (long long)d) {
+                char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)d);
+                tebuf_puts(b, tmp);
+            } else {
+                char tmp[64]; te_fmt_double(tmp, sizeof(tmp), d);
+                tebuf_puts(b, tmp);
+            }
+        }
+        return;
+    }
     /* gotcha #5: indexar un map/list inline como valor de un object-literal
      * — { x: datos["k"] } / { y: items[0] }. Resolvemos el ACCESS_EXPR a su
      * nodo-valor subyacente y lo re-emitimos para preservar su tipo

@@ -1,0 +1,18 @@
+// expect: {"req":"HOLA","num":7}
+// REGRESIÓN: gotcha — json({ k: obj.field }) debía serializar el VALOR real del
+// atributo del objeto, no `null`. En 0.0.30 un map-literal pasado a json() cuyo
+// valor era un acceso a propiedad (obj.campo) salía como null
+// ({"req":null,"num":null}) aunque concat()/let lo resolvían bien. El fix añade
+// el caso ACCESS_ATTR en te_json_emit_node (string vía get_node_string, número
+// vía evaluate_expression), consistente con concat() y el binder de DB.
+class Poc {
+    public string req = "";
+    public int    num = 0;
+}
+
+let p = new Poc();
+p.req = "HOLA";
+p.num = 7;
+
+let s = json({ req: p.req, num: p.num });
+println(s);

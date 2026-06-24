@@ -1,0 +1,36 @@
+// regression: json({ key: obj.field }) must serialize object-property values,
+// NOT null. Reproduces the 0.0.30 bug where a map literal passed to json()
+// whose value was an object-property access (obj.field) serialized as `null`
+// while concat()/local-let returned the real value.
+//
+// Runs in CLI (no server, no curl, no DB). Prints "JSONATTR_RESULT: PASS"
+// only if both string and int attributes serialize with their real values.
+
+class Poc {
+    public string req = "";
+    public int    num = 0;
+}
+
+var fails = 0;
+
+let p = new Poc();
+p.req = "HOLA";
+p.num = 7;
+
+// The broken form: map literal whose values are object-property accesses.
+let s = json({ req: p.req, num: p.num });
+
+// String attribute must serialize as its real value, not null.
+let hasReq = s.contains("\"req\":\"HOLA\"");
+if (!hasReq) { fails = fails + 1; print(concat("FAIL: req not serialized -> ", s)); }
+
+// Int attribute must serialize as a JSON number, not null and not a string.
+let hasNum = s.contains("\"num\":7");
+if (!hasNum) { fails = fails + 1; print(concat("FAIL: num not serialized -> ", s)); }
+
+// Guard against the exact bug signature: no field must come out as null.
+let hasNull = s.contains("null");
+if (hasNull) { fails = fails + 1; print(concat("FAIL: serialized null -> ", s)); }
+
+if (fails == 0) { print("JSONATTR_RESULT: PASS"); }
+if (fails != 0) { print(concat("JSONATTR_RESULT: FAIL (", fails, ")")); }

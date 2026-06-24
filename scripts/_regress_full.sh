@@ -80,6 +80,17 @@ else
 fi
 
 echo "==================================================================="
+echo " STAGE 5c  json({ k: obj.field }) must serialize values, not null"
+echo "==================================================================="
+JSONATTR_OUT="$( cd /tmp && /app/src/typeeasy /app/tests/regress/json_obj_attr.te 2>&1 )"
+echo "$JSONATTR_OUT"
+if echo "$JSONATTR_OUT" | grep -q "JSONATTR_RESULT: PASS"; then
+  JSONATTR_OK=0; echo "json-obj-attr: PASS"
+else
+  JSONATTR_OK=1; echo "json-obj-attr: FAIL"
+fi
+
+echo "==================================================================="
 echo " STAGE 6   API envelope bleed (same-named locals across guard+handler)"
 echo "==================================================================="
 APIBLEED_OUT="$( bash /app/tests/regress/run_api_bleed.sh /app/src/typeeasy /app/tests/regress/api_envelope_bleed.te 8088 2>&1 )"
@@ -134,6 +145,7 @@ echo "==================================================================="
 if [ "${CLANG_OK:-2}" = "0" ]; then echo " clang strict build:    PASS"; elif [ "${CLANG_OK:-2}" = "2" ]; then echo " clang strict build:    SKIP (no clang/omp.h)"; else echo " clang strict build:    FAIL"; fi
 if [ "${DBSTD_OK:-1}" = "0" ]; then echo " db-standard (success): PASS"; else echo " db-standard (success): FAIL"; fi
 if [ "${BARELAMBDA_OK:-1}" = "0" ]; then echo " bare-lambda call:      PASS"; else echo " bare-lambda call:      FAIL"; fi
+if [ "${JSONATTR_OK:-1}" = "0" ]; then echo " json-obj-attr:         PASS"; else echo " json-obj-attr:         FAIL"; fi
 if [ "${APIBLEED_OK:-1}" = "0" ]; then echo " api-bleed (--api):     PASS"; else echo " api-bleed (--api):     FAIL"; fi
 if [ "${WSATTACH_OK:-1}" = "0" ]; then echo " ws-attach (--api):     PASS"; else echo " ws-attach (--api):     FAIL"; fi
 if [ "$RC_TOTAL" = "0" ]; then
@@ -142,7 +154,7 @@ else
   echo " valgrind leaks:        runtime leak detected (see above)"
 fi
 echo "==================================================================="
-if [ "${CLANG_OK:-2}" != "1" ] && [ "${DBSTD_OK:-1}" = "0" ] && [ "${BARELAMBDA_OK:-1}" = "0" ] && [ "${APIBLEED_OK:-1}" = "0" ] && [ "${WSATTACH_OK:-1}" = "0" ] && [ "$RC_TOTAL" = "0" ]; then
+if [ "${CLANG_OK:-2}" != "1" ] && [ "${DBSTD_OK:-1}" = "0" ] && [ "${BARELAMBDA_OK:-1}" = "0" ] && [ "${JSONATTR_OK:-1}" = "0" ] && [ "${APIBLEED_OK:-1}" = "0" ] && [ "${WSATTACH_OK:-1}" = "0" ] && [ "$RC_TOTAL" = "0" ]; then
   echo " RESULT: GREEN"; exit 0
 else
   echo " RESULT: RED"; exit 1
