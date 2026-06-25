@@ -349,6 +349,12 @@ ASTNode *te_json_parse_value(const char **p) {
     }
     char tmp[64];
     size_t L = (size_t)(*p - start);
+    /* Anti-hang: if nothing was consumed the current byte is not a valid JSON
+     * value start (e.g. stray ',' '}' or garbage from malformed input). Skip
+     * one byte so any caller looping over te_json_parse_value() always makes
+     * forward progress instead of spinning forever. Guarded by **p so we never
+     * run past the NUL terminator. */
+    if (L == 0 && **p) (*p)++;
     if (L >= sizeof(tmp)) L = sizeof(tmp) - 1;
     memcpy(tmp, start, L); tmp[L] = 0;
     if (is_float) return create_ast_leaf("FLOAT", 0, tmp, NULL);

@@ -234,11 +234,19 @@ void native_postgres_query(ASTNode* args) {
         return;
     }
     if (st != PGRES_TUPLES_OK) {
-        char err[512];
-        snprintf(err, sizeof(err), "{\"error\":\"%s\"}", PQerrorMessage(conn));
+        /* JSON-escape the driver message (may contain quotes / newlines) so the
+         * returned {"error":...} is always valid JSON for the SQL envelope. */
+        const char *pe = PQerrorMessage(conn);
+        SB eb; sb_init(&eb);
+        sb_puts(&eb, "{\"error\":\"");
+        sb_put_json_escaped_n(&eb, pe ? pe : "", pe ? strlen(pe) : 0);
+        sb_puts(&eb, "\"}");
+        sb_putc(&eb, '\0');
         PQclear(res);
-        ASTNode* r = create_ast_leaf("STRING", 0, strdup(err), NULL);
+        ASTNode* r = create_ast_leaf("STRING", 0,
+            strdup((eb.p && !eb.oom) ? eb.p : "{\"error\":\"db_error\"}"), NULL);
         add_or_update_variable("__ret__", r); free_ast(r);
+        free(eb.p);
         /* Strict mode solo aplica en --api; en CLI es no-op (ver mysql_bridge.c). */
         { extern int g_api_mode; if (g_db_strict_errors && g_api_mode) typeeasy_http_set_status(500); }
         if (final_query) free(final_query);

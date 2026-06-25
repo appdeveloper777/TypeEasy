@@ -969,11 +969,23 @@ void native_mysql_query(ASTNode* args) {
 
     if (mysql_query(conn, query)) {
       //  printf("[MySQL] Error en query: %s\n", mysql_error(conn));
-        char error_buffer[512];
-        snprintf(error_buffer, sizeof(error_buffer), "{\"error\":\"%s\"}", mysql_error(conn));
-        ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup(error_buffer), NULL);
+        /* JSON-escape the driver message: MySQL errors routinely contain
+         * double quotes (e.g. Duplicate entry 'A"B') and other metacharacters.
+         * An unescaped %s produced malformed JSON that downstream consumers
+         * (the SQL envelope's te_json_parse_value) could not parse, leaving
+         * INSERT/UPDATE/DELETE failures undelivered. Build via SB so the
+         * returned {"error":...} is always well-formed. */
+        const char *me = mysql_error(conn);
+        SB eb; sb_init(&eb);
+        sb_puts(&eb, "{\"error\":\"");
+        sb_put_json_escaped_n(&eb, me ? me : "", me ? strlen(me) : 0);
+        sb_puts(&eb, "\"}");
+        sb_putc(&eb, '\0');
+        ASTNode* ret_node = create_ast_leaf("STRING", 0,
+            strdup((eb.p && !eb.oom) ? eb.p : "{\"error\":\"db_error\"}"), NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
+        free(eb.p);
         /* Strict mode (opt-in, solo modo --api): que un fallo de query NO
          * termine respondiendo 200 OK silenciosamente. Fijamos response_status
          * (500) para que el server responda 500 si el handler no toca el

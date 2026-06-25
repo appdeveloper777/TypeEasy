@@ -169,6 +169,39 @@ static void sb_put_xml_str(SB *b, const char *s) {
     }
 }
 
+/* Build a well-formed {"error":"..."} into dst, JSON-escaping msg so SQLite
+ * error text containing quotes/backslashes/newlines (e.g. constraint messages
+ * like UNIQUE constraint failed: t."x") never yields malformed JSON for the
+ * SQL envelope / json parser. Always NUL-terminated and valid JSON; the
+ * message is truncated if it does not fit. */
+static void sqlite_error_json(char *dst, size_t cap, const char *msg) {
+    if (cap == 0) return;
+    if (!msg) msg = "unknown";
+    size_t o = 0;
+    for (const char *s = "{\"error\":\""; *s && o + 1 < cap; s++) dst[o++] = *s;
+    for (const unsigned char *q = (const unsigned char *)msg; *q; q++) {
+        char ubuf[8]; const char *rep; size_t rl;
+        unsigned char c = *q;
+        switch (c) {
+            case '"':  rep = "\\\""; rl = 2; break;
+            case '\\': rep = "\\\\"; rl = 2; break;
+            case '\n': rep = "\\n";  rl = 2; break;
+            case '\r': rep = "\\r";  rl = 2; break;
+            case '\t': rep = "\\t";  rl = 2; break;
+            case '\b': rep = "\\b";  rl = 2; break;
+            case '\f': rep = "\\f";  rl = 2; break;
+            default:
+                if (c < 0x20) { snprintf(ubuf, sizeof(ubuf), "\\u%04x", c); rep = ubuf; rl = 6; }
+                else { ubuf[0] = (char)c; ubuf[1] = '\0'; rep = ubuf; rl = 1; }
+        }
+        /* Leave room for the trailing "\"}" (2 bytes) and the NUL. */
+        if (o + rl + 3 > cap) break;
+        memcpy(dst + o, rep, rl); o += rl;
+    }
+    if (o + 3 <= cap) { dst[o++] = '"'; dst[o++] = '}'; }
+    dst[o] = '\0';
+}
+
 /* ─── Dapper-style param binding (ABI v2) ──────────────────────────────
  *
  * Si el host expone arg_map_head (abi_version >= 2), aceptamos que un
@@ -384,8 +417,7 @@ static int te_sqlite_exec(ASTNode *node, ASTNode *args) {
              * rechazado por constraint (NOT NULL, UNIQUE, ...) parecia exitoso
              * desde el codigo -> perdida silenciosa de datos en SQLite/offline. */
             char ebuf[512];
-            snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
-                     errmsg ? errmsg : "unknown");
+            sqlite_error_json(ebuf, sizeof(ebuf), errmsg ? errmsg : "unknown");
             fprintf(stderr, "[sqlite_exec] error: %s\n", errmsg ? errmsg : "unknown");
             if (errmsg) sqlite3_free(errmsg);
             H->set_ret_str(ebuf);
@@ -404,8 +436,7 @@ static int te_sqlite_exec(ASTNode *node, ASTNode *args) {
          * detectar la falla con res.contains("\"error\"") en vez de recibir
          * silenciosamente -1 (que se confundia con 'no afecto filas'). */
         char ebuf[512];
-        snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
-                 sqlite3_errmsg(g_pool[slot]));
+        sqlite_error_json(ebuf, sizeof(ebuf), sqlite3_errmsg(g_pool[slot]));
         fprintf(stderr, "[sqlite_exec] prepare error: %s\n", sqlite3_errmsg(g_pool[slot]));
         if (stmt) sqlite3_finalize(stmt);
         if (owned) H->free_node(params);
@@ -417,8 +448,7 @@ static int te_sqlite_exec(ASTNode *node, ASTNode *args) {
     if (owned) H->free_node(params);
     if (rc != SQLITE_OK) {
         char ebuf[512];
-        snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
-                 sqlite3_errmsg(g_pool[slot]));
+        sqlite_error_json(ebuf, sizeof(ebuf), sqlite3_errmsg(g_pool[slot]));
         fprintf(stderr, "[sqlite_exec] bind error: %s\n", sqlite3_errmsg(g_pool[slot]));
         sqlite3_finalize(stmt);
         free(sql);
@@ -428,8 +458,7 @@ static int te_sqlite_exec(ASTNode *node, ASTNode *args) {
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
         char ebuf[512];
-        snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
-                 sqlite3_errmsg(g_pool[slot]));
+        sqlite_error_json(ebuf, sizeof(ebuf), sqlite3_errmsg(g_pool[slot]));
         fprintf(stderr, "[sqlite_exec] step error: %s\n", sqlite3_errmsg(g_pool[slot]));
         sqlite3_finalize(stmt);
         free(sql);
@@ -515,8 +544,7 @@ static int te_sqlite_query(ASTNode *node, ASTNode *args) {
          * (p.ej. login devolvia "credenciales invalidas" en lugar de 500
          * cuando el SQL referenciaba una funcion inexistente como sha1()). */
         char ebuf[512];
-        snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
-                 sqlite3_errmsg(g_pool[slot]));
+        sqlite_error_json(ebuf, sizeof(ebuf), sqlite3_errmsg(g_pool[slot]));
         fprintf(stderr, "[sqlite_query] prepare error: %s\n", sqlite3_errmsg(g_pool[slot]));
         if (stmt) sqlite3_finalize(stmt);
         free(sql); if (fmt) free(fmt);
@@ -529,8 +557,7 @@ static int te_sqlite_query(ASTNode *node, ASTNode *args) {
         if (params_owned) H->free_node(params);
         if (rc != SQLITE_OK) {
             char ebuf[512];
-            snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
-                     sqlite3_errmsg(g_pool[slot]));
+            sqlite_error_json(ebuf, sizeof(ebuf), sqlite3_errmsg(g_pool[slot]));
             fprintf(stderr, "[sqlite_query] bind error: %s\n", sqlite3_errmsg(g_pool[slot]));
             sqlite3_finalize(stmt);
             free(sql); if (fmt) free(fmt);
@@ -610,8 +637,7 @@ static int te_sqlite_query(ASTNode *node, ASTNode *args) {
          * parciales + silencio, reportamos el error para no quedarnos con
          * datos a medias (consistente con mysql/postgres). */
         char ebuf[512];
-        snprintf(ebuf, sizeof(ebuf), "{\"error\":\"%s\"}",
-                 sqlite3_errmsg(g_pool[slot]));
+        sqlite_error_json(ebuf, sizeof(ebuf), sqlite3_errmsg(g_pool[slot]));
         fprintf(stderr, "[sqlite_query] step error: %s\n", sqlite3_errmsg(g_pool[slot]));
         sqlite3_finalize(stmt);
         if (b.p) free(b.p);
