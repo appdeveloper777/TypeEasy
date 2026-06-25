@@ -1,0 +1,45 @@
+// Regression: return json(fnCall()) and return xml(fnCall()) must NOT produce
+// an empty body when the function returns an object literal.
+//
+// Reproduces the v0.0.30 bug where a function returning { ... } passed
+// directly to json()/xml() yielded an EMPTY HTTP body, while the same object
+// stored in an intermediate variable worked fine.
+//
+// Tested via run_json_fn_call.sh (--api mode + curl).
+
+let RepoObj = fn() => {
+    return { ok: true, codigo: "ABC", n: 5 };
+};
+
+endpoint {
+    // Case A: json(fnCall()) - was empty before the fix.
+    [HttpGet("/a")]
+    async A() {
+        return json(RepoObj());
+    }
+
+    // Case C (baseline): let o = fnCall(); return json(o) - always worked.
+    [HttpGet("/c")]
+    async C() {
+        let o = RepoObj();
+        return json(o);
+    }
+
+    // Case D (baseline): json({ inline literal }) - always worked.
+    [HttpGet("/d")]
+    async D() {
+        return json({ ok: true, codigo: "ABC", n: 5 });
+    }
+
+    // Case X: xml(fnCall()) - was empty before the fix.
+    [HttpGet("/x")]
+    async X() {
+        return xml(RepoObj());
+    }
+
+    // Case Z (baseline): xml({ inline literal }) - always worked.
+    [HttpGet("/z")]
+    async Z() {
+        return xml({ ok: true, codigo: "ABC", n: 5 });
+    }
+}

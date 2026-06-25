@@ -1,5 +1,7 @@
 #include "typeeasy_api.h"
 #include "debugger.h"
+#include "te_json.h"
+#include "te_buf.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -550,6 +552,19 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
     Variable* ret_var = find_variable("__ret__");
     if (ret_var && ret_var->vtype == VAL_STRING && ret_var->value.string_value) {
         result = strdup(ret_var->value.string_value);
+    }
+    /* Bug fix (v0.0.30): endpoint returns an object directly (return fnCall()
+     * where fn returns { ... }) — auto-serialize to JSON so the body is not
+     * empty. Same te_json_emit_node path as native_json's IDENTIFIER branch. */
+    else if (ret_var && ret_var->vtype == VAL_OBJECT && ret_var->type
+             && (strcmp(ret_var->type, "MAP") == 0
+              || strcmp(ret_var->type, "OBJECT_LITERAL") == 0
+              || strcmp(ret_var->type, "LIST") == 0)) {
+        ASTNode *obj_node = (ASTNode *)(intptr_t)ret_var->value.object_value;
+        TeBuf b; tebuf_init(&b);
+        te_json_emit_node(&b, obj_node);
+        result = strdup(b.p ? b.p : "{}");
+        if (b.p) free(b.p);
     }
     runtime_reset_vars_to_initial_state();
     te_req_owned_free_all();

@@ -370,10 +370,40 @@ void native_json(ASTNode *arg) {
             return;
         }
         if (r && r->vtype == VAL_INT) {
+            if (r->type && strcmp(r->type, "BOOL") == 0) {
+                ASTNode *result_node = create_ast_leaf("STRING", 0, r->value.int_value ? "true" : "false", NULL);
+                add_or_update_variable("__ret__", result_node);
+                free_ast(result_node);
+                return;
+            }
             char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", r->value.int_value);
             ASTNode *result_node = create_ast_leaf("STRING", 0, tmp, NULL);
             add_or_update_variable("__ret__", result_node);
             free_ast(result_node);
+            return;
+        }
+        if (r && r->vtype == VAL_FLOAT) {
+            char tmp[64]; te_fmt_double(tmp, sizeof(tmp), r->value.float_value);
+            ASTNode *result_node = create_ast_leaf("STRING", 0, tmp, NULL);
+            add_or_update_variable("__ret__", result_node);
+            free_ast(result_node);
+            return;
+        }
+        /* Bug fix (v0.0.30): function returns MAP / OBJECT_LITERAL / LIST —
+         * serialize via te_json_emit_node instead of emitting an empty string.
+         * Fixes `json(fnCall())` → EMPTY when the fn returns an object.
+         * Mirrors the same serialization path as the IDENTIFIER branch below. */
+        if (r && r->vtype == VAL_OBJECT && r->type
+            && (strcmp(r->type, "MAP") == 0
+             || strcmp(r->type, "OBJECT_LITERAL") == 0
+             || strcmp(r->type, "LIST") == 0)) {
+            ASTNode *obj_node = (ASTNode *)(intptr_t)r->value.object_value;
+            TeBuf b; tebuf_init(&b);
+            te_json_emit_node(&b, obj_node);
+            ASTNode *result_node = create_ast_leaf("STRING", 0, b.p ? b.p : "{}", NULL);
+            add_or_update_variable("__ret__", result_node);
+            free_ast(result_node);
+            if (b.p) free(b.p);
             return;
         }
         ASTNode *result_node = create_ast_leaf("STRING", 0, "", NULL);
@@ -578,7 +608,66 @@ void native_json(ASTNode *arg) {
 
 void native_xml(ASTNode *arg) {
     if (g_debug_mode) { fprintf(stderr, "[DEBUG] native_xml called\n"); fflush(stderr); }
-    
+
+    /* Bug fix (v0.0.30): xml(fnCall()) — invoke nested function, same CALL_FUNC
+     * pattern as native_json. Handles all return types so that
+     * `return xml(RepoObj())` works just like `let o = RepoObj(); xml(o)`. */
+    if (arg && arg->type && strcmp(arg->type, "CALL_FUNC") == 0) {
+        interpret_call_func(arg);
+        Variable *r = find_variable("__ret__");
+        if (r && r->vtype == VAL_STRING) {
+            /* already a string — nothing else to do */
+            return;
+        }
+        if (r && r->vtype == VAL_INT) {
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", r->value.int_value);
+            ASTNode *result_node = create_ast_leaf("STRING", 0, tmp, NULL);
+            add_or_update_variable("__ret__", result_node);
+            free_ast(result_node);
+            return;
+        }
+        if (r && r->vtype == VAL_FLOAT) {
+            char tmp[64]; te_fmt_double(tmp, sizeof(tmp), r->value.float_value);
+            ASTNode *result_node = create_ast_leaf("STRING", 0, tmp, NULL);
+            add_or_update_variable("__ret__", result_node);
+            free_ast(result_node);
+            return;
+        }
+        /* Function returns MAP / OBJECT_LITERAL — serialize as XML using the
+         * same <root> wrapper as the inline OBJECT_LITERAL branch below. */
+        if (r && r->vtype == VAL_OBJECT && r->type
+            && (strcmp(r->type, "MAP") == 0 || strcmp(r->type, "OBJECT_LITERAL") == 0)) {
+            ASTNode *map_node = (ASTNode *)(intptr_t)r->value.object_value;
+            TeBuf b; tebuf_init(&b);
+            tebuf_puts(&b, "<root>");
+            for (ASTNode *kv = map_node ? map_node->left : NULL; kv; kv = kv->right) {
+                const char *key = kv->id ? kv->id : "item";
+                char *val = get_node_string(kv->left);
+                tebuf_putc(&b, '<'); tebuf_puts(&b, key); tebuf_putc(&b, '>');
+                tebuf_puts(&b, val ? val : "");
+                tebuf_puts(&b, "</"); tebuf_puts(&b, key); tebuf_putc(&b, '>');
+                if (val) free(val);
+            }
+            tebuf_puts(&b, "</root>");
+            ASTNode *result_node = create_ast_leaf("STRING", 0, b.p ? b.p : "<root></root>", NULL);
+            add_or_update_variable("__ret__", result_node);
+            free_ast(result_node);
+            if (b.p) free(b.p);
+            return;
+        }
+        /* Function returns LIST or class object — print_object_as_xml_by_id
+         * already handles both cases via the __ret__ variable. */
+        if (r && r->vtype == VAL_OBJECT && r->type) {
+            print_object_as_xml_by_id("__ret__");
+            return;
+        }
+        /* Fallback: empty XML */
+        ASTNode *result_node = create_ast_leaf("STRING", 0, "<root></root>", NULL);
+        add_or_update_variable("__ret__", result_node);
+        free_ast(result_node);
+        return;
+    }
+
     // Handle empty argument (return xml())
     if (!arg) {
         if (g_stdout_buffer) {
