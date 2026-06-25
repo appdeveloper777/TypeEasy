@@ -108,6 +108,14 @@ extern void te_colcache_attach_prebuilt(ASTNode *list_head, struct TeColCache *c
 extern const char *typeeasy_http_get_body_n(size_t *out_len);
 extern const char *typeeasy_http_get_header(const char *k);
 
+/* Recoverable runtime error (impl in src/ast.c). In --api server mode it
+ * longjmp's back to the per-request recovery point (HTTP 500) instead of
+ * killing the process; in CLI mode (no recovery point installed) it prints and
+ * exit(1)'s, identical to the previous behavior. Used to replace bare exit(1)
+ * calls on malformed/unexpected upload bodies so a single bad `from
+ * "request:body"` request can no longer take down the single-flight server. */
+extern void te_runtime_fatal(void);
+
 /* True if `filename` is the pseudo-URI that asks for the request body. */
 static int te_csv_is_request_uri(const char *filename) {
     if (!filename) return 0;
@@ -2600,7 +2608,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                         if (!attr_nullable[a]) {
                             fprintf(stderr, "CSVError: row %d, column '%s' (int) is empty.\n",
                                     row_idx, header[c]);
-                            exit(1);
+                            te_runtime_fatal();
                         }
                     } else if (!csv_fast_parse_i64(raw, &v)) {
                         /* v0.0.14 polish #7: SIMD parser falló → fallback strtol */
@@ -2609,7 +2617,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                         if (endp == raw || (endp && *endp != '\0')) {
                             fprintf(stderr, "CSVError: row %d, column '%s': '%s' is not int.\n",
                                     row_idx, header[c], raw);
-                            exit(1);
+                            te_runtime_fatal();
                         }
                     }
                     if (out->gcol_i && out->gcol_i[a])
@@ -2618,7 +2626,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                     if (raw[0] == '\0' && !attr_nullable[a]) {
                         fprintf(stderr, "CSVError: row %d: attribute '%s' (not nullable) has no value.\n",
                                 row_idx, cfg->cls->attributes[a].id);
-                        exit(1);
+                        te_runtime_fatal();
                     }
                     if (out->gcol_s && out->gcol_s[a])
                         out->gcol_s[a][r] = (raw[0] == '\0') ? NULL : (char*)raw;
@@ -2629,7 +2637,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                         if (!attr_nullable[a]) {
                             fprintf(stderr, "CSVError: row %d, column '%s' (float) is empty.\n",
                                     row_idx, header[c]);
-                            exit(1);
+                            te_runtime_fatal();
                         }
                     } else {
                         char *endp = NULL;
@@ -2637,7 +2645,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                         if (endp == raw) {
                             fprintf(stderr, "CSVError: row %d, column '%s': '%s' is not float.\n",
                                     row_idx, header[c], raw);
-                            exit(1);
+                            te_runtime_fatal();
                         }
                     }
                     if (out->gcol_f && out->gcol_f[a])
@@ -2676,7 +2684,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                         fprintf(stderr,
                             "CSVError: fila %d, columna '%s' (int) está vacía.\n",
                             row_idx, header[c]);
-                        exit(1);
+                        te_runtime_fatal();
                     }
                 } else {
                     /* v0.0.14 polish #7: SIMD-accelerated int parser (Lemire 8-digit
@@ -2689,7 +2697,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                             fprintf(stderr,
                                 "CSVError: fila %d, columna '%s': '%s' no es int.\n",
                                 row_idx, header[c], raw);
-                            exit(1);
+                            te_runtime_fatal();
                         }
                     }
                     obj->attributes[a].value.int_value = (int)v;
@@ -2716,7 +2724,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                         fprintf(stderr,
                             "CSVError: fila %d, columna '%s' (float) está vacía.\n",
                             row_idx, header[c]);
-                        exit(1);
+                        te_runtime_fatal();
                     }
                 } else {
                     char *endp = NULL;
@@ -2725,7 +2733,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                         fprintf(stderr,
                             "CSVError: fila %d, columna '%s': '%s' no es float.\n",
                             row_idx, header[c], raw);
-                        exit(1);
+                        te_runtime_fatal();
                     }
                     obj->attributes[a].value.float_value = v;
                 }
@@ -2745,7 +2753,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                     fprintf(stderr,
                         "CSVError: fila %d: atributo '%s' (no nullable) sin valor.\n",
                         row_idx, cfg->cls->attributes[a].id);
-                    exit(1);
+                    te_runtime_fatal();
                 }
             }
         }
@@ -2851,7 +2859,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
      * transparentemente; cualquier otra cosa se trata como CSV. */
     if (te_csv_is_request_uri(filename)) {
         src = te_csv_load_from_request(&len);
-        if (!src) exit(1);
+        if (!src) te_runtime_fatal();   /* recoverable: HTTP 500 in --api, exit in CLI */
         src_is_mmap = 0;
     } else {
         resolved = csv_resolve_path(filename);
@@ -2863,7 +2871,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
             src = te_xlsx_to_csv_buf(resolved ? resolved : filename, &len);
             if (!src) {
                 if (resolved) free(resolved);
-                exit(1);
+                te_runtime_fatal();
             }
             src_is_mmap = 0;
         } else {
@@ -2873,7 +2881,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
     if (!src) {
         fprintf(stderr, "IOError: could not open/map the CSV file '%s'.\n", filename);
         if (resolved) free(resolved);
-        exit(1);
+        te_runtime_fatal();
     }
     if (resolved) free(resolved);
     if (te_timing) clock_gettime(CLOCK_MONOTONIC, &ts_after_mmap);
@@ -2889,7 +2897,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
     char **header = csv_next_record(src, len, &pos, &header_n);
     if (!header) {
         fprintf(stderr, "CSVError: file '%s' is empty.\n", filename);
-        exit(1);
+        te_runtime_fatal();
     }
 
     int nattr = cls->attr_count;
@@ -2927,7 +2935,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
                 cls->attributes[a].id, cls->name, filename);
             csv_free_record(header, header_n);
             free(col_to_attr); free(attr_kind); free(attr_nullable);
-            exit(1);
+            te_runtime_fatal();
         }
     }
 
