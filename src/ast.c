@@ -7410,10 +7410,24 @@ static void interpret_call_method_impl(ASTNode *node) {
     }
 
     /* Fase 1c + Ola 13: métodos built-in en MAP (keys/values/has/remove/size/length/clear).
-     * Dispatched in te_map.c (Nivel B paso 2.d). */
-    if (v && v->type && strcmp(v->type, "MAP") == 0) {
+     * Dispatched in te_map.c (Nivel B paso 2.d).
+     *
+     * MAP and OBJECT_LITERAL store an ASTNode in value.object_value (NOT an
+     * ObjectNode). They must be fully handled here and must NEVER fall through
+     * to the class-instance dispatch below: that path casts value.object_value
+     * to ObjectNode and dereferences obj->class->name, which on a plain map is
+     * garbage -> SIGSEGV that takes down the whole single-flight API server
+     * (e.g. calling a string method like `.contains()` on a `{...}` value or on
+     * the sql_exec envelope object). For an unknown method we return null
+     * instead of crashing. */
+    if (v && v->type &&
+        (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0)) {
         ASTNode *map = (ASTNode*)(intptr_t)v->value.object_value;
         if (te_map_method_dispatch(node, map)) return;
+        fprintf(stderr, "[method] unknown method '%s' on %s value\n",
+                node->id ? node->id : "?", v->type);
+        add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+        return;
     }
     
     if (!v || v->vtype != VAL_OBJECT) {
