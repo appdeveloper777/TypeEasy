@@ -910,10 +910,81 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
 }
 #undef TE_REQ_DONE
 
+/* ---- Fix B: crash signal handler (async-signal-safe) ----------------------
+ * Guarantees a diagnostic LOG LINE on every hard fault (SIGSEGV/SIGBUS/...), so
+ * a worker crash is never a fully silent socket reset: operators always get a
+ * journald line with the signal + faulting address + pid. We do NOT resume (the
+ * heap may be corrupt); after logging we restore the default disposition and
+ * re-raise so a core dump is still produced and systemd restarts the unit.
+ * Uses only write(2) and stack buffers — async-signal-safe. */
+#ifndef _WIN32
+static void te_ssafe_write(const char *s) {
+    size_t n = 0; while (s[n]) n++;
+    ssize_t rc = write(2, s, n); (void)rc;
+}
+static void te_ssafe_write_hex(unsigned long v) {
+    char buf[2 + sizeof(unsigned long) * 2];
+    char *p = buf; *p++ = '0'; *p++ = 'x';
+    int started = 0;
+    for (int shift = (int)(sizeof(unsigned long) * 8) - 4; shift >= 0; shift -= 4) {
+        unsigned d = (unsigned)((v >> shift) & 0xF);
+        if (d || started || shift == 0) { *p++ = "0123456789abcdef"[d]; started = 1; }
+    }
+    ssize_t rc = write(2, buf, (size_t)(p - buf)); (void)rc;
+}
+static void te_ssafe_write_dec(long v) {
+    char buf[24]; char *p = buf + sizeof(buf);
+    int neg = v < 0; unsigned long uv = neg ? (unsigned long)(-v) : (unsigned long)v;
+    if (uv == 0) *--p = '0';
+    while (uv) { *--p = (char)('0' + (uv % 10)); uv /= 10; }
+    if (neg) *--p = '-';
+    ssize_t rc = write(2, p, (size_t)(buf + sizeof(buf) - p)); (void)rc;
+}
+static void te_crash_handler(int sig, siginfo_t *info, void *uctx) {
+    (void)uctx;
+    const char *name = "SIG";
+    switch (sig) {
+        case SIGSEGV: name = "SIGSEGV"; break;
+        case SIGBUS:  name = "SIGBUS";  break;
+        case SIGFPE:  name = "SIGFPE";  break;
+        case SIGILL:  name = "SIGILL";  break;
+        case SIGABRT: name = "SIGABRT"; break;
+        default: break;
+    }
+    te_ssafe_write("{\"level\":\"fatal\",\"event\":\"crash\",\"signal\":");
+    te_ssafe_write_dec(sig);
+    te_ssafe_write(",\"name\":\"");
+    te_ssafe_write(name);
+    te_ssafe_write("\",\"addr\":\"");
+    te_ssafe_write_hex((unsigned long)(size_t)(info ? info->si_addr : (void *)0));
+    te_ssafe_write("\",\"pid\":");
+    te_ssafe_write_dec((long)getpid());
+    te_ssafe_write(",\"msg\":\"hard fault in request handler; worker died (core dumped), systemd will restart. NOT a silent reset.\"}\n");
+    /* Restore default disposition and re-raise so a core is produced. */
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+static void te_install_crash_handlers(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = te_crash_handler;
+    sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS,  &sa, NULL);
+    sigaction(SIGFPE,  &sa, NULL);
+    sigaction(SIGILL,  &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);
+}
+#else
+static void te_install_crash_handlers(void) { }
+#endif
+
 /* Run a single in-process civetweb server bound to host:port. When part of a
  * worker pool, `worker_index` >= 0 tweaks the banner; -1 means standalone. */
 static int run_single_server(const char *host, int port, int worker_index) {
     invoke_lock_init();
+    te_install_crash_handlers();   /* Fix B: never a silent reset (log + core). */
     /* Register the invoke lock so handlers parked in an `await` can cooperatively
      * release it (and have it re-acquired on resume) — see te_coop_yield_* in
      * ast.c. This is what lets multiple requests overlap while one is waiting on

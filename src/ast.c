@@ -2908,6 +2908,28 @@ void *te_coop_yield_begin(void) {
     if (!g_te_lock_held || !g_coop_lock_rel) {
         return NULL;
     }
+    /* SAFETY GATE (default OFF): releasing the invoke lock mid-request while a
+     * second request mutates the SAME process-global per-request state
+     * (g_req_ / g_resp_ lists, vars[] slice, __ret_var) was racing under load
+     * and corrupting the heap — confirmed on the Arclad VM by two production
+     * core dumps (SIGSEGV in te_kv_free_list/typeeasy_http_reset and in
+     * te_expr_is_null/interpret_if). te_reqstate_save/restore only isolates ONE
+     * parked request cleanly; with several async requests overlapping the
+     * save/restore ownership of the shared globals double-frees / dangles.
+     * Until that isolation is reworked to a fully per-request heap context, the
+     * cooperative overlap is opt-in. Default: serialize (an async handler keeps
+     * the lock for the whole await, exactly like a sync handler) — correct and
+     * race-free. Set TYPEEASY_ASYNC_OVERLAP=1 to restore the old overlapping
+     * behaviour. */
+    static int s_overlap = -1;
+    if (s_overlap < 0) {
+        const char *e = getenv("TYPEEASY_ASYNC_OVERLAP");
+        s_overlap = (e && (e[0] == '1' || e[0] == 'y' || e[0] == 'Y' ||
+                           e[0] == 't' || e[0] == 'T' || e[0] == 'o' || e[0] == 'O')) ? 1 : 0;
+    }
+    if (!s_overlap) {
+        return NULL;
+    }
     /* C#/.NET-style async gate: only an `async`-declared handler releases the
      * invoke lock while parked in an await, letting other requests overlap. A
      * plain (sync) handler keeps the lock for the whole wait, so concurrent
