@@ -23,6 +23,10 @@
   #include <netinet/in.h>
   #include <arpa/inet.h>
   #include <netdb.h>
+  #include <fcntl.h>
+  #include <poll.h>
+  #include <errno.h>
+  #include <sys/time.h>
 #endif
 
 /* libcurl opcional: enabled with -DTE_HAVE_LIBCURL at compile time. */
@@ -124,15 +128,43 @@ static char* te_http_request(const char *method, const char *url, const char *bo
     if (getaddrinfo(host, port, &hints, &res) != 0 || !res) return NULL;
     int sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (sock < 0) { freeaddrinfo(res); return NULL; }
-    if (connect(sock, res->ai_addr, res->ai_addrlen) < 0) {
+    /* Timeout de connect: sin esto una IP que DROPea SYNs (firewall silencioso)
+     * bloquea connect() durante el timeout TCP del kernel (~75 s Windows,
+     * ~127 s Linux), congelando el hilo del intérprete en --api. */
 #ifdef _WIN32
-        closesocket(sock);
-#else
-        close(sock);
-#endif
-        freeaddrinfo(res); return NULL;
+    { u_long nb = 1; ioctlsocket(sock, FIONBIO, &nb); }
+    connect(sock, res->ai_addr, res->ai_addrlen);
+    { fd_set ws; FD_ZERO(&ws); FD_SET((SOCKET)sock, &ws);
+      struct timeval tv = {30, 0};
+      if (select(0, NULL, &ws, NULL, &tv) <= 0) {
+          closesocket(sock); freeaddrinfo(res); return NULL; }
     }
+    { u_long nb = 0; ioctlsocket(sock, FIONBIO, &nb); }
+#else
+    { int fl = fcntl(sock, F_GETFL, 0); fcntl(sock, F_SETFL, fl | O_NONBLOCK);
+      int cr = connect(sock, res->ai_addr, res->ai_addrlen);
+      if (cr < 0 && errno != EINPROGRESS) {
+          close(sock); freeaddrinfo(res); return NULL; }
+      if (cr != 0) {
+          struct pollfd pfd; pfd.fd = sock; pfd.events = POLLOUT; pfd.revents = 0;
+          if (poll(&pfd, 1, 30000) <= 0 || !(pfd.revents & POLLOUT)) {
+              close(sock); freeaddrinfo(res); return NULL; }
+          int err = 0; socklen_t el = sizeof(err);
+          if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &err, &el) < 0 || err != 0) {
+              close(sock); freeaddrinfo(res); return NULL; }
+      }
+      fcntl(sock, F_SETFL, fl); /* restaurar flags originales */
+    }
+#endif
     freeaddrinfo(res);
+    /* Timeout de recv: sin esto un servidor HTTP que acepta la conexión pero
+     * nunca envía datos deja el recv() bloqueado indefinidamente, congelando
+     * el hilo del intérprete en --api igual que el bug MySQL. */
+#ifdef _WIN32
+    { DWORD tv = 30000; setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv)); }
+#else
+    { struct timeval tv = {30, 0}; setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)); }
+#endif
 #ifdef TE_HAVE_OPENSSL
     /* gotcha #11: handshake TLS sobre el socket ya conectado para https://.
      * SSL_CTX se crea una sola vez (estático). SNI vía SSL_set_tlsext_host_name

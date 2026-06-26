@@ -242,6 +242,19 @@ static char *te_proc_read_line(int slot) {
             break;
         }
 #else
+        /* Timeout guard: en --api el intérprete corre single-flight; un read()
+         * bloqueante indefinido congela el servidor igual que el bug MySQL.
+         * poll() con 30 s garantiza que el hilo devuelve el control aunque
+         * el proceso hijo se cuelgue sin cerrar el pipe. */
+        {
+            struct pollfd pfd; pfd.fd = p->out_fd; pfd.events = POLLIN; pfd.revents = 0;
+            int pr = poll(&pfd, 1, 30000); /* 30 s */
+            if (pr < 0 && errno == EINTR) continue;
+            if (pr <= 0) { /* timeout o error de poll */
+                if (len == 0) { free(buf); return NULL; }
+                break;
+            }
+        }
         ssize_t got = read(p->out_fd, &c, 1);
         if (got < 0) { if (errno == EINTR) continue; }
         if (got <= 0) { /* EOF / error */
