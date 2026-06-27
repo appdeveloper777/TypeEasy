@@ -21,6 +21,12 @@
  * NOTE: keeps a simple global mutex around invoke; the interpreter holds a
  * lot of process-global state and is not thread-safe. */
 
+/* Enable GNU extensions (REG_RIP in <ucontext.h>) so the crash handler can log
+ * the exact faulting instruction pointer. Must precede any system header. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -918,6 +924,8 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
  * re-raise so a core dump is still produced and systemd restarts the unit.
  * Uses only write(2) and stack buffers — async-signal-safe. */
 #ifndef _WIN32
+#include <execinfo.h>   /* backtrace(), backtrace_symbols_fd() (async-signal-safe) */
+#include <ucontext.h>   /* ucontext_t / REG_RIP for the exact faulting PC */
 static void te_ssafe_write(const char *s) {
     size_t n = 0; while (s[n]) n++;
     ssize_t rc = write(2, s, n); (void)rc;
@@ -960,6 +968,31 @@ static void te_crash_handler(int sig, siginfo_t *info, void *uctx) {
     te_ssafe_write("\",\"pid\":");
     te_ssafe_write_dec((long)getpid());
     te_ssafe_write(",\"msg\":\"hard fault in request handler; worker died (core dumped), systemd will restart. NOT a silent reset.\"}\n");
+    /* Exact faulting instruction pointer from the trap frame. On the SAME
+     * (non-stripped) binary this resolves precisely with
+     * `addr2line -fie <binary> <pc>`. Guarded so non-glibc/x86_64 builds (where
+     * REG_RIP is not defined) compile this out cleanly. */
+#if defined(__linux__) && defined(__x86_64__) && defined(REG_RIP)
+    {
+        ucontext_t *uc = (ucontext_t *)uctx;
+        unsigned long pc = (unsigned long)uc->uc_mcontext.gregs[REG_RIP];
+        te_ssafe_write("{\"level\":\"fatal\",\"event\":\"crash_pc\",\"pc\":\"");
+        te_ssafe_write_hex(pc);
+        te_ssafe_write("\"}\n");
+    }
+#endif
+    /* Async-signal-safe backtrace: the faulting function appears in the chain
+     * (e.g. te_expr_is_null <- evaluate_condition <- interpret_if). Even for
+     * `static` functions and without -rdynamic, the absolute frame addresses
+     * print and resolve exactly with addr2line on this build. */
+    {
+        void *bt_frames[40];
+        int bt_n = backtrace(bt_frames, 40);
+        te_ssafe_write("{\"level\":\"fatal\",\"event\":\"crash_backtrace\",\"frames\":");
+        te_ssafe_write_dec((long)bt_n);
+        te_ssafe_write("}\n");
+        backtrace_symbols_fd(bt_frames, bt_n, 2);
+    }
     /* Restore default disposition and re-raise so a core is produced. */
     signal(sig, SIG_DFL);
     raise(sig);
