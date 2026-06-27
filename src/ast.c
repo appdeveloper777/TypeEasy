@@ -570,6 +570,8 @@ void native_json(ASTNode *arg) {
         return;
     }
 
+    if (v->type && strcmp(v->type, "OBJECT") != 0) return;
+
     ObjectNode *obj = v->value.object_value;
     if (!obj || !obj->class) return;
 
@@ -959,7 +961,7 @@ char* get_node_string(ASTNode* node) {
                 /* CALL_FUNC / expression → recurse. */
                 return get_node_string(val);
             }
-            if (v && v->vtype == VAL_OBJECT) obj = v->value.object_value;
+            if (v && v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "OBJECT") == 0) obj = v->value.object_value;
         }
         /* Caso 2: arr[i].attr — o es ACCESS_EXPR sobre LIST. */
         if (!obj && o->type && strcmp(o->type, "ACCESS_EXPR") == 0) {
@@ -3288,6 +3290,14 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
             return;
         }
 
+        if (!v->type || strcmp(v->type, "OBJECT") != 0) {
+            free(vars[my_index].type);
+            vars[my_index].vtype = VAL_OBJECT;
+            vars[my_index].type = strdup("NULL");
+            vars[my_index].value.object_value = NULL;
+            return;
+        }
+
         ObjectNode *obj = v->value.object_value;
         for (int i = 0; i < obj->class->attr_count; i++) {
             if (strcmp(obj->attributes[i].id, a->id) == 0) {
@@ -5521,6 +5531,8 @@ double evaluate_expression(ASTNode *node) {
             return 0;
         }
 
+        if (v->type && strcmp(v->type, "OBJECT") != 0) return 0;
+
         ObjectNode *obj = v->value.object_value;
         if (!obj) {
             ASTNode *wrapper = (ASTNode*)(intptr_t)v->value.object_value;
@@ -7481,12 +7493,22 @@ static void interpret_call_method_impl(ASTNode *node) {
         if (te_map_method_dispatch(node, map)) return;
         fprintf(stderr, "[method] unknown method '%s' on %s value\n",
                 node->id ? node->id : "?", v->type);
-        add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+        ASTNode *nullret = create_ast_leaf("NULL", 0, NULL, NULL);
+        add_or_update_variable("__ret__", nullret);
+        free_ast(nullret);
         return;
     }
     
     if (!v || v->vtype != VAL_OBJECT) {
         printf("Error: '%s' is not a valid object.\n", objNode->id);
+        return;
+    }
+    if (v->type && strcmp(v->type, "OBJECT") != 0) {
+        fprintf(stderr, "[method] unknown method '%s' on %s value\n",
+                node->id ? node->id : "?", v->type);
+        ASTNode *nullret = create_ast_leaf("NULL", 0, NULL, NULL);
+        add_or_update_variable("__ret__", nullret);
+        free_ast(nullret);
         return;
     }
     // Try to get ObjectNode from value.object_value first, then from extra
@@ -7883,7 +7905,7 @@ fastcall_args_done:
                     ASTNode *objN = return_node->left;
                     ASTNode *attrN = return_node->right;
                     Variable *ov = find_variable(objN->id);
-                    if (ov && ov->vtype == VAL_OBJECT) {
+                    if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "OBJECT") == 0) {
                         ObjectNode *oobj = ov->value.object_value; int i = -1;
                         int idx = -1;
                         for (i=0; i<oobj->class->attr_count; i++) { // Inicializa 'i'
@@ -8115,7 +8137,7 @@ static void interpret_call_method_alone(ASTNode *node) {
             ASTNode *objN = return_node->left;
             ASTNode *attrN = return_node->right;
             Variable *ov = find_variable(objN->id);
-            if (ov && ov->vtype == VAL_OBJECT) {
+            if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "OBJECT") == 0) {
                 ObjectNode *oobj = ov->value.object_value; int i = -1;
                 int idx = -1;
                 for (i=0; i<oobj->class->attr_count; i++) {
@@ -8163,6 +8185,10 @@ static void interpret_call_method_alone(ASTNode *node) {
     }
     
     if (!v || v->vtype != VAL_OBJECT) {
+        printf("Error: '%s' is not a valid object.\n", objNode->id);
+        return;
+    }
+    if (v->type && strcmp(v->type, "OBJECT") != 0) {
         printf("Error: '%s' is not a valid object.\n", objNode->id);
         return;
     }
@@ -8258,7 +8284,7 @@ static void interpret_call_method_alone(ASTNode *node) {
                 ASTNode *objN = return_node->left;
                 ASTNode *attrN = return_node->right;
                 Variable *ov = find_variable(objN->id);
-                if (ov && ov->vtype == VAL_OBJECT) {
+                if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "OBJECT") == 0) {
                     ObjectNode *oobj = ov->value.object_value; int i = -1;
                     int idx = -1;
                     for (i=0; i<oobj->class->attr_count; i++) {
@@ -8346,7 +8372,7 @@ static void interpret_call_method_alone(ASTNode *node) {
             ASTNode *objN = return_node->left;
             ASTNode *attrN = return_node->right;
             Variable *ov = find_variable(objN->id);
-            if (ov && ov->vtype == VAL_OBJECT) {
+            if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "OBJECT") == 0) {
                 ObjectNode *oobj = ov->value.object_value; int i = -1;
                 int idx = -1;
                 for (i=0; i<oobj->class->attr_count; i++) {
@@ -9528,6 +9554,9 @@ static void interpret_assign_attr(ASTNode *node) {
     Variable *var = find_variable(access->left->id);
     /* find_variable trace removed */
     if (!var || var->vtype!=VAL_OBJECT) {
+        printf("Error: object '%s' is not defined or is not an object.\n", access->left->id); return;
+    }
+    if (!var->type || strcmp(var->type, "OBJECT") != 0) {
         printf("Error: object '%s' is not defined or is not an object.\n", access->left->id); return;
     }
     ObjectNode *obj = var->value.object_value;
