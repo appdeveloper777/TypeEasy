@@ -5001,8 +5001,16 @@ static int te_expr_is_null(ASTNode *l) {
         if (obj_var->vtype != VAL_OBJECT || !obj_var->value.object_value) return 0;
         ObjectNode *obj = obj_var->value.object_value;
         if (!obj->class) return 0;
+        /* Hardening (prod SIGSEGV at ast.c te_expr_is_null, confirmed via the
+         * crash handler's crash_pc/backtrace): a stale/dangling class-instance
+         * object can leave class->attributes[] or attributes[i].id NULL, so the
+         * strcmp below would dereference NULL (addr 0x0). Guard the array and
+         * each id; a corrupt object resolves as non-null instead of crashing. */
+        if (!obj->class->attributes || !obj->attributes) return 0;
         for (int i = 0; i < obj->class->attr_count; i++) {
-            if (strcmp(obj->class->attributes[i].id, attr_ref->id) == 0) {
+            const char *aid = obj->class->attributes[i].id;
+            if (!aid) continue;
+            if (strcmp(aid, attr_ref->id) == 0) {
                 Variable *attr = &obj->attributes[i];
                 /* Runtime null marker for an attribute: VAL_OBJECT with a
                  * NULL object pointer (set by interpret_assign_attr on
