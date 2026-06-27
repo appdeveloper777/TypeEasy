@@ -924,7 +924,9 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
  * re-raise so a core dump is still produced and systemd restarts the unit.
  * Uses only write(2) and stack buffers — async-signal-safe. */
 #ifndef _WIN32
-#include <execinfo.h>   /* backtrace(), backtrace_symbols_fd() (async-signal-safe) */
+#if defined(__GLIBC__) || defined(__APPLE__)
+#include <execinfo.h>   /* backtrace(), backtrace_symbols_fd() — glibc/macOS only */
+#endif
 #include <ucontext.h>   /* ucontext_t / REG_RIP for the exact faulting PC */
 static void te_ssafe_write(const char *s) {
     size_t n = 0; while (s[n]) n++;
@@ -984,7 +986,9 @@ static void te_crash_handler(int sig, siginfo_t *info, void *uctx) {
     /* Async-signal-safe backtrace: the faulting function appears in the chain
      * (e.g. te_expr_is_null <- evaluate_condition <- interpret_if). Even for
      * `static` functions and without -rdynamic, the absolute frame addresses
-     * print and resolve exactly with addr2line on this build. */
+     * print and resolve exactly with addr2line on this build. backtrace() is a
+     * glibc/macOS extension; skipped on libcs without it (musl, etc.). */
+#if defined(__GLIBC__) || defined(__APPLE__)
     {
         void *bt_frames[40];
         int bt_n = backtrace(bt_frames, 40);
@@ -993,6 +997,7 @@ static void te_crash_handler(int sig, siginfo_t *info, void *uctx) {
         te_ssafe_write("}\n");
         backtrace_symbols_fd(bt_frames, bt_n, 2);
     }
+#endif
     /* Restore default disposition and re-raise so a core is produced. */
     signal(sig, SIG_DFL);
     raise(sig);
