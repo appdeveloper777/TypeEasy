@@ -4142,7 +4142,7 @@ int is_string_type(ASTNode *node) {
                 }
                 return 0;
             }
-            if (v && v->vtype == VAL_OBJECT) {
+            if (v && v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "OBJECT") == 0) {
                 obj = v->value.object_value;
                 if (!obj) {
                     ASTNode *wrapper = (ASTNode*)(intptr_t)v->value.object_value;
@@ -4998,6 +4998,16 @@ static int te_expr_is_null(ASTNode *l) {
             if (strcmp(val->type, "NULL") == 0) return 1;
             return 0;
         }
+        /* ROOT FIX (ASan-confirmed heap-buffer-overflow at ast.c te_expr_is_null,
+         * triggered by the mail-cierre handler): a LIST / LAMBDA value is ALSO
+         * VAL_OBJECT, but its value.object_value is an ASTNode*, not an
+         * ObjectNode*. A condition like `scArr.length == 0` (scArr = a
+         * json_parse'd LIST) reaches here as ACCESS_ATTR; casting the list node
+         * to ObjectNode and reading obj->class->attr_count over-reads the small
+         * json heap buffer -> garbage attr_count -> wild attributes[i] deref ->
+         * intermittent SIGSEGV in production. Only a real class instance
+         * (type "OBJECT") backs an ObjectNode, so bail for anything else. */
+        if (!obj_var->type || strcmp(obj_var->type, "OBJECT") != 0) return 0;
         if (obj_var->vtype != VAL_OBJECT || !obj_var->value.object_value) return 0;
         ObjectNode *obj = obj_var->value.object_value;
         if (!obj->class) return 0;
