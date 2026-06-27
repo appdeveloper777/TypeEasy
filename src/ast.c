@@ -7392,11 +7392,26 @@ static void interpret_call_method_impl(ASTNode *node) {
             } else if (arg->type && (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0)) {
                 Variable *av = find_variable(arg->id);
                 if (av && av->vtype == VAL_OBJECT && av->value.object_value) {
-                    /* Push de variable que contiene un objeto: compartir referencia
-                     * (sin clonar — semántica de referencia, igual que asignación). */
-                    new_item->type = strdup("OBJECT");
-                    new_item->extra = (struct ASTNode*)av->value.object_value;
-                    new_item->value = (int)(intptr_t)av->value.object_value;
+                    /* Root fix (prod UAF SIGSEGV in te_expr_is_null/is_string_type):
+                     * a CLASS instance pushed via a variable used to SHARE the
+                     * ObjectNode pointer. When the source variable's object was
+                     * later freed (free_object_node on scope/lambda teardown) the
+                     * list element dangled -> use-after-free reading
+                     * obj->class->attributes[i].id (== NULL after the chunk was
+                     * reused). Clone the instance so the list OWNS its own copy,
+                     * exactly like the push(new X()) and push({...}) paths already
+                     * do. Only class instances (type "OBJECT") are cloned;
+                     * MAP/LIST/LAMBDA (also VAL_OBJECT) keep the shared pointer. */
+                    if (av->type && strcmp(av->type, "OBJECT") == 0) {
+                        ObjectNode *cl = clone_object((ObjectNode*)av->value.object_value);
+                        new_item->type = strdup("OBJECT");
+                        new_item->extra = (struct ASTNode*)cl;
+                        new_item->value = (int)(intptr_t)cl;
+                    } else {
+                        new_item->type = strdup("OBJECT");
+                        new_item->extra = (struct ASTNode*)av->value.object_value;
+                        new_item->value = (int)(intptr_t)av->value.object_value;
+                    }
                 } else if (av && av->vtype == VAL_STRING) {
                     new_item->type = strdup("STRING");
                     new_item->str_value = strdup(av->value.string_value);
