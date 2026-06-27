@@ -100,6 +100,10 @@ def start_native(port: int) -> subprocess.Popen:
         env["PATH"] = "C:\\msys64\\mingw64\\bin;C:\\msys64\\usr\\bin;" + env.get("PATH", "")
     worker_cmd = f"{_quote(sys.executable)} {_quote(str(WORKER_PY))}"
     env["TE_ASYNC_WORKER"] = worker_cmd
+    # Async request overlap (Option-1a) is now OPT-IN (default OFF is race-free:
+    # concurrent async requests no longer interleave the shared per-request
+    # globals). This test exercises the opted-in overlap path via the env flag.
+    env["TYPEEASY_ASYNC_OVERLAP"] = "1"
     return subprocess.Popen(
         [str(binary), "--api", str(APP_TE), "--port", str(port), "--host", "127.0.0.1"],
         cwd=str(REPO_ROOT), env=env,
@@ -123,6 +127,8 @@ def start_docker(image: str, port: int) -> str:
         "--entrypoint", "/typeeasy/typeeasy",
         # POSIX sh worker (the slim image has sh + sleep but no python3).
         "-e", f"TE_ASYNC_WORKER=sh {worker_in}",
+        # Async overlap is opt-in (default OFF = race-free); enable it here.
+        "-e", "TYPEEASY_ASYNC_OVERLAP=1",
         image,
         "--api", app_in, "--port", "9000", "--host", "0.0.0.0",
     ]
