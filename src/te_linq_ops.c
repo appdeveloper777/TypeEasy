@@ -354,6 +354,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         ASTNode *copy = build_item_from_value(item);
                         te_list_append(result, copy);
                     }
+                    te_free_lambda_result(r);
                     item = next_item;
                 }
                 add_or_update_variable("__ret__", result);

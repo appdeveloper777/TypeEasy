@@ -3515,6 +3515,25 @@ void te_ret_scalar(ASTNode *n) {
     free_ast(n);
 }
 
+/* v0.0.30 (leak fix): libera un resultado throwaway de call_lambda en un sitio
+ * que lo DESCARTA (predicados where/count/any/every/find; proyecciones cuyo
+ * valor se consume y no se retiene). Tras el clonado en call_lambda_exec_body,
+ * todo resultado ESCALAR es fresco y owned -> liberarlo es seguro. LIST/MAP/
+ * OBJECT/OBJECT_LITERAL/LAMBDA pueden aliasar el payload de una variable o el
+ * body del programa -> NUNCA se liberan. NO usar en sitios que RETIENEN el
+ * resultado (map/select que lo appendean a una lista). */
+void te_free_lambda_result(ASTNode *r) {
+    if (!r) return;
+    if (r->type && (
+            strcmp(r->type, "LIST") == 0 ||
+            strcmp(r->type, "MAP") == 0 ||
+            strcmp(r->type, "OBJECT_LITERAL") == 0 ||
+            strcmp(r->type, "OBJECT") == 0 ||
+            strcmp(r->type, "LAMBDA") == 0))
+        return;
+    free_ast(r);
+}
+
 // ====================== CREACIÓN DE NODOS AST ======================
 
 /* Fase 1 (perf): lazy NodeKind resolver. Looks up node->kind, computes
@@ -9419,12 +9438,29 @@ static ASTNode* call_lambda_exec_body(ASTNode *lambda) {
         if (!ret) return create_ast_leaf("NULL", 0, NULL, NULL);
         if (ret->type && strcmp(ret->type, "RETURN") == 0 && ret->left) ret = ret->left;
         /* Normalizar a valor concreto (evaluar la expresión) */
+        /* v0.0.30 (leak fix + soundness): `ret` es el return_node, un nodo
+         * PRESTADO del AST del programa (statement-body `return <literal>`).
+         * Para ESCALARES devolvemos un CLON fresco e independiente, de modo que
+         * todo resultado escalar de call_lambda sea owned: los consumidores LINQ
+         * pueden liberarlo (te_free_lambda_result) sin corromper el programa, y
+         * se evita el cross-link del AST que advierte te_evloop. LIST/OBJECT/MAP
+         * se devuelven tal cual (aliasan el payload de una variable; el
+         * consumidor NUNCA los libera). */
         if (ret->type && (
                 strcmp(ret->type, "STRING") == 0 ||
                 strcmp(ret->type, "NUMBER") == 0 ||
                 strcmp(ret->type, "INT") == 0 ||
                 strcmp(ret->type, "FLOAT") == 0 ||
-                strcmp(ret->type, "NULL") == 0 ||
+                strcmp(ret->type, "NULL") == 0)) {
+            if (strcmp(ret->type, "STRING") == 0)
+                return create_ast_leaf("STRING", 0, ret->str_value ? ret->str_value : "", NULL);
+            if (strcmp(ret->type, "FLOAT") == 0)
+                return create_ast_leaf("FLOAT", 0, ret->str_value ? ret->str_value : "0", NULL);
+            if (strcmp(ret->type, "NULL") == 0)
+                return create_ast_leaf("NULL", 0, NULL, NULL);
+            return create_ast_leaf_number(ret->type, ret->value, NULL, NULL); /* NUMBER / INT */
+        }
+        if (ret->type && (
                 strcmp(ret->type, "LIST") == 0 ||
                 strcmp(ret->type, "OBJECT") == 0 ||
                 strcmp(ret->type, "OBJECT_LITERAL") == 0 ||
