@@ -184,7 +184,7 @@ int lazy_terminal(ASTNode *lazy_node, ASTNode *node) {
     }
     if (counters) free(counters);
 
-    if (is_toList) { add_or_update_variable("__ret__", result); return 1; }
+    if (is_toList) { te_req_owned_ast_register(result); add_or_update_variable("__ret__", result); return 1; }
     if (is_count)  { add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)count, NULL, NULL)); return 1; }
     if (is_sum) {
         if (sum_is_int && sum_acc == (double)(long long)sum_acc)
@@ -424,7 +424,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
             te_list_append(result, build_item_from_value(it));
             it = it->next; i++;
         }
-        add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
         return 1;
     }
     if (strcmp(fname, "skip") == 0) {
@@ -436,7 +436,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
             if (i >= n) te_list_append(result, build_item_from_value(it));
             it = it->next; i++;
         }
-        add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
         return 1;
     }
     if (strcmp(fname, "distinct") == 0) {
@@ -513,14 +513,14 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
         }
         for (size_t k = 0; k < scap; k++) if (skeys[k]) free(skeys[k]);
         free(skeys); free(ikeys); free(iused);
-        add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
         return 1;
     }
     if (strcmp(fname, "toList") == 0) {
         ASTNode *result = create_list_node(NULL);
         ASTNode *it = list->left;
         while (it) { te_list_append(result, build_item_from_value(it)); it = it->next; }
-        add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
         return 1;
     }
     if (strcmp(fname, "concat") == 0) {
@@ -542,7 +542,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
             ASTNode *oi = other_list->left;
             while (oi) { te_list_append(result, build_item_from_value(oi)); oi = oi->next; }
         }
-        add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
         return 1;
     }
     if (strcmp(fname, "union") == 0) {
@@ -557,7 +557,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
                 if (!te_list_contains_item(result, oi)) te_list_append(result, build_item_from_value(oi));
             }
         }
-        add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
         return 1;
     }
     if (strcmp(fname, "intersect") == 0) {
@@ -574,7 +574,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
             if (!in_other) continue;
             if (!te_list_contains_item(result, it)) te_list_append(result, build_item_from_value(it));
         }
-        add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
         return 1;
     }
     if (strcmp(fname, "except") == 0) {
@@ -591,7 +591,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
             if (in_other) continue;
             if (!te_list_contains_item(result, it)) te_list_append(result, build_item_from_value(it));
         }
-        add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
         return 1;
     }
     if (strcmp(fname, "zip") == 0) {
@@ -608,7 +608,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
             }
         }
         if (!other_list) {
-            add_or_update_variable("__ret__", result);
+            te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
             return 1;
         }
         ASTNode *a = list->left;
@@ -624,7 +624,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
             a = a->next;
             b = b->next;
         }
-        add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
         return 1;
     }
     return 0;

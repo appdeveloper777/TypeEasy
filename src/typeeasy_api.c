@@ -387,6 +387,10 @@ static int        g_req_owned_ast_cap = 0;
 void te_req_owned_ast_register(ASTNode *root) {
     extern int g_te_request_active;
     if (!root || !g_te_request_active) return;
+    /* dedup: nunca registrar el mismo root dos veces (evita double-free si dos
+     * call-sites lo registran). Lineal sobre pocas entradas por request. */
+    for (int i = 0; i < g_req_owned_ast_count; i++)
+        if (g_req_owned_ast[i] == root) return;
     if (g_req_owned_ast_count >= g_req_owned_ast_cap) {
         int ncap = g_req_owned_ast_cap ? g_req_owned_ast_cap * 2 : 32;
         ASTNode **n = (ASTNode**)realloc(g_req_owned_ast, ncap * sizeof(ASTNode*));

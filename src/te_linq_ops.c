@@ -194,7 +194,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         it = it->next;
                     }
                     if (ok) {
-                        add_or_update_variable("__ret__", result);
+                        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                         return 1;
                     }
                     /* fallthrough: descartar parcial y rehacer por el path general. */
@@ -222,7 +222,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         it = it->next;
                     }
                     if (ok) {
-                        add_or_update_variable("__ret__", result);
+                        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                         return 1;
                     }
                     /* fallthrough: descartar parcial y rehacer por path general. */
@@ -233,7 +233,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         te_list_append(result, build_item_from_value(item));
                         item = item->next;
                     }
-                    add_or_update_variable("__ret__", result);
+                    te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                     return 1;
                 }
                 while (item) {
@@ -242,7 +242,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     item = item->next;
                 }
                 te_req_owned_ast_register(result);
-                add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
             if (strcmp(fname, "filter") == 0) {
@@ -269,7 +269,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                             result->value = 1;
                             te_colcache_attach_lazy(cc, mask, result, new_n);
                             /* mask ownership pasó a la vista — NO free. */
-                            add_or_update_variable("__ret__", result);
+                            te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                             return 1;
                         }
                         free(mask);
@@ -313,7 +313,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                                     if (mask[k]) te_list_append(result, build_item_from_value(arr[k]));
                                 }
                                 free(arr); free(mask);
-                                add_or_update_variable("__ret__", result);
+                                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                                 return 1;
                             }
                             free(arr); free(mask);
@@ -331,7 +331,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         item = item->next;
                     }
                     if (ok) {
-                        add_or_update_variable("__ret__", result);
+                        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                         return 1;
                     }
                     /* fallback: rebuild a fresh list (cannot reuse partial). */
@@ -359,7 +359,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     item = next_item;
                 }
                 te_req_owned_ast_register(result);
-                add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
             if (strcmp(fname, "reduce") == 0) {
@@ -840,7 +840,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         item = item->next;
                     }
                     if (ok) {
-                        add_or_update_variable("__ret__", result);
+                        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                         return 1;
                     }
                     result = create_list_node(NULL);
@@ -854,7 +854,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     te_list_append(result, build_item_from_value(item));
                     item = item->next;
                 }
-                add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
             if (strcmp(fname, "skipWhile") == 0) {
@@ -873,7 +873,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         item = item->next;
                     }
                     if (ok) {
-                        add_or_update_variable("__ret__", result);
+                        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                         return 1;
                     }
                     result = create_list_node(NULL);
@@ -889,7 +889,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     if (!skipping) te_list_append(result, build_item_from_value(item));
                     item = item->next;
                 }
-                add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
             if (strcmp(fname, "flatMap") == 0 || strcmp(fname, "selectMany") == 0) {
@@ -908,7 +908,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     }
                     item = item->next;
                 }
-                add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
             if (strcmp(fname, "groupBy") == 0) {
@@ -964,7 +964,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     }
                     free(bk); free(bg);
                     if (ok) {
-                        add_or_update_variable("__ret__", result);
+                        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                         return 1;
                     }
                     /* fallback: rebuild from scratch */
@@ -1039,7 +1039,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     for (size_t k = 0; k < hcap; k++) if (hk[k]) free(hk[k]);
                     free(hk); free(hv);
                 }
-                add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
             if (strcmp(fname, "orderBy") == 0 || strcmp(fname, "orderByDescending") == 0) {
@@ -1126,7 +1126,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 g_then_ncols = 1;
                 for (int a = 0; a < n; a++) if (skeys[a]) free(skeys[a]);
                 free(items_arr); free(keys); free(skeys); free(idx);
-                add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
             if (strcmp(fname, "thenBy") == 0 || strcmp(fname, "thenByDescending") == 0) {
@@ -1221,7 +1221,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 for (int c = 0; c < g_then_ncols; c++) te_col_reorder(&g_then_cols[c], idx, n);
 
                 free(items_arr); free(keys); free(skeys); free(idx);
-                add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
             if (strcmp(fname, "distinctBy") == 0) {
@@ -1267,7 +1267,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         item = item->next;
                     }
                     free(ikeys); free(iused);
-                    if (ok) { add_or_update_variable("__ret__", result); return 1; }
+                    if (ok) { te_req_owned_ast_register(result); add_or_update_variable("__ret__", result); return 1; }
                     /* fallback */
                     result = create_list_node(NULL);
                     item = list->left;
@@ -1313,7 +1313,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     for (size_t k = 0; k < scap; k++) if (skeys[k]) free(skeys[k]);
                     free(skeys);
                 }
-                add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
             if (strcmp(fname, "toMap") == 0) {
@@ -1374,7 +1374,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 }
                 for (size_t k = 0; k < hcap; k++) if (hk[k]) free(hk[k]);
                 free(hk); free(hv);
-                add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
         }
