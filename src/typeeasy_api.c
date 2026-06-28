@@ -356,14 +356,21 @@ extern void        free_object_node(ObjectNode *obj);
 /* item #6 (leak audit): registro de ObjectNodes creados por model binding en
  * el request actual. Se liberan una sola vez en typeeasy_embedded_invoke_method
  * tras el reset, evitando el double-free por aliasing (un entry por objeto
- * creado, no por variable). */
-#define TE_REQ_OWNED_MAX 64
-static ObjectNode *g_req_owned_objects[TE_REQ_OWNED_MAX];
-static int         g_req_owned_count = 0;
+ * creado, no por variable). v0.0.30: growable (antes fijo en 64 -> un request
+ * con model-bind de >64 objetos perdia los extras = fuga silenciosa). */
+static ObjectNode **g_req_owned_objects = NULL;
+static int          g_req_owned_count = 0;
+static int          g_req_owned_cap = 0;
 
 static void te_req_owned_register(ObjectNode *obj) {
-    if (obj && g_req_owned_count < TE_REQ_OWNED_MAX)
-        g_req_owned_objects[g_req_owned_count++] = obj;
+    if (!obj) return;
+    if (g_req_owned_count >= g_req_owned_cap) {
+        int ncap = g_req_owned_cap ? g_req_owned_cap * 2 : 64;
+        ObjectNode **n = (ObjectNode**)realloc(g_req_owned_objects, ncap * sizeof(ObjectNode*));
+        if (!n) return; /* OOM: skip (leak rather than crash) */
+        g_req_owned_objects = n; g_req_owned_cap = ncap;
+    }
+    g_req_owned_objects[g_req_owned_count++] = obj;
 }
 
 /* v0.0.30 (leak fix): registro paralelo de arboles JSON heap creados por el
