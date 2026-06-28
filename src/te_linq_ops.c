@@ -717,6 +717,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         if (v != (double)(long long)v) is_int = 0;
                         acc += v;
                     }
+                    te_free_lambda_result(r);
                     item = item->next;
                 }
                 if (is_int && acc == (double)(long long)acc) {
@@ -766,6 +767,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     if (r) { acc += evaluate_expression(r); cnt++; }
+                    te_free_lambda_result(r);
                     item = item->next;
                 }
                 double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
@@ -814,6 +816,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     double k = r ? evaluate_expression(r) : 0.0;
+                    te_free_lambda_result(r);
                     if (first) { best_key = k; best_item = item; first = 0; }
                     else if (want_max ? (k > best_key) : (k < best_key)) { best_key = k; best_item = item; }
                     item = item->next;
@@ -843,7 +846,9 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
-                    if (!r || evaluate_expression(r) == 0) break;
+                    int stop = (!r || evaluate_expression(r) == 0);
+                    te_free_lambda_result(r);
+                    if (stop) break;
                     te_list_append(result, build_item_from_value(item));
                     item = item->next;
                 }
@@ -877,6 +882,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     if (skipping) {
                         ASTNode *r = call_lambda(fn, item);
                         if (!r || evaluate_expression(r) == 0) skipping = 0;
+                        te_free_lambda_result(r);
                     }
                     if (!skipping) te_list_append(result, build_item_from_value(item));
                     item = item->next;
@@ -974,6 +980,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     while (item) {
                         ASTNode *kr = call_lambda(fn, item);
                         char *key_str = kr ? get_node_string(kr) : strdup("");
+                        te_free_lambda_result(kr);
                         /* FNV-1a 32-bit hash */
                         uint32_t h = 2166136261u;
                         for (const unsigned char *p = (const unsigned char*)key_str; *p; p++) {
@@ -1074,6 +1081,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         } else if (k) {
                             keys[i] = evaluate_expression(k);
                         }
+                        te_free_lambda_result(k);
                         items_arr[i] = it;
                         i++; it = it->next;
                     }
@@ -1167,6 +1175,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         } else if (k) {
                             keys[a] = evaluate_expression(k);
                         }
+                        te_free_lambda_result(k);
                     }
                 }
 
