@@ -4271,6 +4271,33 @@ void te_invalidate_list_cache(ASTNode *root) {
     root->extra = NULL;
 }
 
+/* v0.0.30 (leak fix): deep-free de un arbol JSON heap producido por json_parse().
+ * free_ast() libera los cuerpos de nodo + strings, pero NO los indices laterales
+ * por-nodo (TEListIdx para LIST, TEMapHash para OBJECT_LITERAL/MAP) guardados en
+ * ->extra. Esto recorre el arbol liberando esos indices primero; luego free_ast()
+ * libera los nodos. Los arrays de indice solo guardan punteros prestados a los
+ * items/pairs, asi que liberarlos aqui y los nodos via free_ast() nunca hace
+ * double-free. Lo usa el registro de AST-owned por-request (typeeasy_api.c). */
+static void te_json_strip_side_index(ASTNode *n) {
+    while (n) {
+        if (n->type) {
+            if (strcmp(n->type, "LIST") == 0) {
+                te_list_idx_free((TEListIdx*)n->extra); n->extra = NULL;
+            } else if (strcmp(n->type, "OBJECT_LITERAL") == 0 || strcmp(n->type, "MAP") == 0) {
+                te_map_hash_free((TEMapHash*)n->extra); n->extra = NULL;
+            }
+        }
+        te_json_strip_side_index(n->left);
+        te_json_strip_side_index(n->right);
+        n = n->next;
+    }
+}
+void te_req_free_json_tree(ASTNode *root) {
+    if (!root) return;
+    te_json_strip_side_index(root);
+    free_ast(root);
+}
+
 /* Forward decl needed because te_list_get_idx is defined further below. */
 static TEListIdx* te_list_get_idx(ASTNode *list);
 
@@ -6744,8 +6771,10 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
     }
     /* item #6 (leak audit): los valores ya se copiaron a `obj` con strdup,
      * así que el AST JSON temporal puede liberarse aquí en vez de leakear
-     * en cada request con model binding. */
-    if (root) free_ast(root);
+     * en cada request con model binding. v0.0.30: deep-free para liberar
+     * tambien los indices laterales (TEListIdx/TEMapHash) de listas/maps
+     * anidados que free_ast() no toca. */
+    if (root) te_req_free_json_tree(root);
     return obj;
 }
 

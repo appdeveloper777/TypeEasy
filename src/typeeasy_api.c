@@ -366,9 +366,35 @@ static void te_req_owned_register(ObjectNode *obj) {
         g_req_owned_objects[g_req_owned_count++] = obj;
 }
 
+/* v0.0.30 (leak fix): registro paralelo de arboles JSON heap creados por el
+ * builtin json_parse() durante un request. te_value_to_variable aliasa (no copia)
+ * LIST/MAP, asi que nada los liberaba -> leak por request. Se registran al
+ * crearse (te_stdlib json_parse) y se liberan UNA sola vez aqui tras el reset de
+ * vars[], via te_req_free_json_tree (deep-free de indices). Growable: un request
+ * puede json_parse() en loop. Mismo perfil de ownership que el registro de
+ * ObjectNode de model-binding: lo request-scoped no debe stashearse en globals. */
+static ASTNode **g_req_owned_ast = NULL;
+static int        g_req_owned_ast_count = 0;
+static int        g_req_owned_ast_cap = 0;
+
+void te_req_owned_ast_register(ASTNode *root) {
+    extern int g_te_request_active;
+    if (!root || !g_te_request_active) return;
+    if (g_req_owned_ast_count >= g_req_owned_ast_cap) {
+        int ncap = g_req_owned_ast_cap ? g_req_owned_ast_cap * 2 : 32;
+        ASTNode **n = (ASTNode**)realloc(g_req_owned_ast, ncap * sizeof(ASTNode*));
+        if (!n) return; /* OOM: skip (leak rather than crash) */
+        g_req_owned_ast = n; g_req_owned_ast_cap = ncap;
+    }
+    g_req_owned_ast[g_req_owned_ast_count++] = root;
+}
+
 static void te_req_owned_free_all(void) {
     for (int i = 0; i < g_req_owned_count; i++) free_object_node(g_req_owned_objects[i]);
     g_req_owned_count = 0;
+    extern void te_req_free_json_tree(ASTNode *root);
+    for (int i = 0; i < g_req_owned_ast_count; i++) te_req_free_json_tree(g_req_owned_ast[i]);
+    g_req_owned_ast_count = 0;
 }
 
 /* v0.0.16 — @auth decorator helpers. */

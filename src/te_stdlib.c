@@ -536,6 +536,11 @@ int te_builtin_dispatch(ASTNode *node) {
         ASTNode *r = te_json_parse_value(&p);
         free(s);
         if (!r) r = create_ast_leaf("STRING", 0, "", NULL);
+        /* v0.0.30 (leak fix): el arbol queda aliaseado en la variable de usuario
+         * (te_value_to_variable no copia LIST/MAP). Registrarlo para liberarlo a
+         * fin de request; si no hay request activo, no se registra (no-op). */
+        extern void te_req_owned_ast_register(ASTNode *root);
+        te_req_owned_ast_register(r);
         add_or_update_variable("__ret__", r);
         return 1;
     }

@@ -287,6 +287,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls);
 ASTNode* from_csv_to_dataframe(const char* filename, ClassNode* cls);
 
 ASTNode *create_list_node(ASTNode *items);
+void te_req_free_json_tree(ASTNode *root);
 ASTNode *append_to_list(ASTNode *list, ASTNode *item);
 /* Internal helpers exposed for module extraction (te_linq, etc.). */
 void te_list_append(ASTNode *list, ASTNode *item);
