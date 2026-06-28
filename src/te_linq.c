@@ -296,7 +296,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
     if (strcmp(fname, "count") == 0 && !node->right) {
         long long n = 0;
         for (ASTNode *it = list->left; it; it = it->next) n++;
-        add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)n, NULL, NULL));
+        te_ret_scalar(create_ast_leaf_number("INT", (int)n, NULL, NULL));
         return 1;
     }
 
@@ -333,10 +333,10 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
             it = it->next;
         }
         if (is_int && acc == (double)(long long)acc) {
-            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)acc, NULL, NULL));
+            te_ret_scalar(create_ast_leaf_number("INT", (int)acc, NULL, NULL));
         } else {
             char buf[64]; te_fmt_double(buf, sizeof(buf), acc);
-            add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+            te_ret_scalar(create_ast_leaf("FLOAT", 0, buf, NULL));
         }
         return 1;
     }
@@ -349,7 +349,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
         }
         double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
         char buf[64]; te_fmt_double(buf, sizeof(buf), res);
-        add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+        te_ret_scalar(create_ast_leaf("FLOAT", 0, buf, NULL));
         return 1;
     }
     if (strcmp(fname, "minVal") == 0 || strcmp(fname, "maxVal") == 0) {

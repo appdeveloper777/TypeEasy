@@ -3505,6 +3505,16 @@ void add_or_update_variable(char *id, ASTNode *value) {
     }
 }
 
+/* v0.0.30 (leak fix): asigna __ret__ desde un nodo ESCALAR recien creado inline
+ * (create_ast_leaf/_number con STRING/INT/FLOAT/NULL/BOOL) y libera el temporal.
+ * add_or_update_variable COPIA escalares via te_value_to_variable, asi que el
+ * nodo queda redundante tras la llamada. USAR SOLO con nodos throwaway recien
+ * creados; NUNCA con nodos del AST del programa ni LIST/MAP (aliasados -> UAF). */
+void te_ret_scalar(ASTNode *n) {
+    add_or_update_variable("__ret__", n);
+    free_ast(n);
+}
+
 // ====================== CREACIÓN DE NODOS AST ======================
 
 /* Fase 1 (perf): lazy NodeKind resolver. Looks up node->kind, computes
