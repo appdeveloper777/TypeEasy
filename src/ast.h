@@ -290,6 +290,7 @@ ASTNode *create_list_node(ASTNode *items);
 void te_req_free_json_tree(ASTNode *root);
 void te_ret_scalar(ASTNode *n);
 void te_free_lambda_result(ASTNode *r);
+void te_req_owned_ast_register(ASTNode *root);
 ASTNode *append_to_list(ASTNode *list, ASTNode *item);
 /* Internal helpers exposed for module extraction (te_linq, etc.). */
 void te_list_append(ASTNode *list, ASTNode *item);

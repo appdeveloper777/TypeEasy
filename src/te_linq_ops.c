@@ -241,6 +241,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     if (r) te_list_append(result, r);
                     item = item->next;
                 }
+                te_req_owned_ast_register(result);
                 add_or_update_variable("__ret__", result);
                 return 1;
             }
@@ -357,6 +358,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     te_free_lambda_result(r);
                     item = next_item;
                 }
+                te_req_owned_ast_register(result);
                 add_or_update_variable("__ret__", result);
                 return 1;
             }
