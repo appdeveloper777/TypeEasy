@@ -399,7 +399,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
             if (strcmp(fname, "forEach") == 0) {
                 ASTNode *item = list->left;
                 while (item) {
-                    call_lambda(fn, item);
+                    te_free_lambda_result(call_lambda(fn, item));
                     item = item->next;
                 }
                 add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
@@ -426,7 +426,9 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
-                    if (r && evaluate_expression(r) != 0) {
+                    int t = (r && evaluate_expression(r) != 0);
+                    te_free_lambda_result(r);
+                    if (t) {
                         add_or_update_variable("__ret__", build_item_from_value(item));
                         return 1;
                     }
@@ -440,7 +442,9 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 int found = 0;
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
-                    if (r && evaluate_expression(r) != 0) { found = 1; break; }
+                    int t = (r && evaluate_expression(r) != 0);
+                    te_free_lambda_result(r);
+                    if (t) { found = 1; break; }
                     item = item->next;
                 }
                 add_or_update_variable("__ret__", create_ast_leaf_number("BOOL", found, NULL, NULL));
@@ -465,7 +469,9 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
-                    if (!r || evaluate_expression(r) == 0) { all = 0; break; }
+                    int t = (!r || evaluate_expression(r) == 0);
+                    te_free_lambda_result(r);
+                    if (t) { all = 0; break; }
                     item = item->next;
                 }
                 add_or_update_variable("__ret__", create_ast_leaf_number("BOOL", all, NULL, NULL));
@@ -491,7 +497,9 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 }
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
-                    if (r && evaluate_expression(r) != 0) { none_match = 0; break; }
+                    int t = (r && evaluate_expression(r) != 0);
+                    te_free_lambda_result(r);
+                    if (t) { none_match = 0; break; }
                     item = item->next;
                 }
                 add_or_update_variable("__ret__", create_ast_leaf_number("BOOL", none_match, NULL, NULL));
@@ -518,6 +526,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     if (r && evaluate_expression(r) != 0) last_match = item;
+                    te_free_lambda_result(r);
                     item = item->next;
                 }
                 if (last_match) add_or_update_variable("__ret__", build_item_from_value(last_match));
@@ -594,6 +603,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
                     if (r && evaluate_expression(r) != 0) cnt++;
+                    te_free_lambda_result(r);
                     item = item->next;
                 }
                 add_or_update_variable("__ret__", create_ast_leaf_number("INT", cnt, NULL, NULL));
