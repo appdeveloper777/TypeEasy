@@ -397,6 +397,20 @@ static void te_req_owned_free_all(void) {
     g_req_owned_ast_count = 0;
 }
 
+/* v0.0.30 (estabilidad): cleanup simetrico para el path de error (longjmp ->
+ * HTTP 500). El longjmp abandona typeeasy_embedded_invoke_method a mitad, asi
+ * que sus returns (que liberan el registro owned y decrementan
+ * g_te_request_active) nunca corren. El request_handler llama esto en su bloque
+ * de recuperacion, tras runtime_reset_vars_to_initial_state(), para que cada
+ * 500 no acumule memoria request-owned (ObjectNodes de model-bind + arboles
+ * json_parse) ni deje g_te_request_active desbalanceado. Idempotente: si no hay
+ * nada registrado, es no-op. */
+void te_req_abort_cleanup(void) {
+    te_req_owned_free_all();
+    extern int g_te_request_active;
+    if (g_te_request_active > 0) g_te_request_active--;
+}
+
 /* v0.0.16 — @auth decorator helpers. */
 extern char       *te_jwt_verify_alloc(const char *token, const char *secret);
 extern const char *typeeasy_http_get_header(const char *k);

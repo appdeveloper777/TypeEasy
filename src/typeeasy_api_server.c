@@ -755,6 +755,13 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
     if (setjmp(recovery) != 0) {
         g_runtime_recovery = NULL;
         runtime_reset_vars_to_initial_state();
+        /* v0.0.30 (estabilidad): el longjmp se salto los returns de
+         * typeeasy_embedded_invoke_method, asi que liberamos aqui el registro
+         * request-owned (ObjectNodes de model-bind + arboles json_parse) y
+         * rebalanceamos g_te_request_active. Sin esto, cada 500 acumulaba
+         * memoria hasta el proximo request exitoso. */
+        extern void te_req_abort_cleanup(void);
+        te_req_abort_cleanup();
 
         /* Item 2.3: in dev mode expose the runtime error location (file:line)
          * in the 500 body to aid debugging. NEVER in production: default is the
