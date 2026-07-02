@@ -6854,6 +6854,31 @@ static void interpret_call_func_impl(ASTNode *node) {
         Variable *fv = find_variable(node->id);
         if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0) {
             ASTNode *lambda = (ASTNode*)(intptr_t)fv->value.object_value;
+            /* v0.0.30: validar ARIDAD en la llamada DIRECTA a una fn nombrada.
+             * Las fn de TypeEasy son de aridad fija (sin defaults ni ...rest),
+             * pero el binder posicional rellenaba con null los params faltantes
+             * e ignoraba los args sobrantes -> resultados silenciosamente
+             * incorrectos (p.ej. el keygen de licencias con 3 vs 4 args). Contar
+             * params ('\1'-separados en lambda->id) y args (mismo stepping que
+             * call_lambda_impl) y lanzar un error claro si difieren. Solo aplica
+             * a la llamada directa: los callbacks internos de LINQ
+             * (map/reduce/forEach) y async siguen usando call_lambda con aridad
+             * laxa a proposito (pasan item/acc/index). */
+            int nparams = 0;
+            if (lambda->id && lambda->id[0]) {
+                nparams = 1;
+                for (const char *pc = lambda->id; *pc; pc++)
+                    if (*pc == '\1') nparams++;
+            }
+            int nargs = 0;
+            for (ASTNode *a = node->left; a; a = a->next ? a->next : a->right)
+                nargs++;
+            if (nargs != nparams) {
+                te_runtime_fatalf(
+                    "TypeError: '%s' expects %d argument%s but %d %s passed.",
+                    node->id, nparams, nparams == 1 ? "" : "s",
+                    nargs, nargs == 1 ? "was" : "were");
+            }
             ASTNode *r = call_lambda(lambda, node->left);
             if (r) add_or_update_variable("__ret__", r);
             return;
