@@ -6859,8 +6859,9 @@ static void interpret_call_func_impl(ASTNode *node) {
              * pero el binder posicional rellenaba con null los params faltantes
              * e ignoraba los args sobrantes -> resultados silenciosamente
              * incorrectos (p.ej. el keygen de licencias con 3 vs 4 args). Contar
-             * params ('\1'-separados en lambda->id) y args (mismo stepping que
-             * call_lambda_impl) y lanzar un error claro si difieren. Solo aplica
+             * params ('\1'-separados en lambda->id) y args (encadenados por
+             * ->next; los binops usan ->right para su operando, ver
+             * add_statement) y lanzar un error claro si difieren. Solo aplica
              * a la llamada directa: los callbacks internos de LINQ
              * (map/reduce/forEach) y async siguen usando call_lambda con aridad
              * laxa a proposito (pasan item/acc/index). */
@@ -6871,7 +6872,7 @@ static void interpret_call_func_impl(ASTNode *node) {
                     if (*pc == '\1') nparams++;
             }
             int nargs = 0;
-            for (ASTNode *a = node->left; a; a = a->next ? a->next : a->right)
+            for (ASTNode *a = node->left; a; a = a->next)
                 nargs++;
             if (nargs != nparams) {
                 te_runtime_fatalf(
