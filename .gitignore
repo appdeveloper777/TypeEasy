@@ -121,3 +121,8 @@ _runs.txt
 _wwin.txt
 scripts/_smoke_export.sh
 test_export.te
+
+# Config local de modos agente y scratch de git (no van al repo)
+.github/agents/
+.wintest/
+_gitlog.txt
