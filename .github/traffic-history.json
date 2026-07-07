@@ -460,5 +460,27 @@
       "count": 3,
       "uniques": 2
     }
+  },
+  {
+    "timestamp": "2026-07-05T00:00:00Z",
+    "clones": {
+      "count": 12,
+      "uniques": 7
+    },
+    "views": {
+      "count": 10,
+      "uniques": 2
+    }
+  },
+  {
+    "timestamp": "2026-07-06T00:00:00Z",
+    "clones": {
+      "count": 31,
+      "uniques": 10
+    },
+    "views": {
+      "count": 9,
+      "uniques": 4
+    }
   }
 ]
