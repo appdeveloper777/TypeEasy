@@ -10894,6 +10894,10 @@ static void interpret_println(ASTNode *node) {
 }
 
 
+/* Capacidad del buffer inline (en pila) del recorrido iterativo de bloques.
+ * NO es un limite: si el bloque tiene mas statements se hace malloc y la
+ * capacidad se duplica. Centralizado aqui para tuning en un solo sitio. */
+#define TE_STMTLIST_SPINE_INLINE 256
 static void interpret_statement_list(ASTNode *node) {
     /* v0.0.30: recorrer la lista de statements de forma ITERATIVA, no recursiva.
      * La gramática es left-recursive (`statement_list: statement_list statement`),
@@ -10905,7 +10909,7 @@ static void interpret_statement_list(ASTNode *node) {
      * Mismo criterio que free_ast (Ola 14c): usar un stack en heap, no la pila de
      * C. El orden de ejecución y los chequeos de flags de control son idénticos
      * al original. */
-    ASTNode *inline_buf[256];
+    ASTNode *inline_buf[TE_STMTLIST_SPINE_INLINE];
     ASTNode **spine = inline_buf;
     int cap = (int)(sizeof(inline_buf) / sizeof(inline_buf[0]));
     int n = 0;
@@ -10965,27 +10969,61 @@ void set_attribute_value(ObjectNode *obj, const char *attr_name, int value) {
     }
 // ====================== LIBERACIÓN DE MEMORIA ======================
 
+/* Capacidad del buffer inline del teardown iterativo (mismo criterio que
+ * TE_STMTLIST_SPINE_INLINE): crece a heap si el arbol es mas ancho. */
+#define TE_FREE_AST_STACK_INLINE 64
 void free_ast(ASTNode *node) {
-    /* Ola 14c: iterar la cadena `->next` en bucle (no recursión) para
-     * evitar stack overflow en listas grandes (50k+ items). `left`/`right`
-     * siguen siendo recursivos porque su profundidad es típicamente baja. */
-    while (node) {
-        ASTNode *next = node->next;
-        /* Pool nodes (CSV wrappers): no liberar nada del nodo — type es sentinel,
-         * id está interned, str_value es NULL, left/right son NULL. El bloque
-         * del pool vive en g_ast_pool_keepalive hasta exit. */
-        if (node->from_pool) { node = next; continue; }
-        /* CSV wrapper sin pool: type apunta al literal global compartido — no liberar. */
-        if (node->type && node->type != g_csv_wrapper_obj_type) free(node->type);
-        /* Ola 3 Fase A: never free interned strings (immortal in global table). */
-        if (node->str_value && !node->str_interned) free(node->str_value);
-        /* Ola 15: same for id slot. */
-        if (node->id && !node->id_interned) free(node->id);
-        free_ast(node->left);
-        free_ast(node->right);
-        free(node);
-        node = next;
+    /* v0.0.30 (teardown iterativo): liberar el arbol SIN recursion de C. La
+     * cadena ->next se recorre en bucle (Ola 14c) y los hijos ->left/->right se
+     * apilan en un stack en HEAP en vez de free_ast(...) recursivo. El
+     * statement_list es left-recursive (espinazo ->left == nº de statements) y
+     * los maps encadenan KV por ->right; ambos podian desbordar el stack de C
+     * en el TEARDOWN de arboles grandes (win64 ~1MB revienta a ~32k-36k niveles,
+     * imprimiendo el resultado y crasheando al salir con STATUS_STACK_OVERFLOW).
+     * Espejo del fix iterativo de interpret_statement_list/interpret_if. */
+    ASTNode *inline_stack[TE_FREE_AST_STACK_INLINE];
+    ASTNode **stack = inline_stack;
+    int cap = (int)(sizeof(inline_stack) / sizeof(inline_stack[0]));
+    int sp = 0;
+    if (node) stack[sp++] = node;
+
+    while (sp > 0) {
+        ASTNode *n = stack[--sp];
+        while (n) {                          /* recorrer la cadena ->next en bucle */
+            ASTNode *next = n->next;
+            /* Pool nodes (CSV wrappers): no liberar nada — type es sentinel, id
+             * interned, str_value NULL, left/right NULL. Vive en el pool. */
+            if (n->from_pool) { n = next; continue; }
+            /* CSV wrapper sin pool: type apunta al literal global compartido. */
+            if (n->type && n->type != g_csv_wrapper_obj_type) free(n->type);
+            /* Ola 3 Fase A: never free interned strings (immortal). */
+            if (n->str_value && !n->str_interned) free(n->str_value);
+            /* Ola 15: same for id slot. */
+            if (n->id && !n->id_interned) free(n->id);
+            ASTNode *l = n->left, *r = n->right;   /* leer antes de free(n) */
+            free(n);
+            if (l || r) {                    /* apilar hijos: liberacion sin recursion */
+                if (sp + 2 > cap) {
+                    int ncap = cap * 2;
+                    ASTNode **grown = (ASTNode **)malloc((size_t)ncap * sizeof(ASTNode *));
+                    if (grown) {
+                        memcpy(grown, stack, (size_t)sp * sizeof(ASTNode *));
+                        if (stack != inline_stack) free(stack);
+                        stack = grown; cap = ncap;
+                    }
+                }
+                if (sp + 2 <= cap) {
+                    if (l) stack[sp++] = l;
+                    if (r) stack[sp++] = r;
+                } else {                     /* OOM al crecer: fallback recursivo (raro) */
+                    free_ast(l);
+                    free_ast(r);
+                }
+            }
+            n = next;
+        }
     }
+    if (stack != inline_stack) free(stack);
 }
 
 // Serializa un objeto a XML string dado su id y lo guarda en __ret__
