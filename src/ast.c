@@ -6432,12 +6432,24 @@ double evaluate_number(ASTNode *node) {
 }
 
 void interpret_if(ASTNode *node) {
-    if (!node || !node->left) return;
-    int result = evaluate_condition(node->left);
-    if (result) {
-        interpret_ast(node->right);
-    } else if (node->next) {
-        interpret_ast(node->next);
+    /* v0.0.30: recorrer la cadena `if / else if / ... / else` de forma ITERATIVA.
+     * Cada rama `else if` es otro nodo IF encadenado por ->next (create_if_node);
+     * el `interpret_ast(node->next)` recursivo hacía profundidad == nº de ramas ->
+     * mismo riesgo de stack overflow que interpret_statement_list en cadenas
+     * grandes. Semántica idéntica al original. */
+    while (node) {
+        if (!node->left) return;
+        if (evaluate_condition(node->left)) {
+            interpret_ast(node->right);          /* rama then */
+            return;
+        }
+        ASTNode *els = node->next;               /* else / else-if / NULL */
+        if (els && nk_of(els) == NK_IF) {
+            node = els;                          /* else if: iterar sin recursar */
+        } else {
+            interpret_ast(els);                  /* else final (bloque) o NULL: no-op */
+            return;
+        }
     }
 }
 
@@ -10883,9 +10895,49 @@ static void interpret_println(ASTNode *node) {
 
 
 static void interpret_statement_list(ASTNode *node) {
-    interpret_ast(node->left);
-    if (throw_flag || return_flag || break_flag || continue_flag) return;
-    interpret_ast(node->right);
+    /* v0.0.30: recorrer la lista de statements de forma ITERATIVA, no recursiva.
+     * La gramática es left-recursive (`statement_list: statement_list statement`),
+     * así que la lista queda anidada por ->left: node->left es la sublista con los
+     * statements previos y node->right el statement actual. El `interpret_ast(
+     * node->left)` recursivo hacía que la profundidad de interpret_ast fuera ==
+     * nº de statements del bloque -> desbordaba el stack del worker en handlers
+     * grandes (SIGSEGV silencioso, sin log; ese era el bug #5 reportado por ERP).
+     * Mismo criterio que free_ast (Ola 14c): usar un stack en heap, no la pila de
+     * C. El orden de ejecución y los chequeos de flags de control son idénticos
+     * al original. */
+    ASTNode *inline_buf[256];
+    ASTNode **spine = inline_buf;
+    int cap = (int)(sizeof(inline_buf) / sizeof(inline_buf[0]));
+    int n = 0;
+
+    /* 1) Descender el espinazo ->left apilando los nodos STATEMENT_LIST. */
+    ASTNode *cur = node;
+    while (cur && nk_of(cur) == NK_STATEMENT_LIST) {
+        if (n == cap) {
+            int ncap = cap * 2;
+            ASTNode **grown = (ASTNode **)malloc((size_t)ncap * sizeof(ASTNode *));
+            if (!grown) break;  /* OOM: degradar procesando el resto recursivamente */
+            memcpy(grown, spine, (size_t)n * sizeof(ASTNode *));
+            if (spine != inline_buf) free(spine);
+            spine = grown;
+            cap = ncap;
+        }
+        spine[n++] = cur;
+        cur = cur->left;
+    }
+
+    /* 2) cur = primer statement del bloque (nodo no-STATEMENT_LIST, o NULL). */
+    interpret_ast(cur);
+    if (!(throw_flag || return_flag || break_flag || continue_flag)) {
+        /* 3) Procesar los ->right del más profundo (más antiguo) al más reciente,
+         *    preservando el orden fuente. */
+        for (int i = n - 1; i >= 0; i--) {
+            interpret_ast(spine[i]->right);
+            if (throw_flag || return_flag || break_flag || continue_flag) break;
+        }
+    }
+
+    if (spine != inline_buf) free(spine);
 }
 
 // ====================== MANEJO DE ATRIBUTOS ======================
