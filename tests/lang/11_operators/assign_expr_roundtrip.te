@@ -1,0 +1,14 @@
+// expect: ternary=111 index=20 map=55 idxstr=30 nested=1 oob=null
+// Regresión: ternario / acceso por índice / acceso por clave de mapa ASIGNADOS
+// a una variable ya declarada deben EVALUARSE (misma familia que
+// comparison_assign). Antes caían al catch-all de te_value_to_variable y se
+// guardaba 0. Ver interpret_assign en src/ast.c (rama TERNARY + ACCESS_EXPR).
+var arr = [10, 20, 30];
+var m = { "k": 55 };
+var t = 0;      t = (5 > 3 ? 111 : 222);
+var y = 0;      y = arr[1];
+var z = 0;      z = m["k"];
+var s = "";     s = arr[2];
+var nested = 0; nested = (arr[0] < arr[1] ? 1 : 0);
+var oob = 9;    oob = arr[99];
+println("ternary=" + t + " index=" + y + " map=" + z + " idxstr=" + s + " nested=" + nested + " oob=" + oob);

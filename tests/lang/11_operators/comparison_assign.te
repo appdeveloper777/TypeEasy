@@ -1,0 +1,17 @@
+// expect: e1=1 g1=1 n0=0 str=1 and=1 or=1 not=1 blk=1
+// Regresión: un operador de comparación/lógico ASIGNADO a una variable ya
+// declarada (no en la declaración) debe EVALUARSE. Antes caía al catch-all de
+// te_value_to_variable y se guardaba 0 SIEMPRE (p.ej. `coincide = (a == b)`
+// daba false aun con a y b iguales). Ver interpret_assign en src/ast.c.
+var e1 = 0;      e1 = (5 == 5);
+var g1 = 0;      g1 = (7 > 3);
+var n0 = 9;      n0 = (5 == 9);
+var s1 = "AB";   var s2 = "AB";
+var str = false; str = (s1 == s2);
+var andv = false; andv = (1 < 2 && 3 < 4);
+var orv = false;  orv = (1 > 2 || 3 > 1);
+var notv = false; notv = !(1 > 2);
+// Forma exacta del bug de licencias: reasignar dentro de un bloque if.
+var clave = "X"; var esp = ""; var blk = false; var n = 1;
+if (n > 0) { esp = "X"; blk = (clave == esp); }
+println("e1=" + e1 + " g1=" + g1 + " n0=" + n0 + " str=" + str + " and=" + andv + " or=" + orv + " not=" + notv + " blk=" + blk);

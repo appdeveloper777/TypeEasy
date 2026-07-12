@@ -9803,6 +9803,17 @@ static void interpret_assign(ASTNode *node) {
         return; 
     }
 
+    /* Ternario `x = cond ? a : b` sobre variable existente: elegir la rama
+     * fresca SIN mutar node->right (para que loops/funciones re-evalúen la
+     * condición). Loop para ternarios anidados (right-assoc). Espejo de
+     * interpret_var_decl; sin esto el nodo TERNARY caía al catch-all de
+     * te_value_to_variable y se guardaba 0 SIEMPRE. */
+    while (value_node && value_node->type && strcmp(value_node->type, "TERNARY") == 0) {
+        int cond = (evaluate_expression(value_node->left) != 0.0);
+        value_node = cond ? value_node->right : value_node->extra;
+    }
+    if (!value_node) return;
+
     /* Fase 2 (perf): fast-path for "x = numeric_expr" with cached Variable*.
      * Hot in for/while loops. Skips strdup/find_variable_for/temp_node alloc. */
     {
@@ -9978,6 +9989,38 @@ static void interpret_assign(ASTNode *node) {
         add_or_update_variable(var_node->id, temp_node);
         free_ast(temp_node);
     } 
+    /* Operadores de comparación / lógicos producen un booleano (0|1). Espejo de
+     * la rama homónima de declare_variable: una ASIGNACIÓN `x = (a == b)` (donde
+     * x ya existe) DEBE evaluar el operador. Sin esta rama estos node types
+     * caían al `else` final -> add_or_update_variable guardaba el nodo crudo vía
+     * te_value_to_variable, cuyo catch-all almacena value->value (0), perdiendo
+     * SIEMPRE el resultado real (p.ej. `coincide = (clave == esperada)` daba
+     * false aun con strings iguales). */
+    else if (strcmp(value_node->type, "GT") == 0 || strcmp(value_node->type, "LT") == 0 ||
+             strcmp(value_node->type, "EQ") == 0 || strcmp(value_node->type, "GT_EQ") == 0 ||
+             strcmp(value_node->type, "LT_EQ") == 0 || strcmp(value_node->type, "DIFF") == 0 ||
+             strcmp(value_node->type, "AND") == 0 || strcmp(value_node->type, "OR") == 0 ||
+             strcmp(value_node->type, "NOT") == 0) {
+        int b = evaluate_expression(value_node) != 0 ? 1 : 0;
+        ASTNode *temp_node = create_ast_leaf_number("BOOL", b, NULL, NULL);
+        add_or_update_variable(var_node->id, temp_node);
+        free_ast(temp_node);
+    }
+    /* Índice / clave `x = arr[i]` / `x = m["k"]` sobre variable existente.
+     * resolve_access_item devuelve el nodo-elemento tipado (STRING/INT/FLOAT/
+     * BOOL/OBJECT/LIST/MAP); add_or_update_variable lo copia (escalares) o
+     * aliasa (contenedores) vía te_value_to_variable. Sin esta rama el
+     * ACCESS_EXPR caía al catch-all y se guardaba 0 (p.ej. `y = arr[1]` -> 0). */
+    else if (strcmp(value_node->type, "ACCESS_EXPR") == 0) {
+        ASTNode *item = resolve_access_item(value_node);
+        if (item) {
+            add_or_update_variable(var_node->id, item);
+        } else {
+            ASTNode *nn = create_ast_leaf("NULL", 0, NULL, NULL);
+            add_or_update_variable(var_node->id, nn);
+            free_ast(nn);
+        }
+    }
     /* `target = sourceVar;` — copiar el VALOR de otra variable. Sin esta rama
      * un identificador desnudo caía al `else` final y se pasaba crudo a
      * add_or_update_variable, cuyo te_value_to_variable NO tiene caso
