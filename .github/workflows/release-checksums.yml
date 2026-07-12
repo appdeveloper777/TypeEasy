@@ -1,0 +1,103 @@
+name: Release - Consolidate SHA256SUMS
+
+# Genera UN unico SHA256SUMS-<ver>.txt autoritativo que cubre TODOS los assets
+# del release, y elimina los fragmentos por-plataforma. Corre despues de que
+# cualquiera de los workflows de release termina; es idempotente (usa --clobber
+# y regenera los hashes desde los binarios reales), asi que la ultima corrida
+# —cuando ya subieron todos los assets— deja el archivo completo y correcto.
+#
+# Contexto: release-linux.yml y release-windows.yml subian AMBOS
+# `SHA256SUMS-<ver>.txt` (mismo nombre) y se pisaban por carrera -> el publicado
+# quedaba con los hashes de un solo SO. Este job elimina esa ambiguedad sin
+# tocar los 4 workflows de build.
+
+on:
+  workflow_run:
+    workflows:
+      - "Release - Linux Installer"
+      - "Release - Windows Installer"
+      - "Release - Linux ARM64 Installer"
+      - "Release - Android ARM64 (Bionic)"
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag del release a consolidar (ej. v0.0.30)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-checksums-${{ github.event.workflow_run.head_branch || github.event.inputs.tag }}
+  cancel-in-progress: true
+
+jobs:
+  consolidate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: meta
+        env:
+          GH_EVENT: ${{ github.event_name }}
+          WR_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "${GH_EVENT}" == "workflow_dispatch" ]]; then
+            TAG="${DISPATCH_TAG}"
+          else
+            TAG="${WR_BRANCH}"
+          fi
+          if [[ -z "${TAG}" || "${TAG}" != v* ]]; then
+            echo "No es un tag de release ('${TAG}'); nada que consolidar."
+            echo "skip=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "version=${TAG#v}" >> "${GITHUB_OUTPUT}"
+          echo "skip=false" >> "${GITHUB_OUTPUT}"
+          echo "Consolidando checksums para ${TAG}"
+
+      - name: Build and publish single SHA256SUMS
+        if: steps.meta.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VER: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Esperar (best-effort) a que el release exista: los builds pueden
+          # seguir subiendo assets cuando esto arranca.
+          for i in $(seq 1 12); do
+            if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then break; fi
+            echo "release ${TAG} aun no existe; reintento ${i}/12"
+            sleep 15
+          done
+          workdir="$(mktemp -d)"
+          cd "${workdir}"
+          gh release download "${TAG}" --repo "${REPO}" --clobber
+          out="SHA256SUMS-${VER}.txt"
+          : > "${out}"
+          shopt -s nullglob
+          for f in *; do
+            case "${f}" in
+              SHA256SUMS-*.txt) continue ;;                       # ignorar sums previos
+              *.tar.gz|*.zip|*.exe|*.deb|*.AppImage) sha256sum "${f}" >> "${out}" ;;
+            esac
+          done
+          # Orden estable por nombre de archivo (segunda columna).
+          sort -k2 "${out}" -o "${out}"
+          echo "----- ${out} -----"
+          cat "${out}"
+          # Publicar el unico SHA256SUMS completo (clobber = idempotente).
+          gh release upload "${TAG}" "${out}" --repo "${REPO}" --clobber
+          # Eliminar fragmentos por-plataforma para dejar una sola fuente de verdad.
+          for a in $(gh release view "${TAG}" --repo "${REPO}" --json assets --jq '.assets[].name'); do
+            case "${a}" in
+              "${out}") : ;;                                       # conservar el combinado
+              SHA256SUMS-${VER}-*.txt) gh release delete-asset "${TAG}" "${a}" --repo "${REPO}" --yes ;;
+            esac
+          done
+          echo "Consolidacion completa para ${TAG}."
