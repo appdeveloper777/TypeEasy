@@ -210,6 +210,18 @@ void te_capture_error(int line, const char *msg, const char *near) {
 #define TE_JIT_AVAILABLE 0
 #define TE_HAS_MMAP 0
 #define TE_HAS_PTHREAD 0
+/* Phase F/F.3 (portado a este branch): en arm64/android (__linux__ pero NO
+ * __x86_64__) el branch de arriba no aplica; sin estas defs weak,
+ * te_capture_error queda declarado implicitamente y clang (Android NDK) lo
+ * trata como ERROR duro. Mismo contrato weak que el branch x86: typeeasy_main.c
+ * provee las defs STRONG; aqui son weak para que binarios sin main (agent) linken. */
+int g_test_failed __attribute__((weak)) = 0;
+int g_test_assertions __attribute__((weak)) = 0;
+int g_capture_errors __attribute__((weak)) = 0;
+void te_capture_error(int line, const char *msg, const char *near) __attribute__((weak));
+void te_capture_error(int line, const char *msg, const char *near) {
+    (void)line; (void)msg; (void)near;
+}
 #endif
 
 /* Detección portable de número de CPUs (sysconf no existe en MSYS2/mingw). */
