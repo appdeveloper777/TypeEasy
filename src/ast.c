@@ -6254,6 +6254,26 @@ void interpret_ast(ASTNode *node) {
             Variable *fv = node->id ? find_variable(node->id) : NULL;
             if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0) {
                 ASTNode *lambda = (ASTNode*)(intptr_t)fv->value.object_value;
+                /* Residual C: validar ARIDAD tambien aqui (llamada-statement con
+                 * retorno DESCARTADO, p.ej. `f(1);`). Antes call_lambda rellenaba
+                 * los params faltantes con null e ignoraba sobrantes EN SILENCIO.
+                 * Mismo check/mensaje que interpret_call_func_impl (resultado
+                 * consumido). Los callbacks LINQ/async NO pasan por aqui, siguen
+                 * con aridad laxa a proposito. */
+                int nparams = 0;
+                if (lambda->id && lambda->id[0]) {
+                    nparams = 1;
+                    for (const char *pc = lambda->id; *pc; pc++)
+                        if (*pc == '\1') nparams++;
+                }
+                int nargs = 0;
+                for (ASTNode *ar = a; ar; ar = ar->next) nargs++;
+                if (nargs != nparams) {
+                    te_runtime_fatalf(
+                        "TypeError: '%s' expects %d argument%s but %d %s passed.",
+                        node->id, nparams, nparams == 1 ? "" : "s",
+                        nargs, nargs == 1 ? "was" : "were");
+                }
                 ASTNode *r = call_lambda(lambda, a);
                 if (r) add_or_update_variable("__ret__", r);
             } else {
@@ -11112,22 +11132,36 @@ static void te_arity_walk(ASTNode *n, TeArityFn *tbl, int count,
             n = n->next; continue;
         }
 
-        if (strcmp(n->type, "CALL_FUNC") == 0 && n->id &&
-            !te_name_in_shadow(shadow, n->id)) {
-            for (int i = 0; i < count; i++) {
-                if (tbl[i].ambiguous || !tbl[i].name ||
-                    strcmp(tbl[i].name, n->id) != 0) continue;
-                int nargs = 0;
-                for (ASTNode *a = n->left; a; a = a->next) nargs++;
-                if (nargs != tbl[i].nparams) {
-                    char msg[256];
-                    snprintf(msg, sizeof(msg),
-                        "TypeError: '%s' expects %d argument%s but %d %s passed.",
-                        n->id, tbl[i].nparams, tbl[i].nparams == 1 ? "" : "s",
-                        nargs, nargs == 1 ? "was" : "were");
-                    te_capture_error(n->line > 0 ? n->line : *lastLine, msg, n->id);
+        /* Llamada DIRECTA a una fn nombrada. Dos formas de nodo:
+         *   - CALL_FUNC           : resultado CONSUMIDO (arg de otra, `let r=`,
+         *                           `x=`), args en ->left.
+         *   - METHOD_CALL_ALONE   : statement SUELTO con resultado DESCARTADO
+         *                           (`f(x);`), sin receptor (->left==NULL), args
+         *                           en ->right.  (Residual C: antes solo se
+         *                           validaba la primera forma.) */
+        {
+            ASTNode *ca_args = NULL; int is_direct_call = 0;
+            if (strcmp(n->type, "CALL_FUNC") == 0) {
+                ca_args = n->left; is_direct_call = 1;
+            } else if (strcmp(n->type, "METHOD_CALL_ALONE") == 0 && n->left == NULL) {
+                ca_args = n->right; is_direct_call = 1;
+            }
+            if (is_direct_call && n->id && !te_name_in_shadow(shadow, n->id)) {
+                for (int i = 0; i < count; i++) {
+                    if (tbl[i].ambiguous || !tbl[i].name ||
+                        strcmp(tbl[i].name, n->id) != 0) continue;
+                    int nargs = 0;
+                    for (ASTNode *a = ca_args; a; a = a->next) nargs++;
+                    if (nargs != tbl[i].nparams) {
+                        char msg[256];
+                        snprintf(msg, sizeof(msg),
+                            "TypeError: '%s' expects %d argument%s but %d %s passed.",
+                            n->id, tbl[i].nparams, tbl[i].nparams == 1 ? "" : "s",
+                            nargs, nargs == 1 ? "was" : "were");
+                        te_capture_error(n->line > 0 ? n->line : *lastLine, msg, n->id);
+                    }
+                    break;
                 }
-                break;
             }
         }
 
