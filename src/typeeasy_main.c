@@ -246,17 +246,23 @@ static void json_emit_str(FILE *fp, const char *s) {
     fputc('"', fp);
 }
 
-/* --syntax-check <file>: parse only, emit JSON {ok, errors:[{line,msg,near}]} */
+/* --syntax-check <file>: parse only, emit JSON {ok, errors:[{line,msg,near,file}]} */
+/* Residual B (ERP): validación estática de aridad (definida en ast.c). */
+extern void te_syntax_check_arity(ASTNode *root);
 static int run_syntax_check(const char *path) {
     g_capture_errors = 1;
     g_error_count = 0;
     FILE *fp = fopen(path, "r");
     if (!fp) {
-        printf("{\"ok\":false,\"errors\":[{\"line\":0,\"msg\":\"cannot open file\",\"near\":\"\"}]}\n");
+        printf("{\"ok\":false,\"errors\":[{\"line\":0,\"msg\":\"cannot open file\",\"near\":\"\",\"file\":");
+        json_emit_str(stdout, path);
+        printf("}]}\n");
         return 1;
     }
-    parse_file(fp);
+    ASTNode *ast = parse_file(fp);
     fclose(fp);
+    /* Aridad estática: solo si el parseo no dejó errores (AST bien formado). */
+    if (g_error_count == 0) te_syntax_check_arity(ast);
     printf("{\"ok\":%s,\"errors\":[", g_error_count == 0 ? "true" : "false");
     for (int i = 0; i < g_error_count; i++) {
         if (i) fputc(',', stdout);
@@ -264,6 +270,8 @@ static int run_syntax_check(const char *path) {
         json_emit_str(stdout, g_errors[i].msg);
         printf(",\"near\":");
         json_emit_str(stdout, g_errors[i].near);
+        printf(",\"file\":");
+        json_emit_str(stdout, path);
         fputc('}', stdout);
     }
     printf("]}\n");

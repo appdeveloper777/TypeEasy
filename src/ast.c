@@ -11026,6 +11026,145 @@ void free_ast(ASTNode *node) {
     if (stack != inline_stack) free(stack);
 }
 
+/* ==========================================================================
+ * Residual B (ERP): validacion ESTATICA de ARIDAD para --syntax-check.
+ * El runtime ya lanza TypeError al llamar una `fn` nombrada de aridad fija con
+ * un nº de args distinto (interpret_call_func_impl), pero eso solo salta si esa
+ * rama se EJECUTA. Aqui recorremos el AST parseado y marcamos el desajuste en
+ * COMPILACION, para atraparlo antes de desplegar (incluso en ramas no
+ * ejercitadas — el caso que rompio el keygen de licencias de ERP).
+ *
+ * Conservador para NO producir falsos positivos en el editor/LSP:
+ *   - Solo `fn` nombradas a NIVEL SUPERIOR (`let f = fn(...) => ...`).
+ *   - Se saltan nombres (re)declarados de forma ambigua (misma etiqueta con
+ *     distinta aridad, o mezclada con un valor no-lambda).
+ *   - Se saltan nombres SOMBREADOS por un parametro de un lambda envolvente
+ *     (p.ej. `let apply = fn(f) => { f(1); }`).
+ * Solo se invoca desde run_syntax_check(); cero coste/riesgo en ejecucion normal.
+ * ========================================================================== */
+typedef struct { const char *name; int nparams; int ambiguous; } TeArityFn;
+
+static int te_arity_of_lambda(ASTNode *lam) {
+    if (!lam || !lam->id || !lam->id[0]) return 0;   /* fn() => ... : 0 params */
+    int n = 1;
+    for (const char *p = lam->id; *p; p++) if (*p == '\1') n++;
+    return n;
+}
+
+/* Registra (o marca ambiguo) un `let NAME = fn(...)` de nivel superior. */
+static void te_arity_record(ASTNode *stmt, TeArityFn *tbl, int *count, int cap) {
+    if (!stmt || !stmt->type || strcmp(stmt->type, "VAR_DECL") != 0 || !stmt->id) return;
+    ASTNode *val = stmt->left;
+    int is_lambda = (val && val->type && strcmp(val->type, "LAMBDA") == 0);
+    int np = is_lambda ? te_arity_of_lambda(val) : -1;
+    for (int i = 0; i < *count; i++) {
+        if (tbl[i].name && strcmp(tbl[i].name, stmt->id) == 0) {
+            if (!is_lambda || tbl[i].nparams != np) tbl[i].ambiguous = 1;
+            return;
+        }
+    }
+    if (*count < cap) {
+        TeArityFn *e = &tbl[(*count)++];
+        e->name = stmt->id;
+        e->nparams = np;
+        e->ambiguous = is_lambda ? 0 : 1;   /* no-lambda: registrado pero no chequeable */
+    }
+}
+
+/* Recolecta solo statements de NIVEL SUPERIOR (espinazo ->left del program). */
+static void te_arity_collect_toplevel(ASTNode *root, TeArityFn *tbl, int *count, int cap) {
+    ASTNode *cur = root;
+    while (cur && cur->type && strcmp(cur->type, "STATEMENT_LIST") == 0) {
+        te_arity_record(cur->right, tbl, count, cap);   /* statement actual */
+        cur = cur->left;                                /* sublista mas antigua */
+    }
+    te_arity_record(cur, tbl, count, cap);              /* primer statement / hoja */
+}
+
+/* Recorre el AST marcando llamadas directas `NAME(args)` con aridad incorrecta.
+ * Itera ->next y el espinazo de STATEMENT_LIST en bucle (no recursa por esos
+ * ejes) para no desbordar el stack en archivos con muchos statements. */
+static void te_arity_walk(ASTNode *n, TeArityFn *tbl, int count,
+                          const char *shadow, int *lastLine) {
+    while (n) {
+        if (!n->type) { n = n->next; continue; }
+        if (n->line > 0) *lastLine = n->line;
+
+        if (strcmp(n->type, "STATEMENT_LIST") == 0) {
+            ASTNode *cur = n;
+            while (cur && cur->type && strcmp(cur->type, "STATEMENT_LIST") == 0) {
+                te_arity_walk(cur->right, tbl, count, shadow, lastLine);
+                cur = cur->left;
+            }
+            te_arity_walk(cur, tbl, count, shadow, lastLine);
+            n = n->next; continue;
+        }
+
+        if (strcmp(n->type, "CALL_FUNC") == 0 && n->id &&
+            !te_name_in_shadow(shadow, n->id)) {
+            for (int i = 0; i < count; i++) {
+                if (tbl[i].ambiguous || !tbl[i].name ||
+                    strcmp(tbl[i].name, n->id) != 0) continue;
+                int nargs = 0;
+                for (ASTNode *a = n->left; a; a = a->next) nargs++;
+                if (nargs != tbl[i].nparams) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                        "TypeError: '%s' expects %d argument%s but %d %s passed.",
+                        n->id, tbl[i].nparams, tbl[i].nparams == 1 ? "" : "s",
+                        nargs, nargs == 1 ? "was" : "were");
+                    te_capture_error(n->line > 0 ? n->line : *lastLine, msg, n->id);
+                }
+                break;
+            }
+        }
+
+        if (strcmp(n->type, "LAMBDA") == 0 && n->id && n->id[0]) {
+            /* Sombrear los parametros del lambda dentro de su cuerpo (n->left).
+             * NO se recorre ->right/->extra: en lambdas `extra` puede guardar el
+             * entorno de captura (no un nodo estandar). El cuerpo esta en left. */
+            char buf[512];
+            char *ext = buf;
+            size_t sl = shadow ? strlen(shadow) : 0;
+            size_t pl = strlen(n->id);
+            size_t need = sl + (sl ? 1 : 0) + pl + 1;
+            if (need > sizeof(buf)) ext = (char *)malloc(need);
+            if (ext) {
+                if (sl) { memcpy(ext, shadow, sl); ext[sl] = '\1'; memcpy(ext + sl + 1, n->id, pl + 1); }
+                else    { memcpy(ext, n->id, pl + 1); }
+                te_arity_walk(n->left, tbl, count, ext, lastLine);
+                if (ext != buf) free(ext);
+            } else {
+                te_arity_walk(n->left, tbl, count, shadow, lastLine);
+            }
+            n = n->next; continue;
+        }
+
+        /* left y right son siempre hijos ASTNode. El campo extra esta
+         * SOBRECARGADO: en nodos OBJECT/LIST/MAP guarda ObjectNode, TEListIdx o
+         * TEMapHash (punteros que NO son ASTNode). Solo es un nodo hijo real en
+         * TERNARY (rama else). Recorrerlo en otros tipos leeria un puntero
+         * no-nodo y corromperia la memoria. El else de un if va en next
+         * (create_if_node), asi que queda cubierto por la iteracion del bucle. */
+        te_arity_walk(n->left,  tbl, count, shadow, lastLine);
+        te_arity_walk(n->right, tbl, count, shadow, lastLine);
+        if (strcmp(n->type, "TERNARY") == 0)
+            te_arity_walk(n->extra, tbl, count, shadow, lastLine);
+        n = n->next;
+    }
+}
+
+/* Punto de entrada llamado por run_syntax_check() tras un parseo sin errores. */
+void te_syntax_check_arity(ASTNode *root) {
+    if (!root) return;
+    TeArityFn tbl[512];
+    int count = 0;
+    te_arity_collect_toplevel(root, tbl, &count, 512);
+    if (count == 0) return;   /* no hay fn nombradas -> nada que chequear */
+    int lastLine = 0;
+    te_arity_walk(root, tbl, count, "", &lastLine);
+}
+
 // Serializa un objeto a XML string dado su id y lo guarda en __ret__
 void print_object_as_xml_by_id(const char* id) {
     Variable *var = find_variable((char*)id);
