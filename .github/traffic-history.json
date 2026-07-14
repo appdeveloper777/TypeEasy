@@ -537,5 +537,27 @@
       "count": 2,
       "uniques": 2
     }
+  },
+  {
+    "timestamp": "2026-07-12T00:00:00Z",
+    "clones": {
+      "count": 104,
+      "uniques": 8
+    },
+    "views": {
+      "count": 34,
+      "uniques": 3
+    }
+  },
+  {
+    "timestamp": "2026-07-13T00:00:00Z",
+    "clones": {
+      "count": 48,
+      "uniques": 9
+    },
+    "views": {
+      "count": 29,
+      "uniques": 2
+    }
   }
 ]
