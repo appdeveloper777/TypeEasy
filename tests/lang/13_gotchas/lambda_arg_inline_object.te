@@ -1,0 +1,17 @@
+// expect: cod=00001,00002 top=hola nested=2
+// REGRESIÓN B2: pasar json_parse(...) (o cualquier llamada que devuelva un
+// OBJETO/MAP/LIST) INLINE como argumento de una función caía al `else -> NULL`
+// del binder de argumentos en call_lambda_impl (ast.c): sólo manejaba
+// VAL_STRING/VAL_INT/VAL_FLOAT, así que un VAL_OBJECT (lo que devuelve
+// json_parse) se descartaba y el objeto llegaba VACÍO al parámetro
+// (p["campo"] == ""). request_param("id") (string) inline sí bindeaba; sólo el
+// objeto se perdía. Ahora se reconstruye/aliasa igual que la rama
+// IDENTIFIER->obj_var. Cubre también el array anidado (nested).
+let Repo = fn(p) => {
+    let cod = p["producto_codigos"];
+    let top = p["nombre"];
+    let ls  = p["lineas"];
+    return "cod=" + cod + " top=" + top + " nested=" + ls.length;
+};
+
+println(Repo(json_parse("{\"producto_codigos\":\"00001,00002\",\"nombre\":\"hola\",\"lineas\":[{\"a\":1},{\"a\":2}]}")));

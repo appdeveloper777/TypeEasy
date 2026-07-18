@@ -280,7 +280,17 @@ static int append_value(char** buf, size_t* len, size_t* cap,
         free(esc);
         return 1;
     } else {
-        kind = 4;
+        /* Cualquier otro nodo es una EXPRESION inline en el map de params
+         * (p.ej. ("" + i), un ternario, una indexacion compuesta). Antes caia
+         * aqui como kind=4 -> NULL, perdiendo el valor EN SILENCIO: la fila se
+         * insertaba con NULL (o fallaba en STRICT) mientras db_exec devolvia
+         * success=true. Se resuelve por la forma string del runtime
+         * (get_node_string EJECUTA la expresion) con deteccion numerica, igual
+         * que las ramas ACCESS_EXPR / CALL_FUNC de arriba; asi ("" + i) se
+         * materializa a su valor real en vez de perderse. Pasar el valor por
+         * una variable ya funcionaba via la rama IDENTIFIER; esto cubre el
+         * caso inline. */
+        return db_emit_resolved(buf, len, cap, val, escape, ctx);
     }
 
     char tmp[64];

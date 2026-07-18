@@ -1,0 +1,25 @@
+// expect: rows=3 sum=3 max=2
+// REGRESIÓN B1: una expresión inline (("" + i), un índice o un ternario) como
+// valor de un @param en sqlite_exec/db_exec antes caía al catch-all `else ->
+// kind=4 -> NULL` de append_value (db_params.c). La fila se insertaba con NULL
+// (o fallaba en STRICT) mientras la llamada devolvía success=true -> pérdida de
+// datos SILENCIOSA. Pasar el valor por una variable (rama IDENTIFIER) sí
+// funcionaba. Ahora el nodo no reconocido se resuelve vía get_node_string
+// (db_emit_resolved), igual que las ramas ACCESS_EXPR / CALL_FUNC.
+//
+// Plugin SQLite embebido (sin servidor) -> corre en CI.
+load_native("sqlite");
+
+let db = sqlite_connect(":memory:");
+sqlite_exec(db, "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, orden INTEGER)");
+
+// orden viene de ("" + i): expresión ADD inline (antes -> NULL).
+var i = 0;
+while (i < 3) {
+    sqlite_exec(db, "INSERT INTO t (orden) VALUES (@orden)", { "@orden": ("" + i) });
+    i = i + 1;
+}
+
+let rows = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c, SUM(orden) AS s, MAX(orden) AS mx FROM t", "json"));
+let r0 = rows[0];
+println("rows=" + r0["c"] + " sum=" + r0["s"] + " max=" + r0["mx"]);

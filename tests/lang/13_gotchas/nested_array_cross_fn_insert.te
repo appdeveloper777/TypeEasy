@@ -1,0 +1,42 @@
+// expect: inserted=3 rows=3 total=60 names=a|b|c|
+// REGRESIÓN B3: iterar un array ANIDADO de un objeto json_parse-eado en OTRA
+// función. El "controlador" parsea el body y pasa el objeto YA PARSEADO al
+// "repo" (inline: Repo(json_parse(...)), B2); el repo hace
+// for (let l in p["lineas"]) e inserta cada línea usando l["campo"] y una expr
+// inline ("" + n) como @param (B1). Antes, cruzar el objeto parseado y/o usar
+// valores inline perdía datos en silencio y obligaba al workaround de "parsear
+// el string crudo dentro del repo". Con B1+B2 corregidos itera e inserta bien.
+//
+// Plugin SQLite embebido (sin servidor) -> corre en CI.
+load_native("sqlite");
+
+let db = sqlite_connect(":memory:");
+sqlite_exec(db, "CREATE TABLE lineas (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT, cantidad INTEGER, orden INTEGER)");
+
+// "Repo": recibe el objeto YA PARSEADO, itera el array anidado e inserta.
+let Repo = fn(p) => {
+    let ls = p["lineas"];
+    var n = 0;
+    for (let l in ls) {
+        sqlite_exec(db, "INSERT INTO lineas (nombre, cantidad, orden) VALUES (@nombre, @cantidad, @orden)",
+                    { "@nombre": l["nombre"], "@cantidad": l["cantidad"], "@orden": ("" + n) });
+        n = n + 1;
+    }
+    return n;
+};
+
+// "Controlador": parsea el body y pasa el objeto parseado al repo INLINE.
+let body = "{\"lineas\":[{\"nombre\":\"a\",\"cantidad\":10},{\"nombre\":\"b\",\"cantidad\":20},{\"nombre\":\"c\",\"cantidad\":30}]}";
+let inserted = Repo(json_parse(body));
+
+let agg = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c, SUM(cantidad) AS t FROM lineas", "json"));
+let a0 = agg[0];
+
+// Nombres en orden de inserción (verifica que orden 0,1,2 persistió).
+let names = json_parse(sqlite_query(db, "SELECT nombre FROM lineas ORDER BY orden", "json"));
+var acc = "";
+for (let nm in names) {
+    acc = acc + nm["nombre"] + "|";
+}
+
+println("inserted=" + inserted + " rows=" + a0["c"] + " total=" + a0["t"] + " names=" + acc);

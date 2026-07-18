@@ -805,6 +805,16 @@ static char* te_list_node_to_string(ASTNode *listNode) {
         } else if (cur->type && strcmp(cur->type, "FLOAT") == 0) {
             te_fmt_double(buf, sizeof(buf), cur->str_value ? atof(cur->str_value) : 0.0);
             TE_LS_APPEND(buf);
+        } else if (cur->type && (strcmp(cur->type, "OBJECT_LITERAL") == 0 ||
+                                 strcmp(cur->type, "MAP") == 0 ||
+                                 strcmp(cur->type, "LIST") == 0)) {
+            /* Elemento anidado (objeto/array de json_parse): serializar a JSON
+             * en vez de "%d" de cur->value (=0), que producia "[0, 0]" para un
+             * array de objetos y rompia guards tipo ("" + arr) != "". */
+            TeBuf jb; tebuf_init(&jb);
+            te_json_emit_node(&jb, cur);
+            TE_LS_APPEND(jb.p ? jb.p : "");
+            if (jb.p) free(jb.p);
         } else if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
             TE_LS_APPEND("object");
         } else {
@@ -9437,6 +9447,25 @@ static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
                     } else if (rr && rr->vtype == VAL_FLOAT) {
                         char buf[64]; te_fmt_double(buf, sizeof(buf), rr->value.float_value);
                         valNode = create_ast_leaf("FLOAT", 0, buf, NULL);
+                    } else if (rr && rr->vtype == VAL_OBJECT) {
+                        /* Bugfix: una llamada inline que devuelve un OBJETO/MAP/
+                         * LIST (p.ej. json_parse(request_body())) caia aqui al
+                         * `else` -> NULL, y el objeto llegaba VACIO al parametro
+                         * (rompia el patron Repo(json_parse(body())) inline: los
+                         * campos p["x"] salian ""). Reconstruir el nodo
+                         * equivalente y aliasarlo, igual que la rama
+                         * IDENTIFIER->obj_var de abajo. "OBJECT" guarda un
+                         * ObjectNode* (envolver con create_object_node);
+                         * MAP/LIST/etc. guardan el propio ASTNode (aliasar; su
+                         * ciclo de vida ya lo maneja te_req_owned_ast_register
+                         * / la variable de origen). */
+                        if (rr->type && strcmp(rr->type, "OBJECT") == 0) {
+                            valNode = create_object_node(rr->value.object_value);
+                        } else if (rr->value.object_value) {
+                            valNode = (ASTNode *)(intptr_t)rr->value.object_value;
+                        } else {
+                            valNode = create_ast_leaf("NULL", 0, NULL, NULL);
+                        }
                     } else {
                         valNode = create_ast_leaf("NULL", 0, NULL, NULL);
                     }

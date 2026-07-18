@@ -43,3 +43,26 @@ typeeasycode/*.sqlite-*
 typeeasycode/*.db
 typeeasycode/_*
 typeeasycode/test_*
+
+# --- Frontends / apps ERP no requeridos para compilar el binario C ---
+# El build (src/Dockerfile) solo usa src/, api_server/, plugins/,
+# tools/motor_nlu_shim/ y typeeasycode/{apis,models,settings}. Todo lo demas
+# infla el contexto (>360MB) y un node_modules con symlink roto abortaba el
+# build ("invalid file request ERP-agent1/frontend/node_modules").
+**/node_modules/
+ERP/
+ERP-agent1/
+ERP-agent2/
+ERP-agent3/
+ERP-agent4/
+ERP-agent5/
+ERP;C/
+chess/
+chess;C/
+typeeasycode;C/
+web/
+ai_assistant/
+win_test/
+_repro/
+_av_submit/
+waha_sessions/

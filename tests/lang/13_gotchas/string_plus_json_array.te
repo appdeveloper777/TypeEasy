@@ -1,0 +1,9 @@
+// expect: [{"a":1}, {"a":2}]
+// REGRESIÓN B4: coercionar a string un array de objetos (de json_parse)
+// materializado a variable daba "[0, 0]" -> te_list_node_to_string (ast.c)
+// renderizaba cada elemento OBJECT_LITERAL como "%d" de node->value (=0). Eso
+// rompía guards tipo ("" + arr) != "". Ahora cada elemento objeto/array/map
+// anidado se serializa a JSON vía te_json_emit_node.
+let d = json_parse("{\"lineas\":[{\"a\":1},{\"a\":2}]}");
+let lineas = d["lineas"];
+println("" + lineas);
