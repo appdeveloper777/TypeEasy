@@ -7415,6 +7415,24 @@ static void interpret_call_method_impl(ASTNode *node) {
             id->id = strdup(tmp);
             node->left = id;
             objNode = id;
+        } else if (rv && rv->vtype == VAL_STRING) {
+            /* v0.0.30: el call interno devolvió un STRING; materialízalo en una
+             * var temporal para que los métodos de string (.trim/.upper/.lower/
+             * .contains/.split/...) puedan despacharse sobre el resultado de la
+             * cadena. Sin esto, `x.trim().upper()`, `f().trim()` o
+             * `request_query("q").trim()` fallan con
+             * "'<interno>' is not a valid object" (gotcha .trim en --api). */
+            static int _chain_str_seq = 0;
+            char tmp[40];
+            snprintf(tmp, sizeof(tmp), "__chain_s_%d__", _chain_str_seq++);
+            ASTNode *sid = create_ast_leaf("STRING", 0,
+                rv->value.string_value ? rv->value.string_value : "", NULL);
+            add_or_update_variable(tmp, sid);
+            ASTNode *id = (ASTNode*)calloc(1, sizeof(ASTNode));
+            id->type = strdup("ID");
+            id->id = strdup(tmp);
+            node->left = id;
+            objNode = id;
         }
     }
 
