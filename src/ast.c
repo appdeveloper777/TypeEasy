@@ -10001,10 +10001,40 @@ static void interpret_assign(ASTNode *node) {
             temp_node = create_ast_leaf("FLOAT", 0, fs, NULL);
             free(fs);
         } else if (ret_val->vtype == VAL_OBJECT) {
-            temp_node = calloc(1, sizeof(ASTNode));
-            memset(temp_node, 0, sizeof(ASTNode));
-            temp_node->type = strdup(ret_val->type);
-            temp_node->extra = (struct ASTNode*)ret_val->value.object_value;
+            /* Fix var-reassign-a-nativo (UAF/lectura vacia): un objeto NATIVO
+             * (json_parse / envelope de db_exec = MAP, o LIST/LAMBDA/OBJECT)
+             * guarda su arbol REAL en object_value; los lectores (map_find_pair)
+             * esperan ese nodo directo. El path viejo lo envolvia en
+             * temp_node->extra y hacia free_ast(temp_node): te_value_to_variable
+             * para MAP/LIST guarda el WRAPPER (cuyo ->left es NULL) como
+             * object_value -> lectura vacia; y liberar el wrapper dejaba la var
+             * colgando -> SIGSEGV en la siguiente lectura de campo
+             * (`var x={..}; x=json_parse(..); x.success`). Aliasamos object_value
+             * directo, igual que interpret_var_decl en la 1a ligadura: sin
+             * wrapper, sin free (el arbol lo libera el cleanup de request/programa). */
+            Variable *dv = (Variable *)var_node->cached_var;
+            if (!dv) {
+                dv = find_variable_for(var_node->id);
+                if (dv) var_node->cached_var = dv;
+            }
+            if (dv) {
+                if (dv->is_const)
+                    te_runtime_fatalf("Error: cannot assign to constant variable '%s'.", var_node->id);
+                if (dv->vtype == VAL_STRING && dv->value.string_value) free(dv->value.string_value);
+                free(dv->type);
+                dv->vtype = VAL_OBJECT;
+                dv->type = strdup(ret_val->type ? ret_val->type : "OBJECT");
+                dv->value.object_value = ret_val->value.object_value;
+            } else if (var_count < MAX_VARS) {
+                vars[var_count].id = strdup(var_node->id);
+                vars[var_count].is_const = 0;
+                vars[var_count].vtype = VAL_OBJECT;
+                vars[var_count].type = strdup(ret_val->type ? ret_val->type : "OBJECT");
+                vars[var_count].value.object_value = ret_val->value.object_value;
+                te_sym_insert(vars[var_count].id, var_count);
+                var_count++;
+            }
+            /* temp_node queda NULL: se salta el bloque wrapper+free de abajo. */
         }
         
         if (temp_node) {
