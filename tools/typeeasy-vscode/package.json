@@ -2,7 +2,7 @@
   "name": "typeeasy-debug",
   "displayName": "TypeEasy Debugger",
   "description": "Debug adapter + Language Server for TypeEasy (.te files): syntax, go-to-definition, find-references, hover, completion, F5 debug.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "typeeasy",
   "engines": {
     "vscode": "^1.75.0"
