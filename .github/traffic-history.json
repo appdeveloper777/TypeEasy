@@ -757,5 +757,38 @@
       "count": 0,
       "uniques": 0
     }
+  },
+  {
+    "timestamp": "2026-08-01T00:00:00Z",
+    "clones": {
+      "count": 19,
+      "uniques": 8
+    },
+    "views": {
+      "count": 7,
+      "uniques": 1
+    }
+  },
+  {
+    "timestamp": "2026-08-02T00:00:00Z",
+    "clones": {
+      "count": 1,
+      "uniques": 1
+    },
+    "views": {
+      "count": 3,
+      "uniques": 1
+    }
+  },
+  {
+    "timestamp": "2026-08-03T00:00:00Z",
+    "clones": {
+      "count": 3,
+      "uniques": 3
+    },
+    "views": {
+      "count": 8,
+      "uniques": 2
+    }
   }
 ]
