@@ -43,6 +43,18 @@ ASTNode *create_kv_pair_node(char *key, ASTNode *value) {
 }
 Variable *find_variable(char *name) { (void)name; return NULL; }
 
+/* db_arg_as_typed_map_head() (no ejercitado por este test) referencia estos
+ * símbolos; se stubean para resolver el enlace sin arrastrar ast.c. */
+ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id) {
+    return create_ast_leaf(type, value, str_value, id);
+}
+void te_fmt_double(char *buf, size_t cap, double v) {
+    if (!buf || cap == 0) return;
+    if (v == (double)(long long)v) snprintf(buf, cap, "%lld", (long long)v);
+    else snprintf(buf, cap, "%g", v);
+}
+void free_ast(ASTNode *n) { (void)n; }
+
 /* db_params.c llama get_node_string() para valores que son llamadas inline
  * (CALL_FUNC/CALL_METHOD, p.ej. now()/uuid_v4()). En el intérprete real ejecuta
  * la llamada y lee __ret__; aquí, sin runtime, devolvemos el str_value del leaf
@@ -191,7 +203,20 @@ int main(void) {
         free(sql);
     }
 
+    /* 11) llamada inline NUMÉRICA (p.ej. to_int(x)) -> sin comillas. Antes se
+     *     entrecomillaba SIEMPRE ('6'), lo que en motores sin afinidad numérica
+     *     (SQLite) rompía comparaciones tipo `x < @n`. Ahora db_emit_resolved
+     *     detecta el número y lo interpola crudo. El stub get_node_string
+     *     devuelve str_value del leaf. */
+    {
+        ASTNode *params = pair("@n", create_ast_leaf("CALL_FUNC", 0, "6", NULL), NULL);
+        char *sql = db_substitute_params(
+            "SELECT * FROM s WHERE x < @n", params, test_escape, NULL);
+        check("inline_call_numeric", sql, "SELECT * FROM s WHERE x < 6");
+        free(sql);
+    }
+
     if (g_fail) { printf("\nRESULT: FAIL\n"); return 1; }
-    printf("\nRESULT: OK (10/10)\n");
+    printf("\nRESULT: OK (11/11)\n");
     return 0;
 }

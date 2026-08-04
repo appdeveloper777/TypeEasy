@@ -1188,9 +1188,15 @@ static void   host_set_ret_float(double v) {
  * lista de args al estilo (args, idx). db_arg_as_map_head espera una
  * lista — le pasamos `arg` directamente como si fuese una lista de un
  * solo elemento e idx=0 (su iteración `for (i<idx) cur=cur->right` con
- * idx=0 termina inmediatamente y devuelve el primer nodo). */
+ * idx=0 termina inmediatamente y devuelve el primer nodo).
+ *
+ * Usamos la variante _typed_ que normaliza cada valor a un leaf tipado por
+ * su valor EN RUNTIME (int/float/string/null). Sin esto, un número pasado
+ * como variable/expresión/to_int(...) llegaba al plugin como nodo sin
+ * evaluar y se ligaba como TEXT (en SQLite `INTEGER < TEXT` siempre true →
+ * un corte de CTE recursivo `WHERE x < @n` nunca terminaba → OOM). */
 static ASTNode *host_arg_map_head(ASTNode *arg, int *out_owned) {
-    return db_arg_as_map_head(arg, 0, out_owned);
+    return db_arg_as_typed_map_head(arg, 0, out_owned);
 }
 static void host_free_node(ASTNode *n) {
     if (n) free_ast(n);

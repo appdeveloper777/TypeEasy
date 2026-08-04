@@ -22,6 +22,17 @@
  * Devuelve NULL si args[idx] no aplica. out_owned puede ser NULL. */
 ASTNode* db_arg_as_map_head(ASTNode* args, int idx, int* out_owned);
 
+/* Igual que db_arg_as_map_head, pero devuelve una lista de KV_PAIR NUEVA cuyos
+ * valores ya están normalizados a leaves tipados por su valor EN RUNTIME
+ * (int->INT, float->DB_RAW, string->STRING, null->NULL), resolviendo variables,
+ * aritmética y llamadas (to_int/to_float/now/...). Pensada para plugins DB
+ * (sqlite) que ligan por sqlite3_bind_* y necesitan el tipo real, no la forma
+ * sintáctica del argumento — sin esto un número pasado por variable/expresión
+ * se ligaba como TEXT (en SQLite `INTEGER < TEXT` siempre es true → un corte de
+ * CTE recursivo nunca termina → OOM). Siempre *out_owned = 1: el caller DEBE
+ * liberar la lista con free_node/free_ast. Devuelve NULL si args[idx] no aplica. */
+ASTNode* db_arg_as_typed_map_head(ASTNode* args, int idx, int* out_owned);
+
 /* Función de escape para strings, provista por cada driver.
  * Debe devolver un buffer malloc'd con la versión escapada de `in` (sin comillas).
  * `ctx` es opaco (típicamente el handle de conexión). */

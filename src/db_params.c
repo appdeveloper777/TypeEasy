@@ -131,6 +131,129 @@ static int db_str_is_number(const char* s) {
     return digits > 0;
 }
 
+/* Normaliza el valor de un @param (un ASTNode arbitrario) a un leaf TIPADO por
+ * su valor EN RUNTIME (no por su forma sintáctica). Esto arregla el bug donde
+ * un número pasado como variable/expresión/llamada se ligaba como TEXT en los
+ * plugins DB que usan prepared-statements (sqlite_bind_*): con el binding en
+ * texto, en SQLite `INTEGER < TEXT` es siempre verdadero → un corte de CTE
+ * recursivo `WHERE x < @n` nunca termina → recursión infinita → OOM.
+ *
+ * Leaf producido (todos los reconoce el binder del plugin: bind_value):
+ *   int   -> "INT"     (bind_int64)
+ *   float -> "DB_RAW"  (bind_double)
+ *   str   -> "STRING"  (bind_text)
+ *   null  -> "NULL"    (bind_null)
+ *
+ * La distinción int-vs-string DEBE venir del tipo en runtime: `let a=1000`
+ * (int) liga INTEGER, pero `let s="1000"` (string) liga TEXT. Por eso se
+ * resuelve aquí (host, con acceso a los tipos del runtime) y no con un
+ * heurístico de string dentro del plugin, que no puede distinguirlos. */
+static ASTNode* db_value_to_typed_leaf(ASTNode* val) {
+    if (!val || !val->type) return create_ast_leaf("NULL", 0, NULL, NULL);
+    const char* t = val->type;
+
+    /* Leaf ya tipado: literal inline `{"@n":1000}` o atributo de clase
+     * sintetizado por db_arg_as_map_head. Reusar su tipo/valor tal cual. */
+    if (strcmp(t, "NUMBER") == 0 || strcmp(t, "INT") == 0)
+        return create_ast_leaf_number("INT", val->value, NULL, NULL);
+    if (strcmp(t, "BOOL") == 0)
+        return create_ast_leaf_number("INT", val->value ? 1 : 0, NULL, NULL);
+    if (strcmp(t, "FLOAT") == 0 || strcmp(t, "DB_RAW") == 0)
+        return create_ast_leaf("DB_RAW", 0,
+                               (val->str_value && *val->str_value) ? val->str_value : "0", NULL);
+    if (strcmp(t, "STRING") == 0 || strcmp(t, "STRING_LITERAL") == 0)
+        return create_ast_leaf("STRING", 0, val->str_value ? val->str_value : "", NULL);
+    if (strcmp(t, "NULL") == 0 || strcmp(t, "NULLTOK") == 0)
+        return create_ast_leaf("NULL", 0, NULL, NULL);
+
+    /* IDENTIFIER/ID -> resolver por el vtype EN RUNTIME de la variable. Núcleo
+     * del bug: `let a=1000; {"@n":a}` debe ligar INTEGER, no TEXT. */
+    if ((strcmp(t, "IDENTIFIER") == 0 || strcmp(t, "ID") == 0) && val->id) {
+        Variable* v = find_variable(val->id);
+        if (!v) return create_ast_leaf("NULL", 0, NULL, NULL);
+        if (v->vtype == VAL_INT)
+            return create_ast_leaf_number("INT", (int)v->value.int_value, NULL, NULL);
+        if (v->vtype == VAL_FLOAT) {
+            char b[64]; te_fmt_double(b, sizeof(b), v->value.float_value);
+            return create_ast_leaf("DB_RAW", 0, b, NULL);
+        }
+        if (v->vtype == VAL_STRING)
+            return create_ast_leaf("STRING", 0,
+                                   v->value.string_value ? v->value.string_value : "", NULL);
+        return create_ast_leaf("NULL", 0, NULL, NULL);
+    }
+
+    /* CALL_FUNC/CALL_METHOD -> EJECUTAR una sola vez y leer el tipo REAL de
+     * __ret__. Cubre to_int(...)/to_float(...) (deben ligar INTEGER/REAL) y
+     * now()/uuid_v4() (deben ligar TEXT). get_node_string corre la llamada y
+     * deja __ret__ con el valor tipado. */
+    if (strcmp(t, "CALL_FUNC") == 0 || strcmp(t, "CALL_METHOD") == 0) {
+        char* s = get_node_string(val);
+        Variable* r = find_variable("__ret__");
+        ASTNode* leaf;
+        if (r && r->vtype == VAL_INT)
+            leaf = create_ast_leaf_number("INT", (int)r->value.int_value, NULL, NULL);
+        else if (r && r->vtype == VAL_FLOAT) {
+            char b[64]; te_fmt_double(b, sizeof(b), r->value.float_value);
+            leaf = create_ast_leaf("DB_RAW", 0, b, NULL);
+        } else if (r && r->vtype == VAL_STRING)
+            leaf = create_ast_leaf("STRING", 0,
+                     r->value.string_value ? r->value.string_value : (s ? s : ""), NULL);
+        else if (s && *s)
+            leaf = create_ast_leaf("STRING", 0, s, NULL);
+        else
+            leaf = create_ast_leaf("NULL", 0, NULL, NULL);
+        if (s) free(s);
+        return leaf;
+    }
+
+    /* Resto (aritmética 500+500, acceso indexado/miembro, ternario, ...):
+     * get_node_string EJECUTA la expresión una vez. Numérico -> INT/REAL (mismo
+     * criterio db_str_is_number que db_emit_resolved usa en la vía de
+     * interpolación); resto -> STRING; vacío -> NULL. */
+    {
+        char* s = get_node_string(val);
+        if (!s || !*s) { if (s) free(s); return create_ast_leaf("NULL", 0, NULL, NULL); }
+        ASTNode* leaf;
+        if (db_str_is_number(s)) {
+            if (strpbrk(s, ".eE"))
+                leaf = create_ast_leaf("DB_RAW", 0, s, NULL);
+            else
+                leaf = create_ast_leaf_number("INT", (int)atoll(s), NULL, NULL);
+        } else {
+            leaf = create_ast_leaf("STRING", 0, s, NULL);
+        }
+        free(s);
+        return leaf;
+    }
+}
+
+/* Igual que db_arg_as_map_head, pero devuelve una lista de KV_PAIR NUEVA cuyos
+ * valores ya están normalizados a leaves tipados por su valor en runtime (ver
+ * db_value_to_typed_leaf). Pensada para plugins DB (sqlite) que ligan por
+ * sqlite3_bind_* y necesitan el TIPO real, no la forma sintáctica del argumento.
+ * Siempre *out_owned = 1 (lista sintetizada): el caller DEBE liberarla con
+ * free_node/free_ast. Devuelve NULL si args[idx] no es un map/instancia. */
+ASTNode* db_arg_as_typed_map_head(ASTNode* args, int idx, int* out_owned) {
+    if (out_owned) *out_owned = 0;
+    int inner_owned = 0;
+    ASTNode* head = db_arg_as_map_head(args, idx, &inner_owned);
+    if (!head) return NULL;
+
+    ASTNode* new_head = NULL;
+    ASTNode* tail = NULL;
+    for (ASTNode* p = head; p; p = p->right) {
+        ASTNode* leaf = db_value_to_typed_leaf(p->left);
+        ASTNode* pair = create_kv_pair_node(p->id ? p->id : "", leaf);
+        if (!new_head) new_head = pair;
+        else tail->right = pair;
+        tail = pair;
+    }
+    if (inner_owned) free_ast(head);
+    if (out_owned) *out_owned = 1;
+    return new_head;
+}
+
 /* Emite un valor cuya forma escalar no es un leaf simple (indexación
  * `m["k"]`/`arr[i]`, acceso a miembro sobre un MAP) resolviéndolo a su forma
  * string vía get_node_string —que EJECUTA el acceso en el runtime— y aplicando:
@@ -261,24 +384,14 @@ static int append_value(char** buf, size_t* len, size_t* cap,
         return db_emit_resolved(buf, len, cap, val, escape, ctx);
     } else if (strcmp(tipo, "CALL_FUNC") == 0 || strcmp(tipo, "CALL_METHOD") == 0) {
         /* Valor que es una llamada inline en el map, p.ej.
-         * { "@c": now(), "@u": uuid_v4() }. get_node_string EJECUTA la llamada
-         * (corre la función/método y lee __ret__) y devuelve su forma string.
-         * Sin esta rama caía al `else` final (kind=4) y se interpolaba NULL,
-         * perdiendo now()/uuid_v4() en INSERT/UPDATE. Se trata como string
-         * (escapado + entrecomillado), igual que el fallback de texto del
-         * plugin SQLite; si la función devuelve un número MySQL lo coacciona
-         * desde la forma entrecomillada. (Pasar el valor por una variable ya
-         * funcionaba vía la rama IDENTIFIER; esto cubre el caso inline.) */
-        char* s = get_node_string(val);
-        if (!s) { buf_append(buf, len, cap, "NULL", 4); return 1; }
-        char* esc = escape(s, ctx);
-        free(s);
-        if (!esc) { buf_append(buf, len, cap, "NULL", 4); return 1; }
-        buf_append(buf, len, cap, "'", 1);
-        buf_append(buf, len, cap, esc, strlen(esc));
-        buf_append(buf, len, cap, "'", 1);
-        free(esc);
-        return 1;
+         * { "@c": now(), "@u": uuid_v4(), "@n": to_int(x) }. get_node_string
+         * EJECUTA la llamada (corre la función/método y lee __ret__) y devuelve
+         * su forma string. Se resuelve con detección numérica (db_emit_resolved,
+         * igual que las ramas ACCESS_EXPR / else): un resultado numérico como
+         * to_int(...) se interpola SIN comillas (evita `x < '6'`, que en motores
+         * sin afinidad numérica rompe comparaciones), y now()/uuid_v4() se
+         * escapan + entrecomillan. Vacío/null -> SQL NULL. */
+        return db_emit_resolved(buf, len, cap, val, escape, ctx);
     } else {
         /* Cualquier otro nodo es una EXPRESION inline en el map de params
          * (p.ej. ("" + i), un ternario, una indexacion compuesta). Antes caia
