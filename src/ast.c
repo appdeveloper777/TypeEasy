@@ -3056,19 +3056,50 @@ Variable *find_variable_for(char *id) {
  * (abajo) lo usa antes de la definición de te_value_to_variable. */
 static void te_value_to_variable(Variable *dst, ASTNode *value);
 
+/* Bug ERP 2026-08-27 ("stale return" / Bug A): slot ÚNICO por nombre al
+ * re-declarar. Antes cada `let/var x` APPENDEABA un slot nuevo aunque ya
+ * existiera otro `x` (p.ej. el body de una fn ejecutado en cada llamada).
+ * El hash pasaba a apuntar al slot nuevo, pero los cached_var de los nodos
+ * AST (condiciones, fast-path de interpret_assign, bytecode) seguían
+ * apuntando al slot VIEJO del mismo nombre; la revalidación por id no
+ * distingue duplicados -> lecturas/escrituras divididas entre dos slots:
+ * `if (pel == 1)` leía el pel de la llamada anterior y la fn devolvía el
+ * return "viejo". Este es el punto único de asignación de slots para las
+ * declaraciones: reutiliza el slot existente (solo si idx >=
+ * g_initial_var_count, para NO clobberear globals de módulo en --api),
+ * liberando su payload; id y entrada de symtab quedan intactos. Si no
+ * existe, appendea como antes. Devuelve NULL solo si vars[] está lleno. */
+static Variable *te_decl_slot(const char *id) {
+    Variable *ex = find_variable_for((char *)id);
+    if (ex && ex != &__ret_var) {
+        int idx = (int)(ex - vars);
+        if (idx >= g_initial_var_count && idx < var_count) {
+            if (ex->vtype == VAL_STRING && ex->value.string_value)
+                free(ex->value.string_value);
+            if (ex->type) { free(ex->type); ex->type = NULL; }
+            memset(&ex->value, 0, sizeof(ex->value));
+            ex->vtype = VAL_INT;
+            return ex;
+        }
+    }
+    if (var_count >= MAX_VARS) return NULL;
+    Variable *nv = &vars[var_count];
+    memset(nv, 0, sizeof(*nv));
+    nv->id = strdup(id);
+    var_count++;
+    te_sym_insert(nv->id, (int)(nv - vars));
+    return nv;
+}
+
 void declare_variable(char *id, ASTNode *value, int is_const) {
-    if (var_count >= MAX_VARS) {
+    Variable *slot = te_decl_slot(id);
+    if (!slot) {
         te_runtime_fatalf("Error: too many declared variables (limit %d).", MAX_VARS);
         return;
     }
 
-    int my_index = var_count;
-    var_count++;
-
-    vars[my_index].id = strdup(id);
-    vars[my_index].is_const = is_const;
-    /* Ola 16: index in symtab. */
-    te_sym_insert(vars[my_index].id, my_index);
+    int my_index = (int)(slot - vars);
+    slot->is_const = is_const;
 
     // Aseguramos que el tipo siempre sea una copia dinámica para poder liberarlo después
     if (strcmp(value->type, "NUMBER") == 0) {
@@ -7440,6 +7471,28 @@ static void interpret_call_method_impl(ASTNode *node) {
     return_flag = 0;
     return_node = NULL;
 
+    /* Bug ERP 2026-08-27 (Bug B): método sobre una expresión PARENTIZADA de
+     * string — `("" + x).lower()` dentro de una fn. El receptor es un nodo
+     * ADD/STRING_INTERP sin id: ningún dispatcher corría y el caller abortaba
+     * con "no return value captured from expression 'CALL_METHOD'".
+     * Materializamos el string en una Variable de STACK y despachamos directo
+     * (sin reescribir node->left: el AST queda intacto y la expresión se
+     * re-evalúa en cada llamada). Si no era un método de string, seguimos por
+     * el flujo normal. */
+    if (objNode && objNode->type && !objNode->id &&
+        (strcmp(objNode->type, "ADD") == 0 ||
+         strcmp(objNode->type, "STRING_INTERP") == 0) &&
+        is_string_type(objNode)) {
+        char *s = get_node_string(objNode);
+        Variable sv;
+        memset(&sv, 0, sizeof(sv));
+        sv.vtype = VAL_STRING;
+        sv.value.string_value = s ? s : "";
+        int handled = te_string_method_dispatch(node, NULL, &sv);
+        if (s) free(s);
+        if (handled) return;
+    }
+
     /* Fase 7: null-safe ?. — if obj is null, set __ret__ = null and return */
     if (node->value == 1) {
         if (!v || (v->type && strcmp(v->type, "NULL") == 0)) {
@@ -8758,8 +8811,8 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
             ASTNode *pair = key ? map_find_pair(map, key) : NULL;
             ASTNode *val  = pair ? pair->left : NULL;
             if (val && val->type) {
-                Variable *var = &vars[var_count];
-                var->id = strdup(node->id);
+                Variable *var = te_decl_slot(node->id);
+                if (!var) return;
                 var->is_const = is_const_flag;
                 if (strcmp(val->type, "STRING") == 0) {
                     var->vtype = VAL_STRING; var->type = strdup("STRING");
@@ -8784,18 +8837,14 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                     var->vtype = VAL_STRING; var->type = strdup("STRING");
                     var->value.string_value = strdup("");
                 }
-                var_count++;
-                te_sym_insert(var->id, var_count - 1);
                 return;
             }
             /* clave ausente -> string vacío (permite chequear == "") */
-            Variable *var = &vars[var_count];
-            var->id = strdup(node->id);
+            Variable *var = te_decl_slot(node->id);
+            if (!var) return;
             var->is_const = is_const_flag;
             var->vtype = VAL_STRING; var->type = strdup("STRING");
             var->value.string_value = strdup("");
-            var_count++;
-            te_sym_insert(var->id, var_count - 1);
             return;
         }
         ASTNode *list = resolve_to_list(value_node->left);
@@ -8806,13 +8855,12 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 /* Out-of-range index -> first-class null (e.g. `xs[99]` => null),
                  * enabling `xs[99] ?? default`. Previously this fell through to
                  * the legacy path and collapsed silently to INT 0. */
-                Variable *var = &vars[var_count++];
-                var->id = strdup(node->id);
+                Variable *var = te_decl_slot(node->id);
+                if (!var) return;
                 var->is_const = is_const_flag;
                 var->vtype = VAL_OBJECT;
                 var->type = strdup("NULL");
                 var->value.object_value = NULL;
-                te_sym_insert(var->id, var_count - 1);
                 return;
             }
             {
@@ -8823,52 +8871,47 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                             ? (ObjectNode*)item->extra
                             : (ObjectNode*)(intptr_t)item->value;
                         if (obj) {
-                            Variable *var = &vars[var_count++];
-                            var->id = strdup(node->id);
+                            Variable *var = te_decl_slot(node->id);
+                            if (!var) return;
                             var->is_const = is_const_flag;
                             var->vtype = VAL_OBJECT;
                             var->type = strdup("OBJECT");
                             var->value.object_value = obj;
-                            te_sym_insert(var->id, var_count - 1);
                             return;
                         }
                     } else if (strcmp(item->type, "OBJECT_LITERAL") == 0 ||
                                strcmp(item->type, "MAP") == 0) {
                         /* item de json_parse("[{...}]")[i] -> un MAP. */
-                        Variable *var = &vars[var_count++];
-                        var->id = strdup(node->id);
+                        Variable *var = te_decl_slot(node->id);
+                        if (!var) return;
                         var->is_const = is_const_flag;
                         var->vtype = VAL_OBJECT;
                         var->type = strdup("MAP");
                         var->value.object_value = (void *)(intptr_t)item;
-                        te_sym_insert(var->id, var_count - 1);
                         return;
                     } else if (strcmp(item->type, "STRING") == 0) {
-                        Variable *var = &vars[var_count++];
-                        var->id = strdup(node->id);
+                        Variable *var = te_decl_slot(node->id);
+                        if (!var) return;
                         var->is_const = is_const_flag;
                         var->vtype = VAL_STRING;
                         var->type = strdup("STRING");
                         var->value.string_value = strdup(item->str_value ? item->str_value : "");
-                        te_sym_insert(var->id, var_count - 1);
                         return;
                     } else if (strcmp(item->type, "NUMBER") == 0 || strcmp(item->type, "INT") == 0) {
-                        Variable *var = &vars[var_count++];
-                        var->id = strdup(node->id);
+                        Variable *var = te_decl_slot(node->id);
+                        if (!var) return;
                         var->is_const = is_const_flag;
                         var->vtype = VAL_INT;
                         var->type = strdup("INT");
                         var->value.int_value = item->value;
-                        te_sym_insert(var->id, var_count - 1);
                         return;
                     } else if (strcmp(item->type, "FLOAT") == 0) {
-                        Variable *var = &vars[var_count++];
-                        var->id = strdup(node->id);
+                        Variable *var = te_decl_slot(node->id);
+                        if (!var) return;
                         var->is_const = is_const_flag;
                         var->vtype = VAL_FLOAT;
                         var->type = strdup("FLOAT");
                         var->value.float_value = item->str_value ? atof(item->str_value) : 0.0;
-                        te_sym_insert(var->id, var_count - 1);
                         return;
                     }
                 }
@@ -8907,23 +8950,12 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         } else if (evaluated_value_var->vtype == VAL_OBJECT) {
             // Si es LIST, asignar como VAL_OBJECT y type LIST, y value.object_value apunta al nodo LIST
             if (strcmp(evaluated_value_var->type, "LIST") == 0) {
-                Variable *var = malloc(sizeof(Variable));
-                var->id = strdup(node->id);
+                Variable *var = te_decl_slot(node->id);
+                if (!var) return;
                 var->is_const = is_const_flag;
                 var->vtype = VAL_OBJECT;
                 var->type = strdup("LIST");
                 var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value; // Apunta al nodo LIST
-                vars[var_count++] = *var;
-                free(var);
-                /* Bugfix: actualizar el side-index nombre->indice. Sin esto,
-                 * un `let x = <call que devuelve LIST/MAP/LAMBDA>` agregaba el
-                 * slot pero NO refrescaba el hash, asi que un find_variable(x)
-                 * posterior devolvia un binding viejo del mismo nombre (p.ej.
-                 * el `r` de un lambda guard previo en modo --api -> los datos
-                 * de una query se "pegaban" a la siguiente). Las ramas
-                 * STRING/INT/FLOAT no se veian porque pasan por
-                 * declare_variable, que si inserta en el symtab. */
-                te_sym_insert(vars[var_count - 1].id, var_count - 1);
                // printf("[DEBUG] interpret_var_decl: declared LIST variable\n"); fflush(stdout);
                 // Limpia la variable de retorno
                 if (__ret_var_active) {
@@ -8938,15 +8970,12 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 return;
             } else if (strcmp(evaluated_value_var->type, "MAP") == 0) {
                 /* Phase D: fast-path for MAP returned from a builtin (e.g. json_parse). */
-                Variable *var = malloc(sizeof(Variable));
-                var->id = strdup(node->id);
+                Variable *var = te_decl_slot(node->id);
+                if (!var) return;
                 var->is_const = is_const_flag;
                 var->vtype = VAL_OBJECT;
                 var->type = strdup("MAP");
                 var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value;
-                vars[var_count++] = *var;
-                free(var);
-                te_sym_insert(vars[var_count - 1].id, var_count - 1); /* Bugfix: ver LIST */
                 if (__ret_var_active) {
                     if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
                     if (__ret_var.id) free(__ret_var.id);
@@ -8961,15 +8990,12 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                  * (currying). Lo almacenamos como first-class value, igual que
                  * LIST/MAP: object_value apunta al nodo LAMBDA (ya capturado por
                  * te_capture_lambda con sus variables libres sustituidas). */
-                Variable *var = malloc(sizeof(Variable));
-                var->id = strdup(node->id);
+                Variable *var = te_decl_slot(node->id);
+                if (!var) return;
                 var->is_const = is_const_flag;
                 var->vtype = VAL_OBJECT;
                 var->type = strdup("LAMBDA");
                 var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value;
-                vars[var_count++] = *var;
-                free(var);
-                te_sym_insert(vars[var_count - 1].id, var_count - 1); /* Bugfix: ver LIST */
                 if (__ret_var_active) {
                     if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
                     if (__ret_var.id) free(__ret_var.id);
@@ -9909,6 +9935,11 @@ static void interpret_assign(ASTNode *node) {
      * Hot in for/while loops. Skips strdup/find_variable_for/temp_node alloc. */
     {
         Variable *fv = (Variable *)var_node->cached_var;
+        if (fv && (!fv->id || strcmp(fv->id, var_node->id) != 0)) {
+            /* slot reciclado (reset/unwind): revalidar por id como NK_IDENTIFIER */
+            fv = NULL;
+            var_node->cached_var = NULL;
+        }
         if (!fv) {
             fv = find_variable_for(var_node->id);
             if (fv) var_node->cached_var = fv;
@@ -9958,6 +9989,11 @@ static void interpret_assign(ASTNode *node) {
             if (fr_enabled && __ret_var_active
                 && (__ret_var.vtype == VAL_INT || __ret_var.vtype == VAL_FLOAT)) {
                 Variable *fv = (Variable *)var_node->cached_var;
+                if (fv && (!fv->id || strcmp(fv->id, var_node->id) != 0)) {
+                    /* slot reciclado: revalidar por id */
+                    fv = NULL;
+                    var_node->cached_var = NULL;
+                }
                 if (!fv) {
                     fv = find_variable_for(var_node->id);
                     if (fv) var_node->cached_var = fv;
@@ -10013,6 +10049,11 @@ static void interpret_assign(ASTNode *node) {
              * directo, igual que interpret_var_decl en la 1a ligadura: sin
              * wrapper, sin free (el arbol lo libera el cleanup de request/programa). */
             Variable *dv = (Variable *)var_node->cached_var;
+            if (dv && (!dv->id || strcmp(dv->id, var_node->id) != 0)) {
+                /* slot reciclado: revalidar por id */
+                dv = NULL;
+                var_node->cached_var = NULL;
+            }
             if (!dv) {
                 dv = find_variable_for(var_node->id);
                 if (dv) var_node->cached_var = dv;

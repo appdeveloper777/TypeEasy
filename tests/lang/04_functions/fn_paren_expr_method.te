@@ -1,0 +1,16 @@
+// (salida esperada en fn_paren_expr_method.expected)
+// Bug ERP 2026-08-27 (Bug B): metodo encadenado a una expresion PARENTIZADA
+// de string dentro de una fn — `("" + x).lower()` — fallaba con
+// "no return value captured from expression 'CALL_METHOD'" y dejaba la
+// variable destino invalida. Fix: interpret_call_method materializa el
+// receptor ADD/STRING_INTERP sin id en una Variable temporal y despacha
+// los metodos de string sobre ella (ast.c).
+let F = fn(nom) => {
+    let nomL = ("" + nom).lower();
+    println(concat("nomL=[", nomL, "]"));
+    return nomL;
+};
+let r = F("Hola.PDF");
+println(concat("r=[", r, "]"));
+let ok = ("" + "Hola.PDF").lower();
+println(concat("ok=[", ok, "]"));

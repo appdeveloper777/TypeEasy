@@ -1,0 +1,23 @@
+// (salida esperada en fn_multi_return_fresh.expected)
+// Bug ERP 2026-08-27 (Bug A "stale return"): una fn con MULTIPLES `return`
+// (early return dentro de un if + return final) devolvia el valor de la
+// llamada ANTERIOR a partir de la 2a invocacion. Causa raiz: cada `let/var`
+// del body APPENDEABA un slot nuevo en vars[] por llamada; los cached_var de
+// los nodos AST (condicion `pel == 1`, fast-path de assign) quedaban apuntando
+// al slot viejo del mismo nombre -> lecturas/escrituras divididas entre slots.
+// Fix: te_decl_slot() reutiliza el slot existente al re-declarar (ast.c).
+let F = fn(nom) => {
+    let nomTxt = concat("", nom);
+    let nomL = nomTxt.lower();
+    var pel = 0;
+    if (nomL.contains(".exe")) { pel = 1; }
+    println(concat("pel=", ("" + pel)));
+    if (pel == 1) { return "peligroso"; }
+    return "limpio";
+};
+let r1 = F("virus.exe");
+println(concat("r1=[", r1, "]"));
+let r2 = F("foto.png");
+println(concat("r2=[", r2, "]"));
+let r3 = F("otro.exe");
+println(concat("r3=[", r3, "]"));

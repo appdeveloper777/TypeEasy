@@ -1,0 +1,6 @@
+pel=1
+r1=[peligroso]
+pel=0
+r2=[limpio]
+pel=1
+r3=[peligroso]
