@@ -2667,7 +2667,7 @@ typedef struct TESymSlot {
     int idx;
 } TESymSlot;
 
-#define TE_SYM_CAP 4096  /* MAX_VARS=1024 → cap 4096 keeps load < 0.25 */
+#define TE_SYM_CAP 16384  /* MAX_VARS=4096 → cap 16384 keeps load < 0.25 */
 static TESymSlot g_sym_slots[TE_SYM_CAP];
 static int g_sym_init = 0;
 

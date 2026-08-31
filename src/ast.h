@@ -11,9 +11,13 @@
  * Historically these were desynced (256/100/100) which silently truncated
  * variables in async fibers. Limit is per endpoint invocation: the var table
  * is reset after every request, so this is NOT a cumulative cap across
- * endpoints. NOTE: bytecode.c keeps its own unrelated `bc_vars[]` cap. */
+ * endpoints. NOTE: bytecode.c keeps its own unrelated `bc_vars[]` cap.
+ * 2026-08-30: 1024 -> 4096. Un app grande (ERP ~925 globals de modulos) mas los
+ * locals de un endpoint pesado superaba 1024 y el request moria con "too many
+ * declared variables" (venta POS rota). 4096 da margen; costo estatico ~33MB
+ * (g_fibers[256] x CtxSnapshot). */
 #ifndef MAX_VARS
-#define MAX_VARS 1024
+#define MAX_VARS 4096
 #endif
 
 typedef struct MethodNode MethodNode;
