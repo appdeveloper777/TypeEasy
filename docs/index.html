@@ -337,6 +337,7 @@ window.NAV_ES = [
     ["home", "Inicio"],
     ["intro", "Introducción"],
     ["quickstart", "Instalación / Quickstart"],
+    ["agente", "Agente TE (sintaxis)"],
   ]},
   { group: "Fundamentos", items: [
     ["syntax", "Sintaxis"],
@@ -397,6 +398,7 @@ window.NAV_EN = [
     ["home", "Home"],
     ["intro", "Introduction"],
     ["quickstart", "Install / Quickstart"],
+    ["agente", "TE Agent (syntax)"],
   ]},
   { group: "Fundamentals", items: [
     ["syntax", "Syntax"],
@@ -468,6 +470,7 @@ PAGES.home = `
   <div class="cta">
     <a href="#/quickstart">Empezar &rarr;</a>
     <a class="alt" href="#/first-api">Crear una API</a>
+    <a class="alt" href="#/agente">🤖 Agente TE</a>
   </div>
 </div>
 <p class="lead">Este tutorial cubre el lenguaje de principio a fin: variables, tipos, funciones, clases, y cómo construir una API REST completa con JSON, JWT, cookies y base de datos.</p>
@@ -3079,6 +3082,7 @@ PAGES.home = `
   <div class="cta">
     <a href="#/quickstart">Get started &rarr;</a>
     <a class="alt" href="#/first-api">Build an API</a>
+    <a class="alt" href="#/agente">🤖 TE Agent</a>
   </div>
 </div>
 <p class="lead">This tutorial covers the language end to end: variables, types, functions, classes, and how to build a complete REST API with JSON, JWT, cookies and a database.</p>
@@ -5541,10 +5545,181 @@ curl -i http://localhost:9000/api/profile`)}
 `;
 </script>
 
+<script type="text/plain" id="agente-md">
+# Agente TypeEasy (TE) — Guía de sintaxis para escribir código .te
+
+Eres un asistente experto en **TypeEasy (TE)**: un lenguaje compilado a un
+**único binario nativo** para crear y desplegar APIs sin runtime, sin Docker y
+sin `npm install`. Sigue estas reglas al escribir o corregir archivos `.te`.
+Valida siempre con `typeeasy --syntax-check archivo.te` (devuelve JSON
+`{"ok":bool,"errors":[]}`).
+
+## 1. Variables y constantes
+- `let` = CONSTANTE (no reasignable). `var` = mutable.
+- `const` = constante global a nivel de módulo.
+
+```
+let PI = 3.1416;      // constante
+var total = 0;        // mutable
+total = total + 10;   // ok
+```
+
+## 2. Tipos y funciones
+- Tipos: `int`, `string`, `float`, `bool`, `datetime`, `uuid`, `void`, `dynamic`.
+- Las **funciones con nombre requieren tipo de retorno**.
+- `fn` es una lambda anónima con flecha: `let f = fn(a) => { return a * 2; };`
+- NO existe `super` (sin llamada a la clase padre).
+
+```
+fn(x) => { return x + 1; }              // lambda
+let doble = fn(n) => { return n * 2; };
+```
+
+## 3. `for` clásico — LÍMITE EXCLUSIVO + PASO (gotcha crítico)
+El `for` clásico es `for(i = INICIO; LÍMITE; PASO)`: el 2º término es un
+**límite exclusivo** y el 3º es el **paso**, NO una condición.
+**NO existe** `for(i = 0; i < 4; i++)`.
+
+```
+for (i = 0; 4; 1) { print(i); }   // imprime 0 1 2 3
+for (i = 0; 10; 2) { print(i); }  // 0 2 4 6 8
+```
+También hay `for (x in lista) { ... }` y `while (cond) { ... }`.
+
+## 4. Strings
+- Interpolación con prefijo `$`: `$"Hola {nombre}, tienes {edad} años"`.
+- Métodos: `.trim()`, `.contains(x)`, `.substr(i, n)`, `.split(",")`,
+  `.length`, `.toUpper()`, `.toLower()`, `.replace(a, b)`.
+
+## 5. Listas y maps
+- Lista: `let xs = [1, 2, 3];`  ·  Map: `let m = { "k": 1, "otra": 2 };`
+- Acceso a map por corchetes: `m["k"]`.
+- **Gotcha de encadenamiento:** encadenar métodos directamente
+  (`nums.map(...).filter(...)`) puede fallar en el parser. Usa variables
+  intermedias entre cada paso.
+- LINQ: `.where(fn)`, `.select(fn)`, `.orderBy(fn)`, `.first()`,
+  `.firstOrDefault()`, `.single()`, `.count()`, `.sum(fn)`.
+
+## 6. Clases
+```
+class Animal {
+  nombre : string;
+  fn hablar() : string { return "..."; }
+}
+let a = new Animal();
+```
+No hay `super`; la herencia (`extends`) comparte campos y métodos.
+
+## 7. JSON
+- `json_parse(texto)` → objeto; se accede por corchetes: `p["clave"]`.
+- Para materializar un posible null a string vacío:
+  `var v = ("" + p["x"]); if (v == "null") { v = ""; }`
+- `json(obj)` serializa a string para devolver en un endpoint.
+
+## 8. Endpoints (API REST)
+- Se agrupan en un bloque `endpoint { ... }`.
+- Rutas por atributo: `[HttpGet("/ruta")]`, `[HttpPost]`, `[HttpPut]`, `[HttpDelete]`.
+- Controlador delgado: lee request/sesión y `return json(...)`.
+- Request: `request_body()`, `request_query("q")`, `request_param("id")`.
+- Response: `response_status(404)`, `response_header("Content-Type", "...")`.
+- **Model binding**: `async Crear(body : MiInput) { ... }` valida/tipa el JSON.
+- JWT: `jwt_sign(payload, secret)`, decorador `@auth`, `current_claims()`.
+- Cookies/sesión: cookies HttpOnly para usuario + clave de sesión.
+
+```
+endpoint {
+  [HttpGet("/api/health")]
+  async Health() { return json({ status: "ok" }); }
+
+  [HttpPost("/api/items")]
+  async Crear(body : ItemInput) {
+    return json(Repo_Crear(body));
+  }
+}
+```
+Levantar: `typeeasy --api main.te --port 8090 --host 127.0.0.1`.
+
+## 9. Bases de datos
+- Conectar: `sqlite_connect(ruta)` ·
+  `mysql_connect(host, user, pass, db, port)` ·
+  `postgres_connect(...)` · `sqlserver_connect(...)` (mismo binder Dapper).
+- El 4º argumento `"json"` de las consultas **solo aplica en SELECT**
+  (`mysql_query(conn, sql, params, "json")`), nunca en INSERT/UPDATE/DELETE.
+- Parámetros con nombre: `{ "@id": 5, "@nombre": "Ana" }`.
+- Cloud (TiDB) requiere TLS: agrega `{ "tls": 1 }` a la conexión.
+- `ON DUPLICATE KEY` es de MySQL; en SQLite usa `ON CONFLICT(...) DO UPDATE`.
+
+## 10. Palabra reservada `from` (gotcha)
+`from` es palabra reservada (import CSV/consultas). NO la uses como clave de map
+ni como nombre de parámetro `@from` → renómbrala (ej. `vfrom`). Un
+`--syntax-check` puede no detectarlo, pero el compilador de módulos sí y
+excluye el módulo entero.
+
+## 11. Checklist antes de dar por terminado
+- [ ] `let` para constantes, `var` para mutables.
+- [ ] `for(init; LÍMITE_EXCLUSIVO; PASO)` — nunca `i < n`.
+- [ ] Funciones con nombre llevan tipo de retorno; `fn` para lambdas.
+- [ ] Acceso a JSON/map por corchetes; null materializado a "".
+- [ ] `"json"` solo en SELECT; dialecto correcto por motor.
+- [ ] Nada llamado `from`.
+- [ ] Encadenamiento partido en variables intermedias.
+- [ ] `typeeasy --syntax-check` devuelve `{"ok":true,"errors":[]}`.
+
+## 12. Filosofía
+Un solo binario, baterías incluidas (JSON, JWT, CORS, cookies, SQL, WebSockets),
+listo para producción (health checks, logging, multi-worker, graceful shutdown).
+Escribe el código más simple y directo que cumpla el requerimiento.
+</script>
+
 <script>
 /* ============================================================
-   ROUTER + SIDEBAR + i18n + THEME
+   AGENTE TE — cheatsheet de sintaxis (descargable / copiable)
+   El markdown vive en el <script type="text/plain"> de abajo para
+   evitar cualquier escape; JS lo lee para copiar/descargar.
    ============================================================ */
+window.AGENTE_MD = (document.getElementById("agente-md") || {}).textContent || "";
+window.AGENTE_MD = window.AGENTE_MD.replace(/^\n/, "");
+
+function copyAgente(btn){
+  navigator.clipboard.writeText(window.AGENTE_MD).then(()=>{
+    const t = btn.textContent; btn.textContent = (window.LANG === "en" ? "✓ Copied" : "✓ Copiado");
+    setTimeout(()=>btn.textContent = t, 1400);
+  });
+}
+function downloadAgente(){
+  const blob = new Blob([window.AGENTE_MD], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "AGENTE_TypeEasy.md"; document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+(function buildAgentePage(){
+  const md = window.AGENTE_MD;
+  const es = `
+<h1>🤖 Agente TypeEasy</h1>
+<p class="lead">Una guía de sintaxis lista para pegar en tu asistente de IA (ChatGPT, Claude, Copilot…) o para tenerla a mano. Copia o descarga el <code class="inline">.md</code> y tu agente sabrá escribir <strong>TypeEasy</strong> correctamente: variables, funciones, endpoints, base de datos y los <em>gotchas</em> que más rompen scripts.</p>
+<div class="cta" style="display:flex;gap:12px;flex-wrap:wrap;margin:18px 0 26px;">
+  <a href="javascript:void(0)" onclick="copyAgente(this)" style="background:var(--green);color:#fff;padding:11px 22px;border-radius:9px;font-weight:700;cursor:pointer;">📋 Copiar el .md</a>
+  <a href="javascript:void(0)" onclick="downloadAgente()" style="background:rgba(0,0,0,.06);color:var(--green-dark);padding:11px 22px;border-radius:9px;font-weight:700;cursor:pointer;">⬇️ Descargar AGENTE_TypeEasy.md</a>
+</div>
+<div class="note"><strong>¿Cómo se usa?</strong> Pega el contenido como <em>instrucciones del sistema</em> de tu agente, o adjúntalo al pedirle código <code class="inline">.te</code>. También sirve como referencia rápida para personas.</div>
+<div class="code-wrap"><span class="lbl">AGENTE_TypeEasy.md</span><button class="copy" onclick="copyAgente(this)">Copiar</button><pre>${escapeHtml(md)}</pre></div>
+`;
+  const en = `
+<h1>🤖 TypeEasy Agent</h1>
+<p class="lead">A syntax guide ready to paste into your AI assistant (ChatGPT, Claude, Copilot…) or to keep handy. Copy or download the <code class="inline">.md</code> and your agent will write <strong>TypeEasy</strong> correctly: variables, functions, endpoints, databases and the <em>gotchas</em> that break most scripts.</p>
+<div class="cta" style="display:flex;gap:12px;flex-wrap:wrap;margin:18px 0 26px;">
+  <a href="javascript:void(0)" onclick="copyAgente(this)" style="background:var(--green);color:#fff;padding:11px 22px;border-radius:9px;font-weight:700;cursor:pointer;">📋 Copy the .md</a>
+  <a href="javascript:void(0)" onclick="downloadAgente()" style="background:rgba(0,0,0,.06);color:var(--green-dark);padding:11px 22px;border-radius:9px;font-weight:700;cursor:pointer;">⬇️ Download AGENTE_TypeEasy.md</a>
+</div>
+<div class="note"><strong>How to use it?</strong> Paste the content as your agent's <em>system instructions</em>, or attach it when asking for <code class="inline">.te</code> code. It also works as a quick reference for people.</div>
+<div class="code-wrap"><span class="lbl">AGENTE_TypeEasy.md</span><button class="copy" onclick="copyAgente(this)">Copy</button><pre>${escapeHtml(md)}</pre></div>
+`;
+  window.PAGES_ES.agente = es;
+  window.PAGES_EN.agente = en;
+})();
+
 function buildSidebar(){
   const sb = document.getElementById("sidebar");
   let html = "";
