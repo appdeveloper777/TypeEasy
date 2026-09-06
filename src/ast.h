@@ -409,6 +409,7 @@ ASTNode *create_match_node(ASTNode* condition, ASTNode* case_list);
 ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
 ASTNode *create_kv_pair_node(char *key, ASTNode *value);
 char* get_node_string(ASTNode *node);
+int is_string_type(ASTNode *node);
 
 /* ------------------------------------------------------------------
  * Prototipos faltantes usados por el parser (parser.y / parser.tab.c).
