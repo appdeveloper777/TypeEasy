@@ -422,6 +422,12 @@ int te_builtin_dispatch(ASTNode *node) {
                     else if (vv->vtype == VAL_FLOAT) v = (int)vv->value.float_value;
                     else v = vv->value.int_value;
                 }
+            } else if (is_string_type(a0)) {
+                /* Bug ERP: to_int(("" + x)) — la expresion es un string (concat);
+                 * evaluate_expression la trataba como suma numerica -> error + 0. */
+                char *s = get_node_string(a0);
+                v = atoi(s ? s : "0");
+                if (s) free(s);
             } else v = (int)evaluate_expression(a0);
         }
         add_or_update_variable("__ret__", create_ast_leaf_number("INT", v, NULL, NULL));
@@ -438,6 +444,10 @@ int te_builtin_dispatch(ASTNode *node) {
                     else if (vv->vtype == VAL_FLOAT) v = vv->value.float_value;
                     else v = (double)vv->value.int_value;
                 }
+            } else if (is_string_type(a0)) {
+                char *s = get_node_string(a0);
+                v = atof(s ? s : "0");
+                if (s) free(s);
             } else v = evaluate_expression(a0);
         }
         char buf[64]; te_fmt_double(buf, sizeof(buf), v);

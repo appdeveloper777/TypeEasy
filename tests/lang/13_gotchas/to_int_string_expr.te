@@ -1,0 +1,27 @@
+// (salida esperada en to_int_string_expr.expected)
+// Bug ERP 2026-09-05 (gotcha #39 / "NUNCA to_int(("" + x)) inline"):
+// to_int()/to_float() con una EXPRESION de tipo string como argumento
+// (concatenacion `"" + x`, interpolacion, etc.) la pasaban por
+// evaluate_expression -> se trataba como SUMA numerica -> "Error: variable
+// 'x' is a string, cannot be evaluated as a number" y el resultado era 0.
+// Solo funcionaba con un literal, un identificador o concat(). Fix:
+// te_stdlib.c to_int/to_float -> si is_string_type(arg), convertir el texto
+// materializado con get_node_string.
+let F = fn(q) => {
+    let inline = to_int(("" + q));
+    let viaConcat = to_int(concat("", q));
+    let s = ("" + q);
+    let viaVar = to_int(s);
+    println(concat("q=", ("" + q), " inline=", ("" + inline), " concat=", ("" + viaConcat), " var=", ("" + viaVar)));
+    return "";
+};
+F("999");
+F(999);
+F("40");
+let y = "888";
+let z = to_int(("" + y));
+println(concat("top=", ("" + z)));
+let f = to_float(("" + "2.5"));
+println(concat("float=", ("" + f)));
+let n = to_int(("" + y) + "1");
+println(concat("concatDoble=", ("" + n)));
