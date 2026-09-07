@@ -7,6 +7,7 @@
 [![Gemini](https://img.shields.io/badge/Google-Gemini%20AI-4285F4?logo=google&logoColor=white)](https://ai.google.dev/)
 [![WhatsApp](https://img.shields.io/badge/WhatsApp-Enabled-25D366?logo=whatsapp&logoColor=white)](https://www.whatsapp.com/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Página](https://img.shields.io/badge/Página%20Oficial-8A2BE2)](https://appdeveloper777.github.io/TypeEasy/#/home)
 [![GitHub Stars](https://img.shields.io/github/stars/appdeveloper777/TypeEasy?style=social)](https://github.com/appdeveloper777/TypeEasy/stargazers)
 
 **La API más rápida de escribir y desplegar: un binario, cero runtime, cero Docker, cero `npm install`.**
