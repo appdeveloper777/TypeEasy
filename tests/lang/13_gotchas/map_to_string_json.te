@@ -1,0 +1,11 @@
+// ERP gotcha: `("" + map)` yielded "" (value silently lost). It now renders as
+// JSON, identical to json_stringify(map), for literals, variables and fn returns.
+let m = { "k": 1, "s": "x" };
+let s = ("" + m);
+println(s);
+println(s == json_stringify(m));
+let mk = fn() => { return { "a": "b" }; };
+println("r=" + mk());
+let p = json_parse("{\"n\":2,\"l\":[1,2]}");
+println("p=" + p);
+println("" + { "z": true });

@@ -780,6 +780,21 @@ void te_fmt_double(char *buf, size_t cap, double v) {
     snprintf(buf, cap, "%.17g", v);
 }
 
+/* ERP gotcha #38-bis: `("" + map)` used to yield "" (silently dropping the
+ * value). A MAP / OBJECT_LITERAL in string context now renders as JSON,
+ * same text json_stringify(map) produces. */
+static char* te_map_node_to_string(ASTNode *mapNode) {
+    TeBuf b; tebuf_init(&b);
+    te_json_emit_node(&b, mapNode);
+    char *out = strdup(b.p ? b.p : "");
+    free(b.p);
+    return out;
+}
+static int te_var_is_map(Variable *v) {
+    return v && v->vtype == VAL_OBJECT && v->type && v->value.object_value &&
+           (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0);
+}
+
 /* Render a LIST node to a malloc'd string like "[1, 2, 3]" for string
  * concatenation (+) and string-context coercion. Mirrors the element
  * formatting of te_print_list_node (STRING raw, FLOAT %f, int %d). */
@@ -851,6 +866,7 @@ char* get_node_string(ASTNode* node) {
             if (r->vtype == VAL_FLOAT)  { te_fmt_double(temp, sizeof(temp), r->value.float_value); return strdup(temp); }
             if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0)
                 return te_list_node_to_string((ASTNode *)(intptr_t)r->value.object_value);
+            if (te_var_is_map(r)) return te_map_node_to_string((ASTNode *)(intptr_t)r->value.object_value);
         }
         return strdup("");
     }
@@ -867,6 +883,7 @@ char* get_node_string(ASTNode* node) {
             if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) return strdup("null");
             if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0)
                 return te_list_node_to_string((ASTNode *)(intptr_t)r->value.object_value);
+            if (te_var_is_map(r)) return te_map_node_to_string((ASTNode *)(intptr_t)r->value.object_value);
         }
         return strdup("");
     }
@@ -881,6 +898,10 @@ char* get_node_string(ASTNode* node) {
 
     if (node->type && strcmp(node->type, "NULL") == 0) {
         return strdup("null");
+    }
+
+    if (node->type && (strcmp(node->type, "MAP") == 0 || strcmp(node->type, "OBJECT_LITERAL") == 0)) {
+        return te_map_node_to_string(node);
     }
 
     if (node->type && strcmp(node->type, "ADD") == 0) {
@@ -926,6 +947,7 @@ char* get_node_string(ASTNode* node) {
             }
             if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0)
                 return te_list_node_to_string((ASTNode *)(intptr_t)v->value.object_value);
+            if (te_var_is_map(v)) return te_map_node_to_string((ASTNode *)(intptr_t)v->value.object_value);
             if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "NULL") == 0)
                 return strdup("null");
         }
@@ -2258,6 +2280,7 @@ void runtime_reset_vars_to_initial_state() {
      * in the invocation wrappers. Reset the depth counter here so the next
      * request starts from a clean slate. */
     g_call_depth = 0;
+    te_frames_reset();   /* same reason: te_frame_pop was skipped by the longjmp */
 
     /* Invalidate all cached bytecode whose Instrs hold raw Variable*
      * pointers into vars[]. After this reset, slots are recycled and
@@ -2787,6 +2810,7 @@ typedef struct TeReqState {
     Variable  ret;            /* __ret_var (owned) */
     int       ret_active;
     int       return_flag, throw_flag, call_depth;
+    void     *frames;         /* g_frame_top of the yielded request */
     jmp_buf  *recovery;
     char     *claims;         /* g_current_claims (owned) */
     /* http context (ownership moved out of the globals) */
@@ -2842,6 +2866,7 @@ void *te_reqstate_save(void) {
     s->return_flag = return_flag;
     s->throw_flag  = throw_flag;
     s->call_depth  = g_call_depth;
+    s->frames      = te_frames_save();
     s->recovery    = g_runtime_recovery;
     return_flag = 0; throw_flag = 0; g_call_depth = 0;
 
@@ -2891,6 +2916,7 @@ void te_reqstate_restore(void *st) {
     return_flag = s->return_flag;
     throw_flag  = s->throw_flag;
     g_call_depth = s->call_depth;
+    te_frames_restore(s->frames);
     g_runtime_recovery = s->recovery;
 
     if (g_current_claims) free(g_current_claims);
@@ -3056,6 +3082,75 @@ Variable *find_variable_for(char *id) {
  * (abajo) lo usa antes de la definición de te_value_to_variable. */
 static void te_value_to_variable(Variable *dst, ASTNode *value);
 
+/* ─── Function frames (ERP gotcha #38 / 30c-d) ─────────────────────────────
+ * vars[] is one flat array: a `let x` inside a fn body used to overwrite the
+ * caller's `x` (param or local) for good, e.g. PosRepo_* declaring `id` wiped
+ * the `id` of the EcomRepo_* that called it -> UPDATE ... WHERE id=@id hit 0
+ * rows while reporting success. Parameters were already shadowed per call;
+ * a TeFrame generalises that: every slot that existed BEFORE the call and is
+ * (re)declared or bound during it is saved once and restored on exit. Slots
+ * created inside the call are left in place (same as before). Frames live on
+ * the C stack of call_lambda_impl and chain through g_frame_top. */
+typedef struct { Variable *slot; Variable saved; } ParamShadow;
+typedef struct TeFrame {
+    ParamShadow *sh;
+    int n, cap;
+    int base;                 /* var_count at call entry */
+    struct TeFrame *prev;
+} TeFrame;
+static TeFrame *g_frame_top = NULL;
+
+static void te_frame_push(TeFrame *f) {
+    f->sh = NULL; f->n = 0; f->cap = 0;
+    f->base = var_count;
+    f->prev = g_frame_top;
+    g_frame_top = f;
+}
+
+static void te_frame_shadow_slot(TeFrame *f, Variable *ex) {
+    if (!f || !ex || ex == &__ret_var) return;
+    for (int i = 0; i < f->n; i++)
+        if (f->sh[i].slot == ex) return;   /* already saved in this frame */
+    if (f->n >= f->cap) {
+        int ncap = f->cap ? f->cap * 2 : 16;
+        ParamShadow *g = (ParamShadow *)realloc(f->sh, (size_t)ncap * sizeof(ParamShadow));
+        if (!g) return;                   /* OOM: fall back to old (leaky) behaviour */
+        f->sh = g; f->cap = ncap;
+    }
+    ParamShadow *ps = &f->sh[f->n++];
+    ps->slot  = ex;
+    ps->saved = *ex;                       /* shallow copy of the union + tags */
+    /* Deep-copy owned strings: the binder frees the slot's `type` and
+     * `string_value` while (re)declaring. */
+    ps->saved.type = ex->type ? strdup(ex->type) : NULL;
+    if (ex->vtype == VAL_STRING)
+        ps->saved.value.string_value =
+            ex->value.string_value ? strdup(ex->value.string_value) : NULL;
+    ex->is_const = 0;                      /* allow the local to overwrite */
+}
+
+static void te_frame_pop(TeFrame *f) {
+    for (int k = f->n - 1; k >= 0; k--) {
+        Variable *slot = f->sh[k].slot;
+        free(slot->type);
+        if (slot->vtype == VAL_STRING && slot->value.string_value)
+            free(slot->value.string_value);
+        /* Restore the outer variable (ownership of saved.type / saved string
+         * transfers back to the slot). `id` was never touched. */
+        slot->is_const = f->sh[k].saved.is_const;
+        slot->vtype    = f->sh[k].saved.vtype;
+        slot->type     = f->sh[k].saved.type;
+        slot->value    = f->sh[k].saved.value;
+    }
+    free(f->sh);
+    g_frame_top = f->prev;
+}
+
+/* Fatal errors longjmp past te_frame_pop; the request recovery path calls this. */
+void te_frames_reset(void) { g_frame_top = NULL; }
+void *te_frames_save(void)  { void *t = g_frame_top; g_frame_top = NULL; return t; }
+void  te_frames_restore(void *t) { g_frame_top = (TeFrame *)t; }
+
 /* Bug ERP 2026-08-27 ("stale return" / Bug A): slot ÚNICO por nombre al
  * re-declarar. Antes cada `let/var x` APPENDEABA un slot nuevo aunque ya
  * existiera otro `x` (p.ej. el body de una fn ejecutado en cada llamada).
@@ -3074,6 +3169,10 @@ static Variable *te_decl_slot(const char *id) {
     if (ex && ex != &__ret_var) {
         int idx = (int)(ex - vars);
         if (idx >= g_initial_var_count && idx < var_count) {
+            /* Frames: a local (re)declared inside a fn call shadows the slot the
+             * caller owned; save it once so te_frame_pop restores it. Slots
+             * created inside this same call (idx >= base) are simply reused. */
+            if (g_frame_top && idx < g_frame_top->base) te_frame_shadow_slot(g_frame_top, ex);
             if (ex->vtype == VAL_STRING && ex->value.string_value)
                 free(ex->value.string_value);
             if (ex->type) { free(ex->type); ex->type = NULL; }
@@ -3089,6 +3188,141 @@ static Variable *te_decl_slot(const char *id) {
     var_count++;
     te_sym_insert(nv->id, (int)(nv - vars));
     return nv;
+}
+
+/* Constructs `new X(...)` items of a LIST literal in place (template keeps the
+ * ctor args so the persistent --api can re-run it per request). Extracted from
+ * declare_variable; same behaviour, incl. early return on the first non-OBJECT. */
+static void te_list_literal_construct_objects(ASTNode *value) {
+    ASTNode *cur = value->left;
+    int list_count = 0;
+    while (cur) {
+        list_count++;
+        /* debug print removed */
+        if (strcmp(cur->type, "OBJECT") != 0) {
+            return;
+        }
+
+        /* Read the original Object pointer. In the persistent embedded-API
+         * scenario this same LIST literal AST node is re-declared on every
+         * request, so we must NOT destroy the parse-time template here.
+         * The pristine template object lives in `cur->extra` on the first
+         * pass; we stash it in `cur->cached_class` (unused for OBJECT item
+         * nodes) so subsequent requests clone from the original instead of
+         * from the previous request's already-constructed clone, and we
+         * keep `cur->left` (the ctor args) intact for re-binding. */
+        ObjectNode *obj_template = (ObjectNode *)cur->cached_class;
+        if (!obj_template) {
+            if (cur->extra) obj_template = (ObjectNode *)(cur->extra);
+            else obj_template = (ObjectNode *)(intptr_t)cur->value;
+            cur->cached_class = (void *)obj_template;
+        } else if (cur->extra && (ObjectNode *)cur->extra != obj_template) {
+            /* Free the previous request's clone before replacing it so the
+             * persistent API doesn't leak one ObjectNode per item per
+             * request. Never frees the pristine template (== cached_class). */
+            free_object_node((ObjectNode *)cur->extra);
+        }
+        ObjectNode *obj_clonado = clone_object(obj_template);
+        ASTNode *arg = cur->left;
+        cur->value = (int)(intptr_t)obj_clonado;
+        cur->extra = (struct ASTNode*)obj_clonado;
+        MethodNode *m = obj_clonado->class->methods;
+        while (m && strcmp(m->name, "__constructor") != 0) {
+            m = m->next;
+        }
+
+        if (m) {
+            ParameterNode *p = m->params;
+            while (p && arg) {
+                ASTNode *vn = NULL;
+                if (arg->type && strcmp(arg->type, "STRING") == 0) {
+                    vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
+                } 
+                else if (arg->type && strcmp(arg->type, "FLOAT") == 0) {
+                    /* Float literal: value lives in str_value (parsed via
+                     * atof in te_value_to_variable). Passing it as INT here
+                     * truncated 19.99 -> 19. */
+                    vn = create_ast_leaf("FLOAT", 0, arg->str_value, NULL);
+                }
+                else if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+                    Variable *v = find_variable(arg->id);
+                    if (!v) {
+                        printf("Error: variable '%s' not found.\n", arg->id);
+                        return;
+                    }
+                    if (v->vtype == VAL_STRING) {
+                        vn = create_ast_leaf("STRING", 0, strdup(v->value.string_value), NULL);
+                    } else if (v->vtype == VAL_FLOAT) {
+                        char fbuf[64];
+                        te_fmt_double(fbuf, sizeof(fbuf), v->value.float_value);
+                        vn = create_ast_leaf("FLOAT", 0, fbuf, NULL);
+                    } else {
+                        vn = create_ast_leaf_number("INT", v->value.int_value, NULL, NULL);
+                    }
+                } 
+                else {
+                    int val = evaluate_expression(arg);
+                    vn = create_ast_leaf_number("INT", val, NULL, NULL);
+                }
+                add_or_update_variable(p->name, vn);
+                p = p->next;
+                arg = arg->next; /* gotcha #1: step ctor args via ->next */
+            }
+            call_method(obj_clonado, "__constructor");
+            /* Ensure constructor side-effects (like return_flag) don't block later AST execution */
+            return_flag = 0;
+            return_node = NULL;
+            /* debug print removed */
+        }
+        /* NOTE: do NOT null out cur->left here. The args must survive so
+         * that the persistent embedded API can re-run this constructor on
+         * the next request (see template handling above). Nulling it caused
+         * numeric attributes to reset to 0 on the second request. */
+        cur = cur->next;
+    }
+/* debug print removed */
+}
+
+/* Gotcha 30c: a LIST literal evaluated inside a fn was bound BY REFERENCE to its
+ * parse-time AST node, so `var arr = []` accumulated the pushes of every previous
+ * call. Each evaluation now yields a fresh head + shallow item copies. Items keep
+ * borrowed left/right (borrowed_children=1) so free_ast never touches the
+ * template; own strings are duplicated unless interned. Nested LIST items are
+ * instanced recursively. Registered as request-owned so --api frees it per
+ * request (no-op in script mode, where the process exit reclaims it). */
+ASTNode* te_list_literal_instance(ASTNode *lit) {
+    if (!lit || !lit->type || strcmp(lit->type, "LIST") != 0) return lit;
+    ASTNode *head = (ASTNode*)calloc(1, sizeof(ASTNode));
+    if (!head) return lit;
+    head->type = strdup("LIST");
+    head->kind = lit->kind;
+    head->line = lit->line;
+    ASTNode *tail = NULL;
+    for (ASTNode *src = lit->left; src; src = src->next) {
+        ASTNode *copy;
+        if (src->type && strcmp(src->type, "LIST") == 0) {
+            copy = te_list_literal_instance(src);
+            if (copy == src) break;
+        } else {
+            copy = (ASTNode*)malloc(sizeof(ASTNode));
+            if (!copy) break;
+            memcpy(copy, src, sizeof(ASTNode));
+            copy->from_pool = 0;
+            copy->type = src->type ? strdup(src->type) : NULL;
+            if (copy->str_value && !copy->str_interned) copy->str_value = strdup(copy->str_value);
+            if (copy->id && !copy->id_interned) copy->id = strdup(copy->id);
+            copy->bc = NULL;
+            copy->col_cache = NULL;
+            if (src->type && (strcmp(src->type, "OBJECT_LITERAL") == 0 || strcmp(src->type, "MAP") == 0))
+                copy->extra = NULL;   /* side hash belongs to the template */
+            copy->borrowed_children = 1;
+        }
+        copy->next = NULL;
+        if (!tail) head->left = copy; else tail->next = copy;
+        tail = copy;
+    }
+    te_req_owned_ast_register(head);
+    return head;
 }
 
 void declare_variable(char *id, ASTNode *value, int is_const) {
@@ -3133,93 +3367,10 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
             return;
         }
 
-        ASTNode *cur = value->left;
-        int list_count = 0;
-        while (cur) {
-            list_count++;
-            /* debug print removed */
-            if (strcmp(cur->type, "OBJECT") != 0) {
-                return;
-            }
-
-            /* Read the original Object pointer. In the persistent embedded-API
-             * scenario this same LIST literal AST node is re-declared on every
-             * request, so we must NOT destroy the parse-time template here.
-             * The pristine template object lives in `cur->extra` on the first
-             * pass; we stash it in `cur->cached_class` (unused for OBJECT item
-             * nodes) so subsequent requests clone from the original instead of
-             * from the previous request's already-constructed clone, and we
-             * keep `cur->left` (the ctor args) intact for re-binding. */
-            ObjectNode *obj_template = (ObjectNode *)cur->cached_class;
-            if (!obj_template) {
-                if (cur->extra) obj_template = (ObjectNode *)(cur->extra);
-                else obj_template = (ObjectNode *)(intptr_t)cur->value;
-                cur->cached_class = (void *)obj_template;
-            } else if (cur->extra && (ObjectNode *)cur->extra != obj_template) {
-                /* Free the previous request's clone before replacing it so the
-                 * persistent API doesn't leak one ObjectNode per item per
-                 * request. Never frees the pristine template (== cached_class). */
-                free_object_node((ObjectNode *)cur->extra);
-            }
-            ObjectNode *obj_clonado = clone_object(obj_template);
-            ASTNode *arg = cur->left;
-            cur->value = (int)(intptr_t)obj_clonado;
-            cur->extra = (struct ASTNode*)obj_clonado;
-            MethodNode *m = obj_clonado->class->methods;
-            while (m && strcmp(m->name, "__constructor") != 0) {
-                m = m->next;
-            }
-
-            if (m) {
-                ParameterNode *p = m->params;
-                while (p && arg) {
-                    ASTNode *vn = NULL;
-                    if (arg->type && strcmp(arg->type, "STRING") == 0) {
-                        vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
-                    } 
-                    else if (arg->type && strcmp(arg->type, "FLOAT") == 0) {
-                        /* Float literal: value lives in str_value (parsed via
-                         * atof in te_value_to_variable). Passing it as INT here
-                         * truncated 19.99 -> 19. */
-                        vn = create_ast_leaf("FLOAT", 0, arg->str_value, NULL);
-                    }
-                    else if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
-                        Variable *v = find_variable(arg->id);
-                        if (!v) {
-                            printf("Error: variable '%s' not found.\n", arg->id);
-                            return;
-                        }
-                        if (v->vtype == VAL_STRING) {
-                            vn = create_ast_leaf("STRING", 0, strdup(v->value.string_value), NULL);
-                        } else if (v->vtype == VAL_FLOAT) {
-                            char fbuf[64];
-                            te_fmt_double(fbuf, sizeof(fbuf), v->value.float_value);
-                            vn = create_ast_leaf("FLOAT", 0, fbuf, NULL);
-                        } else {
-                            vn = create_ast_leaf_number("INT", v->value.int_value, NULL, NULL);
-                        }
-                    } 
-                    else {
-                        int val = evaluate_expression(arg);
-                        vn = create_ast_leaf_number("INT", val, NULL, NULL);
-                    }
-                    add_or_update_variable(p->name, vn);
-                    p = p->next;
-                    arg = arg->next; /* gotcha #1: step ctor args via ->next */
-                }
-                call_method(obj_clonado, "__constructor");
-                /* Ensure constructor side-effects (like return_flag) don't block later AST execution */
-                return_flag = 0;
-                return_node = NULL;
-                /* debug print removed */
-            }
-            /* NOTE: do NOT null out cur->left here. The args must survive so
-             * that the persistent embedded API can re-run this constructor on
-             * the next request (see template handling above). Nulling it caused
-             * numeric attributes to reset to 0 on the second request. */
-            cur = cur->next;
-        }
-    /* debug print removed */
+        te_list_literal_construct_objects(value);
+        /* Gotcha 30c: the variable must own a fresh instance, not the parse-time
+         * literal, or every call of the enclosing fn keeps pushing into it. */
+        vars[my_index].value.object_value = (void *)(intptr_t)te_list_literal_instance(value);
     }
     else if (strcmp(value->type, "ADD") == 0 || strcmp(value->type, "SUB") == 0 || 
              strcmp(value->type, "MUL") == 0 || strcmp(value->type, "DIV") == 0 ||
@@ -4369,6 +4520,7 @@ static void te_json_strip_side_index(ASTNode *n) {
                 te_map_hash_free((TEMapHash*)n->extra); n->extra = NULL;
             }
         }
+        if (n->borrowed_children) { n = n->next; continue; }   /* children belong to the template */
         te_json_strip_side_index(n->left);
         te_json_strip_side_index(n->right);
         n = n->next;
@@ -9396,40 +9548,11 @@ ASTNode* call_lambda(ASTNode *lambda, ASTNode *argsList) {
  * outer const is untouched after the call returns. Save/restore lives on the
  * C stack, making it re-entrant for recursive lambdas. */
 #define LAMBDA_MAX_SHADOW 64
-typedef struct { Variable *slot; Variable saved; } ParamShadow;
 
-static void te_lambda_save_shadow(const char *name, ParamShadow *sh, int *n) {
-    Variable *ex = find_variable_for(name);
+static void te_lambda_save_shadow(const char *name) {
+    Variable *ex = find_variable_for((char *)name);
     if (!ex) return;                       /* fresh param: nothing to shadow */
-    for (int i = 0; i < *n; i++)
-        if (sh[i].slot == ex) return;      /* duplicate param name: already saved */
-    if (*n >= LAMBDA_MAX_SHADOW) return;   /* pathological arity: skip tracking */
-    ParamShadow *ps = &sh[(*n)++];
-    ps->slot  = ex;
-    ps->saved = *ex;                       /* shallow copy of the union + tags */
-    /* Deep-copy owned strings: add_or_update_variable() frees the slot's
-     * `type` (always) and `string_value` (when VAL_STRING) while binding. */
-    ps->saved.type = ex->type ? strdup(ex->type) : NULL;
-    if (ex->vtype == VAL_STRING)
-        ps->saved.value.string_value =
-            ex->value.string_value ? strdup(ex->value.string_value) : NULL;
-    ex->is_const = 0;                      /* allow the param to overwrite */
-}
-
-static void te_lambda_restore_shadows(ParamShadow *sh, int n) {
-    for (int k = n - 1; k >= 0; k--) {
-        Variable *slot = sh[k].slot;
-        /* Release the parameter value currently in the slot. */
-        free(slot->type);
-        if (slot->vtype == VAL_STRING && slot->value.string_value)
-            free(slot->value.string_value);
-        /* Restore the outer variable (ownership of saved.type / saved string
-         * transfers back to the slot). `id` was never touched. */
-        slot->is_const = sh[k].saved.is_const;
-        slot->vtype    = sh[k].saved.vtype;
-        slot->type     = sh[k].saved.type;
-        slot->value    = sh[k].saved.value;
-    }
+    te_frame_shadow_slot(g_frame_top, ex);
 }
 
 static ASTNode* call_lambda_exec_body(ASTNode *lambda);
@@ -9442,8 +9565,8 @@ static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
     const char *params = lambda->id;
     /* Bind args a params, en orden. argsList puede ser NULL o lista por ->right. */
     ASTNode *cur_arg = argsList;
-    ParamShadow _shadows[LAMBDA_MAX_SHADOW];
-    int _nshadow = 0;
+    TeFrame _frame;
+    te_frame_push(&_frame);
     if (params[0]) {
         const char *p = params;
         while (*p) {
@@ -9553,14 +9676,14 @@ static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
                 valNode = create_ast_leaf("NULL", 0, NULL, NULL);
             }
             /* Param scoping: shadow any outer var (const-safe), then bind. */
-            te_lambda_save_shadow(name, _shadows, &_nshadow);
+            te_lambda_save_shadow(name);
             add_or_update_variable(name, valNode);
             if (*e == '\1') p = e + 1; else p = e;
         }
     }
     {
         ASTNode *_lam_res = call_lambda_exec_body(lambda);
-        te_lambda_restore_shadows(_shadows, _nshadow);
+        te_frame_pop(&_frame);
         return _lam_res;
     }
 }
@@ -10240,7 +10363,11 @@ static void interpret_assign(ASTNode *node) {
     }
     // Es un valor simple (literal, variable)
     else {
-        add_or_update_variable(var_node->id, value_node);
+        /* Gotcha 30c: `arr = []` must bind a fresh instance, like declare_variable. */
+        if (strcmp(value_node->type, "LIST") == 0 && value_node->value != 1)
+            add_or_update_variable(var_node->id, te_list_literal_instance(value_node));
+        else
+            add_or_update_variable(var_node->id, value_node);
     }
     // --- FIN DE LA CORRECCIÓN ---
 }
@@ -11150,9 +11277,11 @@ void free_ast(ASTNode *node) {
             if (n->str_value && !n->str_interned) free(n->str_value);
             /* Ola 15: same for id slot. */
             if (n->id && !n->id_interned) free(n->id);
+            /* Gotcha 30c: item copy of a LIST instance; left/right are the template's. */
+            int borrowed = n->borrowed_children;
             ASTNode *l = n->left, *r = n->right;   /* leer antes de free(n) */
             free(n);
-            if (l || r) {                    /* apilar hijos: liberacion sin recursion */
+            if (!borrowed && (l || r)) {                    /* apilar hijos: liberacion sin recursion */
                 if (sp + 2 > cap) {
                     int ncap = cap * 2;
                     ASTNode **grown = (ASTNode **)malloc((size_t)ncap * sizeof(ASTNode *));

@@ -1,0 +1,28 @@
+// Gotcha 30c: a LIST literal inside a fn was bound by reference to its AST node,
+// so `var arr = []` kept the pushes of previous calls (2/2 then 5/3 then 6/1).
+let acum = fn(n) => {
+    var arr = [];
+    var cnt = 0;
+    for (i = 0; n; 1) { arr.push(i); cnt = cnt + 1; }
+    return "" + arr.length + "/" + cnt;
+};
+println(acum(2));
+println(acum(3));
+println(acum(1));
+
+// Reassignment must also bind a fresh instance.
+var xs = [1, 2, 3];
+xs.push(4);
+xs = [1, 2, 3];
+println(xs.length);
+
+// Non-empty literal with strings and a nested list keeps its items.
+let mk = fn(tag) => {
+    var l = ["a", "b", [1, 2]];
+    l.push(tag);
+    return l;
+};
+let l1 = mk("x");
+let l2 = mk("y");
+println(l1.length + " " + l2.length + " " + l1[0] + l1[1] + l2[3]);
+println(l1[2].length);

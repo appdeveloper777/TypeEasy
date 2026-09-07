@@ -105,6 +105,9 @@ typedef struct ASTNode {
      * Set by create_ast_* constructors from yylineno. May be slightly off for
      * multi-line constructs (lookahead token); good enough for breakpoint match. */
     int   line;
+    /* Gotcha 30c: item copy of a LIST-literal instance. left/right point into
+     * the parse-time template, so free_ast must free this node only. */
+    int   borrowed_children;
     /* v0.0.13 (perf): columnar cache attached to LIST head when items are
      * homogeneous OBJECTs from a CSV load. NULL on all non-LIST nodes and on
      * LIST nodes that don't qualify. Owned by the LIST node; freed when the
@@ -295,6 +298,12 @@ void te_req_free_json_tree(ASTNode *root);
 void te_ret_scalar(ASTNode *n);
 void te_free_lambda_result(ASTNode *r);
 void te_req_owned_ast_register(ASTNode *root);
+/* Gotcha 30c: fresh per-evaluation instance of a LIST literal (see ast.c). */
+ASTNode* te_list_literal_instance(ASTNode *lit);
+/* Function frames (locals shadow the caller's slots; see ast.c). */
+void  te_frames_reset(void);
+void *te_frames_save(void);
+void  te_frames_restore(void *t);
 ASTNode *append_to_list(ASTNode *list, ASTNode *item);
 /* Internal helpers exposed for module extraction (te_linq, etc.). */
 void te_list_append(ASTNode *list, ASTNode *item);

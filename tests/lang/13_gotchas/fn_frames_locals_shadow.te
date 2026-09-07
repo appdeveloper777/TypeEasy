@@ -1,0 +1,44 @@
+// Frames: a `let`/`var` inside a fn must not clobber the caller's same-named
+// slot (ERP #38: PosRepo_* declaring `id` wiped the EcomRepo_* caller's `id`).
+let inner2 = fn(v) => {
+    let id = "99";
+    var nick = "otro";
+    return concat(id, nick, v);
+};
+let outer = fn(id, nick) => {
+    let b = inner2("z");
+    return concat("id=", id, " nick=", nick, " | ", b);
+};
+println(outer("4", "demo"));
+
+// Recursion: each level keeps its own `local`.
+let rec = fn(n) => {
+    let local = "L" + n;
+    var below = "";
+    if (n > 0) { below = rec(n - 1); }
+    return local + below;
+};
+println(rec(3));
+
+// Assignment (not declaration) to an outer var from a nested fn still mutates it.
+var total = 0;
+let addTo = fn(x) => { total = total + x; return total; };
+addTo(5); addTo(7);
+println(total);
+
+// Caller's own locals declared BEFORE the call survive a callee that re-declares them.
+let callee = fn() => { let tmp = "callee"; let acc = "C"; return tmp + acc; };
+let caller = fn() => {
+    let tmp = "caller";
+    var acc = "A";
+    let r = callee();
+    acc = acc + "B";
+    return tmp + "/" + acc + "/" + r;
+};
+println(caller());
+println(caller());
+
+// Const in the outer scope shadowed by a param keeps its value after the call.
+let conn = "outer-conn";
+let useConn = fn(conn) => { return "in:" + conn; };
+println(useConn("param") + " " + conn);
