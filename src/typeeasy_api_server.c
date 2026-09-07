@@ -771,25 +771,30 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
         static int s_dev_mode = -1;
         if (s_dev_mode < 0) s_dev_mode = getenv("TYPEEASY_DEV") ? 1 : 0;
 
-        char devbuf[640];
+        char devbuf[1024];
         const char *err;
         if (s_dev_mode) {
-            /* JSON-escape the captured message (may contain user identifiers). */
-            char esc[256]; size_t ei = 0;
-            const char *src = g_runtime_error_msg;
-            for (; *src && ei + 2 < sizeof(esc); src++) {
-                unsigned char c = (unsigned char)*src;
-                if (c == '"' || c == '\\') { esc[ei++] = '\\'; esc[ei++] = (char)c; }
-                else if (c == '\n') { esc[ei++] = '\\'; esc[ei++] = 'n'; }
-                else if (c == '\t') { esc[ei++] = '\\'; esc[ei++] = 't'; }
-                else if (c < 0x20) { /* skip other control chars */ }
-                else esc[ei++] = (char)c;
+            /* JSON-escape the captured message (may contain user identifiers)
+             * and the file path (Windows backslashes broke the JSON). */
+            char esc[256], escf[400];
+            const char *srcs[2] = { g_runtime_error_msg, te_src_file_name(g_runtime_error_file) };
+            char *dsts[2] = { esc, escf };
+            size_t caps[2] = { sizeof(esc), sizeof(escf) };
+            for (int k = 0; k < 2; k++) {
+                size_t ei = 0; const char *src = srcs[k]; char *out = dsts[k];
+                for (; *src && ei + 2 < caps[k]; src++) {
+                    unsigned char c = (unsigned char)*src;
+                    if (c == '"' || c == '\\') { out[ei++] = '\\'; out[ei++] = (char)c; }
+                    else if (c == '\n') { out[ei++] = '\\'; out[ei++] = 'n'; }
+                    else if (c == '\t') { out[ei++] = '\\'; out[ei++] = 't'; }
+                    else if (c < 0x20) { /* skip other control chars */ }
+                    else out[ei++] = (char)c;
+                }
+                out[ei] = '\0';
             }
-            esc[ei] = '\0';
-            const char *file = te_src_file_name(g_runtime_error_file);
             snprintf(devbuf, sizeof(devbuf),
                      "{\"error\":\"internal_error\",\"message\":\"%s\",\"file\":\"%s\",\"line\":%d}",
-                     esc, file, g_runtime_error_line);
+                     esc, escf, g_runtime_error_line);
             err = devbuf;
         } else {
             err = "{\"error\":\"internal_error\"}";

@@ -1,0 +1,40 @@
+{
+  "entry": "frames_api.te",
+  "health": "/health",
+  "env": { "TYPEEASY_DEV": "1" },
+  "cases": [
+    { "name": "health",
+      "path": "/health",
+      "expect": { "status": 200, "json": { "ok": true } } },
+
+    { "name": "#38 id/nick/fp del handler sobreviven a un callee que declara id/fp",
+      "method": "POST", "path": "/api/ped/4/facturar",
+      "headers": { "X-Nick": "demo1" }, "body": { "forma_pago_id": "1" },
+      "expect": { "status": 200, "json": { "id": "4", "nick": "demo1", "fp": "1", "inner": "40:demo1" } } },
+
+    { "name": "#38 segundo request no hereda valores del primero",
+      "method": "POST", "path": "/api/ped/7/facturar",
+      "headers": { "X-Nick": "demo2" }, "body": { "forma_pago_id": "2" },
+      "expect": { "status": 200, "json": { "id": "7", "nick": "demo2", "fp": "2", "inner": "40:demo2" } } },
+
+    { "name": "#38 accesores inline como argumentos",
+      "method": "POST", "path": "/api/ped/9/facturar-inline?fp=5",
+      "headers": { "X-Nick": "demo3" },
+      "expect": { "status": 200, "json": { "id": "9", "nick": "demo3", "fp": "5" } } },
+
+    { "name": "30c literal [] fresco en cada request (1)",
+      "path": "/api/lista", "expect": { "status": 200, "json": { "n": 2 } } },
+    { "name": "30c literal [] fresco en cada request (2)",
+      "path": "/api/lista", "expect": { "status": 200, "json": { "n": 2 } } },
+    { "name": "30c literal [] fresco en cada request (3)",
+      "path": "/api/lista", "expect": { "status": 200, "json": { "n": 2 } } },
+
+    { "name": "500 en modo dev trae archivo:linea y mensaje",
+      "path": "/api/rompe",
+      "expect": { "status": 500, "json": { "error": "internal_error", "line": 25 },
+                  "contains": ["frames_api.te", "noExiste"] } },
+
+    { "name": "el server sigue vivo despues del 500",
+      "path": "/health", "expect": { "status": 200 } }
+  ]
+}

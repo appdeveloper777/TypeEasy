@@ -1,0 +1,61 @@
+// Endpoint suite for the --api runtime (tools/te-test/run_api_tests.py).
+// Covers, in server mode: fn frames (#38), fresh list literals (30c),
+// map -> string, request accessors and the dev-mode 500 location.
+
+let Repo_Inner = fn(nick) => {
+    var i = 0;
+    var acc = [];
+    while (i < 40) {
+        let id = "inner-" + i;      // same names as the caller's params on purpose
+        let fp = "x";
+        acc.push(id);
+        i = i + 1;
+    }
+    return "" + acc.length + ":" + nick;
+};
+
+let Repo_Facturar = fn(id, nick, fp) => {
+    let inner = Repo_Inner(nick);
+    let m = { "id": id, "nick": nick, "fp": fp, "inner": inner };
+    return ("" + m);
+};
+
+let Repo_Rompe = fn(v) => {
+    let x = v + 1;
+    return noExiste(x);
+};
+
+endpoint {
+    [HttpGet("/health")]
+    async Health() {
+        return json("{\"ok\":true}");
+    }
+
+    [HttpPost("/api/ped/{id}/facturar")]
+    async Facturar() {
+        let g = request_header("X-Nick");
+        let pid = request_param("id");
+        var fp = "";
+        let raw = ("" + request_body());
+        if (raw.contains("forma_pago_id")) { let d = json_parse(raw); fp = ("" + d["forma_pago_id"]); }
+        return json(Repo_Facturar(pid, g, fp));
+    }
+
+    [HttpPost("/api/ped/{id}/facturar-inline")]
+    async FacturarInline() {
+        return json(Repo_Facturar(request_param("id"), request_header("X-Nick"), request_query("fp")));
+    }
+
+    [HttpGet("/api/lista")]
+    async Lista() {
+        var arr = [];
+        arr.push("a");
+        arr.push("b");
+        return json("{\"n\":" + arr.length + "}");
+    }
+
+    [HttpGet("/api/rompe")]
+    async Rompe() {
+        return json(Repo_Rompe(1));
+    }
+}
