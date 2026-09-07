@@ -97,21 +97,76 @@ int  g_current_exec_line   = 0;
 int  g_runtime_error_line  = 0;
 char g_runtime_error_msg[256] = "";
 
+/* ------------------------------------------------------------------
+ * Source-file table (multi-file programs). The lexer includes imports
+ * inline, so `line` alone was a cumulative counter over main.te + every
+ * import (useless for the ERP: 120 files). Each file gets an id; the lexer
+ * resets yylineno per file and stamps g_lex_file_id on new nodes; the
+ * interpreter tracks the file of the statement being executed.
+ * ------------------------------------------------------------------ */
+#define TE_SRC_FILES_MAX 512
+static char *g_src_files[TE_SRC_FILES_MAX];
+static int   g_src_file_count = 0;
+int  g_lex_file_id = 0;            /* file being lexed (0 = main file) */
+int  g_current_exec_file = 0;      /* file of the statement being executed */
+int  g_runtime_error_file = 0;
+
+int te_src_file_register(const char *path) {
+    if (!path) return 0;
+    for (int i = 1; i < g_src_file_count; i++)
+        if (g_src_files[i] && strcmp(g_src_files[i], path) == 0) return i;
+    if (g_src_file_count == 0) { g_src_files[0] = NULL; g_src_file_count = 1; }
+    if (g_src_file_count >= TE_SRC_FILES_MAX) return 0;
+    g_src_files[g_src_file_count] = strdup(path);
+    return g_src_file_count++;
+}
+
+const char *te_src_file_name(int id) {
+    extern const char *g_debug_source_file;
+    if (id > 0 && id < g_src_file_count && g_src_files[id]) return g_src_files[id];
+    return (g_debug_source_file && g_debug_source_file[0]) ? g_debug_source_file : "";
+}
+
+/* Names of the user fns currently executing (innermost last), for the
+ * "in f <- g <- h" trailer of runtime errors. Fixed size; deeper frames
+ * are simply not recorded. Reset together with g_call_depth. */
+#define TE_CALLSTACK_MAX 128
+static const char *g_callstack[TE_CALLSTACK_MAX];
+static int g_callstack_n = 0;
+void te_callstack_push(const char *name) { if (g_callstack_n < TE_CALLSTACK_MAX) g_callstack[g_callstack_n] = name; g_callstack_n++; }
+void te_callstack_pop(void) { if (g_callstack_n > 0) g_callstack_n--; }
+void te_callstack_reset(void) { g_callstack_n = 0; }
+
+/* "    at file.te:12 in fnA <- fnB" (or just "    at file.te:12"). */
+void te_runtime_location(char *buf, size_t cap) {
+    const char *f = te_src_file_name(g_current_exec_file);
+    size_t n = (size_t)snprintf(buf, cap, "    at %s:%d", f[0] ? f : "<main>", g_current_exec_line);
+    int top = g_callstack_n < TE_CALLSTACK_MAX ? g_callstack_n : TE_CALLSTACK_MAX;
+    for (int i = top - 1; i >= 0 && n + 4 < cap; i--) {
+        n += (size_t)snprintf(buf + n, cap - n, "%s%s", i == top - 1 ? " in " : " <- ",
+                              g_callstack[i] ? g_callstack[i] : "?");
+    }
+}
+
 void te_runtime_fatal(void) {
     g_runtime_error_line = g_current_exec_line;
+    g_runtime_error_file = g_current_exec_file;
     if (g_runtime_recovery) longjmp(*g_runtime_recovery, 1);
     exit(1);
 }
 
 /* Same as te_runtime_fatal() but also formats a human-readable message to
  * stderr (governance: user-facing errors in English on stderr) and stashes
- * it for the dev-mode HTTP 500 body. */
+ * it for the dev-mode HTTP 500 body. The location trailer goes to stderr
+ * only; the server decides whether to expose it. */
 void te_runtime_fatalf(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(g_runtime_error_msg, sizeof(g_runtime_error_msg), fmt, ap);
     va_end(ap);
-    fprintf(stderr, "%s\n", g_runtime_error_msg);
+    char loc[512];
+    te_runtime_location(loc, sizeof(loc));
+    fprintf(stderr, "%s\n%s\n", g_runtime_error_msg, loc);
     te_runtime_fatal();
 }
 
@@ -2165,7 +2220,7 @@ ASTNode* create_call_node_return_xml(const char* funcName, ASTNode* args) {
 
 ASTNode* create_method_call_node_alone(ASTNode* objectNode, const char* methodName, ASTNode* args) {
     ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
-    if (node) node->line = yylineno;
+    if (node) { node->line = yylineno; node->file_id = g_lex_file_id; }
     node->type = strdup("METHOD_CALL_ALONE");
     node->left = objectNode;
     node->right = args;
@@ -2281,6 +2336,7 @@ void runtime_reset_vars_to_initial_state() {
      * request starts from a clean slate. */
     g_call_depth = 0;
     te_frames_reset();   /* same reason: te_frame_pop was skipped by the longjmp */
+    te_callstack_reset();
 
     /* Invalidate all cached bytecode whose Instrs hold raw Variable*
      * pointers into vars[]. After this reset, slots are recycled and
@@ -3296,7 +3352,7 @@ ASTNode* te_list_literal_instance(ASTNode *lit) {
     if (!head) return lit;
     head->type = strdup("LIST");
     head->kind = lit->kind;
-    head->line = lit->line;
+    head->line = lit->line; head->file_id = lit->file_id;
     ASTNode *tail = NULL;
     for (ASTNode *src = lit->left; src; src = src->next) {
         ASTNode *copy;
@@ -3950,7 +4006,7 @@ ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
     if (!node) {
         te_runtime_fatalf("Fatal error: could not allocate memory for ASTNode.");
     }
-    node->line = yylineno;
+    node->line = yylineno; node->file_id = g_lex_file_id;
     node->type = strdup(type);
     node->kind = nk_from_str(type);
     node->left = NULL;
@@ -3985,7 +4041,7 @@ ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
 ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) return NULL;
-    node->line = yylineno;
+    node->line = yylineno; node->file_id = g_lex_file_id;
     node->type = strdup(type);
     node->kind = nk_from_str(type);
     node->left = NULL;
@@ -4002,7 +4058,7 @@ ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id
 
 ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
-    node->line = yylineno;
+    node->line = yylineno; node->file_id = g_lex_file_id;
     node->type = strdup(type);
     node->kind = nk_from_str(type);
     node->left = left;
@@ -4077,14 +4133,14 @@ ASTNode *create_var_decl_node(char *id, ASTNode *value) {
      * at the LAST line. The scanner stamps g_decl_stmt_line with the line of the
      * leading keyword (let/var/const/type), so the node is attributed to the
      * statement's FIRST line — which is where a user places a breakpoint. */
-    node->line = (g_decl_stmt_line > 0) ? g_decl_stmt_line : yylineno;
+    node->line = (g_decl_stmt_line > 0) ? g_decl_stmt_line : yylineno; node->file_id = g_lex_file_id;
     //printf("[DEBUG] create_var_decl_node success\n"); fflush(stdout);
     return node;
 }
 
 ASTNode *create_return_node(ASTNode *expr) {
     ASTNode *node = calloc(1, sizeof(ASTNode));
-    if (node) node->line = yylineno;
+    if (node) { node->line = yylineno; node->file_id = g_lex_file_id; }
     node->type = strdup("RETURN");
     node->id = NULL;
     node->left = expr;
@@ -4096,7 +4152,7 @@ ASTNode *create_return_node(ASTNode *expr) {
 
 ASTNode *create_function_call_node(const char *funcName, ASTNode *args) {
     ASTNode *n = calloc(1, sizeof(ASTNode));
-    if (n) n->line = yylineno;
+    if (n) { n->line = yylineno; n->file_id = g_lex_file_id; }
     n->type = strdup("CALL_FUNC");
     n->id = strdup(funcName);
     n->left = args;
@@ -4108,7 +4164,7 @@ ASTNode *create_function_call_node(const char *funcName, ASTNode *args) {
 
 ASTNode *create_method_call_node(ASTNode *objectNode, const char *methodName, ASTNode *args) {
     ASTNode *node = calloc(1, sizeof(ASTNode));
-    if (node) node->line = yylineno;
+    if (node) { node->line = yylineno; node->file_id = g_lex_file_id; }
     node->type = strdup("CALL_METHOD");
     node->id = strdup(methodName);
     node->left = objectNode;
@@ -4139,7 +4195,7 @@ ASTNode *create_object_with_args(ClassNode *class, ASTNode *args) {
 
 ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *condition, ASTNode *update, ASTNode *body) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
-    if (node) node->line = yylineno;
+    if (node) { node->line = yylineno; node->file_id = g_lex_file_id; }
     node->type = strdup("FOR");
     node->id = var->id;
     node->left = init;
@@ -6325,7 +6381,7 @@ void interpret_ast(ASTNode *node) {
     /* Item 2.3: track the source line of the statement currently executing
      * so a fatal runtime error can report file:line in dev mode. Cheap
      * (one branch + store), no debug gate. */
-    if (node->line > 0) g_current_exec_line = node->line;
+    if (node->line > 0) { g_current_exec_line = node->line; g_current_exec_file = node->file_id; }
 
     /* Debugger hook: only stop on "stoppable" statement-level nodes.
      * Cheap when g_debug_enabled == 0 (single load+test). */
@@ -7117,7 +7173,9 @@ static void interpret_call_func_impl(ASTNode *node) {
                     node->id, nparams, nparams == 1 ? "" : "s",
                     nargs, nargs == 1 ? "was" : "were");
             }
+            te_callstack_push(node->id);
             ASTNode *r = call_lambda(lambda, node->left);
+            te_callstack_pop();
             if (r) add_or_update_variable("__ret__", r);
             return;
         }
@@ -9412,7 +9470,7 @@ ASTNode* create_lambda_multi_node(const char *paramsCsv, ASTNode *body) {
     node->left = body;
     node->right = NULL;
     node->next = NULL;
-    node->line = yylineno;
+    node->line = yylineno; node->file_id = g_lex_file_id;
     return node;
 }
 
@@ -11405,6 +11463,7 @@ static void te_arity_walk(ASTNode *n, TeArityFn *tbl, int count,
                             "TypeError: '%s' expects %d argument%s but %d %s passed.",
                             n->id, tbl[i].nparams, tbl[i].nparams == 1 ? "" : "s",
                             nargs, nargs == 1 ? "was" : "were");
+                        g_lex_file_id = n->file_id;   /* te_capture_error reads the current file */
                         te_capture_error(n->line > 0 ? n->line : *lastLine, msg, n->id);
                     }
                     break;

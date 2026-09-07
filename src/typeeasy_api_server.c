@@ -59,6 +59,8 @@ extern void runtime_reset_vars_to_initial_state(void);
 /* Item 2.3: runtime error location captured by te_runtime_fatal[f]() in ast.c,
  * surfaced in the HTTP 500 body when dev mode is active. */
 extern int  g_runtime_error_line;
+extern int  g_runtime_error_file;
+extern const char *te_src_file_name(int id);
 extern char g_runtime_error_msg[256];
 extern const char *g_debug_source_file;
 
@@ -784,7 +786,7 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
                 else esc[ei++] = (char)c;
             }
             esc[ei] = '\0';
-            const char *file = g_debug_source_file ? g_debug_source_file : "";
+            const char *file = te_src_file_name(g_runtime_error_file);
             snprintf(devbuf, sizeof(devbuf),
                      "{\"error\":\"internal_error\",\"message\":\"%s\",\"file\":\"%s\",\"line\":%d}",
                      esc, file, g_runtime_error_line);

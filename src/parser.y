@@ -956,6 +956,8 @@ void yyerror(const char *s) {
     extern int g_capture_errors;
     extern void te_capture_error(int line, const char *msg, const char *near);
     extern const char *g_debug_source_file;
+    extern int g_lex_file_id;
+    extern const char *te_src_file_name(int id);
     if (g_quiet_parse_errors) {
         return;
     }
@@ -964,7 +966,8 @@ void yyerror(const char *s) {
         return;
     }
     /* Diagnostics go to stderr in an English, editor-jumpable file:line: form. */
-    const char *src = (g_debug_source_file && g_debug_source_file[0])
+    const char *src = g_lex_file_id > 0 ? te_src_file_name(g_lex_file_id)
+                      : (g_debug_source_file && g_debug_source_file[0])
                       ? g_debug_source_file : "<stdin>";
     fprintf(stderr, "%s:%d: syntax error: %s\n", src, yylineno, s);
     if (yytext && yytext[0]) {

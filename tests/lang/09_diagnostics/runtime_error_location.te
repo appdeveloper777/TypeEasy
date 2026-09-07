@@ -1,0 +1,20 @@
+// expect-stderr-contains: runtime_error_location.te:13 in rompe <- repo
+// expect-stderr-contains: function 'noExiste' not defined
+// expect-exit: 1
+// Runtime errors report where they happened: "<file>:<line> in <fn> <- <caller>".
+// Before, stderr only had the message and `line` was a cumulative counter across
+// imported files (useless for multi-file programs like the ERP).
+let helper = fn(x) => {
+    let a = "ok";
+    return a + x;
+};
+let rompe = fn(v) => {
+    let b = v + 1;
+    return noExiste(b);
+};
+let repo = fn(id) => {
+    let z = helper("1");
+    return rompe(id);
+};
+println("inicio");
+println(repo(4));

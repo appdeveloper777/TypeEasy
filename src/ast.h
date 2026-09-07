@@ -105,6 +105,8 @@ typedef struct ASTNode {
      * Set by create_ast_* constructors from yylineno. May be slightly off for
      * multi-line constructs (lookahead token); good enough for breakpoint match. */
     int   line;
+    /* Source file of `line` (index into the lexer's file table; 0 = main). */
+    int   file_id;
     /* Gotcha 30c: item copy of a LIST-literal instance. left/right point into
      * the parse-time template, so free_ast must free this node only. */
     int   borrowed_children;
@@ -304,6 +306,14 @@ ASTNode* te_list_literal_instance(ASTNode *lit);
 void  te_frames_reset(void);
 void *te_frames_save(void);
 void  te_frames_restore(void *t);
+/* Source-file table + error location (see ast.c). */
+extern int g_lex_file_id;
+int  te_src_file_register(const char *path);
+const char *te_src_file_name(int id);
+void te_runtime_location(char *buf, size_t cap);
+void te_callstack_reset(void);
+/* --syntax-check error sink (strong def in typeeasy_main.c, weak in ast.c). */
+void te_capture_error(int line, const char *msg, const char *near);
 ASTNode *append_to_list(ASTNode *list, ASTNode *item);
 /* Internal helpers exposed for module extraction (te_linq, etc.). */
 void te_list_append(ASTNode *list, ASTNode *item);

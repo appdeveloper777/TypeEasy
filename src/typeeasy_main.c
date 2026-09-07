@@ -217,14 +217,17 @@ int g_test_assertions = 0;
  * yyerror checks g_capture_errors; if non-zero, it appends to g_errors[]
  * instead of printing. */
 int g_capture_errors = 0;
-typedef struct { int line; char msg[256]; char near[128]; } TeErr;
+typedef struct { int line; int file_id; char msg[256]; char near[128]; } TeErr;
 static TeErr g_errors[64];
 static int g_error_count = 0;
+extern int g_lex_file_id;
+extern const char *te_src_file_name(int id);
 
 void te_capture_error(int line, const char *msg, const char *near) {
     if (g_error_count >= 64) return;
     TeErr *e = &g_errors[g_error_count++];
     e->line = line;
+    e->file_id = g_lex_file_id;   /* file being lexed (or set by the arity pass) */
     snprintf(e->msg, sizeof(e->msg), "%s", msg ? msg : "");
     snprintf(e->near, sizeof(e->near), "%s", near ? near : "");
 }
@@ -271,7 +274,7 @@ static int run_syntax_check(const char *path) {
         printf(",\"near\":");
         json_emit_str(stdout, g_errors[i].near);
         printf(",\"file\":");
-        json_emit_str(stdout, path);
+        json_emit_str(stdout, g_errors[i].file_id > 0 ? te_src_file_name(g_errors[i].file_id) : path);
         fputc('}', stdout);
     }
     printf("]}\n");

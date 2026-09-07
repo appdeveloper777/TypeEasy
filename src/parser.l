@@ -35,6 +35,14 @@
     YY_BUFFER_STATE include_stack[MAX_INCLUDE_DEPTH];
     FILE* include_file_stack[MAX_INCLUDE_DEPTH];  // Track FILE* to close them
     int include_stack_ptr = 0;
+    /* Per-file line numbers: yylineno is saved/restored around each import so
+     * node->line means "line within its own file"; the file itself is tracked
+     * in g_lex_file_id (ast.c file table) and stamped on every node. */
+    int include_line_stack[MAX_INCLUDE_DEPTH];
+    int include_file_id_stack[MAX_INCLUDE_DEPTH];
+    extern int g_lex_file_id;
+    extern int te_src_file_register(const char *path);
+    extern const char *te_src_file_name(int id);
 
     // Circular import tracking
     typedef struct ImportedFile {
@@ -164,7 +172,11 @@
             } else {
                 include_stack[include_stack_ptr] = YY_CURRENT_BUFFER;
                 include_file_stack[include_stack_ptr] = f;  // Store FILE* to close later
+                include_line_stack[include_stack_ptr] = yylineno;
+                include_file_id_stack[include_stack_ptr] = g_lex_file_id;
                 include_stack_ptr++;
+                g_lex_file_id = te_src_file_register(path);
+                yylineno = 1;
                 yy_switch_to_buffer(yy_create_buffer(f, YY_BUF_SIZE));
             }
         }
@@ -420,6 +432,8 @@ int yywrap() {
         
         yy_delete_buffer(YY_CURRENT_BUFFER);
         yy_switch_to_buffer(include_stack[--include_stack_ptr]);
+        yylineno = include_line_stack[include_stack_ptr];
+        g_lex_file_id = include_file_id_stack[include_stack_ptr];
         return 0;
     }
     return 1;
