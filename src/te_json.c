@@ -282,6 +282,9 @@ static char* te_json_parse_string(const char **p) {
 ASTNode *te_json_parse_value(const char **p) {
     te_json_skip_ws(p);
     char c = **p;
+    /* Empty / whitespace-only input is not JSON: yield null (was NUMBER 0,
+     * which then failed for-in with a misleading "it is a number"). */
+    if (c == '\0') return create_ast_leaf("NULL", 0, NULL, NULL);
     if (c == '"') {
         char *s = te_json_parse_string(p);
         ASTNode *r = create_ast_leaf("STRING", 0, s ? s : "", NULL);

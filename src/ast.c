@@ -6142,7 +6142,25 @@ static void interpret_for_in(ASTNode *node) {
             return;
         }       
         if (!v || v->vtype != VAL_OBJECT || strcmp(v->type, "LIST") != 0) {
-            printf("Error: '%s' is not a valid list.\n", list_expr->id);
+            /* null / "" iterate zero times (json_parse("") yields ""). Anything
+             * else is a real mistake: say WHAT it is. The ERP case was a
+             * db_query error envelope `{"error":...}` being for-in'd. */
+            int silent = (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "NULL") == 0) ||
+                         (v->vtype == VAL_STRING && (!v->value.string_value || !v->value.string_value[0]));
+            if (!silent) {
+                char loc[512]; te_runtime_location(loc, sizeof(loc));
+                const char *tn = v->vtype == VAL_STRING ? "a string" : v->vtype == VAL_INT ? "a number" :
+                                 v->vtype == VAL_FLOAT ? "a number" : (v->type ? v->type : "an object");
+                char *detail = NULL;
+                if (v->vtype == VAL_OBJECT && v->type && v->value.object_value &&
+                    (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0))
+                    detail = te_map_node_to_string((ASTNode *)(intptr_t)v->value.object_value);
+                else if (v->vtype == VAL_STRING) detail = strdup(v->value.string_value);
+                if (detail && strlen(detail) > 160) { detail[157] = '.'; detail[158] = '.'; detail[159] = '.'; detail[160] = 0; }
+                fprintf(stderr, "Error: for-in over '%s': it is %s, not a list%s%s%s\n%s\n",
+                        list_expr->id, tn, detail ? " (" : "", detail ? detail : "", detail ? ")" : "", loc);
+                free(detail);
+            }
             return;
         }
         listNode = (ASTNode *)(intptr_t)v->value.object_value;
@@ -9122,6 +9140,32 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                         var->vtype = VAL_FLOAT;
                         var->type = strdup("FLOAT");
                         var->value.float_value = item->str_value ? atof(item->str_value) : 0.0;
+                        return;
+                    } else if (strcmp(item->type, "LIST") == 0) {
+                        /* B5: nested list item (`let fila = matriz[i]`) fell to the
+                         * legacy path -> "object 'fila' is not defined". Alias it. */
+                        Variable *var = te_decl_slot(node->id);
+                        if (!var) return;
+                        var->is_const = is_const_flag;
+                        var->vtype = VAL_OBJECT;
+                        var->type = strdup("LIST");
+                        var->value.object_value = (void *)(intptr_t)item;
+                        return;
+                    } else if (strcmp(item->type, "BOOL") == 0) {
+                        Variable *var = te_decl_slot(node->id);
+                        if (!var) return;
+                        var->is_const = is_const_flag;
+                        var->vtype = VAL_INT;
+                        var->type = strdup("BOOL");
+                        var->value.int_value = item->value;
+                        return;
+                    } else if (strcmp(item->type, "NULL") == 0) {
+                        Variable *var = te_decl_slot(node->id);
+                        if (!var) return;
+                        var->is_const = is_const_flag;
+                        var->vtype = VAL_OBJECT;
+                        var->type = strdup("NULL");
+                        var->value.object_value = NULL;
                         return;
                     }
                 }

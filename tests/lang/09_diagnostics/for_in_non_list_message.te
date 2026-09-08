@@ -1,0 +1,8 @@
+// expect-stderr-contains: for-in over 'envelope': it is MAP, not a list ({"error":"Unknown column"})
+// expect-stderr-contains: for_in_non_list_message.te:7
+// B6 diagnostics: for-in over a non-list says what the value is (the ERP case was a
+// db_query error envelope) and where, instead of "'x' is not a valid list" on stdout.
+let envelope = json_parse("{\"error\":\"Unknown column\"}");
+var n = 0;
+for (let c in envelope) { n = n + 1; }
+println("n=" + n);

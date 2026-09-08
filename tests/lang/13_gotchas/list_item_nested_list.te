@@ -1,0 +1,24 @@
+// B5: `let x = lista[i]` when the item is itself a list (or bool/null) used to fall
+// to the legacy path -> "object 'x' is not defined or is not an object".
+let l = ["a", "b", [1, 2]];
+let inner = l[2];
+println(inner.length);
+let m = [[1, 2], [3]];
+let i0 = m[0];
+println(i0.length + " " + i0[1]);
+var j1 = m[1];
+println(j1.length);
+let p = json_parse("{\"mat\":[[5,6],[7]],\"flags\":[true,false,null]}");
+let mat = p["mat"];
+let fila = mat[0];
+println(fila.length + " " + fila[1]);
+let flags = p["flags"];
+let f0 = flags[0];
+let f2 = flags[2];
+println("" + f0 + " " + (f2 == null));
+// B6: json_parse("") is null (was NUMBER 0); for-in over null / "" iterates zero times, silently.
+let vacio = json_parse("");
+println("null? " + (vacio == null));
+var n = 0;
+for (let x in vacio) { n = n + 1; }
+println("n=" + n);
