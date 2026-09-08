@@ -15,7 +15,7 @@ static PGconn* pg_connections[PG_POOL_SIZE] = {NULL};
 extern int g_db_request_phase;
 static int pg_req_scoped[PG_POOL_SIZE] = {0};
 
-extern ASTNode* create_ast_leaf(char *type, int value, char *str_value, char *id);
+extern ASTNode* create_ast_leaf(char *type, long long value, char *str_value, char *id);
 extern void free_ast(ASTNode *node);
 
 /* Escape para db_substitute_params (estilo Dapper) */

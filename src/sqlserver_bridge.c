@@ -91,7 +91,7 @@ extern int g_db_request_phase;
 static int mssql_req_scoped[MSSQL_POOL_SIZE] = {0};
 static int mssql_initialized = 0;
 
-extern ASTNode* create_ast_leaf(char *type, int value, char *str_value, char *id);
+extern ASTNode* create_ast_leaf(char *type, long long value, char *str_value, char *id);
 extern void free_ast(ASTNode *node);
 
 /* Escape para db_substitute_params: doble la comilla simple. SQL Server no
