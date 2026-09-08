@@ -6347,6 +6347,206 @@ static void interpret_return_node(ASTNode *node);
 void print_object_as_xml_by_id(const char* id);
 void print_object_as_json_by_id(const char* id);
 
+/* NK_METHOD_CALL_ALONE — extraído de interpret_ast (Fase 2). */
+static void te_stmt_method_call_alone(ASTNode *node) {
+        /* Phase F: top-level bare calls like `assert(0);` are parsed as
+         * METHOD_CALL_ALONE; try built-ins before user-defined methods. */
+        if (te_builtin_dispatch(node)) return;
+        MethodNode *m = global_methods;
+        int matched = 0;
+        while (m) {
+            if (strcmp(m->name, node->id) == 0) {
+                debugger_push_frame(m->name, node);
+                interpret_ast(m->body);
+                debugger_pop_frame();
+                matched = 1;
+                break;
+            }
+            m = m->next;
+        }
+        if (!matched) {
+            /* Fallback: bare statement may be a native builtin not handled by
+             * te_builtin_dispatch (e.g. ws_subscribe/ws_send/ws_broadcast,
+             * request_*, response_*). Without this, such calls used as
+             * statements (return value discarded) are silently dropped.
+             * For METHOD_CALL_ALONE the arg list lives in node->right; we
+             * also accept node->left for legacy paths. */
+            ASTNode *a = node->right ? node->right : node->left;
+            /* Bugfix: una llamada-statement a una variable de tipo LAMBDA
+             * (p.ej. `my_exec(...)` donde my_exec = fn(...) => {...}) debe
+             * INVOCAR el lambda. Sin esto cae a call_native_function, que es
+             * no-op para un nombre desconocido -> la llamada (y sus efectos
+             * secundarios: INSERT/UPDATE via un wrapper db_exec) se descarta
+             * en silencio. Solo pasaba cuando el retorno se descartaba; con
+             * `let r = my_exec(...)` funcionaba porque va por
+             * evaluate_expression -> interpret_call_func (que ya maneja LAMBDA). */
+            Variable *fv = node->id ? find_variable(node->id) : NULL;
+            if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0) {
+                ASTNode *lambda = (ASTNode*)(intptr_t)fv->value.object_value;
+                /* Residual C: validar ARIDAD tambien aqui (llamada-statement con
+                 * retorno DESCARTADO, p.ej. `f(1);`). Antes call_lambda rellenaba
+                 * los params faltantes con null e ignoraba sobrantes EN SILENCIO.
+                 * Mismo check/mensaje que interpret_call_func_impl (resultado
+                 * consumido). Los callbacks LINQ/async NO pasan por aqui, siguen
+                 * con aridad laxa a proposito. */
+                int nparams = 0;
+                if (lambda->id && lambda->id[0]) {
+                    nparams = 1;
+                    for (const char *pc = lambda->id; *pc; pc++)
+                        if (*pc == '\1') nparams++;
+                }
+                int nargs = 0;
+                for (ASTNode *ar = a; ar; ar = ar->next) nargs++;
+                if (nargs != nparams) {
+                    te_runtime_fatalf(
+                        "TypeError: '%s' expects %d argument%s but %d %s passed.",
+                        node->id, nparams, nparams == 1 ? "" : "s",
+                        nargs, nargs == 1 ? "was" : "were");
+                }
+                ASTNode *r = call_lambda(lambda, a);
+                if (r) add_or_update_variable("__ret__", r);
+            } else {
+                call_native_function(node->id, a);
+            }
+        }
+}
+
+/* NK_INDEX_ASSIGN — extraído de interpret_ast (Fase 2). */
+static void te_stmt_index_assign(ASTNode *node) {
+        /* Fase 1b: arr[i] = x   |   Fase 1c: m["k"] = x */
+        ASTNode *access = node->left;
+        ASTNode *value  = node->right;
+        if (!access || !access->left) return;
+
+        ASTNode *map = resolve_to_map(access->left);
+        if (map) {
+            char keybuf[1024];
+            const char *key = te_map_key_coerce(access->right, keybuf, sizeof(keybuf));
+            if (!key) { fprintf(stderr, "Error: Map key must be a string.\n"); return; }
+            ASTNode *new_val = build_item_from_value(value);
+            ASTNode *pair = map_find_pair(map, key);
+            if (pair) {
+                pair->left = new_val;  /* same key, value changed: hash entry still valid */
+            } else {
+                ASTNode *new_pair = create_kv_pair_node((char*)key, new_val);
+                if (!map->left) {
+                    map->left = new_pair;
+                } else {
+                    ASTNode *cur = map->left;
+                    while (cur->right) cur = cur->right;
+                    cur->right = new_pair;
+                }
+                te_invalidate_map_cache(map);  /* Ola 14: new key */
+            }
+            return;
+        }
+
+        ASTNode *list = resolve_to_list(access->left);
+        if (!list) {
+            fprintf(stderr, "Error: variable is neither a list nor a Map.\n");
+            return;
+        }
+        int idx = (int)evaluate_expression(access->right);
+        int len = list_length(list);
+        if (idx < 0 || idx >= len) {
+            fprintf(stderr, "Error: index %d out of range (length=%d).\n", idx, len);
+            return;
+        }
+        ASTNode *new_item = build_item_from_value(value);
+        ASTNode *cur = list->left;
+        ASTNode *prev = NULL;
+        for (int k = 0; k < idx && cur; k++) { prev = cur; cur = cur->next; }
+        new_item->next = cur ? cur->next : NULL;
+        if (prev) prev->next = new_item; else list->left = new_item;
+        te_invalidate_list_cache(list);  /* Ola 14: item replaced */
+        te_colcache_invalidate(list);    /* v0.0.13 (perf) */
+}
+
+/* NK_THROW — extraído de interpret_ast (Fase 2). */
+static void te_stmt_throw(ASTNode *node) {
+        ASTNode *e = node->left;
+        char *msg = NULL;
+        if (e && nk_of(e) == NK_STRING) msg = strdup(e->str_value ? e->str_value : "");
+        else if (e && nk_of(e) == NK_IDENTIFIER) {
+            Variable *v = find_variable(e->id);
+            if (v && v->vtype == VAL_STRING) msg = strdup(v->value.string_value ? v->value.string_value : "");
+            else if (v && v->vtype == VAL_INT) { char b[32]; snprintf(b,32,"%lld", (long long)v->value.int_value); msg = strdup(b); }
+            else msg = strdup("");
+        } else if (e) {
+            double d = evaluate_expression(e);
+            char b[64]; te_fmt_double(b, sizeof(b), d);
+            msg = strdup(b);
+        } else msg = strdup("");
+        if (throw_message) free(throw_message);
+        throw_message = msg;
+        g_vm.throw_flag = 1;
+}
+
+/* NK_TRY_CATCH — extraído de interpret_ast (Fase 2). */
+static void te_stmt_try_catch(ASTNode *node) {
+        ASTNode *try_body = node->left;
+        ASTNode *catch_body = node->right;
+        ASTNode *finally_body = node->extra;
+        const char *err_var_name = node->id;
+
+        interpret_ast(try_body);
+        if (g_vm.throw_flag && catch_body) {
+            char *msg = throw_message ? strdup(throw_message) : strdup("");
+            g_vm.throw_flag = 0;
+            if (throw_message) { free(throw_message); throw_message = NULL; }
+            if (err_var_name) {
+                ASTNode *lit = create_ast_leaf("STRING", 0, msg, NULL);
+                add_or_update_variable((char*)err_var_name, lit);
+            }
+            free(msg);
+            interpret_ast(catch_body);
+        }
+        if (finally_body) {
+            int saved_throw = g_vm.throw_flag;
+            char *saved_msg = throw_message; throw_message = NULL; g_vm.throw_flag = 0;
+            interpret_ast(finally_body);
+            if (!g_vm.throw_flag && saved_throw) { g_vm.throw_flag = 1; throw_message = saved_msg; }
+            else if (saved_msg) free(saved_msg);
+        }
+}
+
+/* NK_WHILE — extraído de interpret_ast (Fase 2). */
+static void te_stmt_while(ASTNode *node) {
+        /* Fase 4: try compiled-bytecode loop. Only succeeds if the entire
+         * body is numeric (assigns/ifs/whiles). Falls back to AST walker
+         * for any non-trivial body.
+         * Debugger: skip bytecode entirely when attached, otherwise the
+         * loop runs in one shot and breakpoints / step inside the body
+         * never fire. */
+        {
+            static int bc4_init = 0;
+            static int bc4_enabled = 1;
+            if (!bc4_init) {
+                const char *e = getenv("TYPEEASY_NO_BC");
+                if (e && e[0] && e[0] != '0') bc4_enabled = 0;
+                bc4_init = 1;
+            }
+            if (bc4_enabled && !g_debug_enabled) {
+                BCInfo *info = bc_get_or_compile_stmt(node);
+                if (info) { bc_exec(info->code); return; }
+            }
+        }
+        /* Block scope: reclaim each iteration's body-local `let`s so they do
+         * not accumulate against MAX_VARS across iterations. */
+        int te_while_scope_mark = g_vm.var_count;
+        while (1) {
+            if (g_vm.throw_flag || g_vm.return_flag) break;
+            int cond = evaluate_condition(node->left);
+            if (!cond) break;
+            debugger_on_loop_iteration();
+            te_scope_unwind_to(te_while_scope_mark);
+            interpret_ast(node->right);
+            if (g_vm.break_flag) { g_vm.break_flag = 0; break; }
+            if (g_vm.continue_flag) { g_vm.continue_flag = 0; continue; }
+            if (g_vm.throw_flag || g_vm.return_flag) break;
+        }
+}
+
 void interpret_ast(ASTNode *node) {
     if (!node) return;
     if (g_vm.return_flag) return;
@@ -6457,124 +6657,13 @@ void interpret_ast(ASTNode *node) {
     case NK_RETURN:       interpret_return_node(node); break;
     case NK_CALL_METHOD:  interpret_call_method(node); break;
 
-    case NK_METHOD_CALL_ALONE: {
-        /* Phase F: top-level bare calls like `assert(0);` are parsed as
-         * METHOD_CALL_ALONE; try built-ins before user-defined methods. */
-        if (te_builtin_dispatch(node)) break;
-        MethodNode *m = global_methods;
-        int matched = 0;
-        while (m) {
-            if (strcmp(m->name, node->id) == 0) {
-                debugger_push_frame(m->name, node);
-                interpret_ast(m->body);
-                debugger_pop_frame();
-                matched = 1;
-                break;
-            }
-            m = m->next;
-        }
-        if (!matched) {
-            /* Fallback: bare statement may be a native builtin not handled by
-             * te_builtin_dispatch (e.g. ws_subscribe/ws_send/ws_broadcast,
-             * request_*, response_*). Without this, such calls used as
-             * statements (return value discarded) are silently dropped.
-             * For METHOD_CALL_ALONE the arg list lives in node->right; we
-             * also accept node->left for legacy paths. */
-            ASTNode *a = node->right ? node->right : node->left;
-            /* Bugfix: una llamada-statement a una variable de tipo LAMBDA
-             * (p.ej. `my_exec(...)` donde my_exec = fn(...) => {...}) debe
-             * INVOCAR el lambda. Sin esto cae a call_native_function, que es
-             * no-op para un nombre desconocido -> la llamada (y sus efectos
-             * secundarios: INSERT/UPDATE via un wrapper db_exec) se descarta
-             * en silencio. Solo pasaba cuando el retorno se descartaba; con
-             * `let r = my_exec(...)` funcionaba porque va por
-             * evaluate_expression -> interpret_call_func (que ya maneja LAMBDA). */
-            Variable *fv = node->id ? find_variable(node->id) : NULL;
-            if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0) {
-                ASTNode *lambda = (ASTNode*)(intptr_t)fv->value.object_value;
-                /* Residual C: validar ARIDAD tambien aqui (llamada-statement con
-                 * retorno DESCARTADO, p.ej. `f(1);`). Antes call_lambda rellenaba
-                 * los params faltantes con null e ignoraba sobrantes EN SILENCIO.
-                 * Mismo check/mensaje que interpret_call_func_impl (resultado
-                 * consumido). Los callbacks LINQ/async NO pasan por aqui, siguen
-                 * con aridad laxa a proposito. */
-                int nparams = 0;
-                if (lambda->id && lambda->id[0]) {
-                    nparams = 1;
-                    for (const char *pc = lambda->id; *pc; pc++)
-                        if (*pc == '\1') nparams++;
-                }
-                int nargs = 0;
-                for (ASTNode *ar = a; ar; ar = ar->next) nargs++;
-                if (nargs != nparams) {
-                    te_runtime_fatalf(
-                        "TypeError: '%s' expects %d argument%s but %d %s passed.",
-                        node->id, nparams, nparams == 1 ? "" : "s",
-                        nargs, nargs == 1 ? "was" : "were");
-                }
-                ASTNode *r = call_lambda(lambda, a);
-                if (r) add_or_update_variable("__ret__", r);
-            } else {
-                call_native_function(node->id, a);
-            }
-        }
-        break;
-    }
+    case NK_METHOD_CALL_ALONE: te_stmt_method_call_alone(node); break;
 
     case NK_VAR_DECL:    interpret_var_decl(&g_vm, node); break;
     case NK_ASSIGN_ATTR: interpret_assign_attr(&g_vm, node); break;
     case NK_ASSIGN:      interpret_assign(&g_vm, node); break;
 
-    case NK_INDEX_ASSIGN: {
-        /* Fase 1b: arr[i] = x   |   Fase 1c: m["k"] = x */
-        ASTNode *access = node->left;
-        ASTNode *value  = node->right;
-        if (!access || !access->left) break;
-
-        ASTNode *map = resolve_to_map(access->left);
-        if (map) {
-            char keybuf[1024];
-            const char *key = te_map_key_coerce(access->right, keybuf, sizeof(keybuf));
-            if (!key) { fprintf(stderr, "Error: Map key must be a string.\n"); break; }
-            ASTNode *new_val = build_item_from_value(value);
-            ASTNode *pair = map_find_pair(map, key);
-            if (pair) {
-                pair->left = new_val;  /* same key, value changed: hash entry still valid */
-            } else {
-                ASTNode *new_pair = create_kv_pair_node((char*)key, new_val);
-                if (!map->left) {
-                    map->left = new_pair;
-                } else {
-                    ASTNode *cur = map->left;
-                    while (cur->right) cur = cur->right;
-                    cur->right = new_pair;
-                }
-                te_invalidate_map_cache(map);  /* Ola 14: new key */
-            }
-            break;
-        }
-
-        ASTNode *list = resolve_to_list(access->left);
-        if (!list) {
-            fprintf(stderr, "Error: variable is neither a list nor a Map.\n");
-            break;
-        }
-        int idx = (int)evaluate_expression(access->right);
-        int len = list_length(list);
-        if (idx < 0 || idx >= len) {
-            fprintf(stderr, "Error: index %d out of range (length=%d).\n", idx, len);
-            break;
-        }
-        ASTNode *new_item = build_item_from_value(value);
-        ASTNode *cur = list->left;
-        ASTNode *prev = NULL;
-        for (int k = 0; k < idx && cur; k++) { prev = cur; cur = cur->next; }
-        new_item->next = cur ? cur->next : NULL;
-        if (prev) prev->next = new_item; else list->left = new_item;
-        te_invalidate_list_cache(list);  /* Ola 14: item replaced */
-        te_colcache_invalidate(list);    /* v0.0.13 (perf) */
-        break;
-    }
+    case NK_INDEX_ASSIGN: te_stmt_index_assign(node); break;
 
     case NK_PRINT:    interpret_print(node); break;
     case NK_PRINTLN:  interpret_println(node); break;
@@ -6582,89 +6671,11 @@ void interpret_ast(ASTNode *node) {
     case NK_FPRINTLN: interpret_fprintln(node); break;
     case NK_STATEMENT_LIST: interpret_statement_list(node); break;
 
-    case NK_THROW: {
-        ASTNode *e = node->left;
-        char *msg = NULL;
-        if (e && nk_of(e) == NK_STRING) msg = strdup(e->str_value ? e->str_value : "");
-        else if (e && nk_of(e) == NK_IDENTIFIER) {
-            Variable *v = find_variable(e->id);
-            if (v && v->vtype == VAL_STRING) msg = strdup(v->value.string_value ? v->value.string_value : "");
-            else if (v && v->vtype == VAL_INT) { char b[32]; snprintf(b,32,"%lld", (long long)v->value.int_value); msg = strdup(b); }
-            else msg = strdup("");
-        } else if (e) {
-            double d = evaluate_expression(e);
-            char b[64]; te_fmt_double(b, sizeof(b), d);
-            msg = strdup(b);
-        } else msg = strdup("");
-        if (throw_message) free(throw_message);
-        throw_message = msg;
-        g_vm.throw_flag = 1;
-        break;
-    }
+    case NK_THROW: te_stmt_throw(node); break;
 
-    case NK_TRY_CATCH: {
-        ASTNode *try_body = node->left;
-        ASTNode *catch_body = node->right;
-        ASTNode *finally_body = node->extra;
-        const char *err_var_name = node->id;
+    case NK_TRY_CATCH: te_stmt_try_catch(node); break;
 
-        interpret_ast(try_body);
-        if (g_vm.throw_flag && catch_body) {
-            char *msg = throw_message ? strdup(throw_message) : strdup("");
-            g_vm.throw_flag = 0;
-            if (throw_message) { free(throw_message); throw_message = NULL; }
-            if (err_var_name) {
-                ASTNode *lit = create_ast_leaf("STRING", 0, msg, NULL);
-                add_or_update_variable((char*)err_var_name, lit);
-            }
-            free(msg);
-            interpret_ast(catch_body);
-        }
-        if (finally_body) {
-            int saved_throw = g_vm.throw_flag;
-            char *saved_msg = throw_message; throw_message = NULL; g_vm.throw_flag = 0;
-            interpret_ast(finally_body);
-            if (!g_vm.throw_flag && saved_throw) { g_vm.throw_flag = 1; throw_message = saved_msg; }
-            else if (saved_msg) free(saved_msg);
-        }
-        break;
-    }
-
-    case NK_WHILE:
-        /* Fase 4: try compiled-bytecode loop. Only succeeds if the entire
-         * body is numeric (assigns/ifs/whiles). Falls back to AST walker
-         * for any non-trivial body.
-         * Debugger: skip bytecode entirely when attached, otherwise the
-         * loop runs in one shot and breakpoints / step inside the body
-         * never fire. */
-        {
-            static int bc4_init = 0;
-            static int bc4_enabled = 1;
-            if (!bc4_init) {
-                const char *e = getenv("TYPEEASY_NO_BC");
-                if (e && e[0] && e[0] != '0') bc4_enabled = 0;
-                bc4_init = 1;
-            }
-            if (bc4_enabled && !g_debug_enabled) {
-                BCInfo *info = bc_get_or_compile_stmt(node);
-                if (info) { bc_exec(info->code); break; }
-            }
-        }
-        /* Block scope: reclaim each iteration's body-local `let`s so they do
-         * not accumulate against MAX_VARS across iterations. */
-        int te_while_scope_mark = g_vm.var_count;
-        while (1) {
-            if (g_vm.throw_flag || g_vm.return_flag) break;
-            int cond = evaluate_condition(node->left);
-            if (!cond) break;
-            debugger_on_loop_iteration();
-            te_scope_unwind_to(te_while_scope_mark);
-            interpret_ast(node->right);
-            if (g_vm.break_flag) { g_vm.break_flag = 0; break; }
-            if (g_vm.continue_flag) { g_vm.continue_flag = 0; continue; }
-            if (g_vm.throw_flag || g_vm.return_flag) break;
-        }
-        break;
+    case NK_WHILE: te_stmt_while(node); break;
 
     case NK_BREAK:    g_vm.break_flag = 1; break;
     case NK_CONTINUE: g_vm.continue_flag = 1; break;

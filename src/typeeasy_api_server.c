@@ -594,41 +594,16 @@ static void te_req_profile_flush(const char *method, const char *uri, int status
     te_profile_reset();
 }
 
-static int request_handler(struct mg_connection *conn, void *cbdata) {
-    (void)cbdata;
-    const struct mg_request_info *req = mg_get_request_info(conn);
-    const char *uri    = req->local_uri ? req->local_uri : "/";
-    const char *method = req->request_method ? req->request_method : "GET";
-    const char *qs     = req->query_string;
+/* Cierre de la instrumentacion por request (antes macro TE_REQ_DONE dentro de request_handler). */
+static void te_req_done(const char *method, const char *uri, int st, clock_t t0) {
+    double _ms = (double)(clock() - t0) * 1000.0 / CLOCKS_PER_SEC;
+    __atomic_sub_fetch(&g_inflight, 1, __ATOMIC_SEQ_CST);
+    te_log_request(method, uri, st, _ms);
+    if (g_profile_enabled > 0) te_req_profile_flush(method, uri, st, _ms);
+}
 
-    /* CORS preflight: answer OPTIONS immediately with the allow headers so
-     * browsers permit cross-origin requests carrying Authorization /
-     * Content-Type: application/json (e.g. the JWT auth flow). */
-    if (strcmp(method, "OPTIONS") == 0) {
-        char cors_org[1024];
-        cors_resolve_origin(conn, cors_org, sizeof(cors_org));
-        mg_printf(conn,
-                  "HTTP/1.1 204 No Content\r\n"
-                  "Access-Control-Allow-Origin: %s\r\n"
-                  TE_CORS_EXTRA_HEADERS
-                  "Access-Control-Max-Age: 86400\r\n"
-                  "Content-Length: 0\r\n"
-                  "Connection: close\r\n\r\n",
-                  cors_org);
-        return 1;
-    }
-
-    /* Serve the built-in Swagger-style UI at GET /. */
-    if (strcmp(method, "GET") == 0 && strcmp(uri, "/") == 0) {
-        return serve_root_swagger_ui(conn);
-    }
-
-    /* ---- Operational probes (items #9-12) --------------------------------
-     * /healthz (liveness): the process is up and able to answer. Cheap, never
-     *                      touches the interpreter lock.
-     * /readyz  (readiness): the process is ready to serve traffic, i.e. routes
-     *                      are registered and we are not draining for shutdown.
-     * Both are GET-only, return JSON and are explicitly non-cacheable. */
+/* /healthz y /readyz (extraido de request_handler, Fase 2). Devuelve 1 si respondio. */
+static int te_rh_probes(struct mg_connection *conn, const char *method, const char *uri) {
     if (strcmp(method, "GET") == 0 &&
         (strcmp(uri, "/healthz") == 0 || strcmp(uri, "/readyz") == 0)) {
         long uptime = (g_start_time > 0) ? (long)(time(NULL) - g_start_time) : 0;
@@ -667,113 +642,12 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
         mg_write(conn, body, blen);
         return 1;
     }
+    return 0;
+}
 
-    /* Request instrumentation: count and time every routed request. */
-    clock_t _req_t0 = clock();
-    __atomic_add_fetch(&g_req_total, 1, __ATOMIC_SEQ_CST);
-    __atomic_add_fetch(&g_inflight, 1, __ATOMIC_SEQ_CST);
-#define TE_REQ_DONE(st) do { \
-        double _ms = (double)(clock() - _req_t0) * 1000.0 / CLOCKS_PER_SEC; \
-        __atomic_sub_fetch(&g_inflight, 1, __ATOMIC_SEQ_CST); \
-        te_log_request(method, uri, (st), _ms); \
-        if (g_profile_enabled > 0) te_req_profile_flush(method, uri, (int)(st), _ms); \
-    } while (0)
-
-    invoke_lock_acquire();
-
-    typeeasy_http_reset();
-    typeeasy_http_set_method(method);
-    typeeasy_http_set_path(uri);
-
-    MethodNode *m = find_route(uri, method);
-    if (!m) {
-        invoke_lock_release();
-        TE_REQ_DONE(404);
-        mg_send_http_error(conn, 404, "Endpoint not found: %s %s", method, uri);
-        return 1;
-    }
-
-    /* Query string -> http params. */
-    if (qs && *qs) {
-        const char *p = qs;
-        while (*p) {
-            const char *eq = strchr(p, '=');
-            const char *amp = strchr(p, '&');
-            if (!amp) amp = p + strlen(p);
-            char key[128], val[1024];
-            if (eq && eq < amp) {
-                int kl = (int)(eq - p);
-                int vl = (int)(amp - (eq + 1));
-                if (kl > 0 && kl < (int)sizeof(key) && vl < (int)sizeof(val)) {
-                    memcpy(key, p, kl); key[kl] = '\0';
-                    memcpy(val, eq + 1, vl); val[vl] = '\0';
-                    typeeasy_http_add_query(key, val);
-                }
-            }
-            if (*amp == '\0') break;
-            p = amp + 1;
-        }
-    }
-
-    /* Headers. */
-    for (int i = 0; i < req->num_headers; i++) {
-        typeeasy_http_add_header(req->http_headers[i].name,
-                                 req->http_headers[i].value);
-    }
-
-    /* Body. Reject oversized payloads explicitly with HTTP 413 instead of
-     * silently ignoring them (item #7: limits/backpressure). The previous
-     * code dropped any body >= 1 MiB on the floor and ran the handler with an
-     * empty body — confusing and unbounded-looking to clients. The cap is now
-     * configurable via TYPEEASY_MAX_BODY (bytes, default 1 MiB). */
-    static long long s_max_body = -1;
-    if (s_max_body < 0) {
-        const char *e = getenv("TYPEEASY_MAX_BODY");
-        long long v = e ? strtoll(e, NULL, 10) : 0;
-        s_max_body = (v > 0) ? v : (1 << 20);
-    }
-    long long clen = req->content_length;
-    if (clen > s_max_body) {
-        invoke_lock_release();
-        TE_REQ_DONE(413);
-        char cors_org[1024];
-        cors_resolve_origin(conn, cors_org, sizeof(cors_org));
-        const char *body413 = "{\"error\":\"payload_too_large\"}";
-        mg_printf(conn,
-                  "HTTP/1.1 413 Payload Too Large\r\n"
-                  "Access-Control-Allow-Origin: %s\r\n"
-                  TE_CORS_EXTRA_HEADERS
-                  "Content-Type: application/json\r\n"
-                  "Connection: close\r\n"
-                  "Content-Length: %d\r\n\r\n"
-                  "%s",
-                  cors_org, (int)strlen(body413), body413);
-        return 1;
-    }
-    if (clen > 0) {
-        char *body = (char *)malloc((size_t)clen + 1);
-        if (body) {
-            int n = mg_read(conn, body, (size_t)clen);
-            if (n < 0) n = 0;
-            body[n] = '\0';
-            /* Binary-safe: uploads (xlsx/zip) contain NUL bytes. */
-            typeeasy_http_set_body_n(body, (size_t)n);
-            free(body);
-        }
-    }
-
-    /* Install a runtime recovery point: if the interpreter hits a fatal
-     * runtime error (undefined function, const reassignment, etc) it
-     * longjmp's back here instead of killing the whole server. We answer
-     * HTTP 500, reset interpreter state and keep serving. */
-    jmp_buf recovery;
-#if defined(_WIN64) && defined(__MINGW32__)
-    /* _setjmp(buf, NULL): longjmp restores registers without RtlUnwindEx. The SEH
-     * unwind through civetweb/interpreter frames crashed ~50% of fatals on win64. */
-    if (_setjmp(recovery, NULL) != 0) {
-#else
-    if (setjmp(recovery) != 0) {
-#endif
+/* Respuesta 500 tras un longjmp de te_runtime_fatalf (extraido de request_handler, Fase 2).
+ * Vive FUERA del frame que tiene el setjmp: menos locales ahi = unwind mas robusto (win64). */
+static void te_rh_respond_fatal(struct mg_connection *conn, const char *method, const char *uri, clock_t t0) {
         g_runtime_recovery = NULL;
         runtime_reset_vars_to_initial_state();
         /* v0.0.30 (estabilidad): el longjmp se salto los returns de
@@ -822,7 +696,7 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
         char cors_org[1024];
         cors_resolve_origin(conn, cors_org, sizeof(cors_org));
         invoke_lock_release();
-        TE_REQ_DONE(500);
+        te_req_done(method, uri, 500, t0);
         mg_printf(conn,
                   "HTTP/1.1 500 Internal Server Error\r\n"
                   "Content-Type: application/json\r\n"
@@ -832,6 +706,146 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
                   "\r\n",
                   elen, cors_org);
         mg_write(conn, err, elen);
+}
+
+static int request_handler(struct mg_connection *conn, void *cbdata) {
+    (void)cbdata;
+    const struct mg_request_info *req = mg_get_request_info(conn);
+    const char *uri    = req->local_uri ? req->local_uri : "/";
+    const char *method = req->request_method ? req->request_method : "GET";
+    const char *qs     = req->query_string;
+
+    /* CORS preflight: answer OPTIONS immediately with the allow headers so
+     * browsers permit cross-origin requests carrying Authorization /
+     * Content-Type: application/json (e.g. the JWT auth flow). */
+    if (strcmp(method, "OPTIONS") == 0) {
+        char cors_org[1024];
+        cors_resolve_origin(conn, cors_org, sizeof(cors_org));
+        mg_printf(conn,
+                  "HTTP/1.1 204 No Content\r\n"
+                  "Access-Control-Allow-Origin: %s\r\n"
+                  TE_CORS_EXTRA_HEADERS
+                  "Access-Control-Max-Age: 86400\r\n"
+                  "Content-Length: 0\r\n"
+                  "Connection: close\r\n\r\n",
+                  cors_org);
+        return 1;
+    }
+
+    /* Serve the built-in Swagger-style UI at GET /. */
+    if (strcmp(method, "GET") == 0 && strcmp(uri, "/") == 0) {
+        return serve_root_swagger_ui(conn);
+    }
+
+    /* ---- Operational probes (items #9-12) --------------------------------
+     * /healthz (liveness): the process is up and able to answer. Cheap, never
+     *                      touches the interpreter lock.
+     * /readyz  (readiness): the process is ready to serve traffic, i.e. routes
+     *                      are registered and we are not draining for shutdown.
+     * Both are GET-only, return JSON and are explicitly non-cacheable. */
+    if (te_rh_probes(conn, method, uri)) return 1;
+
+    /* Request instrumentation: count and time every routed request. */
+    clock_t _req_t0 = clock();
+    __atomic_add_fetch(&g_req_total, 1, __ATOMIC_SEQ_CST);
+    __atomic_add_fetch(&g_inflight, 1, __ATOMIC_SEQ_CST);
+
+    invoke_lock_acquire();
+
+    typeeasy_http_reset();
+    typeeasy_http_set_method(method);
+    typeeasy_http_set_path(uri);
+
+    MethodNode *m = find_route(uri, method);
+    if (!m) {
+        invoke_lock_release();
+        te_req_done(method, uri, 404, _req_t0);
+        mg_send_http_error(conn, 404, "Endpoint not found: %s %s", method, uri);
+        return 1;
+    }
+
+    /* Query string -> http params. */
+    if (qs && *qs) {
+        const char *p = qs;
+        while (*p) {
+            const char *eq = strchr(p, '=');
+            const char *amp = strchr(p, '&');
+            if (!amp) amp = p + strlen(p);
+            char key[128], val[1024];
+            if (eq && eq < amp) {
+                int kl = (int)(eq - p);
+                int vl = (int)(amp - (eq + 1));
+                if (kl > 0 && kl < (int)sizeof(key) && vl < (int)sizeof(val)) {
+                    memcpy(key, p, kl); key[kl] = '\0';
+                    memcpy(val, eq + 1, vl); val[vl] = '\0';
+                    typeeasy_http_add_query(key, val);
+                }
+            }
+            if (*amp == '\0') break;
+            p = amp + 1;
+        }
+    }
+
+    /* Headers. */
+    for (int i = 0; i < req->num_headers; i++) {
+        typeeasy_http_add_header(req->http_headers[i].name,
+                                 req->http_headers[i].value);
+    }
+
+    /* Body. Reject oversized payloads explicitly with HTTP 413 instead of
+     * silently ignoring them (item #7: limits/backpressure). The previous
+     * code dropped any body >= 1 MiB on the floor and ran the handler with an
+     * empty body — confusing and unbounded-looking to clients. The cap is now
+     * configurable via TYPEEASY_MAX_BODY (bytes, default 1 MiB). */
+    static long long s_max_body = -1;
+    if (s_max_body < 0) {
+        const char *e = getenv("TYPEEASY_MAX_BODY");
+        long long v = e ? strtoll(e, NULL, 10) : 0;
+        s_max_body = (v > 0) ? v : (1 << 20);
+    }
+    long long clen = req->content_length;
+    if (clen > s_max_body) {
+        invoke_lock_release();
+        te_req_done(method, uri, 413, _req_t0);
+        char cors_org[1024];
+        cors_resolve_origin(conn, cors_org, sizeof(cors_org));
+        const char *body413 = "{\"error\":\"payload_too_large\"}";
+        mg_printf(conn,
+                  "HTTP/1.1 413 Payload Too Large\r\n"
+                  "Access-Control-Allow-Origin: %s\r\n"
+                  TE_CORS_EXTRA_HEADERS
+                  "Content-Type: application/json\r\n"
+                  "Connection: close\r\n"
+                  "Content-Length: %d\r\n\r\n"
+                  "%s",
+                  cors_org, (int)strlen(body413), body413);
+        return 1;
+    }
+    if (clen > 0) {
+        char *body = (char *)malloc((size_t)clen + 1);
+        if (body) {
+            int n = mg_read(conn, body, (size_t)clen);
+            if (n < 0) n = 0;
+            body[n] = '\0';
+            /* Binary-safe: uploads (xlsx/zip) contain NUL bytes. */
+            typeeasy_http_set_body_n(body, (size_t)n);
+            free(body);
+        }
+    }
+
+    /* Install a runtime recovery point: if the interpreter hits a fatal
+     * runtime error (undefined function, const reassignment, etc) it
+     * longjmp's back here instead of killing the whole server. We answer
+     * HTTP 500, reset interpreter state and keep serving. */
+    jmp_buf recovery;
+#if defined(_WIN64) && defined(__MINGW32__)
+    /* _setjmp(buf, NULL): longjmp restores registers without RtlUnwindEx. The SEH
+     * unwind through civetweb/interpreter frames crashed ~50% of fatals on win64. */
+    if (_setjmp(recovery, NULL) != 0) {
+#else
+    if (setjmp(recovery) != 0) {
+#endif
+        te_rh_respond_fatal(conn, method, uri, _req_t0);
         return 1;
     }
     g_runtime_recovery = &recovery;
@@ -944,10 +958,9 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
     free(result);
     free(bin_body);
     free(bin_ct);
-    TE_REQ_DONE(status);
+    te_req_done(method, uri, status, _req_t0);
     return 1;
 }
-#undef TE_REQ_DONE
 
 /* ---- Fix B: crash signal handler (async-signal-safe) ----------------------
  * Guarantees a diagnostic LOG LINE on every hard fault (SIGSEGV/SIGBUS/...), so
