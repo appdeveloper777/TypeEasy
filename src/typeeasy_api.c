@@ -4,6 +4,7 @@
 #include "te_buf.h"
 #include <string.h>
 #include <stdlib.h>
+#include "te_vm.h"
 
 #ifdef _WIN32
   #include <io.h>
@@ -25,7 +26,6 @@ extern FILE *yyin;  // Variable global de Flex para el parser
 // Declaraciones externas para manejo de return values
 extern Variable __ret_var;
 extern int __ret_var_active;
-extern int return_flag;
 
 // Funciones auxiliares para captura de stdout
 static int stdout_backup = -1;
@@ -521,7 +521,7 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
     if (__ret_var.type) { free(__ret_var.type); __ret_var.type = NULL; }
     __ret_var.vtype = VAL_INT;
     __ret_var.value.int_value = 0;
-    return_flag = 0;
+    g_vm.return_flag = 0;
 
     /* v0.0.16: @auth decorator — require a valid Bearer JWT before the handler
      * runs. Secret comes from the JWT_SECRET environment variable. On success

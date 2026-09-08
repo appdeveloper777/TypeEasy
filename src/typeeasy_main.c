@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "ast.h" 
+#include "te_vm.h"
 #include "wasm_backend.h"
 #include "debugger.h"
 #include "typeeasy_api_server.h"
@@ -112,7 +113,6 @@ const char* detect_response_type(ASTNode *body) {
 #include <dirent.h>
 #include <sys/stat.h>
 
-extern int throw_flag;
 extern char *get_throw_message(void);
 extern void __ret_var_clear(void);
 
@@ -154,21 +154,19 @@ static int run_repl(void) {
         if (n == 0) continue;
         if (strcmp(buf, ":quit") == 0 || strcmp(buf, ":q") == 0) break;
         if (strcmp(buf, ":help") == 0) {
-            fprintf(stdout, "Commands: :quit  :help  :vars\n"
+            fprintf(stdout, "Commands: :quit  :help  :g_vm.vars\n"
                             "Anything else is evaluated as TypeEasy.\n"
                             "End expressions with `;`. To print, use println(...).\n");
             continue;
         }
-        if (strcmp(buf, ":vars") == 0) {
-            extern Variable vars[];
-            extern int var_count;
-            for (int i = 0; i < var_count; i++) {
-                if (vars[i].id && vars[i].id[0] == '_' && vars[i].id[1] == '_') continue;
-                fprintf(stdout, "  %s : %s = ", vars[i].id ? vars[i].id : "?", vars[i].type ? vars[i].type : "?");
-                switch (vars[i].vtype) {
-                    case VAL_INT:    fprintf(stdout, "%lld\n", (long long)vars[i].value.int_value); break;
-                    case VAL_FLOAT:  fprintf(stdout, "%g\n", vars[i].value.float_value); break;
-                    case VAL_STRING: fprintf(stdout, "\"%s\"\n", vars[i].value.string_value ? vars[i].value.string_value : ""); break;
+        if (strcmp(buf, ":g_vm.vars") == 0) {
+            for (int i = 0; i < g_vm.var_count; i++) {
+                if (g_vm.vars[i].id && g_vm.vars[i].id[0] == '_' && g_vm.vars[i].id[1] == '_') continue;
+                fprintf(stdout, "  %s : %s = ", g_vm.vars[i].id ? g_vm.vars[i].id : "?", g_vm.vars[i].type ? g_vm.vars[i].type : "?");
+                switch (g_vm.vars[i].vtype) {
+                    case VAL_INT:    fprintf(stdout, "%lld\n", (long long)g_vm.vars[i].value.int_value); break;
+                    case VAL_FLOAT:  fprintf(stdout, "%g\n", g_vm.vars[i].value.float_value); break;
+                    case VAL_STRING: fprintf(stdout, "\"%s\"\n", g_vm.vars[i].value.string_value ? g_vm.vars[i].value.string_value : ""); break;
                     default:         fprintf(stdout, "<object>\n"); break;
                 }
             }
@@ -195,10 +193,10 @@ static int run_repl(void) {
             continue;
         }
         interpret_ast(ast);
-        if (throw_flag) {
+        if (g_vm.throw_flag) {
             const char *m = get_throw_message();
             fprintf(stderr, "Uncaught: %s\n", m ? m : "(no message)");
-            throw_flag = 0;
+            g_vm.throw_flag = 0;
         }
     }
     return 0;
@@ -287,8 +285,6 @@ static int run_syntax_check(const char *path) {
 /* --symbols <file>: parse, then dump classes + global methods + top-level vars
  * as JSON {classes:[{name,line,methods:[{name,params,line}],attrs:[{name,type}]}],
  *          functions:[{name,params,line}], variables:[{name,type,line}]} */
-extern Variable vars[];
-extern int var_count;
 extern ClassNode **classes;
 extern int class_count;
 
@@ -343,14 +339,14 @@ static int run_symbols(const char *path) {
     }
     printf("],\"variables\":[");
     first = 1;
-    for (int i = 0; i < var_count; i++) {
-        if (!vars[i].id || (vars[i].id[0] == '_' && vars[i].id[1] == '_')) continue;
+    for (int i = 0; i < g_vm.var_count; i++) {
+        if (!g_vm.vars[i].id || (g_vm.vars[i].id[0] == '_' && g_vm.vars[i].id[1] == '_')) continue;
         if (!first) fputc(',', stdout);
         first = 0;
         printf("{\"name\":");
-        json_emit_str(stdout, vars[i].id);
+        json_emit_str(stdout, g_vm.vars[i].id);
         printf(",\"type\":");
-        json_emit_str(stdout, vars[i].type ? vars[i].type : "");
+        json_emit_str(stdout, g_vm.vars[i].type ? g_vm.vars[i].type : "");
         fputc('}', stdout);
     }
     printf("]}\n");
@@ -380,10 +376,10 @@ static int run_test_file(const char *path) {
     if (!ast) { fprintf(stderr, "  PARSE ERROR\n"); return 0; }
     interpret_ast(ast);
     int ok = 1;
-    if (throw_flag) {
+    if (g_vm.throw_flag) {
         const char *m = get_throw_message();
         fprintf(stdout, "  THROW: %s\n", m ? m : "(no message)");
-        throw_flag = 0;
+        g_vm.throw_flag = 0;
         ok = 0;
     }
     Variable *tf = find_variable("__test_failed");
@@ -750,9 +746,8 @@ int main(int argc, char *argv[]) {
 
     /* Fase 2: si quedó un throw sin capturar, imprimir y salir con código de error */
     {
-        extern int throw_flag;
         extern char *get_throw_message(void);
-        if (throw_flag) {
+        if (g_vm.throw_flag) {
             const char *m = get_throw_message();
             fprintf(stderr, "Uncaught: %s\n", m ? m : "(no message)");
             return 1;

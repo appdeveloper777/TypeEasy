@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stddef.h>
 #include "code_generation.h"
+#include "te_vm.h"
 
 /* main assembly code generation function */
 void generate_code(){	
@@ -124,13 +125,13 @@ void generate_statements(FILE *fp){
 	int *colors = greedyColoring();
 	
 	printf("Colors:\n");
-	for(i = 0; i < var_count; i++){
+	for(i = 0; i < g_vm.var_count; i++){
 		printf("%s: %d\n", var_name[i], colors[i]);
 	}
 	
 	// assign register-color value as reg_name
 	list_t *l;
-	for(i = 0; i < var_count; i++){
+	for(i = 0; i < g_vm.var_count; i++){
 		l = lookup(var_name[i]);
 		l->reg_name = colors[i];
 	}
@@ -284,18 +285,18 @@ int *greedyColoring(){
 
 void insertVar(char *name){
 	/* first insertion */
-	if(var_count == 0){
+	if(g_vm.var_count == 0){
 		var_name = (char**) malloc(1 * sizeof(char*));
 		var_name[0] = (char*) malloc((strlen(name) + 1) * sizeof(char));		
 		strcpy(var_name[0], name);
 		
-		var_count++;
+		g_vm.var_count++;
 	}
 	else{
 		/* check if variable already exists */
 		int flag = 0;
 		int i;
-		for(i = 0; i < var_count; i++){
+		for(i = 0; i < g_vm.var_count; i++){
 			if(strcmp(var_name[i], name) == 0){
 				flag = 1;
 				break;
@@ -304,11 +305,11 @@ void insertVar(char *name){
 		
 		/* not inserted yet */
 		if(flag == 0){
-			var_name = (char**) realloc(var_name, (var_count + 1) * sizeof(char*));
-			var_name[var_count] = (char*) malloc((strlen(name) + 1) * sizeof(char));		
-			strcpy(var_name[var_count], name);
+			var_name = (char**) realloc(var_name, (g_vm.var_count + 1) * sizeof(char*));
+			var_name[g_vm.var_count] = (char*) malloc((strlen(name) + 1) * sizeof(char));		
+			strcpy(var_name[g_vm.var_count], name);
 			
-			var_count++;
+			g_vm.var_count++;
 		}
 	}
 }
@@ -317,7 +318,7 @@ int getVarIndex(char *name){
 	int index = -1;
 	
 	int i;
-	for(i = 0; i < var_count; i++){
+	for(i = 0; i < g_vm.var_count; i++){
 		if(strcmp(var_name[i], name) == 0){
 			index = i;
 			break;
@@ -330,7 +331,7 @@ int getVarIndex(char *name){
 void printVarArray(){
 	int i;
 	printf("VarArray:\n");
-	for(i = 0 ; i < var_count; i++){
+	for(i = 0 ; i < g_vm.var_count; i++){
 		printf("%d: %s\n", i, var_name[i]);
 	}
 	printf("\n");
@@ -408,7 +409,7 @@ void main_reg_allocation(ASTNode *node){
 			declare = 0;
 			
 			/* graph index */
-			temp_arithm->g_index = var_count - 1;
+			temp_arithm->g_index = g_vm.var_count - 1;
 			
 			/* manage graph */
 			if(temp_arithm->op != INC && temp_arithm->op != DEC){
@@ -442,7 +443,7 @@ void main_reg_allocation(ASTNode *node){
 			declare = 0;
 			
 			/* graph index */
-			temp_bool->g_index = var_count - 1;
+			temp_bool->g_index = g_vm.var_count - 1;
 			
 			/* manage graph */
 			if(temp_bool->op != NOT){
@@ -476,7 +477,7 @@ void main_reg_allocation(ASTNode *node){
 			declare = 0;
 			
 			/* graph index */
-			temp_rel->g_index = var_count - 1;
+			temp_rel->g_index = g_vm.var_count - 1;
 			
 			/* manage graph */
 			insertEdge(temp_rel->g_index, getGraphIndex(temp_rel->left));
@@ -505,7 +506,7 @@ void main_reg_allocation(ASTNode *node){
 			declare = 0;
 			
 			/* graph index */
-			temp_equ->g_index = var_count - 1;
+			temp_equ->g_index = g_vm.var_count - 1;
 			
 			/* manage graph */
 			insertEdge(temp_equ->g_index, getGraphIndex(temp_equ->left));
@@ -623,7 +624,7 @@ void main_reg_allocation(ASTNode *node){
 				declare = 0;
 				
 				/* graph index */
-				temp_func_call->g_index = var_count - 1;
+				temp_func_call->g_index = g_vm.var_count - 1;
 			}			
 			
 			inst_num++;

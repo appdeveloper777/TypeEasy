@@ -8,11 +8,9 @@
 #include "ast.h"
 #include "te_bytecode.h"
 #include "debugger.h"
+#include "te_vm.h"
 
 /* Estado global del intérprete definido en ast.c (la Fase 3 lo agrupa en TeVM). */
-extern int var_count;
-extern int return_flag;
-extern int throw_flag;
 
 /* Resolver perezoso de NodeKind (hot path de dispatch). */
 static inline NodeKind nk_of(ASTNode *n) {
@@ -23,8 +21,6 @@ static inline NodeKind nk_of(ASTNode *n) {
 }
 
 /* Estado de control de flujo (break/continue) compartido por el intérprete. */
-extern int break_flag;
-extern int continue_flag;
 
 /* Funciones compartidas (antes static en ast.c). */
 /* Helpers no-static de ast.c que no estaban en ast.h (implicit-declaration = puntero

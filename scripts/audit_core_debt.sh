@@ -4,6 +4,8 @@
 #
 # Qué vigila (Fase 0 del plan de pago de deuda técnica):
 #   1. GLOBALES: ninguna variable global nueva `g_*` a nivel de archivo en los
+#      módulos del intérprete (excepto `g_vm`, el contenedor de estado de la Fase 3:
+#      el estado NUEVO va como campo de TeVM en te_vm.h, no como global suelto).
 #      módulos del intérprete. El estado global es la causa raíz de los bugs de
 #      "datos que sobreviven entre requests" (#38, 30c) y de que el intérprete no
 #      sea reentrante. Las que ya existen están en la baseline y solo pueden
@@ -36,6 +38,7 @@ scan_globals() {
     [ -f "$f" ] || continue
     grep -nE '^(static[[:space:]]+)?[A-Za-z_][A-Za-z0-9_[:space:]\*]*[[:space:]\*]g_[A-Za-z0-9_]+[[:space:]]*(\[[^]]*\])*[[:space:]]*(=|;)' "$f" \
       | grep -vE '^[0-9]+:extern' \
+      | grep -vE '\bg_vm\b' \
       | sed -E 's/^[0-9]+://; s/.*[[:space:]\*](g_[A-Za-z0-9_]+).*/\1/' \
       | sed "s|^|global $f |"
   done | sort -u

@@ -73,6 +73,7 @@
 #endif
 
 #include "typeeasy_http.h"
+#include "te_vm.h"
 
 /* One-time Winsock initialisation (no-op on POSIX). */
 static void te_sock_startup(void) {
@@ -131,8 +132,6 @@ static int g_last_stop_line = -1;
 static int g_last_stop_depth = -1;
 
 /* Forward decls of interpreter internals we touch from here. */
-extern Variable vars[];
-extern int var_count;
 
 /* ===== low-level IO ===== */
 
@@ -517,7 +516,7 @@ static size_t emit_var_entry(char *buf, size_t cap, size_t o, int first,
 static void cmd_vars(void) {
     char buf[16384];
     size_t o = 0;
-    o += (size_t)snprintf(buf + o, sizeof(buf) - o, "{\"resp\":\"vars\",\"vars\":[");
+    o += (size_t)snprintf(buf + o, sizeof(buf) - o, "{\"resp\":\"g_vm.vars\",\"g_vm.vars\":[");
     int first = 1;
     /* Dedupe by name keeping the LATEST entry. vars[] is append-only across
      * scopes (each `var x = ...` adds a new slot, the older `x` stays alive
@@ -525,13 +524,13 @@ static void cmd_vars(void) {
      * the newest index). Without dedupe we would emit stale shadowed copies
      * and VS Code's Locals view picks the first (oldest) one. Iterate
      * backward and skip any name we've already emitted. */
-    for (int i = var_count - 1; i >= 0 && o + 512 < sizeof(buf); --i) {
-        Variable *v = &vars[i];
+    for (int i = g_vm.var_count - 1; i >= 0 && o + 512 < sizeof(buf); --i) {
+        Variable *v = &g_vm.vars[i];
         if (!v->id) continue;
         if (v->id[0] == '_' && v->id[1] == '_') continue; /* skip __ret__ etc */
         int dup = 0;
-        for (int j = i + 1; j < var_count; ++j) {
-            if (vars[j].id && strcmp(vars[j].id, v->id) == 0) { dup = 1; break; }
+        for (int j = i + 1; j < g_vm.var_count; ++j) {
+            if (g_vm.vars[j].id && strcmp(g_vm.vars[j].id, v->id) == 0) { dup = 1; break; }
         }
         if (dup) continue;
         char val[256] = "";
@@ -612,7 +611,7 @@ static void cmd_get_children(const char *line) {
     json_int_field(line, "ref", &ref_id);
     char buf[16384];
     size_t o = 0;
-    o += (size_t)snprintf(buf + o, sizeof(buf) - o, "{\"resp\":\"children\",\"vars\":[");
+    o += (size_t)snprintf(buf + o, sizeof(buf) - o, "{\"resp\":\"children\",\"g_vm.vars\":[");
     int first = 1;
     if (ref_id >= 1 && ref_id <= g_ref_count) {
         DbgRef *r = &g_refs[ref_id - 1];
@@ -912,7 +911,7 @@ static void wait_for_resume(void) {
             send_line("{\"resp\":\"ok\"}");
         } else if (strcmp(cmd, "stack") == 0) {
             cmd_stack();
-        } else if (strcmp(cmd, "vars") == 0) {
+        } else if (strcmp(cmd, "g_vm.vars") == 0) {
             refs_reset();
             cmd_vars();
         } else if (strcmp(cmd, "get_children") == 0) {

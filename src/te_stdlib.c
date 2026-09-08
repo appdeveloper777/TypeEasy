@@ -32,6 +32,7 @@
 #include <openssl/md5.h>
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
+#include "te_vm.h"
 
 /* ---- Bridges to ast.c (de-staticized helpers) ---- */
 extern void evaluate_native_args(ASTNode *arg);
@@ -60,7 +61,6 @@ extern void native_sqlserver_close(ASTNode *args);
 /* ---- Runtime flags shared with ast.c ---- */
 extern int g_test_assertions;
 extern int g_test_failed;
-extern int throw_flag;
 extern char *throw_message;
 
 /* Cross-platform UTC mktime. timegm is GNU; Windows MSVC/MinGW uses _mkgmtime. */
@@ -872,7 +872,6 @@ static int adapt_env(ASTNode *node, ASTNode *args) {
  * a surrounding try { } catch). */
 static int adapt_env_required(ASTNode *node, ASTNode *args) {
     (void)node;
-    extern int throw_flag;
     extern char *throw_message;
     if (args) evaluate_native_args(args);
     char *key = args ? get_node_string(args) : NULL;
@@ -882,7 +881,7 @@ static int adapt_env_required(ASTNode *node, ASTNode *args) {
         snprintf(buf, sizeof(buf), "env_required: missing environment variable '%s'", key ? key : "(null)");
         if (throw_message) { free(throw_message); throw_message = NULL; }
         throw_message = strdup(buf);
-        throw_flag = 1;
+        g_vm.throw_flag = 1;
         if (key) free(key);
         add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, "", NULL));
         return 1;

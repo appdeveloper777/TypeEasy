@@ -25,6 +25,7 @@
 
 #include "te_evloop.h"
 #include "ast.h"
+#include "te_vm.h"
 #include "te_builtins.h"
 #include "te_bytecode.h"   /* BC_NOT_COMPILABLE */
 
@@ -38,12 +39,8 @@
 /* ---- interpreter globals we snapshot per fiber (defined in ast.c) -------- */
 /* MAX_VARS comes from ast.h — must match ast.c's vars[] size or async fibers
  * silently truncate the snapshot. */
-extern Variable vars[MAX_VARS];
-extern int      var_count;
 extern Variable __ret_var;
 extern int      __ret_var_active;
-extern int      return_flag;
-extern int      throw_flag;
 extern int      g_call_depth;
 
 /* ---- platform: fibers, monotonic clock, sleep ---------------------------- */
@@ -131,18 +128,18 @@ static void ctx_free(CtxSnapshot *s) {
  * the snapshot shares nothing freeable with the live scope. Frees any prior
  * contents of `s` first. */
 static void ctx_save(CtxSnapshot *s) {
-    int n = var_count;
+    int n = g_vm.var_count;
     if (n < 0) n = 0;
     if (n > MAX_VARS) n = MAX_VARS;
     ctx_free(s);                       /* release previous snapshot storage */
-    memcpy(s->vars_copy, vars, (size_t)n * sizeof(Variable));
+    memcpy(s->vars_copy, g_vm.vars, (size_t)n * sizeof(Variable));
     for (int i = 0; i < n; i++) var_dup_owned(&s->vars_copy[i]);
     s->var_count   = n;
     s->ret         = __ret_var;
     s->ret_active  = __ret_var_active;
     if (s->ret_active) var_dup_owned(&s->ret);
-    s->return_flag = return_flag;
-    s->throw_flag  = throw_flag;
+    s->return_flag = g_vm.return_flag;
+    s->throw_flag  = g_vm.throw_flag;
     s->call_depth  = g_call_depth;
 }
 
@@ -155,20 +152,20 @@ static void ctx_restore(const CtxSnapshot *s) {
     if (n < 0) n = 0;
     if (n > MAX_VARS) n = MAX_VARS;
     /* free what the live scope currently owns */
-    int live = var_count;
+    int live = g_vm.var_count;
     if (live < 0) live = 0;
     if (live > MAX_VARS) live = MAX_VARS;
-    for (int i = 0; i < live; i++) var_free_owned(&vars[i]);
+    for (int i = 0; i < live; i++) var_free_owned(&g_vm.vars[i]);
     if (__ret_var_active) var_free_owned(&__ret_var);
     /* copy in the snapshot, giving the live scope its own fresh strings */
-    memcpy(vars, s->vars_copy, (size_t)n * sizeof(Variable));
-    for (int i = 0; i < n; i++) var_dup_owned(&vars[i]);
-    var_count        = n;
+    memcpy(g_vm.vars, s->vars_copy, (size_t)n * sizeof(Variable));
+    for (int i = 0; i < n; i++) var_dup_owned(&g_vm.vars[i]);
+    g_vm.var_count        = n;
     __ret_var        = s->ret;
     __ret_var_active = s->ret_active;
     if (__ret_var_active) var_dup_owned(&__ret_var);
-    return_flag      = s->return_flag;
-    throw_flag       = s->throw_flag;
+    g_vm.return_flag      = s->return_flag;
+    g_vm.throw_flag       = s->throw_flag;
     g_call_depth     = s->call_depth;
     te_runtime_rebuild_symtab();       /* keep name->index lookups correct */
 }

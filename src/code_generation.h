@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "ast.h"
+#include "te_vm.h"
 
 /* main assembly code generation function */
 void generate_code();
@@ -35,7 +36,7 @@ int* greedyColoring();
 
 /* Variable Array */
 static char **var_name;
-static int var_count = 0;
+static int g_vm.var_count = 0;
 static int temp_count = 0;
 
 /* Variable Array Functions */

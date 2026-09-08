@@ -8,6 +8,7 @@
 
 #include "te_bytecode.h"
 #include "ast.h"
+#include "te_vm.h"
 #include "strvars.h"
 
 #include <ctype.h>
@@ -26,8 +27,6 @@ typedef struct TEListIdx {
 } TEListIdx;
 
 /* MAX_VARS comes from ast.h — keep in sync with ast.c's vars[] size. */
-extern Variable vars[MAX_VARS];
-extern int var_count;
 extern int is_string_type(ASTNode *node);
 
 #ifdef __GNUC__
@@ -525,18 +524,18 @@ static int bc_compile(ASTNode *node, Instr *out, int *pos, int max) {
             if (!pv) {
                 pv = find_variable_for(p->name);
                 if (!pv) {
-                    if (var_count < MAX_VARS) {
+                    if (g_vm.var_count < MAX_VARS) {
                         int is_float = (p->type
                                       && (strcmp(p->type, "float") == 0
                                        || strcmp(p->type, "FLOAT") == 0));
-                        vars[var_count].id       = strdup(p->name);
-                        vars[var_count].type     = strdup(is_float ? "FLOAT" : "INT");
-                        vars[var_count].is_const = 0;
-                        vars[var_count].vtype    = is_float ? VAL_FLOAT : VAL_INT;
-                        if (is_float) vars[var_count].value.float_value = 0.0;
-                        else          vars[var_count].value.int_value   = 0;
-                        pv = &vars[var_count];
-                        var_count++;
+                        g_vm.vars[g_vm.var_count].id       = strdup(p->name);
+                        g_vm.vars[g_vm.var_count].type     = strdup(is_float ? "FLOAT" : "INT");
+                        g_vm.vars[g_vm.var_count].is_const = 0;
+                        g_vm.vars[g_vm.var_count].vtype    = is_float ? VAL_FLOAT : VAL_INT;
+                        if (is_float) g_vm.vars[g_vm.var_count].value.float_value = 0.0;
+                        else          g_vm.vars[g_vm.var_count].value.int_value   = 0;
+                        pv = &g_vm.vars[g_vm.var_count];
+                        g_vm.var_count++;
                     }
                 }
                 p->cached_var = pv;
@@ -2619,21 +2618,21 @@ BCInfo *bc_get_or_compile_method(MethodNode *m, ClassNode *cls) {
         if (!p->name) continue;
         Variable *pv = (Variable *)p->cached_var;
         if (!pv) pv = find_variable_for(p->name);
-        if (!pv && var_count < MAX_VARS) {
+        if (!pv && g_vm.var_count < MAX_VARS) {
             /* TypeEasy's lexer doesn't set yylval for INT/FLOAT tokens,
              * so p->type can be garbage. Default to INT; BC_STORE_VAR
              * will switch the slot to FLOAT at runtime if needed. */
             int is_float = (p->type
                           && (strcmp(p->type, "float") == 0
                            || strcmp(p->type, "FLOAT") == 0));
-            vars[var_count].id       = strdup(p->name);
-            vars[var_count].type     = strdup(is_float ? "FLOAT" : "INT");
-            vars[var_count].is_const = 0;
-            vars[var_count].vtype    = is_float ? VAL_FLOAT : VAL_INT;
-            if (is_float) vars[var_count].value.float_value = 0.0;
-            else          vars[var_count].value.int_value   = 0;
-            pv = &vars[var_count];
-            var_count++;
+            g_vm.vars[g_vm.var_count].id       = strdup(p->name);
+            g_vm.vars[g_vm.var_count].type     = strdup(is_float ? "FLOAT" : "INT");
+            g_vm.vars[g_vm.var_count].is_const = 0;
+            g_vm.vars[g_vm.var_count].vtype    = is_float ? VAL_FLOAT : VAL_INT;
+            if (is_float) g_vm.vars[g_vm.var_count].value.float_value = 0.0;
+            else          g_vm.vars[g_vm.var_count].value.int_value   = 0;
+            pv = &g_vm.vars[g_vm.var_count];
+            g_vm.var_count++;
         }
         if (pv) p->cached_var = pv;
     }
@@ -2773,15 +2772,15 @@ static int bc_compile_for(ASTNode *node, Instr *out, int *pos, int max) {
      * but we need it to exist). Try lookup first; if not present, fail and
      * let the AST walker create it (it will be cached on subsequent calls). */
     Variable *fv = find_variable_for(node->id);
-    if (!fv && var_count < MAX_VARS) {
+    if (!fv && g_vm.var_count < MAX_VARS) {
         /* Ola 5: pre-allocate as INT so we can compile straight away. */
-        vars[var_count].id       = strdup(node->id);
-        vars[var_count].type     = strdup("INT");
-        vars[var_count].is_const = 0;
-        vars[var_count].vtype    = VAL_INT;
-        vars[var_count].value.int_value = 0;
-        fv = &vars[var_count];
-        var_count++;
+        g_vm.vars[g_vm.var_count].id       = strdup(node->id);
+        g_vm.vars[g_vm.var_count].type     = strdup("INT");
+        g_vm.vars[g_vm.var_count].is_const = 0;
+        g_vm.vars[g_vm.var_count].vtype    = VAL_INT;
+        g_vm.vars[g_vm.var_count].value.int_value = 0;
+        fv = &g_vm.vars[g_vm.var_count];
+        g_vm.var_count++;
     }
     if (!fv || fv->is_const) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr,"[BCFOR] fail: fv const/null\n"); return 0; }
     if (fv->vtype != VAL_INT) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr,"[BCFOR] fail: fv not VAL_INT (vtype=%d)\n", fv->vtype); return 0; }

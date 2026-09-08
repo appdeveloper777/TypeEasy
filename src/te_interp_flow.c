@@ -5,6 +5,7 @@
 #include <string.h>
 #include <math.h>
 #include "ast.h"
+#include "te_vm.h"
 #include "ast_internal.h"
 
 void interpret_for_in(ASTNode *node) {
@@ -60,7 +61,7 @@ void interpret_for_in(ASTNode *node) {
          * object_value previo (ver add_or_update_variable), así que el listNode
          * capturado aquí sigue válido durante todo el bucle. */
         interpret_ast(list_expr);
-        if (throw_flag || return_flag) return;
+        if (g_vm.throw_flag || g_vm.return_flag) return;
         Variable *r = find_variable("__ret__");
         if (r && r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
             listNode = (ASTNode *)(intptr_t)r->value.object_value;
@@ -79,7 +80,7 @@ void interpret_for_in(ASTNode *node) {
      * loop binding lives at/above this mark and is re-bound every iteration;
      * the final iteration's locals stay live after the loop, preserving the
      * pre-existing "value visible after the loop" behavior. */
-    int te_loop_scope_mark = var_count;
+    int te_loop_scope_mark = g_vm.var_count;
     for (ASTNode *item = items; item; item = item->next) {
         debugger_on_loop_iteration();
         te_scope_unwind_to(te_loop_scope_mark);
@@ -112,9 +113,9 @@ void interpret_for_in(ASTNode *node) {
         }
         /* debug print removed */
         interpret_ast(node->right);
-        if (break_flag) { break_flag = 0; break; }
-        if (continue_flag) { continue_flag = 0; continue; }
-        if (throw_flag || return_flag) break;
+        if (g_vm.break_flag) { g_vm.break_flag = 0; break; }
+        if (g_vm.continue_flag) { g_vm.continue_flag = 0; continue; }
+        if (g_vm.throw_flag || g_vm.return_flag) break;
     }
 }
 void interpret_if(ASTNode *node) {
@@ -186,7 +187,7 @@ void interpret_for(ASTNode *node) {
     /* Block scope: snapshot AFTER the control variable is seeded (it lives
      * below this mark) so per-iteration body `let`s reuse one slot instead of
      * accumulating against MAX_VARS. */
-    int te_loop_scope_mark = var_count;
+    int te_loop_scope_mark = g_vm.var_count;
     while (var->value.int_value < limite) {
         /* Interpret the whole body once per iteration. body is a
          * statement_list node; interpret_statement_list walks every statement
@@ -195,9 +196,9 @@ void interpret_for(ASTNode *node) {
         debugger_on_loop_iteration();
         te_scope_unwind_to(te_loop_scope_mark);
         interpret_ast(body);
-        if (break_flag) { break_flag = 0; break; }
-        if (continue_flag) { continue_flag = 0; }
-        if (throw_flag || return_flag) break;
+        if (g_vm.break_flag) { g_vm.break_flag = 0; break; }
+        if (g_vm.continue_flag) { g_vm.continue_flag = 0; }
+        if (g_vm.throw_flag || g_vm.return_flag) break;
         var->value.int_value += incremento;
     }
 }
@@ -205,18 +206,18 @@ void interpret_for_c(ASTNode *node) {
     ASTNode *fb = (ASTNode *)node->extra;
     ASTNode *update = fb ? fb->left : NULL;
     ASTNode *body = fb ? fb->right : NULL;
-    int loop_scope_mark = var_count;             /* INIT's var lives above this mark */
+    int loop_scope_mark = g_vm.var_count;             /* INIT's var lives above this mark */
     if (node->left) interpret_ast(node->left);
-    int body_scope_mark = var_count;
+    int body_scope_mark = g_vm.var_count;
     while (1) {
-        if (throw_flag || return_flag) break;
+        if (g_vm.throw_flag || g_vm.return_flag) break;
         if (node->right && !evaluate_condition(node->right)) break;
         debugger_on_loop_iteration();
         te_scope_unwind_to(body_scope_mark);
         if (body) interpret_ast(body);
-        if (break_flag) { break_flag = 0; break; }
-        if (continue_flag) { continue_flag = 0; }
-        if (throw_flag || return_flag) break;
+        if (g_vm.break_flag) { g_vm.break_flag = 0; break; }
+        if (g_vm.continue_flag) { g_vm.continue_flag = 0; }
+        if (g_vm.throw_flag || g_vm.return_flag) break;
         if (update) interpret_ast(update);
     }
     te_scope_unwind_to(loop_scope_mark);
