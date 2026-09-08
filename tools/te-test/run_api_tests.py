@@ -176,6 +176,7 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8181)
     ap.add_argument("-k", dest="only", default=None, help="only cases whose name contains this")
     args = ap.parse_args()
+    args.bin = str(Path(args.bin).resolve())   # server runs with cwd = suite dir
     target = Path(args.target)
     suites = sorted(target.rglob("*.api.json")) if target.is_dir() else [target]
     if not suites:
