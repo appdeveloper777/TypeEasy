@@ -767,7 +767,13 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
      * longjmp's back here instead of killing the whole server. We answer
      * HTTP 500, reset interpreter state and keep serving. */
     jmp_buf recovery;
+#if defined(_WIN64) && defined(__MINGW32__)
+    /* _setjmp(buf, NULL): longjmp restores registers without RtlUnwindEx. The SEH
+     * unwind through civetweb/interpreter frames crashed ~50% of fatals on win64. */
+    if (_setjmp(recovery, NULL) != 0) {
+#else
     if (setjmp(recovery) != 0) {
+#endif
         g_runtime_recovery = NULL;
         runtime_reset_vars_to_initial_state();
         /* v0.0.30 (estabilidad): el longjmp se salto los returns de

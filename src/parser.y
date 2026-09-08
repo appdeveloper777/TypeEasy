@@ -753,14 +753,14 @@ func_call_expr SEMICOLON { $$ = $1; }
   | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET    { $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf("NUMBER",$5,NULL,NULL), $7, $9, $12); }
   /* Same prefix as the classic form but the 3rd field is an UPDATE statement
    * (i++ / i += 1 / i = i + 1) -> Java/C semantics (2nd field is a CONDITION). */
-  | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET { extern ASTNode *create_for_c_node(ASTNode*,ASTNode*,ASTNode*,ASTNode*); ASTNode *init = create_ast_node("ASSIGN", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf_number("NUMBER",$5,NULL,NULL)); $$ = create_for_c_node(init, $7, $9, $12); }
+  | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET { ASTNode *init = create_ast_node("ASSIGN", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf_number("NUMBER",$5,NULL,NULL)); $$ = create_for_c_node(init, $7, $9, $12); }
   /* Java/C-style: for (var i = 0; i < n; i++) { ... }. The UPDATE field is an
    * assignment statement (++ -- += -= *= /= =), which cannot start an expression,
    * so it never collides with the classic for(init; LIMIT; STEP) forms above/below. */
-  | FOR LPAREN for_c_init SEMICOLON expression SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET   { extern ASTNode *create_for_c_node(ASTNode*,ASTNode*,ASTNode*,ASTNode*); $$ = create_for_c_node($3, $5, $7, $10); }
-  | FOR LPAREN for_c_init SEMICOLON SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET              { extern ASTNode *create_for_c_node(ASTNode*,ASTNode*,ASTNode*,ASTNode*); $$ = create_for_c_node($3, NULL, $6, $9); }
-  | FOR LPAREN for_c_init SEMICOLON expression SEMICOLON RPAREN LBRACKET statement_list RBRACKET               { extern ASTNode *create_for_c_node(ASTNode*,ASTNode*,ASTNode*,ASTNode*); $$ = create_for_c_node($3, $5, NULL, $9); }
-  | FOR LPAREN SEMICOLON expression SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET             { extern ASTNode *create_for_c_node(ASTNode*,ASTNode*,ASTNode*,ASTNode*); $$ = create_for_c_node(NULL, $4, $6, $9); }
+  | FOR LPAREN for_c_init SEMICOLON expression SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET   { $$ = create_for_c_node($3, $5, $7, $10); }
+  | FOR LPAREN for_c_init SEMICOLON SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET              { $$ = create_for_c_node($3, NULL, $6, $9); }
+  | FOR LPAREN for_c_init SEMICOLON expression SEMICOLON RPAREN LBRACKET statement_list RBRACKET               { $$ = create_for_c_node($3, $5, NULL, $9); }
+  | FOR LPAREN SEMICOLON expression SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET             { $$ = create_for_c_node(NULL, $4, $6, $9); }
   /* for(START; STOP; STEP) — sin variable de control, estilo range() de Python.
    * START/STOP/STEP pueden ser literales o expresiones; STOP es límite exclusivo.
    * Se sintetiza un nombre de contador oculto ("__for$N", imposible de tipear por

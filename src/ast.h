@@ -335,6 +335,8 @@ ASTNode *call_lambda(ASTNode *lambda, ASTNode *argsList);
  * callee = expresión que evalúa a un LAMBDA; args = lista de argumentos. */
 ASTNode *create_call_on_expr_node(ASTNode *callee, ASTNode *args);
 ASTNode* create_for_in_node(const char *var_name, ASTNode *list_expr, ASTNode *body);
+/* for estilo Java/C: for (init; cond; update) { body }; init/cond/update pueden ser NULL. */
+ASTNode *create_for_c_node(ASTNode *init, ASTNode *cond, ASTNode *update, ASTNode *body);
 
 
 ASTNode* create_layer_node(const char*, int, const char*);
