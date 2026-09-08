@@ -51,4 +51,24 @@ int te_expr_is_null(ASTNode *l);
 void te_scope_unwind_to(int target);
 void interpret_statement_list(ASTNode *node);
 
+/* te_interp_decl.c (Fase 2 cut 3). */
+extern char *throw_message;          /* mensaje del throw en vuelo (ast.c) */
+extern int   g_debug_mode;
+int  te_stderr_is_tty(void);
+#define TE_ERR_RED   (te_stderr_is_tty() ? "\033[31m" : "")
+#define TE_ERR_RESET (te_stderr_is_tty() ? "\033[0m"  : "")
+ASTNode *te_csv_runtime_load(ASTNode *placeholder);
+void declare_variable(char *id, ASTNode *value, int is_const);
+void te_colcache_invalidate(ASTNode *list_head);
+void te_runtime_fatalf(const char *fmt, ...);
+void interpret_assign(ASTNode *node);
+void interpret_assign_attr(ASTNode *node);
+void interpret_var_decl(ASTNode *node);
+char* double_to_string(double x);
+ASTNode *te_capture_lambda(ASTNode *lam);
+Variable *te_decl_slot(const char *id);
+ASTNode* resolve_access_item(ASTNode *node);
+inline void te_sym_insert(const char *id, int idx);
+void te_value_to_variable(Variable *dst, ASTNode *value);
+
 #endif /* TE_AST_INTERNAL_H */
