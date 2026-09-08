@@ -54,7 +54,7 @@ int te_math_method_dispatch(ASTNode *node, ASTNode *objNode) {
 
     ASTNode *r;
     if (res == (int)res) {
-        r = create_ast_leaf_number("INT", (int)res, NULL, NULL);
+        r = create_ast_leaf_number("INT", (long long)res, NULL, NULL);
     } else {
         char buf[64];
         te_fmt_double(buf, sizeof(buf), res);

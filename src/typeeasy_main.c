@@ -166,7 +166,7 @@ static int run_repl(void) {
                 if (vars[i].id && vars[i].id[0] == '_' && vars[i].id[1] == '_') continue;
                 fprintf(stdout, "  %s : %s = ", vars[i].id ? vars[i].id : "?", vars[i].type ? vars[i].type : "?");
                 switch (vars[i].vtype) {
-                    case VAL_INT:    fprintf(stdout, "%d\n", vars[i].value.int_value); break;
+                    case VAL_INT:    fprintf(stdout, "%lld\n", (long long)vars[i].value.int_value); break;
                     case VAL_FLOAT:  fprintf(stdout, "%g\n", vars[i].value.float_value); break;
                     case VAL_STRING: fprintf(stdout, "\"%s\"\n", vars[i].value.string_value ? vars[i].value.string_value : ""); break;
                     default:         fprintf(stdout, "<object>\n"); break;

@@ -386,7 +386,7 @@
     char buf[64]; int j = 0;
     for (char *p = yytext + 2; *p && j < 63; p++) if (*p != '_') buf[j++] = *p;
     buf[j] = '\0';
-    yylval.ival = (int)strtol(buf, NULL, 16);
+    yylval.ival = strtoll(buf, NULL, 16);
     return NUMBER;
 }
 0[bB][01][01_]*           {
@@ -394,7 +394,7 @@
     char buf[64]; int j = 0;
     for (char *p = yytext + 2; *p && j < 63; p++) if (*p != '_') buf[j++] = *p;
     buf[j] = '\0';
-    yylval.ival = (int)strtol(buf, NULL, 2);
+    yylval.ival = strtoll(buf, NULL, 2);
     return NUMBER;
 }
 [0-9][0-9_]*              {
@@ -402,7 +402,7 @@
     char buf[64]; int j = 0;
     for (char *p = yytext; *p && j < 63; p++) if (*p != '_') buf[j++] = *p;
     buf[j] = '\0';
-    yylval.ival = atoi(buf);
+    yylval.ival = strtoll(buf, NULL, 10);
     return NUMBER;
 }
 [0-9][0-9_]*\.[0-9][0-9_]*  {

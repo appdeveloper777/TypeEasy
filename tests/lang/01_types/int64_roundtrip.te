@@ -1,0 +1,32 @@
+// int64: literales, +=, listas, maps, JSON, args de fn y division no se truncan a 32 bits (v0.0.35).
+let a = 3000000000;
+println("lit: " + a);
+var s = 2147483647;
+s = s + 1;
+println("add: " + s);
+var t = 0;
+t += 3000000000;
+println("pluseq: " + t);
+let b = 1000000 * 1000000;
+println("mul: " + b);
+var c = 2147483647;
+c++;
+println("inc: " + c);
+let d = 9007199254740993;
+println("2^53+1: " + d);
+let e = 3000000000;
+let f = e / 2;
+println("div: " + f);
+println(3000000000 > 2147483647);
+let lst = [3000000000];
+println("list: " + lst[0]);
+let m = { "k": 3000000000 };
+println("map: " + m["k"]);
+println(json({ v: 3000000000 }));
+let p = json_parse("{\"id\": 3000000000}");
+println("json_parse: " + p["id"]);
+let g = fn(x) => { return x + 1; };
+println("fn: " + g(3000000000));
+var h = 0;
+for (var i = 0; i < 3; i++) { h = h + 1500000000; }
+println("loop: " + h);

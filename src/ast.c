@@ -502,7 +502,7 @@ void native_json(ASTNode *arg) {
                 free_ast(result_node);
                 return;
             }
-            char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", r->value.int_value);
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)r->value.int_value);
             ASTNode *result_node = create_ast_leaf("STRING", 0, tmp, NULL);
             add_or_update_variable("__ret__", result_node);
             free_ast(result_node);
@@ -661,7 +661,7 @@ void native_json(ASTNode *arg) {
                             te_fmt_double(temp, sizeof(temp), attr->value.float_value);
                             strcat(json_buffer, temp);
                         } else {
-                            snprintf(temp, sizeof(temp), "%d", attr->value.int_value);
+                            snprintf(temp, sizeof(temp), "%lld", (long long)attr->value.int_value);
                             strcat(json_buffer, temp);
                         }
                         if (i < obj->class->attr_count - 1) strcat(json_buffer, ", ");
@@ -713,7 +713,7 @@ void native_json(ASTNode *arg) {
             strcat(json_buffer, obj->attributes[i].value.string_value ? obj->attributes[i].value.string_value : "");
             strcat(json_buffer, "\"");
         } else if (obj->attributes[i].vtype == VAL_INT) {
-            snprintf(temp, sizeof(temp), "%d", obj->attributes[i].value.int_value);
+            snprintf(temp, sizeof(temp), "%lld", (long long)obj->attributes[i].value.int_value);
             strcat(json_buffer, temp);
         } else if (obj->attributes[i].vtype == VAL_FLOAT) {
             te_fmt_double(temp, sizeof(temp), obj->attributes[i].value.float_value);
@@ -748,7 +748,7 @@ void native_xml(ASTNode *arg) {
             return;
         }
         if (r && r->vtype == VAL_INT) {
-            char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", r->value.int_value);
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)r->value.int_value);
             ASTNode *result_node = create_ast_leaf("STRING", 0, tmp, NULL);
             add_or_update_variable("__ret__", result_node);
             free_ast(result_node);
@@ -947,7 +947,7 @@ static char* te_list_node_to_string(ASTNode *listNode) {
         } else if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
             TE_LS_APPEND("object");
         } else {
-            snprintf(buf, sizeof(buf), "%d", cur->value);
+            snprintf(buf, sizeof(buf), "%lld", (long long)cur->value);
             TE_LS_APPEND(buf);
         }
         cur = cur->next;
@@ -1038,7 +1038,7 @@ char* get_node_string(ASTNode* node) {
     }
     
     if (node->type && (strcmp(node->type, "NUMBER") == 0 || strcmp(node->type, "INT") == 0)) {
-        snprintf(temp, sizeof(temp), "%d", node->value);
+        snprintf(temp, sizeof(temp), "%lld", (long long)node->value);
         return strdup(temp);
     }
     
@@ -1109,7 +1109,7 @@ char* get_node_string(ASTNode* node) {
                     strcmp(val->type, "UUID") == 0)
                     return strdup(val->str_value ? val->str_value : "");
                 if (strcmp(val->type, "NUMBER") == 0 || strcmp(val->type, "INT") == 0) {
-                    snprintf(temp, sizeof(temp), "%d", val->value);
+                    snprintf(temp, sizeof(temp), "%lld", (long long)val->value);
                     return strdup(temp);
                 }
                 if (strcmp(val->type, "FLOAT") == 0) {
@@ -1162,7 +1162,7 @@ char* get_node_string(ASTNode* node) {
                     Variable *attr = &obj->attributes[i];
                     if (attr->vtype == VAL_STRING) return strdup(attr->value.string_value ? attr->value.string_value : "");
                     if (attr->vtype == VAL_INT) {
-                        snprintf(temp, sizeof(temp), "%d", attr->value.int_value);
+                        snprintf(temp, sizeof(temp), "%lld", (long long)attr->value.int_value);
                         return strdup(temp);
                     }
                     if (attr->vtype == VAL_FLOAT) {
@@ -1199,7 +1199,7 @@ char* get_node_string(ASTNode* node) {
             if (strcmp(val->type, "STRING") == 0)
                 return strdup(val->str_value ? val->str_value : "");
             if (strcmp(val->type, "NUMBER") == 0 || strcmp(val->type, "INT") == 0) {
-                snprintf(temp, sizeof(temp), "%d", val->value);
+                snprintf(temp, sizeof(temp), "%lld", (long long)val->value);
                 return strdup(temp);
             }
             if (strcmp(val->type, "FLOAT") == 0) {
@@ -1856,7 +1856,7 @@ static void te_sql_envelope_wrap(int force) {
         /* SQLite exec OK: __ret__ es int = filas afectadas. */
         ENV_ADD(create_kv_pair_node("success", ENV_BOOL(1)));
         ENV_ADD(create_kv_pair_node("data",
-                create_ast_leaf_number("INT", (int)r->value.int_value, NULL, NULL)));
+                create_ast_leaf_number("INT", r->value.int_value, NULL, NULL)));
     } else if (r->vtype == VAL_STRING && r->value.string_value) {
         const char *s = r->value.string_value;
         const char *t = s;
@@ -2779,7 +2779,7 @@ ObjectNode *create_object(ClassNode *class) {
             } else if (obj->attributes[i].vtype == VAL_FLOAT) {
                 obj->attributes[i].value.float_value = evaluate_expression(d);
             } else {
-                obj->attributes[i].value.int_value = (int)evaluate_expression(d);
+                obj->attributes[i].value.int_value = (long long)evaluate_expression(d);
             }
         }
     }
@@ -3506,7 +3506,7 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         double result = evaluate_expression(value);
         if (result == (int)result) {
             vars[my_index].vtype = VAL_INT;
-            vars[my_index].value.int_value = (int)result;
+            vars[my_index].value.int_value = (long long)result;
             vars[my_index].type = strdup("INT");
         } else {
             vars[my_index].vtype = VAL_FLOAT;
@@ -3539,7 +3539,7 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
         if (a && a->id && (strcmp(a->id, "length") == 0 || strcmp(a->id, "size") == 0)) {
             double r = evaluate_expression(value);
             vars[my_index].vtype = VAL_INT;
-            vars[my_index].value.int_value = (int)r;
+            vars[my_index].value.int_value = (long long)r;
             return;
         }
 
@@ -4061,7 +4061,7 @@ const char *tee_intern(const char *s) {
     return ne->str;
 }
 
-ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
+ASTNode *create_ast_leaf(char *type, long long value, char *str_value, char *id) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) {
         te_runtime_fatalf("Fatal error: could not allocate memory for ASTNode.");
@@ -4098,7 +4098,7 @@ ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
     return node;
 }
 
-ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id) {
+ASTNode *create_ast_leaf_number(char *type, long long value, char *str_value, char *id) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) return NULL;
     node->line = yylineno; node->file_id = g_lex_file_id;
@@ -4152,7 +4152,7 @@ ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right) {
     return node;
 }
 
-ASTNode *create_int_node(int value) {
+ASTNode *create_int_node(long long value) {
     return create_ast_leaf_number("INT", value, NULL, NULL);
 }
 
@@ -5186,7 +5186,7 @@ char* expand_interp_string(const char *raw) {
             if (v) {
                 if (v->type && strcmp(v->type, "NULL") == 0) valstr = "null";
                 else if (v->vtype == VAL_STRING) valstr = v->value.string_value ? v->value.string_value : "";
-                else if (v->vtype == VAL_INT) { snprintf(buf,256,"%d",v->value.int_value); valstr = buf; }
+                else if (v->vtype == VAL_INT) { snprintf(buf,256,"%lld", (long long)v->value.int_value); valstr = buf; }
                 else if (v->vtype == VAL_FLOAT) { te_fmt_double(buf, sizeof(buf), v->value.float_value); valstr = buf; }
                 else valstr = "";
             }
@@ -5319,7 +5319,7 @@ static ASTNode* te_snapshot_object_literal(ASTNode *lit) {
         } else {
             double d = evaluate_expression(valNode);
             if (d == (double)(long long)d && d >= -2147483648.0 && d <= 2147483647.0) {
-                leaf = create_ast_leaf_number("NUMBER", (int)d, NULL, NULL);
+                leaf = create_ast_leaf_number("NUMBER", (long long)d, NULL, NULL);
             } else {
                 char b[64]; te_fmt_double(b, sizeof(b), d);
                 leaf = create_ast_leaf("FLOAT", 0, b, NULL);
@@ -6680,7 +6680,7 @@ void interpret_ast(ASTNode *node) {
         else if (e && nk_of(e) == NK_IDENTIFIER) {
             Variable *v = find_variable(e->id);
             if (v && v->vtype == VAL_STRING) msg = strdup(v->value.string_value ? v->value.string_value : "");
-            else if (v && v->vtype == VAL_INT) { char b[32]; snprintf(b,32,"%d",v->value.int_value); msg = strdup(b); }
+            else if (v && v->vtype == VAL_INT) { char b[32]; snprintf(b,32,"%lld", (long long)v->value.int_value); msg = strdup(b); }
             else msg = strdup("");
         } else if (e) {
             double d = evaluate_expression(e);
@@ -6866,7 +6866,7 @@ static void interpret_for(ASTNode *node) {
         memset(&seed, 0, sizeof(seed));
         seed.type = "INT";
         seed.kind = NK_NUMBER;
-        seed.value = (int)evaluate_expression(node->left);
+        seed.value = (long long)evaluate_expression(node->left);
         add_or_update_variable(node->id, &seed);
     }
     Variable *var = find_variable(node->id);
@@ -7189,7 +7189,7 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
                 if (strcmp(val->type, "STRING") == 0) {
                     dst->value.string_value = strdup(val->str_value ? val->str_value : "");
                 } else if (strcmp(val->type, "INT") == 0) {
-                    char buf[32]; snprintf(buf, sizeof buf, "%d", val->value);
+                    char buf[32]; snprintf(buf, sizeof buf, "%lld", (long long)val->value);
                     dst->value.string_value = strdup(buf);
                 } else if (strcmp(val->type, "FLOAT") == 0) {
                     dst->value.string_value = strdup(val->str_value ? val->str_value : "0");
@@ -7584,7 +7584,7 @@ static void interpret_call_method_impl(ASTNode *node) {
                     }
                     if (outer_kind == 3) {
                         if (sum_is_int && sum_acc == (double)(long long)sum_acc) {
-                            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)sum_acc, NULL, NULL));
+                            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)sum_acc, NULL, NULL));
                         } else {
                             char buf[64]; te_fmt_double(buf, sizeof(buf), sum_acc);
                             add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
@@ -7651,7 +7651,7 @@ static void interpret_call_method_impl(ASTNode *node) {
                                 if (outer_is_countWhere) {
                                     long long total = te_colcache_count(cc, mask);
                                     free(mask);
-                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)total, NULL, NULL));
+                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)total, NULL, NULL));
                                     return;
                                 }
                                 long long itotal = 0; double dtotal = 0.0; int is_int = 1;
@@ -7659,7 +7659,7 @@ static void interpret_call_method_impl(ASTNode *node) {
                                     free(mask);
                                     if (is_int) {
                                         if (itotal >= INT_MIN && itotal <= INT_MAX) {
-                                            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)itotal, NULL, NULL));
+                                            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)itotal, NULL, NULL));
                                         } else {
                                             char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
                                             add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
@@ -7703,10 +7703,10 @@ static void interpret_call_method_impl(ASTNode *node) {
                             free(arr);
                             if (!fail) {
                                 if (outer_is_countWhere) {
-                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)cnt, NULL, NULL));
+                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)cnt, NULL, NULL));
                                 } else if (!any_float) {
                                     if (itotal >= INT_MIN && itotal <= INT_MAX) {
-                                        add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)itotal, NULL, NULL));
+                                        add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)itotal, NULL, NULL));
                                     } else {
                                         char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
                                         add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
@@ -7734,10 +7734,10 @@ static void interpret_call_method_impl(ASTNode *node) {
                         }
                         if (!fail) {
                             if (outer_is_countWhere) {
-                                add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)cnt, NULL, NULL));
+                                add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)cnt, NULL, NULL));
                             } else if (!any_float) {
                                 if (itotal >= INT_MIN && itotal <= INT_MAX) {
-                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)itotal, NULL, NULL));
+                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)itotal, NULL, NULL));
                                 } else {
                                     char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
                                     add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
@@ -7935,7 +7935,7 @@ static void interpret_call_method_impl(ASTNode *node) {
                                     vn = create_ast_leaf_number("INT", 0, NULL, NULL);
                                 }
                             } else {
-                                int val = (int)evaluate_expression(carg);
+                                long long val = (long long)evaluate_expression(carg);
                                 vn = create_ast_leaf_number("INT", val, NULL, NULL);
                             }
                             add_or_update_variable(p->name, vn);
@@ -8311,7 +8311,7 @@ fastcall_args_done:
                 } else {
                     __ret_var.type  = strdup("INT");
                     __ret_var.vtype = VAL_INT;
-                    __ret_var.value.int_value = (int)rv;
+                    __ret_var.value.int_value = (long long)rv;
                 }
                 __ret_var_active = 1;
                 return_flag = 0;
@@ -8404,7 +8404,7 @@ fastcall_args_done:
                     } else {
                         __ret_var.type  = strdup("INT");
                         __ret_var.vtype = VAL_INT;
-                        __ret_var.value.int_value = (int)rv;
+                        __ret_var.value.int_value = (long long)rv;
                     }
                     __ret_var_active = 1;
                     return_flag = 0;
@@ -8492,7 +8492,7 @@ fastcall_args_done:
                 } else {
                     double rv_double = evaluate_expression(return_node);
                     if (rv_double == (int)rv_double) {
-                        lit = create_ast_leaf_number("INT", (int)rv_double, NULL, NULL);
+                        lit = create_ast_leaf_number("INT", (long long)rv_double, NULL, NULL);
                     } else {
                         lit = create_ast_leaf("FLOAT", 0, double_to_string(rv_double), NULL);
                     }
@@ -8701,7 +8701,7 @@ static void interpret_call_method_alone(ASTNode *node) {
         } else {
             double rv_double = evaluate_expression(return_node);
             if (rv_double == (int)rv_double) {
-                lit = create_ast_leaf_number("INT", (int)rv_double, NULL, NULL);
+                lit = create_ast_leaf_number("INT", (long long)rv_double, NULL, NULL);
             } else {
                 lit = create_ast_leaf("FLOAT", 0, double_to_string(rv_double), NULL);
             }
@@ -8848,7 +8848,7 @@ static void interpret_call_method_alone(ASTNode *node) {
             } else {
                 double rv_double = evaluate_expression(return_node);
                 if (rv_double == (int)rv_double) {
-                    lit = create_ast_leaf_number("INT", (int)rv_double, NULL, NULL);
+                    lit = create_ast_leaf_number("INT", (long long)rv_double, NULL, NULL);
                 } else {
                     lit = create_ast_leaf("FLOAT", 0, double_to_string(rv_double), NULL);
                 }
@@ -8936,7 +8936,7 @@ static void interpret_call_method_alone(ASTNode *node) {
         } else {
             double rv_double = evaluate_expression(return_node);
             if (rv_double == (int)rv_double) {
-                lit = create_ast_leaf_number("INT", (int)rv_double, NULL, NULL);
+                lit = create_ast_leaf_number("INT", (long long)rv_double, NULL, NULL);
             } else {
                 lit = create_ast_leaf("FLOAT", 0, double_to_string(rv_double), NULL);
             }
@@ -9876,7 +9876,7 @@ static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
                 } else {
                     double r = evaluate_expression(cur_arg);
                     if (r == (double)(long long)r) {
-                        valNode = create_ast_leaf_number("NUMBER", (int)r, NULL, NULL);
+                        valNode = create_ast_leaf_number("NUMBER", (long long)r, NULL, NULL);
                     } else {
                         char buf[64]; te_fmt_double(buf, sizeof(buf), r);
                         valNode = create_ast_leaf("FLOAT", 0, buf, NULL);
@@ -9986,7 +9986,7 @@ static ASTNode* call_lambda_exec_body(ASTNode *lambda) {
             }
         }
         double dr = evaluate_expression(ret);
-        if (dr == (double)(long long)dr) return create_ast_leaf_number("NUMBER", (int)dr, NULL, NULL);
+        if (dr == (double)(long long)dr) return create_ast_leaf_number("NUMBER", (long long)dr, NULL, NULL);
         char buf[64]; te_fmt_double(buf, sizeof(buf), dr);
         return create_ast_leaf("FLOAT", 0, buf, NULL);
     }
@@ -10023,7 +10023,7 @@ static ASTNode* call_lambda_exec_body(ASTNode *lambda) {
                 free(s);
             } else {
                 double dv = evaluate_expression(it);
-                if (dv == (double)(long long)dv) valNode = create_ast_leaf_number("NUMBER", (int)dv, NULL, NULL);
+                if (dv == (double)(long long)dv) valNode = create_ast_leaf_number("NUMBER", (long long)dv, NULL, NULL);
                 else { char buf[64]; te_fmt_double(buf, sizeof(buf), dv); valNode = create_ast_leaf("FLOAT", 0, buf, NULL); }
             }
             te_list_append(result, valNode);
@@ -10091,7 +10091,7 @@ static ASTNode* call_lambda_exec_body(ASTNode *lambda) {
     }
     double r = evaluate_expression(body);
     if (r == (double)(long long)r) {
-        return create_ast_leaf_number("NUMBER", (int)r, NULL, NULL);
+        return create_ast_leaf_number("NUMBER", (long long)r, NULL, NULL);
     }
     char buf[64]; te_fmt_double(buf, sizeof(buf), r);
     return create_ast_leaf("FLOAT", 0, buf, NULL);
@@ -10238,7 +10238,7 @@ static void interpret_assign_attr(ASTNode *node) {
             obj->attributes[idx].vtype = VAL_FLOAT;
             if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %f (FLOAT)\n", attr_name, val);
         } else {
-            obj->attributes[idx].value.int_value = (int)val;
+            obj->attributes[idx].value.int_value = (long long)val;
             obj->attributes[idx].vtype = VAL_INT;
             if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %d (INT)\n", attr_name, (int)val);
         }
@@ -10288,7 +10288,7 @@ static void interpret_assign(ASTNode *node) {
                     double r = evaluate_expression(value_node);
                     if (r == (double)(int)r) {
                         fv->vtype = VAL_INT;
-                        fv->value.int_value = (int)r;
+                        fv->value.int_value = (long long)r;
                     } else {
                         fv->vtype = VAL_FLOAT;
                         fv->value.float_value = r;
@@ -10476,7 +10476,7 @@ static void interpret_assign(ASTNode *node) {
         double result = evaluate_expression(value_node);
         ASTNode* temp_node = NULL;
         if (result == (int)result) {
-            temp_node = create_ast_leaf_number("INT", (int)result, NULL, NULL);
+            temp_node = create_ast_leaf_number("INT", (long long)result, NULL, NULL);
         } else {
             char* str_res = double_to_string(result);
             temp_node = create_ast_leaf("FLOAT", 0, str_res, NULL);
@@ -10615,7 +10615,7 @@ static void te_print_list_node(ASTNode *listNode, int nl) {
             te_fmt_double(buf, sizeof(buf), cur->str_value ? atof(cur->str_value) : 0.0);
             dbg_printf("%s", buf); append_to_stdout(buf);
         } else {
-            snprintf(buf, sizeof(buf), "%d", cur->value);
+            snprintf(buf, sizeof(buf), "%lld", (long long)cur->value);
             dbg_printf("%s", buf); append_to_stdout(buf);
         }
         cur = cur->next;
@@ -10642,7 +10642,7 @@ static char *te_map_field_display(Variable *v, const char *key) {
         strcmp(val->type, "UUID") == 0)
         return strdup(val->str_value ? val->str_value : "");
     if (strcmp(val->type, "NUMBER") == 0 || strcmp(val->type, "INT") == 0) {
-        char b[32]; snprintf(b, sizeof(b), "%d", val->value); return strdup(b);
+        char b[32]; snprintf(b, sizeof(b), "%lld", (long long)val->value); return strdup(b);
     }
     if (strcmp(val->type, "FLOAT") == 0) {
         char b[64]; te_fmt_double(b, sizeof(b), val->str_value ? atof(val->str_value) : 0.0);
@@ -10813,7 +10813,7 @@ static void interpret_print(ASTNode *node) {
         else if (attr->vtype == VAL_STRING)
             dbg_printf("%s", attr->value.string_value);
         else
-            dbg_printf("%d", attr->value.int_value);
+            dbg_printf("%lld", (long long)attr->value.int_value);
         return;
     }
 
@@ -10891,7 +10891,7 @@ static void interpret_fprint(ASTNode *node) {
         if (attr->vtype == VAL_STRING)
             dbg_eprintf( "%s", attr->value.string_value);
         else
-            dbg_eprintf( "%d", attr->value.int_value);
+            dbg_eprintf( "%lld", (long long)attr->value.int_value);
         return;
     }
 
@@ -10920,7 +10920,7 @@ static void interpret_fprint(ASTNode *node) {
         if (v->vtype == VAL_STRING)
             dbg_eprintf( "%s", v->value.string_value);
         else if (v->vtype == VAL_INT)
-            dbg_eprintf( "%d", v->value.int_value);
+            dbg_eprintf( "%lld", (long long)v->value.int_value);
         else if (v->vtype == VAL_FLOAT)
             { char b[64]; te_fmt_double(b, sizeof(b), v->value.float_value); dbg_eprintf("%s", b); }
         else
@@ -11233,7 +11233,7 @@ static void interpret_println(ASTNode *node) {
                                 char b[64]; te_fmt_double(b, sizeof(b), attr2->value.float_value); dbg_printf("%s\n", b);
                             } else {
                                 dbg_printf("%d\n", attr2->value.int_value);
-                                char tmpx[32]; snprintf(tmpx, 32, "%d\n", attr2->value.int_value);
+                                char tmpx[32]; snprintf(tmpx, 32, "%lld\n", (long long)attr2->value.int_value);
                                 append_to_stdout(tmpx);
                             }
                             return;
@@ -11272,7 +11272,7 @@ static void interpret_println(ASTNode *node) {
                                     char b[64]; te_fmt_double(b, sizeof(b), attr2->value.float_value); dbg_printf("%s\n", b);
                                 } else {
                                     dbg_printf("%d\n", attr2->value.int_value);
-                                    char tmpx[32]; snprintf(tmpx, 32, "%d\n", attr2->value.int_value);
+                                    char tmpx[32]; snprintf(tmpx, 32, "%lld\n", (long long)attr2->value.int_value);
                                     append_to_stdout(tmpx);
                                 }
                                 return;
@@ -11325,7 +11325,7 @@ static void interpret_println(ASTNode *node) {
         }
         else {
             dbg_printf("%d\n", attr->value.int_value);
-            char temp[32]; snprintf(temp, 32, "%d\n", attr->value.int_value);
+            char temp[32]; snprintf(temp, 32, "%lld\n", (long long)attr->value.int_value);
             append_to_stdout(temp);
         }
         return;
@@ -11888,7 +11888,7 @@ void print_object_as_xml_by_id(const char* id) {
                             te_fmt_double(temp, sizeof(temp), attr->value.float_value);
                             strcat(xml_buffer, temp);
                         } else {
-                            snprintf(temp, sizeof(temp), "%d", attr->value.int_value);
+                            snprintf(temp, sizeof(temp), "%lld", (long long)attr->value.int_value);
                             strcat(xml_buffer, temp);
                         }
                         snprintf(temp, sizeof(temp), "</%s>\n", obj->class->attributes[i].id);
@@ -11923,7 +11923,7 @@ void print_object_as_xml_by_id(const char* id) {
         if (obj->attributes[i].vtype == VAL_STRING) {
             strcat(xml_buffer, obj->attributes[i].value.string_value ? obj->attributes[i].value.string_value : "");
         } else if (obj->attributes[i].vtype == VAL_INT) {
-            snprintf(temp, sizeof(temp), "%d", obj->attributes[i].value.int_value);
+            snprintf(temp, sizeof(temp), "%lld", (long long)obj->attributes[i].value.int_value);
             strcat(xml_buffer, temp);
         } else if (obj->attributes[i].vtype == VAL_FLOAT) {
             te_fmt_double(temp, sizeof(temp), obj->attributes[i].value.float_value);
@@ -11977,7 +11977,7 @@ static char *te_return_raw_text(ASTNode *e) {
     if (!strcmp(t, "STRING_INTERP"))
         return expand_interp_string(e->str_value ? e->str_value : "");
     if (!strcmp(t, "NUMBER") || !strcmp(t, "INT")) {
-        char b[32]; snprintf(b, sizeof(b), "%d", e->value); return strdup(b);
+        char b[32]; snprintf(b, sizeof(b), "%lld", (long long)e->value); return strdup(b);
     }
     if (!strcmp(t, "FLOAT")) {
         char b[48]; te_fmt_double(b, sizeof(b), e->str_value ? atof(e->str_value) : 0.0); return strdup(b);
@@ -11985,7 +11985,7 @@ static char *te_return_raw_text(ASTNode *e) {
     if (!strcmp(t, "IDENTIFIER") || !strcmp(t, "ID")) {
         Variable *v = find_variable(e->id);
         if (v && v->vtype == VAL_STRING) return strdup(v->value.string_value ? v->value.string_value : "");
-        if (v && v->vtype == VAL_INT)   { char b[32]; snprintf(b, sizeof(b), "%d", v->value.int_value); return strdup(b); }
+        if (v && v->vtype == VAL_INT)   { char b[32]; snprintf(b, sizeof(b), "%lld", (long long)v->value.int_value); return strdup(b); }
         if (v && v->vtype == VAL_FLOAT) { char b[48]; te_fmt_double(b, sizeof(b), v->value.float_value); return strdup(b); }
         return NULL; /* object/list/map variable -> not raw text */
     }

@@ -185,10 +185,10 @@ int lazy_terminal(ASTNode *lazy_node, ASTNode *node) {
     if (counters) free(counters);
 
     if (is_toList) { te_req_owned_ast_register(result); add_or_update_variable("__ret__", result); return 1; }
-    if (is_count)  { add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)count, NULL, NULL)); return 1; }
+    if (is_count)  { add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)count, NULL, NULL)); return 1; }
     if (is_sum) {
         if (sum_is_int && sum_acc == (double)(long long)sum_acc)
-            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)sum_acc, NULL, NULL));
+            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)sum_acc, NULL, NULL));
         else {
             char buf[64]; te_fmt_double(buf, sizeof(buf), sum_acc);
             add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
@@ -296,7 +296,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
     if (strcmp(fname, "count") == 0 && !node->right) {
         long long n = 0;
         for (ASTNode *it = list->left; it; it = it->next) n++;
-        te_ret_scalar(create_ast_leaf_number("INT", (int)n, NULL, NULL));
+        te_ret_scalar(create_ast_leaf_number("INT", (long long)n, NULL, NULL));
         return 1;
     }
 
@@ -333,7 +333,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
             it = it->next;
         }
         if (is_int && acc == (double)(long long)acc) {
-            te_ret_scalar(create_ast_leaf_number("INT", (int)acc, NULL, NULL));
+            te_ret_scalar(create_ast_leaf_number("INT", (long long)acc, NULL, NULL));
         } else {
             char buf[64]; te_fmt_double(buf, sizeof(buf), acc);
             te_ret_scalar(create_ast_leaf("FLOAT", 0, buf, NULL));

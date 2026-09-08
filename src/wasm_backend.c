@@ -135,7 +135,7 @@ static void emit_expr(WasmContext *ctx, ASTNode *node) {
 
     if (is_node(node, "NUMBER") || is_node(node, "INT")) {
         char buffer[64];
-        snprintf(buffer, sizeof(buffer), "i32.const %d", node->value);
+        snprintf(buffer, sizeof(buffer), "i32.const %lld", (long long)node->value);
         wasm_line(ctx, buffer);
     } else if (is_node(node, "IDENTIFIER") || is_node(node, "ID")) {
         const char *name = local_name(ctx, node->id);

@@ -94,7 +94,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         return 1;
     }
     if (strcmp(m, "length") == 0) {
-        ASTNode *r = create_ast_leaf_number("INT", (int)strlen(s), NULL, NULL);
+        ASTNode *r = create_ast_leaf_number("INT", (long long)strlen(s), NULL, NULL);
         add_or_update_variable("__ret__", r);
         return 1;
     }

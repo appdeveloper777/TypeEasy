@@ -97,7 +97,7 @@ static inline long te_nprocs_online(void) {
 
 /* ---------- Walker bridges (kept in ast.c) ---------------------------- */
 extern void add_or_update_variable(char *id, ASTNode *value);
-extern ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
+extern ASTNode *create_ast_leaf_number(char *type, long long value, char *str_value, char *id);
 extern ObjectNode *create_object(ClassNode *class);
 extern void te_colcache_build(ASTNode *list_head, ClassNode *cls);
 extern void te_colcache_attach_prebuilt(ASTNode *list_head, struct TeColCache *c);
@@ -1922,7 +1922,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
          * (double exacto hasta 2^53 ~ 9e15). Igual semántica que sumBy de OO mode. */
         if (r >= INT_MIN && r <= INT_MAX) {
             add_or_update_variable("__ret__",
-                create_ast_leaf_number("INT", (int)r, NULL, NULL));
+                create_ast_leaf_number("INT", (long long)r, NULL, NULL));
         } else {
             char buf[32];
             snprintf(buf, sizeof(buf), "%lld", r);
@@ -1978,7 +1978,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
                     }
                 } else if (r >= INT_MIN && r <= INT_MAX) {
                     add_or_update_variable("__ret__",
-                        create_ast_leaf_number("INT", (int)r, NULL, NULL));
+                        create_ast_leaf_number("INT", (long long)r, NULL, NULL));
                 } else {
                     char buf[32];
                     snprintf(buf, sizeof(buf), "%lld", r);
@@ -2111,7 +2111,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
                 if (df->col_kinds[ci] == 0) {
                     int64_t iv = ((int64_t*)df->col_data[ci])[i];
                     if (v->vtype == VAL_INT) {
-                        v->value.int_value = (int)iv;
+                        v->value.int_value = (long long)iv;
                     } else if (v->vtype == VAL_FLOAT) {
                         v->value.float_value = (double)iv;
                     } else { /* string fallback */
@@ -2700,7 +2700,7 @@ static void csv_parse_chunk(const CSVParseCfg *cfg, char *src, size_t total_len,
                             te_runtime_fatal();
                         }
                     }
-                    obj->attributes[a].value.int_value = (int)v;
+                    obj->attributes[a].value.int_value = (long long)v;
                 }
             } else if (attr_kind[a] == 1 /*STRING*/) {
                 if (raw[0] == '\0' && attr_nullable[a]) {

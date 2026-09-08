@@ -68,7 +68,7 @@ typedef struct ASTNode {
     char *type;
     NodeKind kind;        /* Fase 1: cached enum kind */
     char *id;
-    int value;
+    long long value;   /* int64: literales/IDs/timestamps no se truncan a 32 bits */
     char *str_value;
     struct ASTNode *left;
     struct ASTNode *right;
@@ -377,7 +377,7 @@ void free_object_node(ObjectNode *obj);
 ObjectNode *create_objects_bulk(ClassNode *cls, int N);
 void call_method(ObjectNode *obj, char *method);
 ClassNode *find_class(char *name);
-ASTNode *create_int_node(int value);
+ASTNode *create_int_node(long long value);
 ASTNode *create_float_node(int value);
 ASTNode *create_train_node(const char *model_name, const char *dataset_name, ASTNode *options);
 ASTNode *create_train_option_node(const char *option_name, int value);
@@ -422,7 +422,7 @@ ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *c
 Variable *find_variable_for(char *id);
 Variable *find_variable(char *id);
 void add_or_update_variable(char *id, ASTNode *value);
-ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id);
+ASTNode *create_ast_leaf(char *type, long long value, char *str_value, char *id);
 ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right);
 ASTNode *create_return_node(ASTNode *expr);
 ASTNode *create_call_node(const char *funcName, ASTNode *args);
@@ -433,7 +433,7 @@ ASTNode *add_statement(ASTNode *list, ASTNode *stmt);
 ASTNode *create_case_node(ASTNode* condition, ASTNode* body);
 ASTNode *append_case_clause(ASTNode* list, ASTNode* case_clause);
 ASTNode *create_match_node(ASTNode* condition, ASTNode* case_list);
-ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id);
+ASTNode *create_ast_leaf_number(char *type, long long value, char *str_value, char *id);
 ASTNode *create_kv_pair_node(char *key, ASTNode *value);
 char* get_node_string(ASTNode *node);
 int is_string_type(ASTNode *node);

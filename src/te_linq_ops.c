@@ -182,7 +182,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         ASTNode *node = NULL;
                         if (a->vtype == VAL_INT) {
                             /* Igual que build_item_from_value: tipo "NUMBER" + ->value. */
-                            node = create_ast_leaf_number("NUMBER", (int)a->value.int_value, NULL, NULL);
+                            node = create_ast_leaf_number("NUMBER", a->value.int_value, NULL, NULL);
                         } else if (a->vtype == VAL_FLOAT) {
                             char buf[64]; te_fmt_double(buf, sizeof(buf), a->value.float_value);
                             node = create_ast_leaf("FLOAT", 0, buf, NULL);
@@ -213,7 +213,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         if (!fast_eval(&fl, it, &rv, &rv_is_int)) { ok = 0; break; }
                         ASTNode *node;
                         if (rv_is_int) {
-                            node = create_ast_leaf_number("NUMBER", (int)rv, NULL, NULL);
+                            node = create_ast_leaf_number("NUMBER", (long long)rv, NULL, NULL);
                         } else {
                             char buf[64]; te_fmt_double(buf, sizeof(buf), rv);
                             node = create_ast_leaf("FLOAT", 0, buf, NULL);
@@ -372,7 +372,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         acc = create_ast_leaf("STRING", 0, s, NULL); free(s);
                     } else {
                         double r = evaluate_expression(initArg);
-                        if (r == (double)(long long)r) acc = create_ast_leaf_number("NUMBER", (int)r, NULL, NULL);
+                        if (r == (double)(long long)r) acc = create_ast_leaf_number("NUMBER", (long long)r, NULL, NULL);
                         else { char b[64]; te_fmt_double(b,sizeof(b),r); acc = create_ast_leaf("FLOAT", 0, b, NULL); }
                     }
                 } else {
@@ -548,7 +548,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         if (te_colcache_eval_pred(cc, aidx, &fl, mask)) {
                             long long total = te_colcache_count(cc, mask);
                             free(mask);
-                            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)total, NULL, NULL));
+                            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)total, NULL, NULL));
                             return 1;
                         }
                         free(mask);
@@ -579,7 +579,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                             }
                             free(arr);
                             if (!fail) {
-                                add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)total, NULL, NULL));
+                                add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)total, NULL, NULL));
                                 return 1;
                             }
                             /* fall through to sequential fallback */
@@ -623,7 +623,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                         if (te_colcache_sum(cc, aidx, NULL, &itotal, &dtotal, &is_int)) {
                             if (is_int) {
                                 if (itotal >= INT_MIN && itotal <= INT_MAX) {
-                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)itotal, NULL, NULL));
+                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)itotal, NULL, NULL));
                                 } else {
                                     char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
                                     add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
@@ -667,7 +667,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                             if (!fail) {
                                 if (!any_float) {
                                     if (itotal >= INT_MIN && itotal <= INT_MAX) {
-                                        add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)itotal, NULL, NULL));
+                                        add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)itotal, NULL, NULL));
                                     } else {
                                         char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
                                         add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
@@ -696,7 +696,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                                 /* Build a NUMBER node carrying the int64 via str_value
                                  * when it overflows int32, otherwise the usual int slot. */
                                 if (iacc >= INT_MIN && iacc <= INT_MAX) {
-                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)iacc, NULL, NULL));
+                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)iacc, NULL, NULL));
                                 } else {
                                     char buf[32]; snprintf(buf, sizeof(buf), "%lld", iacc);
                                     add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
@@ -723,7 +723,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                     item = item->next;
                 }
                 if (is_int && acc == (double)(long long)acc) {
-                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)acc, NULL, NULL));
+                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)acc, NULL, NULL));
                 } else {
                     char buf[64]; te_fmt_double(buf, sizeof(buf), acc);
                     add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));

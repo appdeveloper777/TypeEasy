@@ -81,7 +81,7 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
         if (r->vtype == VAL_STRING) { te_json_emit_str(b, r->value.string_value ? r->value.string_value : ""); return; }
         if (r->vtype == VAL_INT) {
             if (r->type && strcmp(r->type, "BOOL") == 0) { tebuf_puts(b, r->value.int_value ? "true" : "false"); return; }
-            char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", r->value.int_value); tebuf_puts(b, tmp); return;
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)r->value.int_value); tebuf_puts(b, tmp); return;
         }
         if (r->vtype == VAL_FLOAT) { char tmp[64]; te_fmt_double(tmp, sizeof(tmp), r->value.float_value); tebuf_puts(b, tmp); return; }
         tebuf_puts(b, "null"); return;
@@ -95,7 +95,7 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
         return;
     }
     if (strcmp(n->type, "INT") == 0 || strcmp(n->type, "NUMBER") == 0) {
-        char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", n->value); tebuf_puts(b, tmp);
+        char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)n->value); tebuf_puts(b, tmp);
         return;
     }
     if (strcmp(n->type, "FLOAT") == 0) {
@@ -140,7 +140,7 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
             }
             if (v->type && strcmp(v->type, "NULL") == 0) { tebuf_puts(b, "null"); return; }
             if (v->vtype == VAL_STRING) { te_json_emit_str(b, v->value.string_value ? v->value.string_value : ""); return; }
-            if (v->vtype == VAL_INT)    { char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", v->value.int_value); tebuf_puts(b, tmp); return; }
+            if (v->vtype == VAL_INT)    { char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)v->value.int_value); tebuf_puts(b, tmp); return; }
             if (v->vtype == VAL_FLOAT)  { char tmp[64]; te_fmt_double(tmp, sizeof(tmp), v->value.float_value); tebuf_puts(b, tmp); return; }
             if (v->type && (strcmp(v->type,"LIST")==0 || strcmp(v->type,"MAP")==0)) {
                 te_json_emit_node(b, (ASTNode*)(intptr_t)v->value.object_value);
@@ -361,5 +361,5 @@ ASTNode *te_json_parse_value(const char **p) {
     if (L >= sizeof(tmp)) L = sizeof(tmp) - 1;
     memcpy(tmp, start, L); tmp[L] = 0;
     if (is_float) return create_ast_leaf("FLOAT", 0, tmp, NULL);
-    return create_ast_leaf_number("INT", atoi(tmp), NULL, NULL);
+    return create_ast_leaf_number("INT", strtoll(tmp, NULL, 10), NULL, NULL);
 }

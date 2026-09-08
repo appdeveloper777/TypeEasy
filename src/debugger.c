@@ -466,7 +466,7 @@ static int render_variable_value(const Variable *v, char *val, size_t valcap, co
     *type_out = vtype_name(v->vtype);
     switch (v->vtype) {
         case VAL_INT:
-            snprintf(val, valcap, "%d", v->value.int_value);
+            snprintf(val, valcap, "%lld", (long long)v->value.int_value);
             break;
         case VAL_FLOAT:
             snprintf(val, valcap, "%g", v->value.float_value);
@@ -644,7 +644,7 @@ static void cmd_get_children(const char *line) {
                     snprintf(val, sizeof(val), "%s", cur->str_value ? cur->str_value : "0");
                     type = "float";
                 } else {
-                    snprintf(val, sizeof(val), "%d", cur->value);
+                    snprintf(val, sizeof(val), "%lld", (long long)cur->value);
                     type = "int";
                 }
                 o = emit_var_entry(buf, sizeof(buf), o, first, name, type, val, child_ref);
@@ -864,7 +864,7 @@ static void cmd_eval(const char *line) {
                         snprintf(val, sizeof(val), "%.200s", cur->str_value ? cur->str_value : "");
                         snprintf(type, sizeof(type), "string");
                     } else if (cur) {
-                        snprintf(val, sizeof(val), "%d", cur->value);
+                        snprintf(val, sizeof(val), "%lld", (long long)cur->value);
                         snprintf(type, sizeof(type), "int");
                     }
                 }

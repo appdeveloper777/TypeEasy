@@ -482,7 +482,7 @@ int te_builtin_dispatch(ASTNode *node) {
         double va = a0 ? evaluate_expression(a0) : 0;
         double vb = a1 ? evaluate_expression(a1) : va;
         double r = (strcmp(fn,"min")==0) ? (va < vb ? va : vb) : (va > vb ? va : vb);
-        if (r == (int)r) add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)r, NULL, NULL));
+        if (r == (long long)r) add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)r, NULL, NULL));
         else { char buf[64]; te_fmt_double(buf, sizeof(buf), r); add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL)); }
         return 1;
     }
@@ -498,7 +498,7 @@ int te_builtin_dispatch(ASTNode *node) {
             fprintf(stderr, "    ASSERT FAILED: %s (line %d)\n", msg ? msg : "condition is false", node->line);
             if (msg) free(msg);
         }
-        add_or_update_variable("__ret__", create_ast_leaf_number("INT", (int)(cond != 0), NULL, NULL));
+        add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)(cond != 0), NULL, NULL));
         return 1;
     }
     if (strcmp(fn, "assert_eq") == 0) {
@@ -954,7 +954,7 @@ static int adapt_now(ASTNode *node, ASTNode *args) {
 static int adapt_now_epoch(ASTNode *node, ASTNode *args) {
     (void)node; (void)args;
     add_or_update_variable("__ret__",
-        create_ast_leaf_number("INT", (int)time(NULL), NULL, NULL));
+        create_ast_leaf_number("INT", (long long)time(NULL), NULL, NULL));
     return 1;
 }
 
@@ -970,7 +970,7 @@ static int adapt_now_ms(ASTNode *node, ASTNode *args) {
     long long ms = (long long)(ts.tv_sec - t0.tv_sec) * 1000LL
                  + (long long)(ts.tv_nsec - t0.tv_nsec) / 1000000LL;
     add_or_update_variable("__ret__",
-        create_ast_leaf_number("INT", (int)ms, NULL, NULL));
+        create_ast_leaf_number("INT", (long long)ms, NULL, NULL));
     return 1;
 }
 
@@ -1066,7 +1066,7 @@ static int adapt_date_diff(ASTNode *node, ASTNode *args) {
     }
     if (sa) free(sa); if (sb) free(sb); if (unit) free(unit);
     add_or_update_variable("__ret__",
-        create_ast_leaf_number("INT", (int)diff, NULL, NULL));
+        create_ast_leaf_number("INT", (long long)diff, NULL, NULL));
     return 1;
 }
 

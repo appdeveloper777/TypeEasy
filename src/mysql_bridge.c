@@ -404,7 +404,7 @@ ASTNode* mysql_query_result(int conn_id, const char* query) {
 }
 
 // Prototipos de funciones auxiliares de ast.c
-extern ASTNode* create_ast_leaf(char *type, int value, char *str_value, char *id);
+extern ASTNode* create_ast_leaf(char *type, long long value, char *str_value, char *id);
 extern void free_ast(ASTNode *node);
 
 // Helper: Extrae argumento string de un nodo de argumentos

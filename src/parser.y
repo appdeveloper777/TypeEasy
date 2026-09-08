@@ -45,7 +45,7 @@
 %}
 
 %union {
-    int ival;
+    long long ival;
     char *sval;
     ASTNode *node;
     ParameterNode *pnode;
@@ -1015,7 +1015,7 @@ void print_ast(ASTNode *node, int indent) {
         printf("Node");
     }
     if (node->value)
-        printf(", value: %d", node->value);
+        printf(", value: %lld", (long long)node->value);
     if (node->str_value)
         printf(", str: %s", node->str_value);
     if (node->id)
