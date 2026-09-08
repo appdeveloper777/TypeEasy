@@ -266,6 +266,9 @@ static int run_syntax_check(const char *path) {
     fclose(fp);
     /* Aridad estática: solo si el parseo no dejó errores (AST bien formado). */
     if (g_error_count == 0) te_syntax_check_arity(ast);
+    /* Semántica estática (let reasignado, for con condición, for-in sobre escalar). */
+    extern void te_syntax_check_semantics(ASTNode *root);
+    if (g_error_count == 0) te_syntax_check_semantics(ast);
     printf("{\"ok\":%s,\"errors\":[", g_error_count == 0 ? "true" : "false");
     for (int i = 0; i < g_error_count; i++) {
         if (i) fputc(',', stdout);

@@ -3849,6 +3849,7 @@ NodeKind nk_from_str(const char *t) {
         case 'F':
             if (!strcmp(t, "FOR")) return NK_FOR;
             if (!strcmp(t, "FOR_IN")) return NK_FOR_IN;
+            if (!strcmp(t, "FOR_C")) return NK_FOR_C;
             if (!strcmp(t, "FLOAT")) return NK_FLOAT;
             if (!strcmp(t, "FILTER_CALL")) return NK_FILTER_CALL;
             if (!strcmp(t, "FPRINT")) return NK_FPRINT;
@@ -6023,6 +6024,7 @@ void execute_predict(ASTNode* model_node, ASTNode* input_node) {
 /* Prototipos de funciones auxiliares */
 static void interpret_dataset(ASTNode *node);
 static void interpret_for(ASTNode *node);
+static void interpret_for_c(ASTNode *node);
 static void interpret_model_object(ASTNode *node);
 static void interpret_train_node(ASTNode *node);
 static void interpret_predict_node(ASTNode *node);
@@ -6408,7 +6410,7 @@ void interpret_ast(ASTNode *node) {
             case NK_VAR_DECL:
             case NK_ASSIGN: case NK_ASSIGN_ATTR: case NK_INDEX_ASSIGN:
             case NK_IF: case NK_MATCH:
-            case NK_FOR: case NK_FOR_IN: case NK_WHILE:
+            case NK_FOR: case NK_FOR_IN: case NK_WHILE: case NK_FOR_C:
             case NK_BREAK: case NK_CONTINUE:
             case NK_RETURN: case NK_THROW: case NK_TRY_CATCH:
             case NK_PRINT: case NK_PRINTLN:
@@ -6452,6 +6454,7 @@ void interpret_ast(ASTNode *node) {
         break;
 
     case NK_FOR:        interpret_for(node); break;
+    case NK_FOR_C:      interpret_for_c(node); break;
     case NK_IF:         interpret_if(node); break;
     case NK_MATCH:      interpret_match(node); break;
     case NK_FOR_IN:     interpret_for_in(node); break;
@@ -6860,6 +6863,51 @@ static void interpret_for(ASTNode *node) {
 
 static void interpret_model_object(ASTNode *node) {
     add_or_update_variable(node->id, node);
+}
+
+/* Java/C-style `for (INIT; COND; UPDATE) { BODY }`:
+ *   node->left  = INIT statement (VAR_DECL / ASSIGN) or NULL
+ *   node->right = COND expression or NULL (= true)
+ *   node->extra = FOR_BODY { left = UPDATE statement or NULL, right = BODY }
+ * Desugars to init; while (cond) { body; update; }. `break`/`continue` behave as
+ * in the while loop (continue still runs UPDATE, like Java). INIT's variable is
+ * scoped to the loop: the slots created from here on are unwound at exit. */
+ASTNode *create_for_c_node(ASTNode *init, ASTNode *cond, ASTNode *update, ASTNode *body) {
+    ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
+    if (!node) te_oom_fatal("FOR_C");
+    node->type = strdup("FOR_C");
+    node->kind = NK_FOR_C;
+    node->line = yylineno; node->file_id = g_lex_file_id;
+    node->left = init;
+    node->right = cond;
+    ASTNode *fb = (ASTNode *)calloc(1, sizeof(ASTNode));
+    if (!fb) te_oom_fatal("FOR_BODY");
+    fb->type = strdup("FOR_BODY");
+    fb->left = update;
+    fb->right = body;
+    node->extra = fb;
+    return node;
+}
+
+static void interpret_for_c(ASTNode *node) {
+    ASTNode *fb = (ASTNode *)node->extra;
+    ASTNode *update = fb ? fb->left : NULL;
+    ASTNode *body = fb ? fb->right : NULL;
+    int loop_scope_mark = var_count;             /* INIT's var lives above this mark */
+    if (node->left) interpret_ast(node->left);
+    int body_scope_mark = var_count;
+    while (1) {
+        if (throw_flag || return_flag) break;
+        if (node->right && !evaluate_condition(node->right)) break;
+        debugger_on_loop_iteration();
+        te_scope_unwind_to(body_scope_mark);
+        if (body) interpret_ast(body);
+        if (break_flag) { break_flag = 0; break; }
+        if (continue_flag) { continue_flag = 0; }
+        if (throw_flag || return_flag) break;
+        if (update) interpret_ast(update);
+    }
+    te_scope_unwind_to(loop_scope_mark);
 }
 
 static void interpret_train_node(ASTNode *node) {
@@ -11544,7 +11592,7 @@ static void te_arity_walk(ASTNode *n, TeArityFn *tbl, int count,
          * (create_if_node), asi que queda cubierto por la iteracion del bucle. */
         te_arity_walk(n->left,  tbl, count, shadow, lastLine);
         te_arity_walk(n->right, tbl, count, shadow, lastLine);
-        if (strcmp(n->type, "TERNARY") == 0)
+        if (strcmp(n->type, "TERNARY") == 0 || strcmp(n->type, "FOR_C") == 0)
             te_arity_walk(n->extra, tbl, count, shadow, lastLine);
         n = n->next;
     }
@@ -11559,6 +11607,167 @@ void te_syntax_check_arity(ASTNode *root) {
     if (count == 0) return;   /* no hay fn nombradas -> nada que chequear */
     int lastLine = 0;
     te_arity_walk(root, tbl, count, "", &lastLine);
+}
+
+/* ==========================================================================
+ * --syntax-check: chequeos SEMANTICOS estaticos (los tropiezos de la primera
+ * hora con TypeEasy, que hasta ahora solo se veian en runtime):
+ *   S1  reasignar un `let`/`const`      -> "cannot assign to constant variable"
+ *   S2  `for (i = 0; i < n; 1)`         -> el 2o campo es LIMITE, no condicion
+ *   S3  `for (i = 0; n; i < 5)` etc.    -> el 3o campo es PASO, no condicion
+ *   S4  `for (let x in 5)` / in "str"   -> el operando debe ser una lista
+ * Ambitos: cada LAMBDA y cada cuerpo de bloque abre un scope; una `let x` dentro
+ * de una fn no bloquea un `x = ...` externo. Conservador: si el nombre no fue
+ * declarado en un scope visible, no se marca (puede venir de otro archivo).
+ * ========================================================================== */
+typedef struct { const char *name; int is_const; } TeScopeVar;
+typedef struct TeScope { TeScopeVar v[256]; int n; struct TeScope *up; } TeScope;
+
+static int te_scope_lookup_const(TeScope *s, const char *name) {
+    for (; s; s = s->up)
+        for (int i = s->n - 1; i >= 0; i--)
+            if (s->v[i].name && strcmp(s->v[i].name, name) == 0) return s->v[i].is_const;
+    return -1;   /* not declared in a visible scope */
+}
+static void te_scope_declare(TeScope *s, const char *name, int is_const) {
+    for (int i = 0; i < s->n; i++)
+        if (s->v[i].name && strcmp(s->v[i].name, name) == 0) { s->v[i].is_const = is_const; return; }
+    if (s->n < 256) { s->v[s->n].name = name; s->v[s->n].is_const = is_const; s->n++; }
+}
+static int te_node_is_comparison(ASTNode *n) {
+    if (!n || !n->type) return 0;
+    return strcmp(n->type, "LT") == 0 || strcmp(n->type, "GT") == 0 || strcmp(n->type, "LT_EQ") == 0 ||
+           strcmp(n->type, "GT_EQ") == 0 || strcmp(n->type, "EQ") == 0 || strcmp(n->type, "DIFF") == 0 ||
+           strcmp(n->type, "AND") == 0 || strcmp(n->type, "OR") == 0 || strcmp(n->type, "NOT") == 0;
+}
+static void te_sem_error(ASTNode *n, int fallbackLine, const char *msg) {
+    g_lex_file_id = n->file_id;
+    te_capture_error(n->line > 0 ? n->line : fallbackLine, msg, n->id ? n->id : "");
+}
+
+static void te_sem_walk(ASTNode *n, TeScope *scope, int *lastLine) {
+    while (n) {
+        if (!n->type) { n = n->next; continue; }
+        if (n->line > 0) *lastLine = n->line;
+
+        if (strcmp(n->type, "STATEMENT_LIST") == 0) {
+            /* The spine is left-recursive (newest statement in ->right); collect
+             * and replay in PROGRAM order so declarations precede their uses. */
+            int cap = 64, cnt = 0;
+            ASTNode **stack = (ASTNode **)malloc((size_t)cap * sizeof(ASTNode *));
+            ASTNode *cur = n;
+            while (cur && cur->type && strcmp(cur->type, "STATEMENT_LIST") == 0) {
+                if (cnt >= cap) { cap *= 2; stack = (ASTNode **)realloc(stack, (size_t)cap * sizeof(ASTNode *)); }
+                stack[cnt++] = cur->right;
+                cur = cur->left;
+            }
+            te_sem_walk(cur, scope, lastLine);               /* oldest statement / leaf */
+            for (int i = cnt - 1; i >= 0; i--) te_sem_walk(stack[i], scope, lastLine);
+            free(stack);
+            n = n->next; continue;
+        }
+
+        if (strcmp(n->type, "VAR_DECL") == 0 && n->id) {
+            te_sem_walk(n->left, scope, lastLine);          /* RHS first (may contain lambdas) */
+            te_scope_declare(scope, n->id, n->value == 1);
+            n = n->next; continue;
+        }
+
+        if (strcmp(n->type, "ASSIGN") == 0 && n->left && n->left->id &&
+            n->left->type && (strcmp(n->left->type, "IDENTIFIER") == 0 || strcmp(n->left->type, "ID") == 0)) {
+            if (te_scope_lookup_const(scope, n->left->id) == 1) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                    "Error: cannot assign to constant variable '%s' (declared with let/const; use var).", n->left->id);
+                te_sem_error(n->left->line > 0 ? n->left : n, *lastLine, msg);
+            }
+            te_sem_walk(n->right, scope, lastLine);
+            n = n->next; continue;
+        }
+
+        if (strcmp(n->type, "FOR") == 0) {
+            /* left=init, right=LIMIT (whose ->right is FOR_BODY{left=STEP,right=body}) */
+            ASTNode *limit = n->right;
+            ASTNode *fb = limit ? limit->right : NULL;
+            ASTNode *step = fb ? fb->left : NULL;
+            ASTNode *body = fb ? fb->right : NULL;
+            if (te_node_is_comparison(limit)) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                    "Error: for(init; LIMIT; STEP): the 2nd field is an exclusive LIMIT, not a condition "
+                    "(write 'for (%s = 0; n; 1)', not 'i < n').", n->id ? n->id : "i");
+                te_sem_error(n, *lastLine, msg);
+            }
+            if (te_node_is_comparison(step)) {
+                te_sem_error(n, *lastLine,
+                    "Error: for(init; LIMIT; STEP): the 3rd field is the STEP to add (e.g. 1), not a condition.");
+            }
+            TeScope inner = { .n = 0, .up = scope };
+            if (n->id) te_scope_declare(&inner, n->id, 0);
+            te_sem_walk(body, &inner, lastLine);
+            n = n->next; continue;
+        }
+
+        if (strcmp(n->type, "FOR_C") == 0) {
+            TeScope inner = { .n = 0, .up = scope };
+            ASTNode *fb = (ASTNode *)n->extra;
+            te_sem_walk(n->left, &inner, lastLine);           /* init (declares in loop scope) */
+            te_sem_walk(n->right, &inner, lastLine);          /* cond */
+            if (fb) { te_sem_walk(fb->left, &inner, lastLine); te_sem_walk(fb->right, &inner, lastLine); }
+            n = n->next; continue;
+        }
+
+        if (strcmp(n->type, "FOR_IN") == 0) {
+            ASTNode *src = n->left;
+            if (src && src->type && (strcmp(src->type, "NUMBER") == 0 || strcmp(src->type, "INT") == 0 ||
+                                     strcmp(src->type, "FLOAT") == 0 || strcmp(src->type, "STRING") == 0 ||
+                                     strcmp(src->type, "STRING_LITERAL") == 0 || strcmp(src->type, "BOOL") == 0)) {
+                te_sem_error(n, *lastLine, "Error: for-in expects a list; a scalar literal is not iterable.");
+            }
+            TeScope inner = { .n = 0, .up = scope };
+            if (n->id) te_scope_declare(&inner, n->id, 0);
+            te_sem_walk(n->right, &inner, lastLine);
+            n = n->next; continue;
+        }
+
+        if (strcmp(n->type, "LAMBDA") == 0) {
+            TeScope inner = { .n = 0, .up = scope };
+            /* params ('\1'-separated in id) are mutable locals of the body */
+            if (n->id && n->id[0]) {
+                static char pbuf[64][128]; static int pi = 0;   /* names must outlive the walk of this body */
+                const char *p = n->id;
+                while (*p) {
+                    const char *e = p; while (*e && *e != '\1') e++;
+                    size_t len = (size_t)(e - p); if (len >= 128) len = 127;
+                    char *slot = pbuf[pi++ % 64];
+                    memcpy(slot, p, len); slot[len] = 0;
+                    te_scope_declare(&inner, slot, 0);
+                    p = *e ? e + 1 : e;
+                }
+            }
+            te_sem_walk(n->left, &inner, lastLine);
+            n = n->next; continue;
+        }
+
+        if (strcmp(n->type, "IF") == 0 || strcmp(n->type, "WHILE") == 0) {
+            te_sem_walk(n->left, scope, lastLine);           /* condition */
+            TeScope inner = { .n = 0, .up = scope };
+            te_sem_walk(n->right, &inner, lastLine);         /* body */
+            n = n->next; continue;                           /* else chain lives in ->next */
+        }
+
+        te_sem_walk(n->left,  scope, lastLine);
+        te_sem_walk(n->right, scope, lastLine);
+        if (strcmp(n->type, "TERNARY") == 0) te_sem_walk(n->extra, scope, lastLine);
+        n = n->next;
+    }
+}
+
+void te_syntax_check_semantics(ASTNode *root) {
+    if (!root) return;
+    TeScope top = { .n = 0, .up = NULL };
+    int lastLine = 0;
+    te_sem_walk(root, &top, &lastLine);
 }
 
 // Serializa un objeto a XML string dado su id y lo guarda en __ret__

@@ -92,6 +92,7 @@
 %type <sval> lambda_param_list
 %type <pnode> parameter_decl parameter_list
 %type <node> list_literal
+%type <node> for_c_init for_c_update
 %type <node> object_expression object_list
 %type <node> dataset_decl
 %type <node> model_decl func_call_expr
@@ -750,6 +751,16 @@ func_call_expr SEMICOLON { $$ = $1; }
   | FPRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("FPRINT", access, NULL); }
   
   | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET    { $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf("NUMBER",$5,NULL,NULL), $7, $9, $12); }
+  /* Same prefix as the classic form but the 3rd field is an UPDATE statement
+   * (i++ / i += 1 / i = i + 1) -> Java/C semantics (2nd field is a CONDITION). */
+  | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET { extern ASTNode *create_for_c_node(ASTNode*,ASTNode*,ASTNode*,ASTNode*); ASTNode *init = create_ast_node("ASSIGN", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf_number("NUMBER",$5,NULL,NULL)); $$ = create_for_c_node(init, $7, $9, $12); }
+  /* Java/C-style: for (var i = 0; i < n; i++) { ... }. The UPDATE field is an
+   * assignment statement (++ -- += -= *= /= =), which cannot start an expression,
+   * so it never collides with the classic for(init; LIMIT; STEP) forms above/below. */
+  | FOR LPAREN for_c_init SEMICOLON expression SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET   { extern ASTNode *create_for_c_node(ASTNode*,ASTNode*,ASTNode*,ASTNode*); $$ = create_for_c_node($3, $5, $7, $10); }
+  | FOR LPAREN for_c_init SEMICOLON SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET              { extern ASTNode *create_for_c_node(ASTNode*,ASTNode*,ASTNode*,ASTNode*); $$ = create_for_c_node($3, NULL, $6, $9); }
+  | FOR LPAREN for_c_init SEMICOLON expression SEMICOLON RPAREN LBRACKET statement_list RBRACKET               { extern ASTNode *create_for_c_node(ASTNode*,ASTNode*,ASTNode*,ASTNode*); $$ = create_for_c_node($3, $5, NULL, $9); }
+  | FOR LPAREN SEMICOLON expression SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET             { extern ASTNode *create_for_c_node(ASTNode*,ASTNode*,ASTNode*,ASTNode*); $$ = create_for_c_node(NULL, $4, $6, $9); }
   /* for(START; STOP; STEP) — sin variable de control, estilo range() de Python.
    * START/STOP/STEP pueden ser literales o expresiones; STOP es límite exclusivo.
    * Se sintetiza un nombre de contador oculto ("__for$N", imposible de tipear por
@@ -813,6 +824,23 @@ func_call_expr:
     /* Fase 2: NEW IDENTIFIER (...) for non-class names is handled by the
      * `NEW IDENTIFIER LPAREN expression_list RPAREN` rule in `expression`
      * which falls back to create_call_node when find_class returns NULL. */
+;
+
+/* Java/C-style for(...) pieces. INIT declares (var/let) or assigns; UPDATE is an
+ * assignment statement without the trailing ';'. */
+for_c_init:
+    VAR IDENTIFIER ASSIGN expression                { $$ = create_var_decl_node($2, $4); }
+  | LET IDENTIFIER ASSIGN expression                { ASTNode *d = create_var_decl_node($2, $4); d->value = 1; $$ = d; }
+  | INT IDENTIFIER ASSIGN expression                { ASTNode *d = create_var_decl_node($2, $4); d->str_value = strdup("INT"); $$ = d; }
+;
+for_c_update:
+    IDENTIFIER INCREMENT      { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("ADD", id2, create_ast_leaf_number("NUMBER",1,NULL,NULL))); }
+  | IDENTIFIER DECREMENT      { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("SUB", id2, create_ast_leaf_number("NUMBER",1,NULL,NULL))); }
+  | IDENTIFIER PLUS_ASSIGN expression   { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("ADD", id2, $3)); }
+  | IDENTIFIER MINUS_ASSIGN expression  { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("SUB", id2, $3)); }
+  | IDENTIFIER STAR_ASSIGN expression   { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("MUL", id2, $3)); }
+  | IDENTIFIER SLASH_ASSIGN expression  { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("DIV", id2, $3)); }
+  | IDENTIFIER ASSIGN expression        { $$ = create_ast_node("ASSIGN", create_ast_leaf("IDENTIFIER",0,NULL,$1), $3); }
 ;
 
 if_statement:

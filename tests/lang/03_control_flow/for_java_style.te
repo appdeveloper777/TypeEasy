@@ -1,0 +1,41 @@
+// Java/C-style for: init; condition; update. Coexists with the classic
+// for(init; LIMIT; STEP) and the range-style for(START; STOP; STEP).
+var s = 0;
+for (var i = 0; i < 5; i++) { s = s + i; }
+println("s=" + s);
+for (var j = 10; j > 0; j -= 3) { print(j + " "); }
+println("");
+for (var k = 1; k <= 100; k *= 10) { print(k + " "); }
+println("");
+// init by assignment on an existing var, no body-var leak
+var m = 0; var mm = 0;
+for (m = 0; m < 3; m = m + 1) { mm = mm + 1; }
+println("m=" + m + " mm=" + mm);
+// break / continue (continue still runs the update, like Java)
+var seen = "";
+for (var a = 0; a < 10; a++) {
+    if (a == 2) { continue; }
+    if (a == 5) { break; }
+    seen = seen + a;
+}
+println(seen);
+// nested + body-local let reclaimed per iteration
+var cnt = 0;
+for (var x = 0; x < 3; x++) {
+    for (var y = 0; y < 3; y++) {
+        let cell = x * 3 + y;
+        cnt = cnt + cell;
+    }
+}
+println("cnt=" + cnt);
+// classic forms still work
+var c1 = 0; for (q = 0; 4; 1) { c1 = c1 + 1; }
+var c2 = 0; for (0; 6; 2) { c2 = c2 + 1; }
+println(c1 + " " + c2);
+// inside a fn, called twice (frames)
+let f = fn(n) => { var t = 0; for (var i = 0; i < n; i++) { t = t + 1; } return t; };
+println(f(4) + " " + f(2));
+// omitted cond / omitted update
+var w = 0; for (var z = 0; ; z++) { if (z >= 3) { break; } w = w + 1; }
+var v = 0; for (var u = 0; u < 3; ) { u = u + 1; v = v + 1; }
+println(w + " " + v);

@@ -1,0 +1,27 @@
+// xfail: --syntax-check debe reportar 5 errores semanticos en este archivo (ver tests/lang/09_diagnostics/README)
+// Este archivo NO se ejecuta como test de runtime (marcado xfail); su proposito es
+// servir de fixture para: typeeasy --syntax-check syntax_check_semantics.te
+// Esperado: ok=false con S1 (L6, L13), S2 (L23), S3 (L24), S4 (L26).
+let total = 0;
+total = total + 1;                 // S1: let reasignado
+
+var ok = 0;
+ok = ok + 1;                       // fine
+
+let f = fn(n) => {
+    let acc = "";
+    acc = acc + n;                 // S1: let reasignado dentro de fn
+    var loc = 1;
+    loc = loc + 1;                 // fine
+    n = n + 1;                     // fine: params mutables
+    return acc;
+};
+
+let g = fn(x) => { let total = x; return total; };        // shadow en scope propio: fine
+var y = 0; if (y == 0) { let total2 = 1; y = total2; }    // fine
+
+for (i = 0; i < 4; 1) { println(i); }     // S2: 2do campo condicion (clasico)
+for (j = 0; 4; j < 3) { println(j); }     // S3: 3er campo condicion
+for (k = 0; 4; 1) { println(k); }         // fine (clasico)
+for (let z in 5) { println(z); }          // S4: for-in sobre escalar
+for (var q = 0; q < 3; q++) { println(q); }   // fine (estilo Java)
