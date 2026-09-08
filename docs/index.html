@@ -1545,7 +1545,7 @@ ${out("899970000\\n[profile] perf.te  (2 fns, 7.2 ms in fn bodies)\\n[profile]  
 </table>
 <p><strong>En una API</strong> (<code class="inline">--api</code>) el reporte sale <strong>por request</strong> al terminar cada una, con método, ruta, status y duración. Con <code class="inline">TYPEEASY_PROFILE_MIN_MS=50</code> solo se imprimen las requests que tardaron más de 50 ms: ideal para encontrar el endpoint lento en un servidor de pruebas sin tocar el código.</p>
 ${sh(`TYPEEASY_PROF_FN=1 TYPEEASY_PROFILE_MIN_MS=50 typeeasy --api main.te --port 8199`)}
-<div class="note"><strong>Nota.</strong> <code class="inline">--profile</code> activa además el perfilador del JIT (<code class="inline">TYPEEASY_PROFILE=1</code>) y agrega al final su tabla de <em>hot regions</em>; si solo quieres la tabla por función usa <code class="inline">TYPEEASY_PROF_FN=1</code>. Los enteros son de 32 bits: una suma grande desborda (por eso el ejemplo usa 30000).</div>
+<div class="note"><strong>Nota.</strong> <code class="inline">--profile</code> activa además el perfilador del JIT (<code class="inline">TYPEEASY_PROFILE=1</code>) y agrega al final su tabla de <em>hot regions</em>; si solo quieres la tabla por función usa <code class="inline">TYPEEASY_PROF_FN=1</code>. Hasta la 0.0.34 los enteros se truncaban a 32 bits al asignarlos (por eso el ejemplo usa 30000); desde la <strong>0.0.35</strong> son de 64 bits (exactos hasta 2<sup>53</sup>).</div>
 <div class="note"><strong>Costo.</strong> Desactivado, el hook cuesta una comparación de entero por llamada. Activado suma unos microsegundos por función; no lo dejes encendido en producción.</div>
 
 <div class="pager">
@@ -4322,7 +4322,7 @@ ${out("899970000\\n[profile] perf.te  (2 fns, 7.2 ms in fn bodies)\\n[profile]  
 </table>
 <p><strong>In an API</strong> (<code class="inline">--api</code>) the report is printed <strong>per request</strong> as each one finishes, with method, route, status and duration. With <code class="inline">TYPEEASY_PROFILE_MIN_MS=50</code> only requests slower than 50 ms are printed: ideal to find the slow endpoint on a test server without touching the code.</p>
 ${sh(`TYPEEASY_PROF_FN=1 TYPEEASY_PROFILE_MIN_MS=50 typeeasy --api main.te --port 8199`)}
-<div class="note"><strong>Note.</strong> <code class="inline">--profile</code> also enables the JIT profiler (<code class="inline">TYPEEASY_PROFILE=1</code>) and appends its <em>hot regions</em> table; if you only want the per-function table use <code class="inline">TYPEEASY_PROF_FN=1</code>. Integers are 32-bit: a large sum overflows (hence 30000 in the example).</div>
+<div class="note"><strong>Note.</strong> <code class="inline">--profile</code> also enables the JIT profiler (<code class="inline">TYPEEASY_PROFILE=1</code>) and appends its <em>hot regions</em> table; if you only want the per-function table use <code class="inline">TYPEEASY_PROF_FN=1</code>. Up to 0.0.34 integers were truncated to 32 bits on assignment (hence 30000 in the example); since <strong>0.0.35</strong> they are 64-bit (exact up to 2<sup>53</sup>).</div>
 <div class="note"><strong>Cost.</strong> Disabled, the hook is one integer compare per call. Enabled it adds a few microseconds per function; don't leave it on in production.</div>
 
 <div class="pager">
@@ -5893,7 +5893,7 @@ sobre escalar. Comprueba la versión con `typeeasy --version` antes de usar sint
 - `const` = constante global a nivel de módulo; **solo admite un literal**.
 - `let` congela la **variable**, no el objeto: `obj.edad = 99;` sí; `obj = new X();` no.
 - `as` y `from` son palabras reservadas: no las uses como identificadores ni claves.
-- Los enteros son de **32 bits**: sumas grandes desbordan (usa float o divide el cálculo).
+- Enteros: hasta 0.0.34 se truncaban a **32 bits** al asignar/pasar a fn/JSON; desde **0.0.35** son de 64 bits (exactos hasta 2^53). Con binario viejo, IDs > 2.147.483.647 se corrompen.
 
 ```
 let PI = 3.1416;      // constante
