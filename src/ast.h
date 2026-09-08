@@ -391,7 +391,6 @@ extern const char *g_script_path;
 // Funciones adicionales que faltan
 double evaluate_expression(ASTNode *node);
 void generate_plot(double *values, int count);
-void interpret_if(ASTNode *node);
 ASTNode* create_call_node_return_json(const char* funcName, ASTNode* args);
 ASTNode* create_call_node_return_xml(const char* funcName, ASTNode* args);
 int evaluate_condition(ASTNode* condition);

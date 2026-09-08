@@ -6100,7 +6100,7 @@ void interpret_statement_list(ASTNode *node);
 /* te_builtin_dispatch now declared in te_stdlib.h. */
 double evaluate_number(ASTNode *node);
 static void interpret_match(ASTNode *node);
-// void interpret_if(ASTNode *node); // Ya en ast.h
+// void interpret_if(&g_vm, ASTNode *node); // Ya en ast.h
 // int evaluate_condition(ASTNode* condition); // Ya en ast.h
 
 /* ─── DATASET ─────────────────────────────────────────────────────────── */
@@ -6374,7 +6374,7 @@ void interpret_ast(ASTNode *node) {
     switch (nk_of(node)) {
     case NK_STATE_DECL:
         printf("[TypeEasy] 'state' '%s' tratado como 'var' en modo script.\n", node->id);
-        interpret_var_decl(node);
+        interpret_var_decl(&g_vm, node);
         break;
 
     case NK_BRIDGE_DECL:
@@ -6400,11 +6400,11 @@ void interpret_ast(ASTNode *node) {
         /* main puro ignora los listeners */
         break;
 
-    case NK_FOR:        interpret_for(node); break;
-    case NK_FOR_C:      interpret_for_c(node); break;
-    case NK_IF:         interpret_if(node); break;
+    case NK_FOR:        interpret_for(&g_vm, node); break;
+    case NK_FOR_C:      interpret_for_c(&g_vm, node); break;
+    case NK_IF:         interpret_if(&g_vm, node); break;
     case NK_MATCH:      interpret_match(node); break;
-    case NK_FOR_IN:     interpret_for_in(node); break;
+    case NK_FOR_IN:     interpret_for_in(&g_vm, node); break;
     case NK_LIST_FUNC_CALL: interpret_list_func_call(node); break;
     case NK_FILTER_CALL:    interpret_filter_call(node); break;
     case NK_DATASET:    interpret_dataset(node); break;
@@ -6500,9 +6500,9 @@ void interpret_ast(ASTNode *node) {
         break;
     }
 
-    case NK_VAR_DECL:    interpret_var_decl(node); break;
-    case NK_ASSIGN_ATTR: interpret_assign_attr(node); break;
-    case NK_ASSIGN:      interpret_assign(node); break;
+    case NK_VAR_DECL:    interpret_var_decl(&g_vm, node); break;
+    case NK_ASSIGN_ATTR: interpret_assign_attr(&g_vm, node); break;
+    case NK_ASSIGN:      interpret_assign(&g_vm, node); break;
 
     case NK_INDEX_ASSIGN: {
         /* Fase 1b: arr[i] = x   |   Fase 1c: m["k"] = x */
@@ -7875,7 +7875,7 @@ static void interpret_call_method_impl(ASTNode *node) {
       //     objNode->id, v->type, v->vtype, (void*)obj);
     if (!obj) {
         // Fallback: The ObjectNode might be stored in an ASTNode wrapper's extra field
-        // This happens when objects are created by interpret_for_in()
+        // This happens when objects are created by interpret_for_in(&g_vm, )
         ASTNode *wrapper = (ASTNode*)(intptr_t)v->value.object_value;
        // printf("[DEBUG interpret_call_method] Trying fallback: wrapper=%p\n", (void*)wrapper);
         if (wrapper && wrapper->extra) {

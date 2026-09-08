@@ -8,7 +8,7 @@
 #include "ast.h"
 #include "ast_internal.h"
 
-void interpret_var_decl(ASTNode *node) {
+void interpret_var_decl(TeVM *vm, ASTNode *node) {
     //printf("[DEBUG] interpret_var_decl: %s\n", node->id); fflush(stdout);
     int is_const_flag = node->value;
     const char* declared_type = node->str_value;
@@ -146,7 +146,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                     effective_value_type_str, declared_type);
                 if (throw_message) free(throw_message);
                 throw_message = strdup(buf);
-                g_vm.throw_flag = 1;
+                vm->throw_flag = 1;
                 return;
             }
         }
@@ -355,8 +355,8 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                     memset(&__ret_var, 0, sizeof(Variable));
                     // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
                 }
-                g_vm.return_flag = 0;
-                g_vm.return_node = NULL;
+                vm->return_flag = 0;
+                vm->return_node = NULL;
                 return;
             } else if (strcmp(evaluated_value_var->type, "MAP") == 0) {
                 /* Phase D: fast-path for MAP returned from a builtin (e.g. json_parse). */
@@ -372,8 +372,8 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                     if (__ret_var.type) free(__ret_var.type);
                     memset(&__ret_var, 0, sizeof(Variable));
                 }
-                g_vm.return_flag = 0;
-                g_vm.return_node = NULL;
+                vm->return_flag = 0;
+                vm->return_node = NULL;
                 return;
             } else if (strcmp(evaluated_value_var->type, "LAMBDA") == 0) {
                 /* gotcha closure-return: una función/lambda devolvió un lambda
@@ -392,8 +392,8 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                     if (__ret_var.type) free(__ret_var.type);
                     memset(&__ret_var, 0, sizeof(Variable));
                 }
-                g_vm.return_flag = 0;
-                g_vm.return_node = NULL;
+                vm->return_flag = 0;
+                vm->return_node = NULL;
                 return;
             } else {
                 value_to_assign_node = calloc(1, sizeof(ASTNode));
@@ -433,8 +433,8 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
             memset(&__ret_var, 0, sizeof(Variable));
             // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
         }
-        g_vm.return_flag = 0;
-        g_vm.return_node = NULL;
+        vm->return_flag = 0;
+        vm->return_node = NULL;
         // ¡OJO! No pongas un 'return' aquí, el código del constructor debe ejecutarse
     
     } else {
@@ -505,7 +505,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
     }
    // printf("[DEBUG] interpret_var_decl: done\n"); fflush(stdout);
 }
-void interpret_assign_attr(ASTNode *node) {
+void interpret_assign_attr(TeVM *vm, ASTNode *node) {
     /* trace removed */
     ASTNode *access = node->left;
     /* access internals trace removed */
@@ -651,7 +651,7 @@ void interpret_assign_attr(ASTNode *node) {
         }
     }
 }
-void interpret_assign(ASTNode *node) {
+void interpret_assign(TeVM *vm, ASTNode *node) {
     /* trace removed */
     ASTNode *var_node = node->left;
     ASTNode *value_node = node->right;
@@ -749,8 +749,8 @@ void interpret_assign(ASTNode *node) {
                     }
                     /* Reset return state but DO NOT free __ret_var fields:
                      * leaving them avoids strdup/free churn. */
-                    g_vm.return_flag = 0;
-                    g_vm.return_node = NULL;
+                    vm->return_flag = 0;
+                    vm->return_node = NULL;
                     return;
                 }
             }
@@ -806,14 +806,14 @@ void interpret_assign(ASTNode *node) {
                 dv->vtype = VAL_OBJECT;
                 dv->type = strdup(ret_val->type ? ret_val->type : "OBJECT");
                 dv->value.object_value = ret_val->value.object_value;
-            } else if (g_vm.var_count < MAX_VARS) {
-                g_vm.vars[g_vm.var_count].id = strdup(var_node->id);
-                g_vm.vars[g_vm.var_count].is_const = 0;
-                g_vm.vars[g_vm.var_count].vtype = VAL_OBJECT;
-                g_vm.vars[g_vm.var_count].type = strdup(ret_val->type ? ret_val->type : "OBJECT");
-                g_vm.vars[g_vm.var_count].value.object_value = ret_val->value.object_value;
-                te_sym_insert(g_vm.vars[g_vm.var_count].id, g_vm.var_count);
-                g_vm.var_count++;
+            } else if (vm->var_count < MAX_VARS) {
+                vm->vars[vm->var_count].id = strdup(var_node->id);
+                vm->vars[vm->var_count].is_const = 0;
+                vm->vars[vm->var_count].vtype = VAL_OBJECT;
+                vm->vars[vm->var_count].type = strdup(ret_val->type ? ret_val->type : "OBJECT");
+                vm->vars[vm->var_count].value.object_value = ret_val->value.object_value;
+                te_sym_insert(vm->vars[vm->var_count].id, vm->var_count);
+                vm->var_count++;
             }
             /* temp_node queda NULL: se salta el bloque wrapper+free de abajo. */
         }
@@ -833,8 +833,8 @@ void interpret_assign(ASTNode *node) {
             memset(&__ret_var, 0, sizeof(Variable));
             // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
         }
-        g_vm.return_flag = 0;
-        g_vm.return_node = NULL;
+        vm->return_flag = 0;
+        vm->return_node = NULL;
     }
     // ¿Es un acceso a atributo (como intencion.item)?
     else if (strcmp(value_node->type, "ACCESS_ATTR") == 0) {
