@@ -1,0 +1,86 @@
+# core_debt_baseline — generada por scripts/audit_core_debt.sh --update-baseline
+# Formato: 'global <archivo> <nombre>' | 'fn <archivo> <nombre> <lineas>'. Solo puede achicarse.
+global src/ast.c g_api_mode
+global src/ast.c g_bridge_handlers
+global src/ast.c g_call_depth
+global src/ast.c g_callstack
+global src/ast.c g_callstack_n
+global src/ast.c g_current_claims
+global src/ast.c g_current_exec_file
+global src/ast.c g_current_exec_line
+global src/ast.c g_current_handler_async
+global src/ast.c g_db_request_phase
+global src/ast.c g_decl_stmt_line
+global src/ast.c g_frame_top
+global src/ast.c g_initial_var_count
+global src/ast.c g_intern_enabled
+global src/ast.c g_intern_init
+global src/ast.c g_intern_table
+global src/ast.c g_lex_file_id
+global src/ast.c g_max_call_depth
+global src/ast.c g_prof
+global src/ast.c g_prof_child_ns
+global src/ast.c g_prof_n
+global src/ast.c g_prof_start_ns
+global src/ast.c g_profile_enabled
+global src/ast.c g_req_body
+global src/ast.c g_req_body_len
+global src/ast.c g_req_headers
+global src/ast.c g_req_method
+global src/ast.c g_req_params
+global src/ast.c g_req_path
+global src/ast.c g_req_query
+global src/ast.c g_resp_body
+global src/ast.c g_resp_body_len
+global src/ast.c g_resp_content_type
+global src/ast.c g_resp_headers
+global src/ast.c g_resp_status
+global src/ast.c g_response_is_raw_text
+global src/ast.c g_runtime_error_file
+global src/ast.c g_runtime_error_line
+global src/ast.c g_runtime_error_msg
+global src/ast.c g_runtime_recovery
+global src/ast.c g_script_path
+global src/ast.c g_src_file_count
+global src/ast.c g_src_files
+global src/ast.c g_stdout_buffer
+global src/ast.c g_stdout_size
+global src/ast.c g_suppress_stdout
+global src/ast.c g_sym_init
+global src/ast.c g_sym_slots
+global src/ast.c g_te_lock_held
+global src/ast.c g_te_request_active
+global src/te_builtins.c g_buckets
+global src/te_builtins.c g_loaded
+global src/te_stdlib.c g_db_cleanup_count
+global src/typeeasy_api.c g_param_validation_error
+global src/typeeasy_api.c g_req_owned_ast
+global src/typeeasy_api.c g_req_owned_ast_cap
+global src/typeeasy_api.c g_req_owned_ast_count
+global src/typeeasy_api.c g_req_owned_cap
+global src/typeeasy_api.c g_req_owned_count
+global src/typeeasy_api.c g_req_owned_objects
+global src/typeeasy_api_server.c g_cors_origin
+global src/typeeasy_api_server.c g_hotreload_mtime
+global src/typeeasy_api_server.c g_hotreload_path
+global src/typeeasy_api_server.c g_inflight
+global src/typeeasy_api_server.c g_invoke_cv
+global src/typeeasy_api_server.c g_invoke_lock
+global src/typeeasy_api_server.c g_invoke_lock_init
+global src/typeeasy_api_server.c g_invoke_mtx
+global src/typeeasy_api_server.c g_invoke_next
+global src/typeeasy_api_server.c g_invoke_serv
+global src/typeeasy_api_server.c g_ready
+global src/typeeasy_api_server.c g_reload_requested
+global src/typeeasy_api_server.c g_req_total
+global src/typeeasy_api_server.c g_start_time
+global src/typeeasy_api_server.c g_stop_requested
+fn src/ast.c evaluate_expression 576
+fn src/ast.c interpret_assign 336
+fn src/ast.c interpret_ast 338
+fn src/ast.c interpret_call_method_alone 400
+fn src/ast.c interpret_call_method_impl 1119
+fn src/ast.c interpret_println 349
+fn src/ast.c interpret_var_decl 496
+fn src/te_stdlib.c te_builtin_dispatch 490
+fn src/typeeasy_api_server.c request_handler 352

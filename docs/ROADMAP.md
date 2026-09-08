@@ -33,6 +33,33 @@ Leyenda: ✅ hecho · ⏳ en curso · 🔜 planificado
 
 ---
 
+## Plan de pago de deuda del núcleo (0.0.35 → 0.1.0)
+
+Auditoría 2026-09-08 (código + 3 meses de producción): la gestión es profesional,
+el núcleo es artesanal. `src/ast.c` = 12k líneas, 9 funciones > 300 líneas
+(`interpret_call_method_impl` 1.119), 75 globales `g_*`, aritmética por `double`
+con casts `(int)` (enteros efectivos de 32 bits), MySQL/Postgres sin prepared
+statements. Se paga **sin reescribir**, en fases con la suite en verde y release
+por fase.
+
+| Fase | Qué | Estado |
+|------|-----|--------|
+| 0 | **Cerrar la puerta:** `scripts/audit_core_debt.sh` en CI (global nuevo o función > 300 líneas = build rojo; la baseline solo achica), fuzz nightly 20 min. **Congelamiento de sintaxis**: ninguna regla nueva en `parser.y` hasta terminar la Fase 2; las ideas van abajo en "Features en espera". | ✅ |
+| 1 | **Modelo de valores `TeValue`** (`te_value.c`): enteros `long long` end-to-end, `evaluate_expression` deja de ser el único camino (retorna `double`); migrar los 19 `(int)` / 13 `(long long)` casts; tests `int64_*`. Prerequisito de todo lo demás. | ⏳ |
+| 2 | **Partir `ast.c`** por dominio, movimiento puro sin cambio semántico (un módulo por PR): `te_interp_call.c` (despacho por receptor), `te_interp_decl.c`, `te_interp_flow.c`, `te_print.c`, `te_frames.c`. Orden: de menos a más globales tocados. | 🔜 |
+| 3 | **Estado explícito `TeVM*`**: agrupar los globales en una struct, luego pasarla como parámetro por módulo → intérprete reentrante, tests unitarios en C, base para hilos. | 🔜 |
+| 4 | Derivados: prepared statements MySQL (`mysql_stmt_*`) y Postgres (`PQexecParams`) en `db_params.c`; reemplazar `setjmp/longjmp` por propagación de error; unificar AST-walker y bytecode; tipo `decimal`. | 🔜 |
+
+Reglas: un PR = un movimiento (los fixes van aparte con su test); suite Win+Linux
++ ASAN + `--syntax-check` del `main.te` del ERP (120 archivos) antes y después;
+bench de referencia (clínica, `--workers 2`, ~1.010 rps) no puede bajar.
+
+### Features en espera (congeladas hasta cerrar Fase 2)
+- `switch`/`match`; `for (a, b in map)`; spread `...`; string multilinea.
+- Registrar aquí cualquier pedido de sintaxis con el caso de uso que lo motiva.
+
+---
+
 ## v0.0.19 — Fiabilidad del core (Nivel 1)
 
 **Objetivo:** que el lenguaje no mienta. Lo que parece funcionar, funciona; lo

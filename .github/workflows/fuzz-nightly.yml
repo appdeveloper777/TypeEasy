@@ -1,0 +1,44 @@
+name: fuzz-nightly
+
+# Fuzz largo del parser (complementa el fuzz-smoke de 60 s de lang-tests.yml).
+# Corre cada noche 20 minutos con el corpus semilla + tests/lang; cualquier
+# crash queda como artefacto reproducible con `src/fuzz_parser <archivo>`.
+on:
+  schedule:
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Duracion del fuzz en segundos'
+        default: '1200'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-long:
+    runs-on: ubuntu-latest
+    container:
+      image: gcc:13.2.0
+      options: --security-opt seccomp=unconfined
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build + fuzz deps
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq clang flex bison libomp-dev libssl-dev \
+            default-libmysqlclient-dev libcurl4-openssl-dev libpq-dev freetds-dev \
+            libsqlite3-dev zlib1g-dev util-linux
+
+      - name: Build fuzzer and run long session
+        run: bash scripts/run_fuzz.sh "${{ github.event.inputs.seconds || '1200' }}"
+
+      - name: Upload crash artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-nightly-artifacts
+          path: tests/fuzz/artifacts/
+          if-no-files-found: ignore
