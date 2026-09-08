@@ -582,6 +582,18 @@ static int serve_root_swagger_ui(struct mg_connection *conn) {
     return 1;
 }
 
+/* Kept OUT of request_handler on purpose: that function holds the setjmp
+ * recovery frame and adding sizeable locals to it broke longjmp's SEH unwind
+ * on win64 (crash inside RtlUnwind on the first fatal after a nested-fn request). */
+static void te_req_profile_flush(const char *method, const char *uri, int status, double ms) {
+    static double s_min_ms = -1;
+    if (s_min_ms < 0) { const char *e = getenv("TYPEEASY_PROFILE_MIN_MS"); s_min_ms = e ? atof(e) : 0; }
+    char title[512];
+    snprintf(title, sizeof(title), "%s %s -> %d (%.1f ms)", method ? method : "?", uri ? uri : "?", status, ms);
+    if (ms >= s_min_ms) te_profile_report(title);
+    te_profile_reset();
+}
+
 static int request_handler(struct mg_connection *conn, void *cbdata) {
     (void)cbdata;
     const struct mg_request_info *req = mg_get_request_info(conn);
@@ -664,6 +676,7 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
         double _ms = (double)(clock() - _req_t0) * 1000.0 / CLOCKS_PER_SEC; \
         __atomic_sub_fetch(&g_inflight, 1, __ATOMIC_SEQ_CST); \
         te_log_request(method, uri, (st), _ms); \
+        if (g_profile_enabled > 0) te_req_profile_flush(method, uri, (int)(st), _ms); \
     } while (0)
 
     invoke_lock_acquire();

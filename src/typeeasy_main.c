@@ -529,6 +529,12 @@ int main(int argc, char *argv[]) {
             api_mode = 1;
         } else if (strcmp(argv[i], "--dev") == 0) {
             dev_mode = 1;
+        } else if (strcmp(argv[i], "--profile") == 0) {
+#ifdef _WIN32
+            _putenv("TYPEEASY_PROFILE=1"); _putenv("TYPEEASY_PROF_FN=1");
+#else
+            setenv("TYPEEASY_PROFILE", "1", 1); setenv("TYPEEASY_PROF_FN", "1", 1);
+#endif
         } else if ((strcmp(argv[i], "--port") == 0 || strcmp(argv[i], "-p") == 0) && i + 1 < argc) {
             api_port = atoi(argv[++i]);
         } else if (strncmp(argv[i], "--port=", 7) == 0) {
@@ -728,9 +734,11 @@ int main(int argc, char *argv[]) {
 
     // 5. Ejecutar Script (Global scope)
     // Esto es necesario para inicializar variables globales, clases, etc.
+    te_profile_on();   /* read TYPEEASY_PROFILE once so the hot path only tests an int */
     if (script_ast) {
         interpret_ast(script_ast); 
     }
+    if (!api_mode && !test_mode) te_profile_report(script_path ? script_path : "script");
 
     // 6. Inicializar Runtime: snapshot DESPUÉS del bootstrap para que las
     // variables top-level (ej. `let db = sqlite_connect(...)`) sobrevivan

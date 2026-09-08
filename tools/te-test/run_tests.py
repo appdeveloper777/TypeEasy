@@ -54,7 +54,7 @@ from xml.etree import ElementTree as ET
 # ---------- expectations ----------
 
 DIRECTIVE_RE = re.compile(r"^\s*//\s*(expect|expect-exit|expect-contains|"
-                          r"expect-stderr-contains|xfail|skip|skip-on|timeout)\s*:\s*(.*)$")
+                          r"expect-stderr-contains|xfail|skip|skip-on|timeout|env)\s*:\s*(.*)$")
 
 
 @dataclass
@@ -67,6 +67,7 @@ class Expect:
     skip: Optional[str] = None
     skip_on: list[str] = field(default_factory=list)
     timeout_s: float = 30.0
+    env: dict = field(default_factory=dict)      # `// env: KEY=VALUE` (repeatable)
     has_any_assertion: bool = False             # False ⇒ smoke (exit 0 only)
 
 
@@ -119,6 +120,9 @@ def parse_expect(te_path: Path) -> Expect:
                     e.timeout_s = float(val)
                 except ValueError:
                     pass
+            elif key == "env" and "=" in val:
+                k, v = val.split("=", 1)
+                e.env[k.strip()] = v.strip()
     return e
 
 
@@ -179,6 +183,7 @@ def run_test(te_path: Path, expect: Expect, bin_path: Optional[Path],
             "docker", "run", "--rm",
             "-v", f"{repo_root.as_posix()}:/work",
             "-w", "/work",
+            *[a for k, v in expect.env.items() for a in ("-e", f"{k}={v}")],
             "--entrypoint", "/typeeasy/typeeasy",
             docker_image,
             f"/work/{rel.as_posix()}",
@@ -198,6 +203,7 @@ def run_test(te_path: Path, expect: Expect, bin_path: Optional[Path],
             errors="replace",
             timeout=expect.timeout_s,
             cwd=repo_root,
+            env={**os.environ, **expect.env} if expect.env else None,
         )
         elapsed = time.time() - t0
         rc = proc.returncode

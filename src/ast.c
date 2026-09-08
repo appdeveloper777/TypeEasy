@@ -137,6 +137,65 @@ void te_callstack_push(const char *name) { if (g_callstack_n < TE_CALLSTACK_MAX)
 void te_callstack_pop(void) { if (g_callstack_n > 0) g_callstack_n--; }
 void te_callstack_reset(void) { g_callstack_n = 0; }
 
+/* ------------------------------------------------------------------
+ * --profile / TYPEEASY_PROFILE=1: per-named-fn wall time (inclusive and
+ * self), call count. Zero cost when disabled (one int test per call).
+ * Script mode: report on exit. --api: report per request that exceeds
+ * TYPEEASY_PROFILE_MIN_MS (default 0 = every request) to stderr.
+ * ------------------------------------------------------------------ */
+int g_profile_enabled = -1;   /* -1 = not yet read from env */
+typedef struct { const char *name; long long calls, incl_ns, self_ns; } TeProfEntry;
+#define TE_PROF_MAX 1024
+static TeProfEntry g_prof[TE_PROF_MAX];
+static int g_prof_n = 0;
+static long long g_prof_child_ns[TE_CALLSTACK_MAX];   /* time spent in callees, per active frame */
+static long long g_prof_start_ns[TE_CALLSTACK_MAX];
+
+static long long te_prof_now_ns(void) {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+int te_profile_on(void) {
+    if (g_profile_enabled < 0) { const char *e = getenv("TYPEEASY_PROF_FN"); g_profile_enabled = (e && e[0] && e[0] != '0') ? 1 : 0; }
+    return g_profile_enabled;
+}
+static TeProfEntry *te_prof_entry(const char *name) {
+    for (int i = 0; i < g_prof_n; i++) if (g_prof[i].name == name || strcmp(g_prof[i].name, name) == 0) return &g_prof[i];
+    if (g_prof_n >= TE_PROF_MAX) return NULL;
+    g_prof[g_prof_n].name = name; g_prof[g_prof_n].calls = 0; g_prof[g_prof_n].incl_ns = 0; g_prof[g_prof_n].self_ns = 0;
+    return &g_prof[g_prof_n++];
+}
+void te_prof_enter(void) {
+    int d = g_callstack_n - 1;                     /* frame just pushed */
+    if (d < 0 || d >= TE_CALLSTACK_MAX) return;
+    g_prof_start_ns[d] = te_prof_now_ns();
+    g_prof_child_ns[d] = 0;
+}
+void te_prof_leave(const char *name) {
+    int d = g_callstack_n - 1;                     /* frame about to be popped */
+    if (d < 0 || d >= TE_CALLSTACK_MAX) return;
+    long long incl = te_prof_now_ns() - g_prof_start_ns[d];
+    TeProfEntry *e = te_prof_entry(name);
+    if (e) { e->calls++; e->incl_ns += incl; e->self_ns += incl - g_prof_child_ns[d]; }
+    if (d > 0) g_prof_child_ns[d - 1] += incl;
+}
+static int te_prof_cmp(const void *a, const void *b) {
+    const TeProfEntry *x = a, *y = b;
+    return (y->self_ns > x->self_ns) - (y->self_ns < x->self_ns);
+}
+void te_profile_report(const char *title) {
+    if (!te_profile_on() || g_prof_n == 0) return;
+    qsort(g_prof, (size_t)g_prof_n, sizeof(TeProfEntry), te_prof_cmp);
+    long long total_self = 0; for (int i = 0; i < g_prof_n; i++) total_self += g_prof[i].self_ns;
+    fprintf(stderr, "[profile] %s  (%d fns, %.1f ms in fn bodies)\n", title ? title : "", g_prof_n, total_self / 1e6);
+    fprintf(stderr, "[profile] %10s %10s %10s  %s\n", "self_ms", "incl_ms", "calls", "fn");
+    int shown = g_prof_n < 25 ? g_prof_n : 25;
+    for (int i = 0; i < shown; i++)
+        fprintf(stderr, "[profile] %10.2f %10.2f %10lld  %s\n", g_prof[i].self_ns / 1e6, g_prof[i].incl_ns / 1e6, g_prof[i].calls, g_prof[i].name);
+    fflush(stderr);
+}
+void te_profile_reset(void) { g_prof_n = 0; }
+
 /* "    at file.te:12 in fnA <- fnB" (or just "    at file.te:12"). */
 void te_runtime_location(char *buf, size_t cap) {
     const char *f = te_src_file_name(g_current_exec_file);
@@ -7240,7 +7299,9 @@ static void interpret_call_func_impl(ASTNode *node) {
                     nargs, nargs == 1 ? "was" : "were");
             }
             te_callstack_push(node->id);
+            if (g_profile_enabled) te_prof_enter();
             ASTNode *r = call_lambda(lambda, node->left);
+            if (g_profile_enabled) te_prof_leave(node->id);
             te_callstack_pop();
             if (r) add_or_update_variable("__ret__", r);
             return;

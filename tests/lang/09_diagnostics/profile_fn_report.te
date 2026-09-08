@@ -1,0 +1,10 @@
+// env: TYPEEASY_PROF_FN=1
+// expect-stderr-contains: [profile]
+// expect-stderr-contains: calls  fn
+// expect-stderr-contains: outer
+// expect-stderr-contains: inner
+// TYPEEASY_PROF_FN=1 / --profile: per-fn self/inclusive time and call counts on
+// stderr at exit. stdout is untouched.
+let inner = fn(n) => { var s = 0; for (var i = 0; i < n; i++) { s = s + i; } return s; };
+let outer = fn(k) => { var t = 0; for (var j = 0; j < k; j++) { t = t + inner(50); } return t; };
+println(outer(20));

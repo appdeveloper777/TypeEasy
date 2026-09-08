@@ -313,6 +313,11 @@ int  te_src_file_register(const char *path);
 const char *te_src_file_name(int id);
 void te_runtime_location(char *buf, size_t cap);
 void te_callstack_reset(void);
+/* --profile (TYPEEASY_PROFILE=1): per-fn timing, see ast.c. */
+extern int g_profile_enabled;
+int  te_profile_on(void);
+void te_profile_report(const char *title);
+void te_profile_reset(void);
 /* --syntax-check error sink (strong def in typeeasy_main.c, weak in ast.c). */
 void te_capture_error(int line, const char *msg, const char *near);
 ASTNode *append_to_list(ASTNode *list, ASTNode *item);
