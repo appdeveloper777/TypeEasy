@@ -28,7 +28,7 @@ cd "$ROOT"
 BASELINE="scripts/core_debt_baseline.txt"
 MAX_FN_LINES=300
 # Módulos del intérprete auditados. Al partir ast.c (Fase 2) agregá los nuevos aquí.
-FILES=(src/ast.c src/typeeasy_api_server.c src/typeeasy_api.c src/te_stdlib.c src/te_builtins.c)
+FILES=(src/ast.c src/te_print.c src/te_interp_flow.c src/typeeasy_api_server.c src/typeeasy_api.c src/te_stdlib.c src/te_builtins.c)
 
 # Globales g_* definidos a nivel de archivo (columna 0, con o sin static; no extern).
 scan_globals() {

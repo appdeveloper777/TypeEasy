@@ -1,5 +1,6 @@
 
 #include "ast.h"
+#include "ast_internal.h"
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -398,7 +399,7 @@ int g_decl_stmt_line = 0;
 
 /* Phase H: forward declaration so get_node_string / native_json can recursively
  * evaluate nested CALL_FUNC arguments (e.g. json(concat(...)), concat(a, request_param("id"), b)). */
-static void interpret_call_func(ASTNode *node);
+void interpret_call_func(ASTNode *node);
 /* Gotcha #2: forward decl para invocar el resultado de una llamada — `make(10)(5)`. */
 static void interpret_call_expr(ASTNode *node);
 
@@ -865,8 +866,8 @@ ASTNode* resolve_to_map(ASTNode *node);
 int map_length(ASTNode *map);
 ASTNode* map_find_pair(ASTNode *map, const char *key);
 static ASTNode* resolve_access_item(ASTNode *node);
-static const char* te_map_key_coerce(ASTNode *keyNode, char *buf, size_t cap);
-static void interpret_call_method(ASTNode *node);
+const char* te_map_key_coerce(ASTNode *keyNode, char *buf, size_t cap);
+void interpret_call_method(ASTNode *node);
 
 /* Format a double as the shortest decimal string that round-trips back to the
  * same IEEE-754 value (Python/JS style). Integer-valued doubles print without a
@@ -897,7 +898,7 @@ void te_fmt_double(char *buf, size_t cap, double v) {
 /* ERP gotcha #38-bis: `("" + map)` used to yield "" (silently dropping the
  * value). A MAP / OBJECT_LITERAL in string context now renders as JSON,
  * same text json_stringify(map) produces. */
-static char* te_map_node_to_string(ASTNode *mapNode) {
+char* te_map_node_to_string(ASTNode *mapNode) {
     TeBuf b; tebuf_init(&b);
     te_json_emit_node(&b, mapNode);
     char *out = strdup(b.p ? b.p : "");
@@ -2150,7 +2151,7 @@ int call_native_function(const char *name, ASTNode *arg) {
  * Used by interpret_print/println/fprint/fprintln so EVERY output path
  * shows up in the Debug Console — not just the few paths that historically
  * called append_to_stdout. Returns the number of chars formatted (or -1). */
-static int dbg_printf(const char *fmt, ...) {
+int dbg_printf(const char *fmt, ...) {
     char stackbuf[1024];
     va_list ap;
     va_start(ap, fmt);
@@ -2341,8 +2342,8 @@ char *throw_message = NULL;
 const char *get_throw_message(void) { return throw_message; }
 
 /* Fase 4: break/continue */
-static int break_flag = 0;
-static int continue_flag = 0;
+int break_flag = 0;
+int continue_flag = 0;
 
 /* === Bloque D: helper to reset all interpreter control-flow flags ===
  * Called by typeeasy_embedded_load_script() between successive global-scope
@@ -2874,7 +2875,7 @@ static void te_sym_reset_to(int initial_count) {
  * declared variables" and then SILENTLY dropped every declaration that followed
  * the loop (the request still returned 200 with a half-built body). Cheap
  * no-op when the iteration declared nothing. */
-static void te_scope_unwind_to(int target) {
+void te_scope_unwind_to(int target) {
     if (target < 0) target = 0;
     if (target >= var_count) return;            /* nothing new this iteration */
     for (int i = target; i < var_count; i++) {
@@ -3858,12 +3859,7 @@ void te_free_lambda_result(ASTNode *r) {
 /* Fase 1 (perf): lazy NodeKind resolver. Looks up node->kind, computes
  * from node->type if still NK_UNKNOWN, and caches the result on the node.
  * Use this in hot dispatch paths instead of strcmp(node->type, "X"). */
-static inline NodeKind nk_of(ASTNode *n) {
-    if (!n) return NK_UNKNOWN;
-    if (n->kind != NK_UNKNOWN) return n->kind;
-    if (n->type) n->kind = nk_from_str(n->type);
-    return n->kind;
-}
+/* nk_of: ahora es static inline en ast_internal.h (Fase 2). */
 
 /* Fase 1 (perf): map type-string -> NodeKind. Called once per node creation.
  * Uses first-character switch to keep dispatch O(1) on the common path. */
@@ -4937,7 +4933,7 @@ ASTNode* map_find_pair(ASTNode *map, const char *key) {
  * (numbers, concat, chained index, calls, json values) -> get_node_string().
  * Simple cases borrow the original pointer; coerced cases are copied into `buf`.
  * Returns the key string (never NULL for a non-NULL node). */
-static const char* te_map_key_coerce(ASTNode *keyNode, char *buf, size_t cap) {
+const char* te_map_key_coerce(ASTNode *keyNode, char *buf, size_t cap) {
     if (!keyNode || !keyNode->type) return NULL;
     if (strcmp(keyNode->type, "STRING") == 0)
         return keyNode->str_value ? keyNode->str_value : "";
@@ -5340,7 +5336,7 @@ static ASTNode* te_snapshot_object_literal(ASTNode *lit) {
  *     nullable `string?` attribute, or `?.` access on a null object.
  * Returns 1 when the value is null, 0 otherwise. Conservative: any shape it
  * cannot resolve is treated as non-null. */
-static int te_expr_is_null(ASTNode *l) {
+int te_expr_is_null(ASTNode *l) {
     if (!l || !l->type) return 0;
     if (strcmp(l->type, "NULL") == 0) return 1;
     /* gotcha #12: `env("X") ?? def` y demás `fn() ?? def`. Evaluamos la
@@ -6082,24 +6078,20 @@ void execute_predict(ASTNode* model_node, ASTNode* input_node) {
 
 /* Prototipos de funciones auxiliares */
 static void interpret_dataset(ASTNode *node);
-static void interpret_for(ASTNode *node);
-static void interpret_for_c(ASTNode *node);
 static void interpret_model_object(ASTNode *node);
 static void interpret_train_node(ASTNode *node);
 static void interpret_predict_node(ASTNode *node);
-static void interpret_call_func(ASTNode *node);
+void interpret_call_func(ASTNode *node);
 static void interpret_return_node(ASTNode *node);
-static void interpret_call_method(ASTNode *node);
+void interpret_call_method(ASTNode *node);
 static void interpret_call_method_alone(ASTNode *node);
 static void interpret_var_decl(ASTNode *node);
 static void interpret_assign_attr(ASTNode *node);
 /* te_colcache_invalidate declared in te_colcache.h. */
 static void interpret_assign(ASTNode *node);
-static void interpret_print(ASTNode *node);
-static void interpret_println(ASTNode *node);
 static void interpret_fprint(ASTNode *node);
 static void interpret_fprintln(ASTNode *node);
-static void interpret_statement_list(ASTNode *node);
+void interpret_statement_list(ASTNode *node);
 /* te_builtin_dispatch now declared in te_stdlib.h. */
 double evaluate_number(ASTNode *node);
 static void interpret_match(ASTNode *node);
@@ -6186,116 +6178,7 @@ ASTNode* create_for_in_node(const char *var_name, ASTNode *list_expr, ASTNode *b
 
 
 
-static void interpret_for_in(ASTNode *node) {
-    if (!node->right) {
-        /* for-in empty body (debug log removed) */
-        return;
-    }
-    /* debug print removed */
-    ASTNode *list_expr = node->left;
-    ASTNode *listNode = NULL;
-    if (list_expr->type && (
-        strcmp(list_expr->type, "ID") == 0 ||
-        strcmp(list_expr->type, "IDENTIFIER") == 0)) {
-        Variable *v = find_variable(list_expr->id);
-        if (!v) {
-            /* variable not found (debug log removed) */
-            return;
-        }       
-        if (!v || v->vtype != VAL_OBJECT || strcmp(v->type, "LIST") != 0) {
-            /* null / "" iterate zero times (json_parse("") yields ""). Anything
-             * else is a real mistake: say WHAT it is. The ERP case was a
-             * db_query error envelope `{"error":...}` being for-in'd. */
-            int silent = (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "NULL") == 0) ||
-                         (v->vtype == VAL_STRING && (!v->value.string_value || !v->value.string_value[0]));
-            if (!silent) {
-                char loc[512]; te_runtime_location(loc, sizeof(loc));
-                const char *tn = v->vtype == VAL_STRING ? "a string" : v->vtype == VAL_INT ? "a number" :
-                                 v->vtype == VAL_FLOAT ? "a number" : (v->type ? v->type : "an object");
-                char *detail = NULL;
-                if (v->vtype == VAL_OBJECT && v->type && v->value.object_value &&
-                    (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0))
-                    detail = te_map_node_to_string((ASTNode *)(intptr_t)v->value.object_value);
-                else if (v->vtype == VAL_STRING) detail = strdup(v->value.string_value);
-                if (detail && strlen(detail) > 160) { detail[157] = '.'; detail[158] = '.'; detail[159] = '.'; detail[160] = 0; }
-                fprintf(stderr, "Error: for-in over '%s': it is %s, not a list%s%s%s\n%s\n",
-                        list_expr->id, tn, detail ? " (" : "", detail ? detail : "", detail ? ")" : "", loc);
-                free(detail);
-            }
-            return;
-        }
-        listNode = (ASTNode *)(intptr_t)v->value.object_value;
-    }
-    else if (list_expr->type && strcmp(list_expr->type, "LIST") == 0) {
-        listNode = list_expr;
-    }
-    else {
-        /* Gotcha #2: expresión inline que produce una lista (p.ej. una
-         * llamada a método/función LINQ como `a.union(b)` o `nums.filter(...)`).
-         * Antes esto fallaba con "unsupported for-in expression" y obligaba a
-         * un `let tmp = ...;` previo. Ahora evaluamos la expresión y leemos el
-         * resultado capturado en __ret__; si es una LIST, iteramos sobre ella.
-         * Es seguro: al reasignarse __ret__ dentro del cuerpo NO se libera el
-         * object_value previo (ver add_or_update_variable), así que el listNode
-         * capturado aquí sigue válido durante todo el bucle. */
-        interpret_ast(list_expr);
-        if (throw_flag || return_flag) return;
-        Variable *r = find_variable("__ret__");
-        if (r && r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
-            listNode = (ASTNode *)(intptr_t)r->value.object_value;
-        } else {
-            printf("Error: unsupported for-in expression (type: %s).\n", list_expr->type);
-            return;
-        }
-    }
-    if (!listNode || strcmp(listNode->type, "LIST") != 0) {
-        printf("Error: node is not a valid list.\n");
-        return;
-    }
-    ASTNode *items = listNode->left;   
-    /* Block scope: snapshot the variable count so each iteration's body-local
-     * `let`s are reclaimed before the next pass (see te_scope_unwind_to). The
-     * loop binding lives at/above this mark and is re-bound every iteration;
-     * the final iteration's locals stay live after the loop, preserving the
-     * pre-existing "value visible after the loop" behavior. */
-    int te_loop_scope_mark = var_count;
-    for (ASTNode *item = items; item; item = item->next) {
-        debugger_on_loop_iteration();
-        te_scope_unwind_to(te_loop_scope_mark);
-        if (item->type && strcmp(item->type, "OBJECT") == 0) {
-            // Get ObjectNode from extra field (where create_object_with_args stores it)
-            // For backward compatibility, also check value field for objects created differently
-            ObjectNode *obj = (ObjectNode *)item->extra;
-            if (!obj) {
-                // Fallback for objects that might store pointer in value field
-                obj = (ObjectNode *)(intptr_t)item->value;
-            }
-            if (!list_expr->id || strcmp(node->id, list_expr->id) != 0) {
-                ASTNode *wrapper = calloc(1, sizeof(ASTNode));
-                wrapper->type = strdup("OBJECT");
-                wrapper->id = strdup(node->id);
-                wrapper->left = wrapper->right = NULL;
-                /* Store pointer in 'extra' to be consistent with create_object_with_args()/declare_variable */
-                wrapper->extra = (struct ASTNode*)obj;
-                wrapper->value = 0;
-                /* debug print removed */
-                add_or_update_variable(node->id, wrapper);
-            } 
-        } else {
-            /* Gotcha #6: items escalares (NUMBER/STRING/FLOAT/...) — ligar la
-             * variable del bucle y ejecutar el cuerpo igual que para objetos.
-             * Antes el cuerpo SOLO corría dentro del branch OBJECT, así que
-             * `for x in nums { total = total + x }` se saltaba todas las
-             * iteraciones y el acumulador externo nunca se actualizaba. */
-            add_or_update_variable(node->id, item);
-        }
-        /* debug print removed */
-        interpret_ast(node->right);
-        if (break_flag) { break_flag = 0; break; }
-        if (continue_flag) { continue_flag = 0; continue; }
-        if (throw_flag || return_flag) break;
-    }
-}
+/* interpret_for_in: movida a te_interp_flow.c (Fase 2). */
 
 ASTNode *create_object_node(ObjectNode *obj) {
     ASTNode *node = calloc(1, sizeof(ASTNode));
@@ -6792,27 +6675,7 @@ double evaluate_number(ASTNode *node) {
     return 0;
 }
 
-void interpret_if(ASTNode *node) {
-    /* v0.0.30: recorrer la cadena `if / else if / ... / else` de forma ITERATIVA.
-     * Cada rama `else if` es otro nodo IF encadenado por ->next (create_if_node);
-     * el `interpret_ast(node->next)` recursivo hacía profundidad == nº de ramas ->
-     * mismo riesgo de stack overflow que interpret_statement_list en cadenas
-     * grandes. Semántica idéntica al original. */
-    while (node) {
-        if (!node->left) return;
-        if (evaluate_condition(node->left)) {
-            interpret_ast(node->right);          /* rama then */
-            return;
-        }
-        ASTNode *els = node->next;               /* else / else-if / NULL */
-        if (els && nk_of(els) == NK_IF) {
-            node = els;                          /* else if: iterar sin recursar */
-        } else {
-            interpret_ast(els);                  /* else final (bloque) o NULL: no-op */
-            return;
-        }
-    }
-}
+/* interpret_if: movida a te_interp_flow.c (Fase 2). */
 
 void interpret_match(ASTNode *node) {
     /* interpret_match debug logs removed */
@@ -6856,69 +6719,7 @@ void generate_plot(double *values, int count) {
 }
 
 
-static void interpret_for(ASTNode *node) {
-    /* Seed the control variable. node->left is the INIT: a NUMBER literal in the
-     * classic `for(i=0; ...)` form, or an arbitrary expression in the literal-free
-     * `for(START; STOP; STEP)` / `for(START, STOP, STEP)` forms. evaluate_expression
-     * collapses both to an int; we store via a stack INT node (no per-entry alloc). */
-    {
-        ASTNode seed;
-        memset(&seed, 0, sizeof(seed));
-        seed.type = "INT";
-        seed.kind = NK_NUMBER;
-        seed.value = (long long)evaluate_expression(node->left);
-        add_or_update_variable(node->id, &seed);
-    }
-    Variable *var = find_variable(node->id);
-    if (!var || var->vtype != VAL_INT) {
-        printf("Error: invalid control variable in FOR.\n");
-        return;
-    }
-
-    /* Ola 1 (perf): try compiled-bytecode FOR. Fall back to AST walker if any
-     * statement in the body is not bytecode-compilable. */
-    {
-        static int bc_for_init = 0;
-        static int bc_for_enabled = 1;
-        if (!bc_for_init) {
-            const char *e = getenv("TYPEEASY_NO_BC");
-            if (e && e[0] && e[0] != '0') bc_for_enabled = 0;
-            bc_for_init = 1;
-        }
-        if (bc_for_enabled && !g_debug_enabled) {
-            BCInfo *info = bc_get_or_compile_stmt(node);
-            if (info) { bc_exec(info->code); return; }
-        }
-    }
-
-    /* Evaluate step and limit as expressions (not raw node->value): this lets
-     * the limit/step be variables or arithmetic, not just NUMBER literals.
-     * Both are evaluated once, before the loop, matching "for to N" semantics. */
-    int incremento = (int)evaluate_expression(node->right->right->left);
-    int limite = (int)evaluate_expression(node->right);
-    ASTNode *body = node->right->right->right;
-    if (!body) {
-        printf("Warning: FOR without body\n");
-        return;
-    }
-    /* Block scope: snapshot AFTER the control variable is seeded (it lives
-     * below this mark) so per-iteration body `let`s reuse one slot instead of
-     * accumulating against MAX_VARS. */
-    int te_loop_scope_mark = var_count;
-    while (var->value.int_value < limite) {
-        /* Interpret the whole body once per iteration. body is a
-         * statement_list node; interpret_statement_list walks every statement
-         * via ->left/->right recursion. (Manually chaining stmt=stmt->right
-         * here double-executed the last statement.) */
-        debugger_on_loop_iteration();
-        te_scope_unwind_to(te_loop_scope_mark);
-        interpret_ast(body);
-        if (break_flag) { break_flag = 0; break; }
-        if (continue_flag) { continue_flag = 0; }
-        if (throw_flag || return_flag) break;
-        var->value.int_value += incremento;
-    }
-}
+/* interpret_for: movida a te_interp_flow.c (Fase 2). */
 
 static void interpret_model_object(ASTNode *node) {
     add_or_update_variable(node->id, node);
@@ -6948,26 +6749,7 @@ ASTNode *create_for_c_node(ASTNode *init, ASTNode *cond, ASTNode *update, ASTNod
     return node;
 }
 
-static void interpret_for_c(ASTNode *node) {
-    ASTNode *fb = (ASTNode *)node->extra;
-    ASTNode *update = fb ? fb->left : NULL;
-    ASTNode *body = fb ? fb->right : NULL;
-    int loop_scope_mark = var_count;             /* INIT's var lives above this mark */
-    if (node->left) interpret_ast(node->left);
-    int body_scope_mark = var_count;
-    while (1) {
-        if (throw_flag || return_flag) break;
-        if (node->right && !evaluate_condition(node->right)) break;
-        debugger_on_loop_iteration();
-        te_scope_unwind_to(body_scope_mark);
-        if (body) interpret_ast(body);
-        if (break_flag) { break_flag = 0; break; }
-        if (continue_flag) { continue_flag = 0; }
-        if (throw_flag || return_flag) break;
-        if (update) interpret_ast(update);
-    }
-    te_scope_unwind_to(loop_scope_mark);
-}
+/* interpret_for_c: movida a te_interp_flow.c (Fase 2). */
 
 static void interpret_train_node(ASTNode *node) {
     int epochs = 1;
@@ -7258,7 +7040,7 @@ const char *typeeasy_http_find_query(const char *k) {
 
 /* stdlib dispatcher + plugin host API moved to te_stdlib.c (Fase 2 paso 4). */
 
-static void interpret_call_func(ASTNode *node) {
+void interpret_call_func(ASTNode *node) {
     te_depth_enter();
     interpret_call_func_impl(node);
     te_depth_leave();
@@ -7420,7 +7202,7 @@ int te_invoke_decorator_guard(const char *name) {
 /* lazy_* LINQ helpers moved to te_linq.{c,h} (Nivel B paso 1). */
 /* DataFrame, te_list_df, te_df_dispatch_method now declared in te_csv.h. */
 
-static void interpret_call_method(ASTNode *node) {
+void interpret_call_method(ASTNode *node) {
     te_depth_enter();
     interpret_call_method_impl(node);
     te_depth_leave();
@@ -10583,278 +10365,11 @@ static void interpret_assign(ASTNode *node) {
     // --- FIN DE LA CORRECCIÓN ---
 }
 
-/* Render a LIST node. Object lists keep the legacy multi-line Mostrar
- * rendering; scalar lists (INT/NUMBER/STRING/FLOAT) render inline as
- * [a, b, c]. Mirrored to the embedded-API stdout buffer. When `nl` is set a
- * trailing newline is emitted. */
-static void te_print_list_node(ASTNode *listNode, int nl) {
-    ASTNode *cur = listNode ? listNode->left : NULL;
-    if (cur && cur->type && strcmp(cur->type, "OBJECT") == 0) {
-        dbg_printf("[\n");
-        while (cur) {
-            if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
-                ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
-                call_method(obj, "Mostrar");
-            }
-            cur = cur->next;
-        }
-        dbg_printf("]");
-        if (nl) dbg_printf("\n");
-        return;
-    }
-    dbg_printf("["); append_to_stdout("[");
-    int first = 1;
-    while (cur) {
-        if (!first) { dbg_printf(", "); append_to_stdout(", "); }
-        first = 0;
-        char buf[64];
-        if (cur->type && strcmp(cur->type, "STRING") == 0) {
-            const char *s = cur->str_value ? cur->str_value : "";
-            dbg_printf("%s", s); append_to_stdout(s);
-        } else if (cur->type && strcmp(cur->type, "FLOAT") == 0) {
-            te_fmt_double(buf, sizeof(buf), cur->str_value ? atof(cur->str_value) : 0.0);
-            dbg_printf("%s", buf); append_to_stdout(buf);
-        } else {
-            snprintf(buf, sizeof(buf), "%lld", (long long)cur->value);
-            dbg_printf("%s", buf); append_to_stdout(buf);
-        }
-        cur = cur->next;
-    }
-    dbg_printf("]"); append_to_stdout("]");
-    if (nl) { dbg_printf("\n"); append_to_stdout("\n"); }
-}
+/* te_print_list_node: movida a te_print.c (Fase 2). */
 
-/* Resolve `var.attr` where var holds a MAP / OBJECT_LITERAL (e.g. a `{..}`
- * literal or a lambda param bound to a map list item). Returns a newly
- * malloc'd display string (caller frees), or NULL if var is not a map.
- * Used by interpret_print/println to avoid casting the map's ASTNode* to
- * ObjectNode* (which crashes when reading obj->class). */
-static char *te_map_field_display(Variable *v, const char *key) {
-    if (!v || !v->type) return NULL;
-    if (strcmp(v->type, "MAP") != 0 && strcmp(v->type, "OBJECT_LITERAL") != 0) return NULL;
-    ASTNode *map  = (ASTNode*)(intptr_t)v->value.object_value;
-    ASTNode *pair = (map && key) ? map_find_pair(map, key) : NULL;
-    ASTNode *val  = pair ? pair->left : NULL;
-    if (!val || !val->type) return strdup("null");
-    if (strcmp(val->type, "BOOL") == 0) return strdup(val->value ? "true" : "false");
-    if (strcmp(val->type, "NULL") == 0) return strdup("null");
-    if (strcmp(val->type, "STRING") == 0 || strcmp(val->type, "DATETIME") == 0 ||
-        strcmp(val->type, "UUID") == 0)
-        return strdup(val->str_value ? val->str_value : "");
-    if (strcmp(val->type, "NUMBER") == 0 || strcmp(val->type, "INT") == 0) {
-        char b[32]; snprintf(b, sizeof(b), "%lld", (long long)val->value); return strdup(b);
-    }
-    if (strcmp(val->type, "FLOAT") == 0) {
-        char b[64]; te_fmt_double(b, sizeof(b), val->str_value ? atof(val->str_value) : 0.0);
-        return strdup(b);
-    }
-    { char b[64]; te_fmt_double(b, sizeof(b), evaluate_expression(val)); return strdup(b); }
-}
+/* te_map_field_display: movida a te_print.c (Fase 2). */
 
-static void interpret_print(ASTNode *node) {
-    ASTNode *arg = node->left;
-    if (!arg) {
-        dbg_printf("Error: print without argument\n");
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "NULL") == 0) {
-        dbg_printf("null");
-        append_to_stdout("null");
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "BOOL") == 0) {
-        const char *s = arg->value ? "true" : "false";
-        dbg_printf("%s", s);
-        append_to_stdout(s);
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "IDENTIFIER") == 0) {
-        Variable *_v = find_variable(arg->id);
-        if (_v && _v->type && strcmp(_v->type, "NULL") == 0) { dbg_printf("null"); append_to_stdout("null"); return; }
-        if (_v && _v->type && strcmp(_v->type, "BOOL") == 0) {
-            const char *s = _v->value.int_value ? "true" : "false";
-            dbg_printf("%s", s); append_to_stdout(s); return;
-        }
-    }
-    if (arg->type && strcmp(arg->type, "STRING") == 0) {
-        dbg_printf("%s", arg->str_value);
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "STRING_INTERP") == 0) {
-        char *s = expand_interp_string(arg->str_value);
-        dbg_printf("%s", s);
-        append_to_stdout(s);
-        free(s);
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "ADD") == 0 && is_string_type(arg)) {
-        char *s = get_node_string(arg);
-        dbg_printf("%s", s);
-        append_to_stdout(s);
-        free(s);
-        return;
-    }
-    /* println(xs.distinct()) — método que retorna LIST/escalar vía __ret__.
-     * Sin esto, un método que retorna lista caía al fallback numérico e
-     * imprimía vacío. */
-    if (arg->type && strcmp(arg->type, "CALL_METHOD") == 0) {
-        interpret_call_method(arg);
-        Variable *r = find_variable("__ret__");
-        if (r) {
-            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
-                te_print_list_node((ASTNode *)(intptr_t)r->value.object_value, 0);
-                return;
-            }
-            if (r->vtype == VAL_STRING) { dbg_printf("%s", r->value.string_value ? r->value.string_value : ""); append_to_stdout(r->value.string_value ? r->value.string_value : ""); return; }
-            if (r->vtype == VAL_INT)    { char b[32]; snprintf(b, sizeof(b), "%lld", r->value.int_value); dbg_printf("%s", b); append_to_stdout(b); return; }
-            if (r->vtype == VAL_FLOAT)  { char b[64]; te_fmt_double(b, sizeof(b), r->value.float_value); dbg_printf("%s", b); append_to_stdout(b); return; }
-            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) { dbg_printf("null"); append_to_stdout("null"); return; }
-        }
-        return;
-    }
-    /* gotcha #19: print(builtin(...)) — a nested function call such as
-     * print(mysql_query(conn, sql, "json")) used to fall through to the
-     * `arg->id` branch and report `variable 'mysql_query' is not defined`,
-     * because a CALL_FUNC node carries the function name in arg->id. Dispatch
-     * it like CALL_METHOD and print the captured __ret__ value. */
-    if (arg->type && strcmp(arg->type, "CALL_FUNC") == 0) {
-        interpret_call_func(arg);
-        Variable *r = find_variable("__ret__");
-        if (r) {
-            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
-                te_print_list_node((ASTNode *)(intptr_t)r->value.object_value, 0);
-                return;
-            }
-            if (r->vtype == VAL_STRING) { dbg_printf("%s", r->value.string_value ? r->value.string_value : ""); append_to_stdout(r->value.string_value ? r->value.string_value : ""); return; }
-            if (r->vtype == VAL_INT)    { char b[32]; snprintf(b, sizeof(b), "%lld", r->value.int_value); dbg_printf("%s", b); append_to_stdout(b); return; }
-            if (r->vtype == VAL_FLOAT)  { char b[64]; te_fmt_double(b, sizeof(b), r->value.float_value); dbg_printf("%s", b); append_to_stdout(b); return; }
-            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) { dbg_printf("null"); append_to_stdout("null"); return; }
-        }
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "ACCESS_EXPR") == 0) {
-        ASTNode *map = resolve_to_map(arg->left);
-        if (map) {
-            char keybuf[1024];
-            const char *key = te_map_key_coerce(arg->right, keybuf, sizeof(keybuf));
-            if (!key) { dbg_printf("Error: Map key must be a string.\n"); return; }
-            ASTNode *pair = map_find_pair(map, key);
-            if (!pair) { dbg_printf("Error: key '%s' not found.\n", key); return; }
-            ASTNode *val = pair->left;
-            if (val && val->type && strcmp(val->type, "STRING") == 0) dbg_printf("%s", val->str_value);
-            else if (val && val->type && strcmp(val->type, "FLOAT") == 0) { char b[64]; te_fmt_double(b, sizeof(b), atof(val->str_value)); dbg_printf("%s", b); }
-            else { double v_ = evaluate_expression(val); char b[64]; te_fmt_double(b, sizeof(b), v_); dbg_printf("%s", b); }
-            return;
-        }
-        ASTNode *list = resolve_to_list(arg->left);
-        if (!list) { dbg_printf("Error: not a list or Map.\n"); return; }
-        int idx = (int)evaluate_expression(arg->right);
-        int len = list_length(list);
-        if (idx < 0 || idx >= len) {
-            /* gotcha #4: índice fuera de rango imprime `null` (consistente
-             * con el assign), en vez de "Error: index N out of range". */
-            dbg_printf("null"); append_to_stdout("null");
-            return;
-        }
-        ASTNode *item = list_get_item(list, idx);
-        if (!item) return;
-        if (item->type && strcmp(item->type, "STRING") == 0) dbg_printf("%s", item->str_value);
-        else if (item->type && strcmp(item->type, "FLOAT") == 0) { char b[64]; te_fmt_double(b, sizeof(b), atof(item->str_value)); dbg_printf("%s", b); }
-        else { double v_ = evaluate_expression(item); char b[64]; te_fmt_double(b, sizeof(b), v_); dbg_printf("%s", b); }
-        return;
-    }
-    /* Fase 1a: print(arr[i]) — soporta strings y números */
-    if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
-        ASTNode *o = arg->left;
-        ASTNode *a = arg->right;
-        /* Fase 1a: arr.length / map.length / str.length */
-        if (a && a->id && strcmp(a->id, "length") == 0) {
-            ASTNode *list = resolve_to_list(o);
-            if (list) { dbg_printf("%d", list_length(list)); return; }
-            ASTNode *map = resolve_to_map(o);
-            if (map) { dbg_printf("%d", map_length(map)); return; }
-            /* str.length — mayo 2026 */
-            if (o && o->id) {
-                Variable *sv = find_variable(o->id);
-                if (sv && sv->vtype == VAL_STRING) {
-                    dbg_printf("%zu", sv->value.string_value ? strlen(sv->value.string_value) : 0);
-                    return;
-                }
-            }
-        }
-        Variable *v = find_variable(o->id);
-        if (!v || v->vtype != VAL_OBJECT) {
-            dbg_printf("Error: object '%s' is not defined or is not an object.\n", o->id);
-            return;
-        }
-        /* v1.0.0 fix: var is a MAP / OBJECT_LITERAL → resolve `o.attr` as a
-         * map lookup instead of casting to ObjectNode* (which crashes). */
-        if (v->type && (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0)) {
-            char *s = te_map_field_display(v, a->id);
-            if (s) { dbg_printf("%s", s); append_to_stdout(s); free(s); }
-            return;
-        }
-        ObjectNode *obj = v->value.object_value;
-        int idx = -1;
-        for (int i = 0; i < obj->class->attr_count; i++) {
-            if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
-                idx = i;
-                break;
-            }
-        }
-        if (idx < 0) {
-            dbg_printf("Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
-            return;
-        }
-        if (!te_attr_access_ok(obj->class, idx, o)) return;
-        Variable *attr = &obj->attributes[idx];
-        if (attr->vtype == VAL_OBJECT && attr->value.object_value == NULL)
-            dbg_printf("null");
-        else if (attr->vtype == VAL_STRING)
-            dbg_printf("%s", attr->value.string_value);
-        else
-            dbg_printf("%lld", (long long)attr->value.int_value);
-        return;
-    }
-
-    if (arg->id) { 
-        Variable *v = find_variable(arg->id);
-        if (!v) {
-            dbg_printf("Error: variable '%s' is not defined.\n", arg->id);
-            return;
-        }
-        if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
-            ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
-            if (listNode && strcmp(listNode->type, "LIST") == 0) {
-                te_print_list_node(listNode, 0);
-                return;
-            }
-        }
-        if (v->vtype == VAL_STRING)
-            dbg_printf("%s", v->value.string_value);
-        else if (v->vtype == VAL_INT)
-            dbg_printf("%lld", v->value.int_value);
-        else if (v->vtype == VAL_FLOAT)
-            { char b[64]; te_fmt_double(b, sizeof(b), v->value.float_value); dbg_printf("%s", b); }
-        else
-            dbg_printf("Object of class: %s\n", v->value.object_value->class->name);
-    } else {
-        double val = evaluate_expression(arg);
-        if (val == (int)val) {
-            dbg_printf("%d", (int)val);
-        } else {
-            char b[64]; te_fmt_double(b, sizeof(b), val); dbg_printf("%s", b);
-        }
-    }
-
-    if (__ret_var_active) {
-        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
-        if (__ret_var.id) free(__ret_var.id);
-        if (__ret_var.type) free(__ret_var.type);
-        memset(&__ret_var, 0, sizeof(Variable));
-        // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
-    }
-}
+/* interpret_print: movida a te_print.c (Fase 2). */
 
 static void interpret_fprint(ASTNode *node) {
     ASTNode *arg = node->left;
@@ -11030,363 +10545,14 @@ static void interpret_fprintln(ASTNode *node) {
     }
 }
 
-static void interpret_println(ASTNode *node) {
-    ASTNode *arg = node->left;
-    if (!arg) {
-        dbg_printf("Error: print without argument\n");
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "NULL") == 0) {
-        dbg_printf("null\n");
-        append_to_stdout("null\n");
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "BOOL") == 0) {
-        const char *s = arg->value ? "true" : "false";
-        dbg_printf("%s\n", s);
-        append_to_stdout(s); append_to_stdout("\n");
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "IDENTIFIER") == 0) {
-        Variable *_v = find_variable(arg->id);
-        if (_v && _v->type && strcmp(_v->type, "NULL") == 0) { dbg_printf("null\n"); append_to_stdout("null\n"); return; }
-        if (_v && _v->type && strcmp(_v->type, "BOOL") == 0) {
-            const char *s = _v->value.int_value ? "true" : "false";
-            dbg_printf("%s\n", s); append_to_stdout(s); append_to_stdout("\n"); return;
-        }
-    }
-    if (arg->type && strcmp(arg->type, "STRING") == 0) {
-        dbg_printf("%s\n", arg->str_value);
-        append_to_stdout(arg->str_value);
-        append_to_stdout("\n");
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "STRING_INTERP") == 0) {
-        char *s = expand_interp_string(arg->str_value);
-        dbg_printf("%s\n", s);
-        append_to_stdout(s);
-        append_to_stdout("\n");
-        free(s);
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "ADD") == 0 && is_string_type(arg)) {
-        char *s = get_node_string(arg);
-        dbg_printf("%s\n", s);
-        append_to_stdout(s);
-        append_to_stdout("\n");
-        free(s);
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "CALL_METHOD") == 0) {
-        interpret_call_method(arg);
-        Variable *r = find_variable("__ret__");
-        if (!r) { dbg_printf("\n"); return; }
-        if (r->vtype == VAL_STRING) { dbg_printf("%s\n", r->value.string_value ? r->value.string_value : ""); return; }
-        if (r->vtype == VAL_INT && r->type && strcmp(r->type, "BOOL") == 0) {
-            const char *s = r->value.int_value ? "true" : "false";
-            dbg_printf("%s\n", s); return;
-        }
-        if (r->vtype == VAL_INT) { dbg_printf("%lld\n", r->value.int_value); return; }
-        if (r->vtype == VAL_FLOAT) { char b[64]; te_fmt_double(b, sizeof(b), r->value.float_value); dbg_printf("%s\n", b); return; }
-        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) { dbg_printf("null\n"); return; }
-        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
-            ASTNode *listNode = (ASTNode*)(intptr_t)r->value.object_value;
-            if (listNode) { te_print_list_node(listNode, 1); return; }
-        }
-        dbg_printf("\n");
-        return;
-    }
-    /* Ola 13: println(builtin(...)) — dispatch via __ret__ */
-    if (arg->type && strcmp(arg->type, "CALL_FUNC") == 0) {
-        interpret_call_func(arg);
-        Variable *r = find_variable("__ret__");
-        if (!r) { dbg_printf("\n"); return; }
-        if (r->vtype == VAL_STRING) { dbg_printf("%s\n", r->value.string_value ? r->value.string_value : ""); append_to_stdout(r->value.string_value ? r->value.string_value : ""); append_to_stdout("\n"); return; }
-        if (r->vtype == VAL_INT && r->type && strcmp(r->type, "BOOL") == 0) {
-            const char *s = r->value.int_value ? "true" : "false";
-            dbg_printf("%s\n", s); append_to_stdout(s); append_to_stdout("\n"); return;
-        }
-        if (r->vtype == VAL_INT)    { dbg_printf("%lld\n", r->value.int_value); char tmp[32]; snprintf(tmp,32,"%lld\n",r->value.int_value); append_to_stdout(tmp); return; }
-        if (r->vtype == VAL_FLOAT)  { char b[64]; te_fmt_double(b, sizeof(b), r->value.float_value); dbg_printf("%s\n", b); append_to_stdout(b); append_to_stdout("\n"); return; }
-        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
-            ASTNode *listNode = (ASTNode*)(intptr_t)r->value.object_value;
-            if (listNode) { te_print_list_node(listNode, 1); return; }
-        }
-        dbg_printf("\n");
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "NULL_COALESCE") == 0) {
-        ASTNode *l = arg->left;
-        ASTNode *chosen = te_expr_is_null(l) ? arg->right : l;
-        ASTNode wrapper; memset(&wrapper, 0, sizeof(ASTNode));
-        wrapper.type = strdup("PRINTLN"); wrapper.left = chosen;
-        interpret_println(&wrapper);
-        free(wrapper.type);
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "TERNARY") == 0) {
-        int cond = (evaluate_expression(arg->left) != 0.0);
-        ASTNode *chosen = cond ? arg->right : arg->extra;
-        ASTNode wrapper; memset(&wrapper, 0, sizeof(ASTNode));
-        wrapper.type = strdup("PRINTLN"); wrapper.left = chosen;
-        interpret_println(&wrapper);
-        free(wrapper.type);
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "ACCESS_EXPR") == 0) {
-        /* Fase 1c: println(m["k"]) */
-        ASTNode *map = resolve_to_map(arg->left);
-        if (map) {
-            char keybuf[1024];
-            const char *key = te_map_key_coerce(arg->right, keybuf, sizeof(keybuf));
-            if (!key) { dbg_printf("Error: Map key must be a string.\n"); return; }
-            ASTNode *pair = map_find_pair(map, key);
-            if (!pair) { dbg_printf("Error: key '%s' not found.\n", key); return; }
-            ASTNode *val = pair->left;
-            if (val && val->type && strcmp(val->type, "STRING") == 0) dbg_printf("%s\n", val->str_value);
-            else if (val && val->type && strcmp(val->type, "FLOAT") == 0) { char b[64]; te_fmt_double(b, sizeof(b), atof(val->str_value)); dbg_printf("%s\n", b); }
-            else { double v_ = evaluate_expression(val); char b[64]; te_fmt_double(b, sizeof(b), v_); dbg_printf("%s\n", b); }
-            return;
-        }
-        ASTNode *list = resolve_to_list(arg->left);
-        if (!list) { dbg_printf("Error: not a list.\n"); return; }
-        int idx = (int)evaluate_expression(arg->right);
-        int len = list_length(list);
-        if (idx < 0 || idx >= len) {
-            /* gotcha #4: índice fuera de rango en uso directo imprime `null`,
-             * consistente con `let v = xs[99]` (que asigna null). Antes
-             * imprimía "Error: index N out of range". */
-            dbg_printf("null\n"); append_to_stdout("null\n");
-            return;
-        }
-        ASTNode *item = list_get_item(list, idx);
-        if (!item) return;
-        if (item->type && strcmp(item->type, "STRING") == 0) {
-            dbg_printf("%s\n", item->str_value);
-        } else if (item->type && strcmp(item->type, "FLOAT") == 0) {
-            char b[64]; te_fmt_double(b, sizeof(b), atof(item->str_value)); dbg_printf("%s\n", b);
-        } else {
-            double v = evaluate_expression(item);
-            char b[64]; te_fmt_double(b, sizeof(b), v); dbg_printf("%s\n", b);
-        }
-        return;
-    }
-    if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
-        ASTNode *o = arg->left;
-        ASTNode *a = arg->right;
-        /* Fase 1a: arr.length / map.length / str.length */
-        if (a && a->id && strcmp(a->id, "length") == 0) {
-            ASTNode *list = resolve_to_list(o);
-            if (list) {
-                int n = list_length(list);
-                dbg_printf("%d\n", n);
-                char tmp[32]; snprintf(tmp, 32, "%d\n", n);
-                append_to_stdout(tmp);
-                return;
-            }
-            ASTNode *map = resolve_to_map(o);
-            if (map) {
-                int n = map_length(map);
-                dbg_printf("%d\n", n);
-                char tmp[32]; snprintf(tmp, 32, "%d\n", n);
-                append_to_stdout(tmp);
-                return;
-            }
-            /* str.length — mayo 2026 */
-            if (o && o->id) {
-                Variable *sv = find_variable(o->id);
-                if (sv && sv->vtype == VAL_STRING) {
-                    size_t n = sv->value.string_value ? strlen(sv->value.string_value) : 0;
-                    dbg_printf("%zu\n", n);
-                    char tmp[32]; snprintf(tmp, 32, "%zu\n", n);
-                    append_to_stdout(tmp);
-                    return;
-                }
-            }
-        }
-        /* Bug fix: println(arr[i].attr) — o es ACCESS_EXPR.
-         * Va antes de find_variable porque o->id es NULL aquí. */
-        if (o && o->type && strcmp(o->type, "ACCESS_EXPR") == 0) {
-            ASTNode *list2 = resolve_to_list(o->left);
-            if (list2 && o->right) {
-                int idx2 = (int)evaluate_expression(o->right);
-                int len2 = list_length(list2);
-                if (idx2 < 0 || idx2 >= len2) {
-                    dbg_printf("Error: index %d out of range (length=%d).\n", idx2, len2);
-                    return;
-                }
-                ASTNode *item = list_get_item(list2, idx2);
-                ObjectNode *iobj = NULL;
-                if (item && item->type && strcmp(item->type, "OBJECT") == 0) {
-                    if (item->extra) iobj = (ObjectNode*)item->extra;
-                    else iobj = (ObjectNode*)(intptr_t)item->value;
-                }
-                if (iobj && iobj->class) {
-                    for (int i = 0; i < iobj->class->attr_count; i++) {
-                        if (strcmp(iobj->class->attributes[i].id, a->id) == 0) {
-                            Variable *attr2 = &iobj->attributes[i];
-                            if (attr2->vtype == VAL_STRING) {
-                                dbg_printf("%s\n", attr2->value.string_value);
-                                append_to_stdout(attr2->value.string_value);
-                                append_to_stdout("\n");
-                            } else if (attr2->vtype == VAL_FLOAT) {
-                                char b[64]; te_fmt_double(b, sizeof(b), attr2->value.float_value); dbg_printf("%s\n", b);
-                            } else {
-                                dbg_printf("%d\n", attr2->value.int_value);
-                                char tmpx[32]; snprintf(tmpx, 32, "%lld\n", (long long)attr2->value.int_value);
-                                append_to_stdout(tmpx);
-                            }
-                            return;
-                        }
-                    }
-                    dbg_printf("Error: attribute '%s' not found in indexed object.\n", a->id);
-                    return;
-                }
-            }
-            /* m["k"].attr — MAP-indexed object attr access (toMap result). */
-            ASTNode *map2 = resolve_to_map(o->left);
-            if (map2 && o->right) {
-                const char *key2 = NULL;
-                if (nk_of(o->right) == NK_STRING) key2 = o->right->str_value;
-                else if (nk_of(o->right) == NK_IDENTIFIER || nk_of(o->right) == NK_ID) {
-                    Variable *kv = find_variable(o->right->id);
-                    if (kv && kv->vtype == VAL_STRING) key2 = kv->value.string_value;
-                }
-                if (key2) {
-                    ASTNode *pair = map_find_pair(map2, key2);
-                    ASTNode *val  = pair ? pair->left : NULL;
-                    ObjectNode *iobj = NULL;
-                    if (val && val->type && strcmp(val->type, "OBJECT") == 0) {
-                        if (val->extra) iobj = (ObjectNode*)val->extra;
-                        else iobj = (ObjectNode*)(intptr_t)val->value;
-                    }
-                    if (iobj && iobj->class) {
-                        for (int i = 0; i < iobj->class->attr_count; i++) {
-                            if (strcmp(iobj->class->attributes[i].id, a->id) == 0) {
-                                Variable *attr2 = &iobj->attributes[i];
-                                if (attr2->vtype == VAL_STRING) {
-                                    dbg_printf("%s\n", attr2->value.string_value);
-                                    append_to_stdout(attr2->value.string_value);
-                                    append_to_stdout("\n");
-                                } else if (attr2->vtype == VAL_FLOAT) {
-                                    char b[64]; te_fmt_double(b, sizeof(b), attr2->value.float_value); dbg_printf("%s\n", b);
-                                } else {
-                                    dbg_printf("%d\n", attr2->value.int_value);
-                                    char tmpx[32]; snprintf(tmpx, 32, "%lld\n", (long long)attr2->value.int_value);
-                                    append_to_stdout(tmpx);
-                                }
-                                return;
-                            }
-                        }
-                        dbg_printf("Error: attribute '%s' not found in mapped object.\n", a->id);
-                        return;
-                    }
-                }
-            }
-            dbg_printf("Error: cannot resolve indexed expression for attribute access.\n");
-            return;
-        }
-        Variable *v = find_variable(o->id);
-        if (!v || v->vtype != VAL_OBJECT) {
-            dbg_printf("Error: object '%s' is not defined or is not an object.\n",
-                       (o && o->id) ? o->id : "<expr>");
-            return;
-        }
-        /* v1.0.0 fix: var is a MAP / OBJECT_LITERAL → resolve `o.attr` as a
-         * map lookup instead of casting to ObjectNode* (which crashes). */
-        if (v->type && (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0)) {
-            char *s = te_map_field_display(v, a->id);
-            if (s) { dbg_printf("%s\n", s); append_to_stdout(s); append_to_stdout("\n"); free(s); }
-            else { dbg_printf("null\n"); append_to_stdout("null\n"); }
-            return;
-        }
-        ObjectNode *obj = v->value.object_value;
-        int idx = -1;
-        for (int i = 0; i < obj->class->attr_count; i++) {
-            if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
-                idx = i;
-                break;
-            }
-        }
-        if (idx < 0) {
-            dbg_printf("Error: attribute '%s' not found in class '%s'.\n", a->id, obj->class->name);
-            return;
-        }
-        if (!te_attr_access_ok(obj->class, idx, o)) return;
-        Variable *attr = &obj->attributes[idx];
-        if (attr->vtype == VAL_OBJECT && attr->value.object_value == NULL) {
-            dbg_printf("null\n");
-            append_to_stdout("null\n");
-        }
-        else if (attr->vtype == VAL_STRING) {
-            dbg_printf("%s\n", attr->value.string_value);
-            append_to_stdout(attr->value.string_value);
-            append_to_stdout("\n");
-        }
-        else {
-            dbg_printf("%d\n", attr->value.int_value);
-            char temp[32]; snprintf(temp, 32, "%lld\n", (long long)attr->value.int_value);
-            append_to_stdout(temp);
-        }
-        return;
-    }
-
-    if (arg->id) {
-        Variable *v = find_variable(arg->id);
-        if (!v) {
-            dbg_printf("Error: variable '%s' is not defined.\n", arg->id);
-            return;
-        }
-        if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
-            ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
-            if (listNode && strcmp(listNode->type, "LIST") == 0) {
-                te_print_list_node(listNode, 1);
-                return;
-            }
-        }
-        if (v->vtype == VAL_STRING) {
-            dbg_printf("%s\n", v->value.string_value);
-            append_to_stdout(v->value.string_value);
-            append_to_stdout("\n");
-        }
-        else if (v->vtype == VAL_INT) {
-            dbg_printf("%lld\n", v->value.int_value);
-            char temp[32]; snprintf(temp, 32, "%lld\n", v->value.int_value);
-            append_to_stdout(temp);
-        }
-        else if (v->vtype == VAL_FLOAT) {
-            char b[64]; te_fmt_double(b, sizeof(b), v->value.float_value);
-            dbg_printf("%s\n", b);
-            append_to_stdout(b); append_to_stdout("\n");
-        }
-        else {
-            dbg_printf("Object of class: %s\n", v->value.object_value->class->name);
-            // Don't append object description to stdout for API response usually
-        }
-    } else {
-        double val = evaluate_expression(arg);
-        if (val == (int)val) {
-            dbg_printf("%d\n", (int)val);
-        } else {
-            char b[64]; te_fmt_double(b, sizeof(b), val); dbg_printf("%s\n", b);
-        }
-    }
-
-    if (__ret_var_active) {
-        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
-        if (__ret_var.id) free(__ret_var.id);
-        if (__ret_var.type) free(__ret_var.type);
-        memset(&__ret_var, 0, sizeof(Variable));
-        // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
-    }
-}
+/* interpret_println: movida a te_print.c (Fase 2). */
 
 
 /* Capacidad del buffer inline (en pila) del recorrido iterativo de bloques.
  * NO es un limite: si el bloque tiene mas statements se hace malloc y la
  * capacidad se duplica. Centralizado aqui para tuning en un solo sitio. */
 #define TE_STMTLIST_SPINE_INLINE 256
-static void interpret_statement_list(ASTNode *node) {
+void interpret_statement_list(ASTNode *node) {
     /* v0.0.30: recorrer la lista de statements de forma ITERATIVA, no recursiva.
      * La gramática es left-recursive (`statement_list: statement_list statement`),
      * así que la lista queda anidada por ->left: node->left es la sublista con los
