@@ -25,6 +25,13 @@ static int lookup_int(ASTNode *n, long long *out) {
     return 1;
 }
 
+int te_eval_num(ASTNode *node, long long *iv, double *dv) {
+    if (te_eval_i64(node, iv)) { *dv = (double)*iv; return 1; }
+    *dv = evaluate_expression(node);
+    if (*dv == (double)(long long)*dv) { *iv = (long long)*dv; return 1; }
+    return 0;
+}
+
 int te_eval_i64(ASTNode *node, long long *out) {
     if (!node || !out) return 0;
     long long a, b;

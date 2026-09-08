@@ -8202,9 +8202,7 @@ fastcall_args_done:
                     && strcmp(g_vm.return_node->type, "CALL_METHOD") != 0
                     && strcmp(g_vm.return_node->type, "RETURN_JSON") != 0
                     && strcmp(g_vm.return_node->type, "RETURN_XML")  != 0) {
-                    long long rv_i64;
-                    int rv_is_i64 = te_eval_i64(g_vm.return_node, &rv_i64);   /* Fase 1b */
-                    double rv = rv_is_i64 ? (double)rv_i64 : evaluate_expression(g_vm.return_node);
+                    long long rv_i64; double rv; int rv_is_i64 = te_eval_num(g_vm.return_node, &rv_i64, &rv);   /* Fase 1b */
                     /* Reset and write __ret_var directly. */
                     if (__ret_var_active) {
                         if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
@@ -9292,12 +9290,9 @@ static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
                     valNode = create_ast_leaf("STRING", 0, s, NULL);
                     free(s);
                 } else {
-                    long long i64v;
-                    double r = te_eval_i64(cur_arg, &i64v) ? (double)i64v : evaluate_expression(cur_arg);
-                    if (te_eval_i64(cur_arg, &i64v)) {   /* Fase 1b */
+                    long long i64v; double r;
+                    if (te_eval_num(cur_arg, &i64v, &r)) {   /* Fase 1b */
                         valNode = create_ast_leaf_number("NUMBER", i64v, NULL, NULL);
-                    } else if (r == (double)(long long)r) {
-                        valNode = create_ast_leaf_number("NUMBER", (long long)r, NULL, NULL);
                     } else {
                         char buf[64]; te_fmt_double(buf, sizeof(buf), r);
                         valNode = create_ast_leaf("FLOAT", 0, buf, NULL);
@@ -9710,14 +9705,10 @@ static void interpret_assign(ASTNode *node) {
                 || vk == NK_IDENTIFIER) {
                 /* Avoid string-typed ADD (concat) which needs the slow path. */
                 if (!(vk == NK_ADD && is_string_type(value_node))) {
-                    long long i64v;
-                    double r = te_eval_i64(value_node, &i64v) ? (double)i64v : evaluate_expression(value_node);
-                    if (te_eval_i64(value_node, &i64v)) {   /* Fase 1b */
+                    long long i64v; double r;
+                    if (te_eval_num(value_node, &i64v, &r)) {   /* Fase 1b: entero exacto */
                         fv->vtype = VAL_INT;
                         fv->value.int_value = i64v;
-                    } else if (r == (double)(long long)r) {
-                        fv->vtype = VAL_INT;
-                        fv->value.int_value = (long long)r;
                     } else {
                         fv->vtype = VAL_FLOAT;
                         fv->value.float_value = r;
@@ -9902,13 +9893,10 @@ static void interpret_assign(ASTNode *node) {
             free_ast(temp_node);
             return;
         }
-        long long i64v;
-        double result = te_eval_i64(value_node, &i64v) ? (double)i64v : evaluate_expression(value_node);
+        long long i64v; double result;
         ASTNode* temp_node = NULL;
-        if (te_eval_i64(value_node, &i64v)) {   /* Fase 1b */
+        if (te_eval_num(value_node, &i64v, &result)) {   /* Fase 1b */
             temp_node = create_ast_leaf_number("INT", i64v, NULL, NULL);
-        } else if (result == (long long)result) {
-            temp_node = create_ast_leaf_number("INT", (long long)result, NULL, NULL);
         } else {
             char* str_res = double_to_string(result);
             temp_node = create_ast_leaf("FLOAT", 0, str_res, NULL);
