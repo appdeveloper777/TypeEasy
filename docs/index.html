@@ -203,7 +203,7 @@
   <header class="topbar">
     <button class="hamburger" id="hamburger" aria-label="Menú">☰</button>
     <a class="brand" href="#/home"><span class="logo">Te</span> TypeEasy</a>
-    <span class="ver" id="verBadge">v0.0.23</span>
+    <span class="ver" id="verBadge">v0.0.34</span>
     <span class="spacer"></span>
     <nav class="tnav">
       <a href="#/home" data-i18n="nav_home">Inicio</a>
@@ -305,7 +305,8 @@ function sh(code){
     + `<button class="copy" onclick="copyCode(this)">${cp}</button>`
     + `<pre class="shell" data-raw="${encodeURIComponent(code)}">${escapeHtml(code)}</pre></div>`;
 }
-function out(text){ return `<div class="output">${escapeHtml(text)}</div>`; }
+// Pages write "\\n" inside ${out(...)} expressions (not cooked by the template literal): turn it into a real newline.
+function out(text){ return `<div class="output">${escapeHtml(text.replace(/\\n/g, "\n"))}</div>`; }
 function copyCode(btn){
   const pre = btn.parentElement.querySelector("pre");
   const raw = decodeURIComponent(pre.getAttribute("data-raw"));
@@ -372,6 +373,7 @@ window.NAV_ES = [
     ["timing", "Medir tiempo"],
     ["bridge", "Bridge (otros lenguajes)"],
     ["async", "Async / concurrencia"],
+    ["extend", "Extender el lenguaje"],
   ]},
   { group: "Crear APIs", items: [
     ["first-api", "Tu primera API"],
@@ -433,6 +435,7 @@ window.NAV_EN = [
     ["timing", "Measure time"],
     ["bridge", "Bridge (other languages)"],
     ["async", "Async / concurrency"],
+    ["extend", "Extending the language"],
   ]},
   { group: "Build APIs", items: [
     ["first-api", "Your first API"],
@@ -555,7 +558,7 @@ class Persona {
   <li><strong>APIs</strong>: endpoints, JSON, autenticación JWT, cookies, CORS y bases de datos.</li>
 </ul>
 
-<div class="note"><strong>Nota.</strong> Los archivos <code class="inline">.te</code> deben ser ASCII fuera de los strings literales. Usa solo caracteres ASCII en comentarios e identificadores.</div>
+<div class="note"><strong>Nota.</strong> Los archivos <code class="inline">.te</code> se leen como <strong>UTF-8</strong>: puedes usar acentos y <code class="inline">ñ</code> en strings, comentarios e incluso identificadores (<code class="inline">let configuración = 5;</code> funciona). Guarda el archivo en UTF-8 (sin BOM).</div>
 
 <div class="pager">
   <a class="prev" href="#/home">&larr; Inicio</a>
@@ -568,12 +571,41 @@ PAGES.quickstart = `
 <p class="lead">De cero a una API corriendo en menos de 5 minutos.</p>
 
 <h2>1. Instalar</h2>
-<p>Descarga el binario para tu sistema desde la página de releases:</p>
+<p>Descarga el binario para tu sistema desde la página de releases (versión actual: <strong>v0.0.34</strong>). En la sección <strong>Assets</strong> de la release encontrarás:</p>
 <ul>
-  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.0.23.exe</code> (instalador) o el <code class="inline">.zip</code> portable.</li>
-  <li><strong>Linux</strong>: <code class="inline">.deb</code> (Debian/Ubuntu/Mint) o el <code class="inline">.tar.gz</code> portable.</li>
+  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.0.34.exe</code> (instalador) o <code class="inline">TypeEasy-0.0.34-win64.zip</code> (portable).</li>
+  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.0.34_amd64.deb</code> (Debian/Ubuntu/Mint) o <code class="inline">TypeEasy-0.0.34-linux-amd64.tar.gz</code> (portable).</li>
+  <li><strong>Linux ARM64</strong> (Raspberry Pi, servidores ARM): <code class="inline">typeeasy_0.0.34_arm64.deb</code> o <code class="inline">TypeEasy-0.0.34-linux-arm64.tar.gz</code>.</li>
+  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.0.34-android-arm64.tar.gz</code>.</li>
+  <li><code class="inline">SHA256SUMS-0.0.34.txt</code> para verificar la descarga.</li>
 </ul>
-<p><a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">Releases en GitHub &rarr;</a></p>
+<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.0.34" target="_blank" rel="noopener">Release v0.0.34 en GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">Todas las releases &rarr;</a></p>
+${sh(`# Linux (Debian/Ubuntu)
+sudo apt install ./typeeasy_0.0.34_amd64.deb
+
+# Linux/Android portable: descomprime y usa el binario que trae
+tar -xzf TypeEasy-0.0.34-linux-amd64.tar.gz
+
+# Verificar la instalación (Windows, Linux o Android)
+typeeasy --version        # TypeEasy 0.0.34`)}
+<div class="note"><strong>Dónde queda el binario.</strong> El instalador de Windows lo deja en <code class="inline">%LOCALAPPDATA%\\Programs\\TypeEasy\\bin\\typeeasy-bin.exe</code> (y agrega <code class="inline">typeeasy</code>/<code class="inline">te</code> al PATH). El <code class="inline">.deb</code> instala <code class="inline">/usr/bin/typeeasy-bin</code> (el motor) y <code class="inline">/usr/bin/typeeasy</code> (CLI con <code class="inline">new</code>, <code class="inline">gen</code>, <code class="inline">serve</code>…). Si un subcomando del CLI no reconoce un flag del motor (p. ej. <code class="inline">--syntax-check</code>), llama directo a <code class="inline">typeeasy-bin</code>.</div>
+
+<h2>1b. O clona y compila (para estudiar o extender el motor)</h2>
+<p>Si quieres leer el código del intérprete, agregar una función nativa o <a href="#/extend">ampliar la sintaxis</a>, clona el repositorio en la versión que quieras y compílalo. Necesitas <code class="inline">gcc</code>, <code class="inline">flex</code>, <code class="inline">bison</code>, <code class="inline">make</code> y las cabeceras de MariaDB/PostgreSQL/OpenSSL (en Windows, MSYS2/MinGW-w64).</p>
+${sh(`git clone --branch v0.0.34 https://github.com/appdeveloper777/TypeEasy.git
+cd TypeEasy
+
+# Linux (Ubuntu/Debian): deps una sola vez
+sudo apt-get install -y build-essential flex bison libmariadb-dev libpq-dev freetds-dev libssl-dev pkg-config
+bash scripts/build_native_linux.sh          # -> src/typeeasy
+
+# Windows (MSYS2 MinGW64)
+bash scripts/build_native_windows.sh        # -> src/typeeasy.exe
+
+# Suite de regresión del lenguaje y de endpoints
+python tools/te-test/run_tests.py tests/lang --bin ./src/typeeasy
+python tools/te-test/run_api_tests.py tests/api --bin ./src/typeeasy`)}
+<div class="note"><strong>Descargar vs clonar.</strong> Para <em>usar</em> TypeEasy basta la release (un binario). Clonar descarga el <em>código fuente</em> en C: sirve para desarrollar el lenguaje, no hace falta para escribir APIs.</div>
 
 <h2>2. Crear un proyecto (estilo Rails)</h2>
 ${sh(`te new tienda
@@ -968,21 +1000,35 @@ ${te(`for (i = 0; 2; 1) {
 }`)}
 ${out("0,0\\n0,1\\n1,0\\n1,1")}
 
-<p>Si necesitas <strong>empezar desde una variable</strong>, no la pongas en el inicio del <code class="inline">for</code>
-(daría error de sintaxis). Inicialízala antes con <code class="inline">var</code> y usa <code class="inline">while</code>:</p>
-${te(`let start = 2;
-var i = start;          // var (mutable), no let
-while (i < 5) {
-    println(i);
-    i = i + 1;
-}`)}
-${out("2\\n3\\n4")}
-
-<div class="note"><strong>Regla del for numérico.</strong>
+<div class="note"><strong>Regla del for numérico (forma clásica).</strong>
 <ul>
-<li>El <strong>inicio debe ser un número literal</strong> (<code class="inline">for (i = 0; ...)</code>); una variable en el inicio da error de sintaxis. Si necesitas empezar en una variable, inicialízala antes con <code class="inline">var</code> y usa <code class="inline">while</code> (ver ejemplo arriba).</li>
+<li>El <strong>inicio debe ser un número literal</strong> (<code class="inline">for (i = 0; ...)</code>); una variable en el inicio da error de sintaxis. Si necesitas empezar en una variable usa el <strong>for estilo Java</strong> de abajo (<code class="inline">for (var i = start; i &lt; 5; i++)</code>) o <code class="inline">while</code>.</li>
+<li>El 2º campo es un <strong>límite</strong>, no una condición: <code class="inline">for (i = 0; i &lt; 4; 1)</code> es un error y <code class="inline">typeeasy --syntax-check</code> lo reporta (“the 2nd field is an exclusive LIMIT, not a condition”).</li>
 </ul>
 El <strong>límite</strong> y el <strong>paso</strong> sí admiten variables/expresiones, y el cuerpo admite varias sentencias.</div>
+
+<h2>for estilo Java / C <span class="ver" style="vertical-align:middle">v0.0.34</span></h2>
+<p>Desde la <strong>v0.0.34</strong> también existe el <code class="inline">for</code> de tres partes <strong>con condición</strong>, igual que en Java, C o JavaScript: <code class="inline">for (init; condición; actualización)</code>. El parser lo reconoce porque el init lleva <code class="inline">var</code>/<code class="inline">let</code> o porque el 2º campo es una comparación / el 3º un <code class="inline">i++</code>, <code class="inline">i += 2</code>, etc.</p>
+${te(`for (var i = 0; i < 4; i++) {
+    println(i);
+}`)}
+${out("0\\n1\\n2\\n3")}
+
+<p>El init <strong>sí puede ser una variable o expresión</strong>, y la actualización admite <code class="inline">++</code>, <code class="inline">--</code>, <code class="inline">+=</code>, <code class="inline">-=</code>, <code class="inline">*=</code>, <code class="inline">/=</code> o una asignación:</p>
+${te(`let start = 2;
+for (var i = start; i < 5; i++) { print(i + " "); }     // 2 3 4
+println("");
+for (var j = 10; j > 0; j -= 3) { print(j + " "); }     // 10 7 4 1
+println("");
+for (var k = 1; k <= 100; k *= 10) { print(k + " "); }  // 1 10 100
+println("");`)}
+${out("2 3 4 \\n10 7 4 1 \\n1 10 100 ")}
+
+<ul>
+  <li>La variable del init es <strong>local del bucle</strong>; <code class="inline">continue</code> ejecuta la actualización antes de seguir.</li>
+  <li>Las tres formas <strong>conviven</strong>: clásica <code class="inline">for (i = 0; 5; 1)</code>, rango <code class="inline">for (0; 8; 1)</code> y Java <code class="inline">for (var i = 0; i &lt; 5; i++)</code>.</li>
+  <li>Requiere binario <strong>&ge; 0.0.34</strong> (<code class="inline">typeeasy --version</code>); en versiones anteriores es error de sintaxis.</li>
+</ul>
 
 <h2>break y continue</h2>
 ${te(`var i = 0;
@@ -1280,6 +1326,28 @@ try {
   <li><code class="inline">finally</code> se ejecuta siempre, incluso tras un <code class="inline">return</code>.</li>
 </ul>
 
+<h2>Errores de runtime: archivo, línea y pila de funciones <span class="ver" style="vertical-align:middle">v0.0.33</span></h2>
+<p>Un error fatal no atrapado (función inexistente, reasignar un <code class="inline">let</code>, método sobre <code class="inline">null</code>…) imprime en <code class="inline">stderr</code> el mensaje, el <strong>archivo y la línea</strong> (también de archivos importados con <code class="inline">import</code>) y la cadena de funciones que llevó hasta ahí:</p>
+${te(`let f = fn(x) => { return noExiste(x); };
+println(f(1));`, "err.te")}
+${out("Error: function 'noExiste' not defined.\\n    at err.te:1 in f")}
+<p>En modo API (<code class="inline">--api</code>) el mismo error <strong>no tumba el servidor</strong>: la request responde <code class="inline">500 {"error":"internal_error"}</code> y el proceso sigue atendiendo. Con <code class="inline">--dev</code> (o <code class="inline">TYPEEASY_DEV=1</code>) el cuerpo del 500 incluye además <code class="inline">file</code>, <code class="inline">line</code> y el mensaje. Nunca actives <code class="inline">--dev</code> en producción.</p>
+
+<h2>Detectar errores antes de ejecutar: <code class="inline">--syntax-check</code> <span class="ver" style="vertical-align:middle">v0.0.34</span></h2>
+<p><code class="inline">typeeasy --syntax-check archivo.te</code> parsea el archivo (y sus <code class="inline">import</code>) sin ejecutarlo y devuelve JSON. Desde la <strong>v0.0.34</strong> además de sintaxis y aridad reporta <strong>errores semánticos</strong> que antes solo aparecían en runtime:</p>
+<table class="ref">
+  <tr><th>Código</th><th>Detecta</th></tr>
+  <tr><td>S1</td><td>Reasignar una variable declarada con <code>let</code>/<code>const</code> (respeta scopes de fn/bloque; los parámetros sí son mutables).</td></tr>
+  <tr><td>S2 / S3</td><td>Una comparación en el 2º o 3º campo de un <code>for</code> clásico (<code>for (i = 0; i &lt; 4; 1)</code>): ahí va un límite y un paso.</td></tr>
+  <tr><td>S4</td><td><code>for-in</code> sobre un literal escalar (<code>for (let z in 5)</code>).</td></tr>
+</table>
+${te(`let total = 0;
+total = total + 1;                  // S1
+for (i = 0; i < 4; 1) { println(i); }   // S2`, "sem.te")}
+${sh(`typeeasy --syntax-check sem.te`)}
+${out('{"ok":false,"errors":[\\n  {"line":2,"msg":"Error: cannot assign to constant variable \'total\' (declared with let/const; use var).","near":"total","file":"sem.te"},\\n  {"line":3,"msg":"Error: for(init; LIMIT; STEP): the 2nd field is an exclusive LIMIT, not a condition (write \'for (i = 0; n; 1)\', not \'i < n\').","near":"i","file":"sem.te"}\\n]}')}
+<div class="note"><strong>Intégralo en tu flujo.</strong> Un archivo válido devuelve <code class="inline">{"ok":true,"errors":[]}</code>. Úsalo en un hook de git o en CI antes de desplegar: es instantáneo y no necesita base de datos ni variables de entorno. En el instalador de Windows el motor es <code class="inline">typeeasy-bin.exe</code>; en Linux <code class="inline">typeeasy-bin</code>.</div>
+
 <div class="pager">
   <a class="prev" href="#/inheritance">&larr; Herencia</a>
   <a href="#/modules">Módulos &rarr;</a>
@@ -1458,6 +1526,28 @@ ${out("1 millon: 3 ms (suma=499999500000)\n10 millones: 27 ms (suma=499999950000
 
 <div class="note"><strong>Tip.</strong> Para acelerar bucles calientes con el JIT, ejecuta con <code class="inline">TYPEEASY_JIT=1 TYPEEASY_PROFILE=1</code>. El mismo bucle de 100M baja de ~2.7s a ~0.13s.</div>
 
+<h2>Perfilar por función: <code class="inline">--profile</code> <span class="ver" style="vertical-align:middle">v0.0.34</span></h2>
+<p>Cuando no sabes <em>qué</em> función se lleva el tiempo, no hace falta sembrar <code class="inline">now_ms()</code> por todo el código. <code class="inline">typeeasy --profile script.te</code> (o la variable <code class="inline">TYPEEASY_PROF_FN=1</code>) mide cada <strong>función con nombre</strong> (<code class="inline">let f = fn(...) =&gt; {...}</code>, métodos) y al terminar imprime en <code class="inline">stderr</code> una tabla ordenada por tiempo propio:</p>
+${te(`let suma = fn(n) => {
+    var s = 0;
+    for (var i = 0; i < n; i++) { s += i; }
+    return s;
+};
+let doble = fn(n) => { return suma(n) * 2; };
+println(doble(30000));`, "perf.te")}
+${sh(`TYPEEASY_PROF_FN=1 typeeasy perf.te     # o: typeeasy --profile perf.te`)}
+${out("899970000\\n[profile] perf.te  (2 fns, 7.2 ms in fn bodies)\\n[profile]    self_ms    incl_ms      calls  fn\\n[profile]       7.16       7.16          1  suma\\n[profile]       0.02       7.18          1  doble")}
+<table class="ref">
+  <tr><th>Columna</th><th>Significado</th></tr>
+  <tr><td><code>self_ms</code></td><td>Tiempo dentro del cuerpo de la función, <strong>sin</strong> contar las funciones que llama. Ordena la tabla: lo de arriba es lo que hay que optimizar.</td></tr>
+  <tr><td><code>incl_ms</code></td><td>Tiempo total incluyendo callees.</td></tr>
+  <tr><td><code>calls</code></td><td>Cuántas veces se llamó.</td></tr>
+</table>
+<p><strong>En una API</strong> (<code class="inline">--api</code>) el reporte sale <strong>por request</strong> al terminar cada una, con método, ruta, status y duración. Con <code class="inline">TYPEEASY_PROFILE_MIN_MS=50</code> solo se imprimen las requests que tardaron más de 50 ms: ideal para encontrar el endpoint lento en un servidor de pruebas sin tocar el código.</p>
+${sh(`TYPEEASY_PROF_FN=1 TYPEEASY_PROFILE_MIN_MS=50 typeeasy --api main.te --port 8199`)}
+<div class="note"><strong>Nota.</strong> <code class="inline">--profile</code> activa además el perfilador del JIT (<code class="inline">TYPEEASY_PROFILE=1</code>) y agrega al final su tabla de <em>hot regions</em>; si solo quieres la tabla por función usa <code class="inline">TYPEEASY_PROF_FN=1</code>. Los enteros son de 32 bits: una suma grande desborda (por eso el ejemplo usa 30000).</div>
+<div class="note"><strong>Costo.</strong> Desactivado, el hook cuesta una comparación de entero por llamada. Activado suma unos microsegundos por función; no lo dejes encendido en producción.</div>
+
 <div class="pager">
   <a class="prev" href="#/stdlib">&larr; Stdlib</a>
   <a href="#/bridge">Bridge &rarr;</a>
@@ -1610,7 +1700,7 @@ ${out('{"ventas":1280,"clientes":342,"productos":97}')}
 
 <div class="pager">
   <a class="prev" href="#/bridge">&larr; Bridge</a>
-  <a href="#/first-api">Tu primera API &rarr;</a>
+  <a href="#/extend">Extender el lenguaje &rarr;</a>
 </div>
 `;
 </script>
@@ -1619,6 +1709,77 @@ ${out('{"ventas":1280,"clientes":342,"productos":97}')}
 /* ============================================================
    PAGES — data & queries (LINQ, CSV)
    ============================================================ */
+
+PAGES.extend = `
+<h1>Extender el lenguaje (el motor en C) <span class="ver" style="vertical-align:middle">v0.0.34</span></h1>
+<p class="lead">Dos maneras de "agregar cosas" a TypeEasy, y son muy distintas: <strong>reutilizar</strong> código con funciones e <code class="inline">import</code> (lo haces en <code class="inline">.te</code>, sin tocar el motor) y <strong>ampliar la sintaxis o los builtins</strong> (se hace en el código C del intérprete, se recompila y se publica un binario nuevo).</p>
+
+<h2>1. Lo que NO necesita tocar el motor</h2>
+<p>Funciones, clases y módulos cubren el 99% de los casos. Una "librería" en TypeEasy es simplemente un archivo <code class="inline">.te</code> que importas:</p>
+${te(`let saludar = fn(nombre) => { return "Hola " + nombre; };
+let iva = fn(monto, pais) => {
+    if (pais == "PA") { return monto * 0.07; }
+    return monto * 0.15;
+};`, "utils.te")}
+${te(`import "utils.te";
+println(saludar("Ana"));
+println(iva(100, "PA"));   // 7`, "app.te")}
+<p>También puedes llamar código de otros lenguajes con el <a href="#/bridge">Bridge</a>. Nada de esto cambia la gramática: son las mismas palabras clave con más funciones disponibles.</p>
+
+<h2>2. Cuándo sí hay que tocar el motor</h2>
+<ul>
+  <li>Una <strong>construcción nueva</strong> del lenguaje (una forma de <code class="inline">for</code>, un operador, una palabra clave).</li>
+  <li>Un <strong>builtin nativo</strong> (función en C accesible desde <code class="inline">.te</code>, p. ej. un conector o un algoritmo pesado).</li>
+  <li>Un <strong>chequeo</strong> nuevo de <code class="inline">--syntax-check</code> o un mensaje de error mejor.</li>
+</ul>
+<p>Un <code class="inline">.te</code> <strong>no puede</strong> activar sintaxis nueva: la gramática vive en el binario. Por eso cada release indica desde qué versión existe cada cosa (y por eso <code class="inline">typeeasy --version</code> importa).</p>
+
+<h2>3. El recorrido de una sintaxis nueva</h2>
+<p>Tomemos el caso real del <code class="inline">for</code> estilo Java (<code class="inline">for (var i = 0; i &lt; n; i++)</code>), agregado en la v0.0.34. Pasó por estas cuatro capas:</p>
+<table class="ref">
+  <tr><th>Capa</th><th>Archivo</th><th>Qué se hizo</th></tr>
+  <tr><td>1. Lexer</td><td><code>src/parser.l</code></td><td>Convierte texto en tokens (<code>FOR</code>, <code>LPAREN</code>, <code>INCREMENT</code> para <code>++</code>…). Aquí no hizo falta nada: los tokens ya existían.</td></tr>
+  <tr><td>2. Parser</td><td><code>src/parser.y</code> (Bison)</td><td>Reglas nuevas <code>for_c_init</code> / <code>for_c_update</code> y las producciones <code>FOR LPAREN for_c_init SEMICOLON expression SEMICOLON for_c_update RPAREN …</code> que construyen el nodo con <code>create_for_c_node(init, cond, update, body)</code>.</td></tr>
+  <tr><td>3. AST</td><td><code>src/ast.h</code> + <code>src/ast.c</code></td><td>Prototipo <code>ASTNode *create_for_c_node(...)</code> en el header, el tipo de nodo <code>"FOR_C"</code> (<code>NK_FOR_C</code>) y el constructor.</td></tr>
+  <tr><td>4. Intérprete</td><td><code>src/ast.c</code></td><td><code>interpret_for_c(node)</code>: ejecuta init, evalúa la condición, corre el cuerpo, ejecuta update; respeta <code>break</code>/<code>continue</code> y hace la variable local al bucle. Se engancha en el <code>switch</code> de <code>interpret_node</code> (<code>case NK_FOR_C</code>).</td></tr>
+</table>
+<div class="warn"><strong>Gotcha Windows (LLP64).</strong> Toda función constructora que el parser invoque <strong>debe tener prototipo en <code class="inline">src/*.h</code></strong>. Un <code class="inline">extern</code> inline dentro de la acción de Bison compila, pero sin prototipo visible el compilador asume <code class="inline">int</code> como retorno y en Windows x64 <strong>trunca el puntero a 32 bits</strong> → SIGSEGV que en Linux no aparece. El CI lo audita (<code class="inline">scripts/audit_llp64_prototypes.sh</code>) y falla si falta uno.</div>
+
+<h2>4. Pruebas: sin test no hay feature</h2>
+<p>Cada cambio de lenguaje lleva un archivo en <code class="inline">tests/lang/&lt;carpeta&gt;/nombre.te</code> con su <code class="inline">nombre.expected</code> (la salida exacta). El runner compila la lista, ejecuta y compara:</p>
+${sh(`# tests/lang/03_control_flow/for_java_style.te  +  for_java_style.expected
+python tools/te-test/run_tests.py tests/lang --bin ./src/typeeasy
+# === TOTAL: PASS=97  FAIL=0  XFAIL=3 ===
+
+# endpoints HTTP reales (levanta el server, dispara requests, compara JSON)
+python tools/te-test/run_api_tests.py tests/api --bin ./src/typeeasy`)}
+<ul>
+  <li><code class="inline">tests/lang/09_diagnostics/</code> cubre los mensajes de error y los chequeos S1–S4 de <code class="inline">--syntax-check</code>.</li>
+  <li><code class="inline">tests/lang/13_gotchas/</code> es la colección de trampas históricas: si arreglas un bug, agrega ahí el caso que lo reproducía.</li>
+  <li>Corre la suite en <strong>Windows y Linux</strong>: el crash del punto anterior solo se veía en uno de los dos.</li>
+</ul>
+
+<h2>5. Compilar y probar tu binario</h2>
+${sh(`git clone https://github.com/appdeveloper777/TypeEasy.git && cd TypeEasy
+bash scripts/build_native_linux.sh            # Linux   -> src/typeeasy
+bash scripts/build_native_windows.sh          # Windows -> src/typeeasy.exe (MSYS2)
+
+./src/typeeasy --version
+./src/typeeasy --syntax-check mi_api.te       # tu código sigue parseando?
+./src/typeeasy --api mi_api.te --port 8199    # prueba en un puerto aparte antes de reemplazar el instalado`)}
+<div class="note"><strong>Versión embebida.</strong> El número que muestra <code class="inline">--version</code> se inyecta en compilación: <code class="inline">make -C src typeeasy CFLAGS_EXTRA=-DTYPEEASY_VERSION=0.0.34</code> (el CI lo toma del tag). Sin ese flag el binario dice <code class="inline">0.0.1</code>.</div>
+
+<h2>6. Agregar un builtin nativo (más fácil que sintaxis)</h2>
+<p>Si lo que quieres es una función nueva llamable desde <code class="inline">.te</code>, no hace falta tocar lexer ni parser: se implementa en C y se registra con <code class="inline">te_builtin_register("nombre", adaptador)</code> en <code class="inline">src/te_stdlib.c</code>, igual que <code class="inline">mysql_connect</code> o <code class="inline">now_ms</code>. El adaptador recibe los argumentos ya evaluados y devuelve un valor. Agrega el test en <code class="inline">tests/lang/07_stdlib/</code> y documéntalo en <a href="#/stdlib">Stdlib</a>.</p>
+
+<h2>7. Publicar</h2>
+<p>Un <code class="inline">git tag vX.Y.Z</code> dispara los workflows de GitHub Actions que compilan <strong>Linux amd64/arm64, Windows y Android</strong>, corren la suite y publican la release con <code class="inline">SHA256SUMS</code>. Antes del tag: <code class="inline">tests/lang</code> y <code class="inline">tests/api</code> en verde en ambos SO, y <code class="inline">--syntax-check</code> sobre un proyecto real grande (el ERP de referencia tiene 120 archivos) para confirmar que no hay falsos positivos.</p>
+
+<div class="pager">
+  <a class="prev" href="#/async">&larr; Async / concurrencia</a>
+  <a href="#/first-api">Tu primera API &rarr;</a>
+</div>
+`;
 
 PAGES.linq = `
 <h1>LINQ — consultas sobre colecciones</h1>
@@ -2680,19 +2841,32 @@ ${sh(`te --api endpoint.te --port 9000 --host 0.0.0.0
 te --api-dir ./apis --workers 4 --hotreload`)}
 <table class="ref">
   <tr><th>Flag</th><th>Default</th><th>Descripción</th></tr>
-  <tr><td><code>--api &lt;file.te&gt;</code></td><td>—</td><td>modo single-file</td></tr>
+  <tr><td><code>--api &lt;file.te&gt;</code></td><td>—</td><td>modo single-file (el archivo puede <code>import</code>ar otros)</td></tr>
   <tr><td><code>--api-dir &lt;dir&gt;</code></td><td>—</td><td>multi-archivo: escanea todos los .te del directorio</td></tr>
   <tr><td><code>--port N</code> / <code>-p N</code></td><td>8080</td><td>puerto TCP</td></tr>
-  <tr><td><code>--host H</code></td><td>0.0.0.0</td><td>interfaz de red</td></tr>
-  <tr><td><code>--workers N</code></td><td>auto</td><td>procesos worker (solo modo --api-dir)</td></tr>
+  <tr><td><code>--host H</code></td><td>0.0.0.0</td><td>interfaz de red (<code>127.0.0.1</code> detrás de un proxy)</td></tr>
+  <tr><td><code>--workers N</code></td><td>1</td><td>procesos worker (prefork). Funciona con <code>--api</code> y con <code>--api-dir</code>; ver abajo</td></tr>
   <tr><td><code>--hotreload</code></td><td>OFF</td><td>recarga automática al cambiar archivos</td></tr>
+  <tr><td><code>--dev</code></td><td>OFF</td><td>hot-reload + los 500 traen <code>file:line</code> (nunca en producción)</td></tr>
+  <tr><td><code>--cors-origin &lt;url&gt;</code></td><td>*</td><td>origen permitido para CORS</td></tr>
+  <tr><td><code>--syntax-check &lt;file.te&gt;</code></td><td>—</td><td>valida sin ejecutar; JSON <code>{ok, errors[]}</code> (ver <a href="#/errors">Manejo de errores</a>)</td></tr>
+  <tr><td><code>--profile</code> / <code>TYPEEASY_PROF_FN=1</code></td><td>OFF</td><td>tiempos por función, por request en <code>--api</code> (ver <a href="#/timing">Medir tiempo</a>)</td></tr>
+  <tr><td><code>--version</code> / <code>--help</code></td><td>—</td><td>versión del motor / ayuda</td></tr>
 </table>
+
+<h2>Concurrencia: <code class="inline">--workers N</code></h2>
+<p>El intérprete atiende <strong>una request a la vez por proceso</strong>. Con <code class="inline">--workers N</code> el binario, tras parsear tu <code class="inline">.te</code>, hace <em>prefork</em> de N procesos hijos que escuchan el <strong>mismo puerto</strong> (<code class="inline">SO_REUSEPORT</code> en Linux); el kernel reparte las conexiones y el padre vigila y relanza al que muera. Así N requests se atienden en paralelo y una request lenta ya no congela a las demás.</p>
+${sh(`# 2 vCPU -> 2 workers (N ≈ núcleos; más que eso solo compite por CPU)
+typeeasy --api apis/main.te --port 8090 --host 127.0.0.1 --workers 2`)}
+<div class="note"><strong>Medido</strong> en una VM de 2 vCPU con una API real (dashboard + listados con MariaDB, 8 clientes concurrentes): 1 worker ≈ 745 req/s, p50 10.7 ms; <strong>2 workers ≈ 1010 req/s, p50 7.7 ms</strong>; 3 workers ya empeora (outliers de ~1 s por sobre-suscripción).</div>
+<div class="warn"><strong>Regla de oro con workers: nada de estado mutable global en el <code class="inline">.te</code>.</strong> Cada worker es un proceso con su propia memoria: un contador, caché o rate-limit guardado en una <code class="inline">var</code> global tendría N copias distintas. La sesión, los contadores y las colas van a la base de datos (o a Redis). Las conexiones a BD deben abrirse <em>dentro</em> de las funciones/endpoints, no a nivel global.</div>
+<p>En Windows <code class="inline">--workers</code> también existe (balanceador TCP interno), pero el escalado real es en Linux. En systemd basta agregar el flag al <code class="inline">ExecStart</code>; <code class="inline">pgrep -fa typeeasy</code> mostrará el padre más N hijos.</p>
 
 <h2>Producción: mantener el API corriendo</h2>
 <p class="warn"><strong>El servidor habla HTTP en claro.</strong> Para producción, poné un <strong>reverse proxy con TLS</strong> (nginx, Caddy o un Ingress) delante del binario: termina HTTPS y reenvía a TypeEasy por HTTP local. Lo mismo aplica para rate limiting y balanceo entre varios <code class="inline">--workers</code>.</p>
 
 <h3>Linux — systemd (incluido en el .deb)</h3>
-${sh(`sudo apt install ./typeeasy_0.0.10_amd64.deb   # binario + CLI + alias 'te'
+${sh(`sudo apt install ./typeeasy_0.0.34_amd64.deb   # binario + CLI + alias 'te'
 sudo vi /etc/default/typeeasy-api               # archivo .te a servir
 sudo systemctl enable --now typeeasy-api@9001
 sudo systemctl status typeeasy-api@9001
@@ -3167,7 +3341,7 @@ class Person {
   <li><strong>APIs</strong>: endpoints, JSON, JWT authentication, cookies, CORS and databases.</li>
 </ul>
 
-<div class="note"><strong>Note.</strong> <code class="inline">.te</code> files must be ASCII outside of string literals. Use only ASCII characters in comments and identifiers.</div>
+<div class="note"><strong>Note.</strong> <code class="inline">.te</code> files are read as <strong>UTF-8</strong>: accents and non-ASCII letters work in strings, comments and even identifiers (<code class="inline">let configuración = 5;</code> is valid). Save the file as UTF-8 (no BOM).</div>
 
 <div class="pager">
   <a class="prev" href="#/home">&larr; Home</a>
@@ -3180,12 +3354,41 @@ PAGES.quickstart = `
 <p class="lead">From zero to a running API in under 5 minutes.</p>
 
 <h2>1. Install</h2>
-<p>Download the binary for your system from the releases page:</p>
+<p>Download the binary for your system from the releases page (current version: <strong>v0.0.34</strong>). Under the release's <strong>Assets</strong> you will find:</p>
 <ul>
-  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.0.23.exe</code> (installer) or the portable <code class="inline">.zip</code>.</li>
-  <li><strong>Linux</strong>: <code class="inline">.deb</code> (Debian/Ubuntu/Mint) or the portable <code class="inline">.tar.gz</code>.</li>
+  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.0.34.exe</code> (installer) or <code class="inline">TypeEasy-0.0.34-win64.zip</code> (portable).</li>
+  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.0.34_amd64.deb</code> (Debian/Ubuntu/Mint) or <code class="inline">TypeEasy-0.0.34-linux-amd64.tar.gz</code> (portable).</li>
+  <li><strong>Linux ARM64</strong> (Raspberry Pi, ARM servers): <code class="inline">typeeasy_0.0.34_arm64.deb</code> or <code class="inline">TypeEasy-0.0.34-linux-arm64.tar.gz</code>.</li>
+  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.0.34-android-arm64.tar.gz</code>.</li>
+  <li><code class="inline">SHA256SUMS-0.0.34.txt</code> to verify the download.</li>
 </ul>
-<p><a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">Releases on GitHub &rarr;</a></p>
+<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.0.34" target="_blank" rel="noopener">Release v0.0.34 on GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">All releases &rarr;</a></p>
+${sh(`# Linux (Debian/Ubuntu)
+sudo apt install ./typeeasy_0.0.34_amd64.deb
+
+# Linux/Android portable: extract and use the bundled binary
+tar -xzf TypeEasy-0.0.34-linux-amd64.tar.gz
+
+# Verify the install (Windows, Linux or Android)
+typeeasy --version        # TypeEasy 0.0.34`)}
+<div class="note"><strong>Where the binary lives.</strong> The Windows installer puts it at <code class="inline">%LOCALAPPDATA%\\Programs\\TypeEasy\\bin\\typeeasy-bin.exe</code> (and adds <code class="inline">typeeasy</code>/<code class="inline">te</code> to PATH). The <code class="inline">.deb</code> installs <code class="inline">/usr/bin/typeeasy-bin</code> (the engine) and <code class="inline">/usr/bin/typeeasy</code> (CLI with <code class="inline">new</code>, <code class="inline">gen</code>, <code class="inline">serve</code>…). If a CLI subcommand does not recognise an engine flag (e.g. <code class="inline">--syntax-check</code>), call <code class="inline">typeeasy-bin</code> directly.</div>
+
+<h2>1b. Or clone and build (to study or extend the engine)</h2>
+<p>If you want to read the interpreter source, add a native function or <a href="#/extend">extend the syntax</a>, clone the repository at the version you want and build it. You need <code class="inline">gcc</code>, <code class="inline">flex</code>, <code class="inline">bison</code>, <code class="inline">make</code> and the MariaDB/PostgreSQL/OpenSSL headers (on Windows, MSYS2/MinGW-w64).</p>
+${sh(`git clone --branch v0.0.34 https://github.com/appdeveloper777/TypeEasy.git
+cd TypeEasy
+
+# Linux (Ubuntu/Debian): deps, once
+sudo apt-get install -y build-essential flex bison libmariadb-dev libpq-dev freetds-dev libssl-dev pkg-config
+bash scripts/build_native_linux.sh          # -> src/typeeasy
+
+# Windows (MSYS2 MinGW64)
+bash scripts/build_native_windows.sh        # -> src/typeeasy.exe
+
+# Language and endpoint regression suites
+python tools/te-test/run_tests.py tests/lang --bin ./src/typeeasy
+python tools/te-test/run_api_tests.py tests/api --bin ./src/typeeasy`)}
+<div class="note"><strong>Download vs clone.</strong> To <em>use</em> TypeEasy the release (one binary) is enough. Cloning downloads the C <em>source code</em>: it is for developing the language, not required to write APIs.</div>
 
 <h2>2. Create a project (Rails-style)</h2>
 ${sh(`te new shop
@@ -3580,21 +3783,35 @@ ${te(`for (i = 0; 2; 1) {
 }`)}
 ${out("0,0\\n0,1\\n1,0\\n1,1")}
 
-<p>If you need to <strong>start from a variable</strong>, don't put it in the start of the <code class="inline">for</code>
-(it would be a syntax error). Initialize it first with <code class="inline">var</code> and use <code class="inline">while</code>:</p>
-${te(`let start = 2;
-var i = start;          // var (mutable), not let
-while (i < 5) {
-    println(i);
-    i = i + 1;
-}`)}
-${out("2\\n3\\n4")}
-
-<div class="note"><strong>Numeric for rule.</strong>
+<div class="note"><strong>Numeric for rule (classic form).</strong>
 <ul>
-<li>The <strong>start must be a numeric literal</strong> (<code class="inline">for (i = 0; ...)</code>); a variable in the start is a syntax error. If you need to start at a variable, initialize it first with <code class="inline">var</code> and use <code class="inline">while</code> (see example above).</li>
+<li>The <strong>start must be a numeric literal</strong> (<code class="inline">for (i = 0; ...)</code>); a variable in the start is a syntax error. To start at a variable use the <strong>Java-style for</strong> below (<code class="inline">for (var i = start; i &lt; 5; i++)</code>) or <code class="inline">while</code>.</li>
+<li>The 2nd field is a <strong>limit</strong>, not a condition: <code class="inline">for (i = 0; i &lt; 4; 1)</code> is an error and <code class="inline">typeeasy --syntax-check</code> reports it (“the 2nd field is an exclusive LIMIT, not a condition”).</li>
 </ul>
 The <strong>limit</strong> and <strong>step</strong> do accept variables/expressions, and the body accepts multiple statements.</div>
+
+<h2>Java / C-style for <span class="ver" style="vertical-align:middle">v0.0.34</span></h2>
+<p>Since <strong>v0.0.34</strong> there is also the three-part <code class="inline">for</code> <strong>with a condition</strong>, exactly like Java, C or JavaScript: <code class="inline">for (init; condition; update)</code>. The parser recognises it because the init uses <code class="inline">var</code>/<code class="inline">let</code>, or because the 2nd field is a comparison / the 3rd is <code class="inline">i++</code>, <code class="inline">i += 2</code>, etc.</p>
+${te(`for (var i = 0; i < 4; i++) {
+    println(i);
+}`)}
+${out("0\\n1\\n2\\n3")}
+
+<p>The init <strong>can be a variable or expression</strong>, and the update accepts <code class="inline">++</code>, <code class="inline">--</code>, <code class="inline">+=</code>, <code class="inline">-=</code>, <code class="inline">*=</code>, <code class="inline">/=</code> or an assignment:</p>
+${te(`let start = 2;
+for (var i = start; i < 5; i++) { print(i + " "); }     // 2 3 4
+println("");
+for (var j = 10; j > 0; j -= 3) { print(j + " "); }     // 10 7 4 1
+println("");
+for (var k = 1; k <= 100; k *= 10) { print(k + " "); }  // 1 10 100
+println("");`)}
+${out("2 3 4 \\n10 7 4 1 \\n1 10 100 ")}
+
+<ul>
+  <li>The init variable is <strong>local to the loop</strong>; <code class="inline">continue</code> runs the update before the next iteration.</li>
+  <li>All three forms <strong>coexist</strong>: classic <code class="inline">for (i = 0; 5; 1)</code>, range <code class="inline">for (0; 8; 1)</code> and Java <code class="inline">for (var i = 0; i &lt; 5; i++)</code>.</li>
+  <li>Requires binary <strong>&ge; 0.0.34</strong> (<code class="inline">typeeasy --version</code>); older versions report a syntax error.</li>
+</ul>
 
 <h2>break and continue</h2>
 ${te(`var i = 0;
@@ -3886,6 +4103,28 @@ try {
   <li><code class="inline">finally</code> always runs, even after a <code class="inline">return</code>.</li>
 </ul>
 
+<h2>Runtime errors: file, line and function stack <span class="ver" style="vertical-align:middle">v0.0.33</span></h2>
+<p>An uncaught fatal error (unknown function, reassigning a <code class="inline">let</code>, method call on <code class="inline">null</code>…) prints to <code class="inline">stderr</code> the message, the <strong>file and line</strong> (also for files pulled in with <code class="inline">import</code>) and the chain of functions that led there:</p>
+${te(`let f = fn(x) => { return noExiste(x); };
+println(f(1));`, "err.te")}
+${out("Error: function 'noExiste' not defined.\\n    at err.te:1 in f")}
+<p>In API mode (<code class="inline">--api</code>) the same error <strong>does not kill the server</strong>: the request gets <code class="inline">500 {"error":"internal_error"}</code> and the process keeps serving. With <code class="inline">--dev</code> (or <code class="inline">TYPEEASY_DEV=1</code>) the 500 body also includes <code class="inline">file</code>, <code class="inline">line</code> and the message. Never enable <code class="inline">--dev</code> in production.</p>
+
+<h2>Catch errors before running: <code class="inline">--syntax-check</code> <span class="ver" style="vertical-align:middle">v0.0.34</span></h2>
+<p><code class="inline">typeeasy --syntax-check file.te</code> parses the file (and its <code class="inline">import</code>s) without executing it and returns JSON. Since <strong>v0.0.34</strong>, besides syntax and arity it reports <strong>semantic errors</strong> that used to show up only at runtime:</p>
+<table class="ref">
+  <tr><th>Code</th><th>Detects</th></tr>
+  <tr><td>S1</td><td>Reassigning a variable declared with <code>let</code>/<code>const</code> (scope-aware for fn/blocks; parameters are mutable).</td></tr>
+  <tr><td>S2 / S3</td><td>A comparison in the 2nd or 3rd field of a classic <code>for</code> (<code>for (i = 0; i &lt; 4; 1)</code>): those fields are a limit and a step.</td></tr>
+  <tr><td>S4</td><td><code>for-in</code> over a scalar literal (<code>for (let z in 5)</code>).</td></tr>
+</table>
+${te(`let total = 0;
+total = total + 1;                  // S1
+for (i = 0; i < 4; 1) { println(i); }   // S2`, "sem.te")}
+${sh(`typeeasy --syntax-check sem.te`)}
+${out('{"ok":false,"errors":[\\n  {"line":2,"msg":"Error: cannot assign to constant variable \'total\' (declared with let/const; use var).","near":"total","file":"sem.te"},\\n  {"line":3,"msg":"Error: for(init; LIMIT; STEP): the 2nd field is an exclusive LIMIT, not a condition (write \'for (i = 0; n; 1)\', not \'i < n\').","near":"i","file":"sem.te"}\\n]}')}
+<div class="note"><strong>Wire it into your workflow.</strong> A valid file returns <code class="inline">{"ok":true,"errors":[]}</code>. Use it in a git hook or CI before deploying: it is instant and needs no database or environment variables. In the Windows installer the engine is <code class="inline">typeeasy-bin.exe</code>; on Linux <code class="inline">typeeasy-bin</code>.</div>
+
 <div class="pager">
   <a class="prev" href="#/inheritance">&larr; Inheritance</a>
   <a href="#/modules">Modules &rarr;</a>
@@ -4064,6 +4303,28 @@ ${out("1 million: 3 ms (sum=499999500000)\n10 million: 27 ms (sum=49999995000000
 
 <div class="note"><strong>Tip.</strong> To speed up hot loops with the JIT, run with <code class="inline">TYPEEASY_JIT=1 TYPEEASY_PROFILE=1</code>. The same 100M loop drops from ~2.7s to ~0.13s.</div>
 
+<h2>Profile per function: <code class="inline">--profile</code> <span class="ver" style="vertical-align:middle">v0.0.34</span></h2>
+<p>When you don't know <em>which</em> function eats the time, there is no need to sprinkle <code class="inline">now_ms()</code> everywhere. <code class="inline">typeeasy --profile script.te</code> (or the <code class="inline">TYPEEASY_PROF_FN=1</code> variable) times every <strong>named function</strong> (<code class="inline">let f = fn(...) =&gt; {...}</code>, methods) and prints a table sorted by self time to <code class="inline">stderr</code> when the script ends:</p>
+${te(`let suma = fn(n) => {
+    var s = 0;
+    for (var i = 0; i < n; i++) { s += i; }
+    return s;
+};
+let doble = fn(n) => { return suma(n) * 2; };
+println(doble(30000));`, "perf.te")}
+${sh(`TYPEEASY_PROF_FN=1 typeeasy perf.te     # o: typeeasy --profile perf.te`)}
+${out("899970000\\n[profile] perf.te  (2 fns, 7.2 ms in fn bodies)\\n[profile]    self_ms    incl_ms      calls  fn\\n[profile]       7.16       7.16          1  suma\\n[profile]       0.02       7.18          1  doble")}
+<table class="ref">
+  <tr><th>Column</th><th>Meaning</th></tr>
+  <tr><td><code>self_ms</code></td><td>Time inside the function body, <strong>excluding</strong> the functions it calls. The table is sorted by it: the top rows are what to optimise.</td></tr>
+  <tr><td><code>incl_ms</code></td><td>Total time including callees.</td></tr>
+  <tr><td><code>calls</code></td><td>How many times it was called.</td></tr>
+</table>
+<p><strong>In an API</strong> (<code class="inline">--api</code>) the report is printed <strong>per request</strong> as each one finishes, with method, route, status and duration. With <code class="inline">TYPEEASY_PROFILE_MIN_MS=50</code> only requests slower than 50 ms are printed: ideal to find the slow endpoint on a test server without touching the code.</p>
+${sh(`TYPEEASY_PROF_FN=1 TYPEEASY_PROFILE_MIN_MS=50 typeeasy --api main.te --port 8199`)}
+<div class="note"><strong>Note.</strong> <code class="inline">--profile</code> also enables the JIT profiler (<code class="inline">TYPEEASY_PROFILE=1</code>) and appends its <em>hot regions</em> table; if you only want the per-function table use <code class="inline">TYPEEASY_PROF_FN=1</code>. Integers are 32-bit: a large sum overflows (hence 30000 in the example).</div>
+<div class="note"><strong>Cost.</strong> Disabled, the hook is one integer compare per call. Enabled it adds a few microseconds per function; don't leave it on in production.</div>
+
 <div class="pager">
   <a class="prev" href="#/stdlib">&larr; Stdlib</a>
   <a href="#/bridge">Bridge &rarr;</a>
@@ -4216,6 +4477,77 @@ ${out('{"sales":1280,"customers":342,"products":97}')}
 
 <div class="pager">
   <a class="prev" href="#/bridge">&larr; Bridge</a>
+  <a href="#/extend">Extending the language &rarr;</a>
+</div>
+`;
+
+PAGES.extend = `
+<h1>Extending the language (the C engine) <span class="ver" style="vertical-align:middle">v0.0.34</span></h1>
+<p class="lead">There are two very different ways to "add things" to TypeEasy: <strong>reusing</strong> code with functions and <code class="inline">import</code> (done in <code class="inline">.te</code>, no engine changes) and <strong>extending the syntax or builtins</strong> (done in the interpreter's C code, recompiled and shipped as a new binary).</p>
+
+<h2>1. What does NOT require touching the engine</h2>
+<p>Functions, classes and modules cover 99% of cases. A "library" in TypeEasy is just a <code class="inline">.te</code> file you import:</p>
+${te(`let greet = fn(name) => { return "Hello " + name; };
+let tax = fn(amount, country) => {
+    if (country == "PA") { return amount * 0.07; }
+    return amount * 0.15;
+};`, "utils.te")}
+${te(`import "utils.te";
+println(greet("Ana"));
+println(tax(100, "PA"));   // 7`, "app.te")}
+<p>You can also call code in other languages through the <a href="#/bridge">Bridge</a>. None of this changes the grammar: same keywords, more functions available.</p>
+
+<h2>2. When you DO have to touch the engine</h2>
+<ul>
+  <li>A <strong>new language construct</strong> (a <code class="inline">for</code> form, an operator, a keyword).</li>
+  <li>A <strong>native builtin</strong> (a C function callable from <code class="inline">.te</code>, e.g. a connector or a heavy algorithm).</li>
+  <li>A new <strong>check</strong> in <code class="inline">--syntax-check</code> or a better error message.</li>
+</ul>
+<p>A <code class="inline">.te</code> file <strong>cannot</strong> enable new syntax: the grammar lives in the binary. That is why every release states the version each feature appeared in (and why <code class="inline">typeeasy --version</code> matters).</p>
+
+<h2>3. The journey of a new syntax</h2>
+<p>Take the real case of the Java-style <code class="inline">for</code> (<code class="inline">for (var i = 0; i &lt; n; i++)</code>), added in v0.0.34. It went through these four layers:</p>
+<table class="ref">
+  <tr><th>Layer</th><th>File</th><th>What was done</th></tr>
+  <tr><td>1. Lexer</td><td><code>src/parser.l</code></td><td>Turns text into tokens (<code>FOR</code>, <code>LPAREN</code>, <code>INCREMENT</code> for <code>++</code>…). Nothing needed here: the tokens already existed.</td></tr>
+  <tr><td>2. Parser</td><td><code>src/parser.y</code> (Bison)</td><td>New rules <code>for_c_init</code> / <code>for_c_update</code> and the productions <code>FOR LPAREN for_c_init SEMICOLON expression SEMICOLON for_c_update RPAREN …</code> that build the node via <code>create_for_c_node(init, cond, update, body)</code>.</td></tr>
+  <tr><td>3. AST</td><td><code>src/ast.h</code> + <code>src/ast.c</code></td><td>Prototype <code>ASTNode *create_for_c_node(...)</code> in the header, the node type <code>"FOR_C"</code> (<code>NK_FOR_C</code>) and the constructor.</td></tr>
+  <tr><td>4. Interpreter</td><td><code>src/ast.c</code></td><td><code>interpret_for_c(node)</code>: runs init, evaluates the condition, runs the body, runs update; honours <code>break</code>/<code>continue</code> and keeps the variable local to the loop. Hooked into the <code>interpret_node</code> <code>switch</code> (<code>case NK_FOR_C</code>).</td></tr>
+</table>
+<div class="warn"><strong>Windows gotcha (LLP64).</strong> Every constructor function the parser calls <strong>must have a prototype in <code class="inline">src/*.h</code></strong>. An inline <code class="inline">extern</code> inside the Bison action compiles, but without a visible prototype the compiler assumes an <code class="inline">int</code> return and on Windows x64 <strong>truncates the pointer to 32 bits</strong> → a SIGSEGV that never shows on Linux. CI audits this (<code class="inline">scripts/audit_llp64_prototypes.sh</code>) and fails when one is missing.</div>
+
+<h2>4. Tests: no test, no feature</h2>
+<p>Every language change ships a file in <code class="inline">tests/lang/&lt;folder&gt;/name.te</code> with its <code class="inline">name.expected</code> (exact output). The runner builds the list, runs and compares:</p>
+${sh(`# tests/lang/03_control_flow/for_java_style.te  +  for_java_style.expected
+python tools/te-test/run_tests.py tests/lang --bin ./src/typeeasy
+# === TOTAL: PASS=97  FAIL=0  XFAIL=3 ===
+
+# real HTTP endpoints (starts the server, fires requests, compares JSON)
+python tools/te-test/run_api_tests.py tests/api --bin ./src/typeeasy`)}
+<ul>
+  <li><code class="inline">tests/lang/09_diagnostics/</code> covers error messages and the S1–S4 checks of <code class="inline">--syntax-check</code>.</li>
+  <li><code class="inline">tests/lang/13_gotchas/</code> is the collection of historical traps: when you fix a bug, add the case that reproduced it there.</li>
+  <li>Run the suite on <strong>both Windows and Linux</strong>: the crash above only showed on one of them.</li>
+</ul>
+
+<h2>5. Build and try your binary</h2>
+${sh(`git clone https://github.com/appdeveloper777/TypeEasy.git && cd TypeEasy
+bash scripts/build_native_linux.sh            # Linux   -> src/typeeasy
+bash scripts/build_native_windows.sh          # Windows -> src/typeeasy.exe (MSYS2)
+
+./src/typeeasy --version
+./src/typeeasy --syntax-check my_api.te       # does your code still parse?
+./src/typeeasy --api my_api.te --port 8199    # try on a spare port before replacing the installed one`)}
+<div class="note"><strong>Embedded version.</strong> The number shown by <code class="inline">--version</code> is injected at build time: <code class="inline">make -C src typeeasy CFLAGS_EXTRA=-DTYPEEASY_VERSION=0.0.34</code> (CI takes it from the tag). Without that flag the binary reports <code class="inline">0.0.1</code>.</div>
+
+<h2>6. Adding a native builtin (easier than syntax)</h2>
+<p>If what you want is a new function callable from <code class="inline">.te</code>, there is no need to touch lexer or parser: implement it in C and register it with <code class="inline">te_builtin_register("name", adapter)</code> in <code class="inline">src/te_stdlib.c</code>, just like <code class="inline">mysql_connect</code> or <code class="inline">now_ms</code>. The adapter receives the already-evaluated arguments and returns a value. Add the test under <code class="inline">tests/lang/07_stdlib/</code> and document it in <a href="#/stdlib">Stdlib</a>.</p>
+
+<h2>7. Publishing</h2>
+<p>A <code class="inline">git tag vX.Y.Z</code> triggers the GitHub Actions workflows that build <strong>Linux amd64/arm64, Windows and Android</strong>, run the suite and publish the release with <code class="inline">SHA256SUMS</code>. Before tagging: <code class="inline">tests/lang</code> and <code class="inline">tests/api</code> green on both OSes, and <code class="inline">--syntax-check</code> over a large real project (the reference ERP has 120 files) to confirm there are no false positives.</p>
+
+<div class="pager">
+  <a class="prev" href="#/async">&larr; Async / concurrency</a>
   <a href="#/first-api">Your first API &rarr;</a>
 </div>
 `;
@@ -5168,7 +5500,7 @@ te --api-dir ./apis --workers 4 --hotreload`)}
 <p class="warn"><strong>The server speaks plain HTTP.</strong> For production, put a <strong>TLS reverse proxy</strong> (nginx, Caddy or an Ingress) in front of the binary: it terminates HTTPS and forwards to TypeEasy over local HTTP. The same applies to rate limiting and balancing across multiple <code class="inline">--workers</code>.</p>
 
 <h3>Linux — systemd (bundled in the .deb)</h3>
-${sh(`sudo apt install ./typeeasy_0.0.10_amd64.deb   # binary + CLI + 'te' alias
+${sh(`sudo apt install ./typeeasy_0.0.34_amd64.deb   # binary + CLI + 'te' alias
 sudo vi /etc/default/typeeasy-api               # .te file to serve
 sudo systemctl enable --now typeeasy-api@9001
 sudo systemctl status typeeasy-api@9001
@@ -5548,15 +5880,20 @@ curl -i http://localhost:9000/api/profile`)}
 <script type="text/plain" id="agente-md">
 # Agente TypeEasy (TE) — Guía de sintaxis para escribir código .te
 
-Eres un asistente experto en **TypeEasy (TE)**: un lenguaje compilado a un
-**único binario nativo** para crear y desplegar APIs sin runtime, sin Docker y
-sin `npm install`. Sigue estas reglas al escribir o corregir archivos `.te`.
+Eres un asistente experto en **TypeEasy (TE)**: un lenguaje con motor nativo en un
+**único binario** (Windows / Linux / Android) para crear y desplegar APIs sin runtime,
+sin Docker y sin `npm install`. Sigue estas reglas al escribir o corregir archivos `.te`.
 Valida siempre con `typeeasy --syntax-check archivo.te` (devuelve JSON
-`{"ok":bool,"errors":[]}`).
+`{"ok":bool,"errors":[{file,line,msg,near}]}`). Desde **0.0.34** también detecta errores
+semánticos: S1 reasignar `let`/`const`, S2/S3 condición en un `for` clásico, S4 `for-in`
+sobre escalar. Comprueba la versión con `typeeasy --version` antes de usar sintaxis nueva.
 
 ## 1. Variables y constantes
 - `let` = CONSTANTE (no reasignable). `var` = mutable.
-- `const` = constante global a nivel de módulo.
+- `const` = constante global a nivel de módulo; **solo admite un literal**.
+- `let` congela la **variable**, no el objeto: `obj.edad = 99;` sí; `obj = new X();` no.
+- `as` y `from` son palabras reservadas: no las uses como identificadores ni claves.
+- Los enteros son de **32 bits**: sumas grandes desbordan (usa float o divide el cálculo).
 
 ```
 let PI = 3.1416;      // constante
@@ -5575,16 +5912,21 @@ fn(x) => { return x + 1; }              // lambda
 let doble = fn(n) => { return n * 2; };
 ```
 
-## 3. `for` clásico — LÍMITE EXCLUSIVO + PASO (gotcha crítico)
-El `for` clásico es `for(i = INICIO; LÍMITE; PASO)`: el 2º término es un
-**límite exclusivo** y el 3º es el **paso**, NO una condición.
-**NO existe** `for(i = 0; i < 4; i++)`.
+## 3. `for` — dos formas que conviven (gotcha crítico)
+**Clásica:** `for(i = INICIO; LÍMITE; PASO)`: el 2º término es un **límite exclusivo**
+y el 3º el **paso**, NO una condición. El inicio debe ser un número literal.
+`for (i = 0; i < 4; 1)` es un ERROR (S2) y `--syntax-check` lo reporta.
+
+**Estilo Java/C (desde 0.0.34):** `for (var i = 0; i < n; i++) { ... }` con condición
+real y update `++ -- += -= *= /=`; el init puede ser variable; `i` es local del bucle.
+En binarios < 0.0.34 esta forma NO existe (error de sintaxis).
 
 ```
-for (i = 0; 4; 1) { print(i); }   // imprime 0 1 2 3
-for (i = 0; 10; 2) { print(i); }  // 0 2 4 6 8
+for (i = 0; 4; 1) { print(i); }                 // clásico: 0 1 2 3
+for (i = 0; 10; 2) { print(i); }                // clásico: 0 2 4 6 8
+for (var i = start; i < n; i++) { print(i); }   // Java (>= 0.0.34)
 ```
-También hay `for (x in lista) { ... }` y `while (cond) { ... }`.
+También hay `for (let x in lista) { ... }` (solo sobre listas) y `while (cond) { ... }`.
 
 ## 4. Strings
 - Interpolación con prefijo `$`: `$"Hola {nombre}, tienes {edad} años"`.
@@ -5611,10 +5953,10 @@ let a = new Animal();
 No hay `super`; la herencia (`extends`) comparte campos y métodos.
 
 ## 7. JSON
-- `json_parse(texto)` → objeto; se accede por corchetes: `p["clave"]`.
+- `json_parse(texto)` → objeto; se accede por corchetes: `p["clave"]`. `json_parse("")` devuelve `null`.
 - Para materializar un posible null a string vacío:
   `var v = ("" + p["x"]); if (v == "null") { v = ""; }`
-- `json(obj)` serializa a string para devolver en un endpoint.
+- `json(obj)` serializa a string para devolver en un endpoint. `("" + map)` también da JSON.
 
 ## 8. Endpoints (API REST)
 - Se agrupan en un bloque `endpoint { ... }`.
@@ -5637,7 +5979,13 @@ endpoint {
   }
 }
 ```
-Levantar: `typeeasy --api main.te --port 8090 --host 127.0.0.1`.
+Levantar: `typeeasy --api main.te --port 8090 --host 127.0.0.1 --workers 2`.
+- `--workers N` (N ≈ núcleos) atiende N requests en paralelo con N procesos: **NO guardes
+  estado mutable en variables globales** del `.te` (contadores, caches, rate-limit): cada
+  worker tendría su copia. Sesión y contadores van a la BD. Conexiones a BD dentro de fns.
+- Un error fatal en un endpoint responde 500 y el server sigue vivo; `--dev` agrega
+  `file:line` al 500 (nunca en producción). Perfilar: `TYPEEASY_PROF_FN=1` (tabla por fn
+  por request; `TYPEEASY_PROFILE_MIN_MS=50` para solo las lentas).
 
 ## 9. Bases de datos
 - Conectar: `sqlite_connect(ruta)` ·
@@ -5656,19 +6004,22 @@ ni como nombre de parámetro `@from` → renómbrala (ej. `vfrom`). Un
 excluye el módulo entero.
 
 ## 11. Checklist antes de dar por terminado
-- [ ] `let` para constantes, `var` para mutables.
-- [ ] `for(init; LÍMITE_EXCLUSIVO; PASO)` — nunca `i < n`.
+- [ ] `let` para constantes, `var` para mutables (S1 del syntax-check lo confirma).
+- [ ] `for` clásico = `for(init; LÍMITE_EXCLUSIVO; PASO)`; con condición solo la forma Java `for (var i = 0; i < n; i++)` y binario >= 0.0.34.
 - [ ] Funciones con nombre llevan tipo de retorno; `fn` para lambdas.
 - [ ] Acceso a JSON/map por corchetes; null materializado a "".
 - [ ] `"json"` solo en SELECT; dialecto correcto por motor.
-- [ ] Nada llamado `from`.
+- [ ] Nada llamado `from` ni `as`.
 - [ ] Encadenamiento partido en variables intermedias.
+- [ ] Sin estado mutable global si el server corre con `--workers`.
 - [ ] `typeeasy --syntax-check` devuelve `{"ok":true,"errors":[]}`.
 
 ## 12. Filosofía
 Un solo binario, baterías incluidas (JSON, JWT, CORS, cookies, SQL, WebSockets),
-listo para producción (health checks, logging, multi-worker, graceful shutdown).
-Escribe el código más simple y directo que cumpla el requerimiento.
+listo para producción (health checks, logging, multi-worker `--workers`, graceful shutdown).
+La sintaxis vive en el motor (C): un `.te` no puede agregar palabras clave; para eso se
+extiende el intérprete (lexer `parser.l` → parser `parser.y` → `ast.c` + tests) y se publica
+una versión nueva. Escribe el código más simple y directo que cumpla el requerimiento.
 </script>
 
 <script>

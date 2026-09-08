@@ -479,7 +479,9 @@ int main(int argc, char *argv[]) {
             printf("  --dev                  Dev mode: hot-reload + 500 errors with file:line\n");
             printf("  --port <p>             Port for --api (default 8080)\n");
             printf("  --host <h>             Bind host for --api (default 0.0.0.0)\n");
+            printf("  --workers <n>          Prefork n worker processes for --api (default 1)\n");
             printf("  --cors-origin <url>    Allowed CORS origin (default *)\n");
+            printf("  --profile              Per-fn timings (self/incl ms, calls); per request in --api\n");
             return 0;
         }
     }
