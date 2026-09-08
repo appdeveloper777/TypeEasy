@@ -6084,7 +6084,6 @@ static void interpret_predict_node(ASTNode *node);
 void interpret_call_func(ASTNode *node);
 static void interpret_return_node(ASTNode *node);
 void interpret_call_method(ASTNode *node);
-static void interpret_call_method_alone(ASTNode *node);
 static void interpret_var_decl(ASTNode *node);
 static void interpret_assign_attr(ASTNode *node);
 /* te_colcache_invalidate declared in te_colcache.h. */
@@ -7208,61 +7207,8 @@ void interpret_call_method(ASTNode *node) {
     te_depth_leave();
 }
 
-static void interpret_call_method_impl(ASTNode *node) {
-    ASTNode *objNode = node->left;
-
-    /* ===== Gotcha #2: método sobre literal — `[1,2,3].map(...)`, `{...}.keys()`.
-     * Si el receptor es un literal LIST/OBJECT_LITERAL no tiene `id`, así que la
-     * resolución `find_variable(objNode->id)` da NULL y ningún dispatcher LIST/MAP
-     * corre (silenciosamente no hace nada / null-deref). Materializamos el literal
-     * en una variable temporal y reescribimos node->left a un ID, igual que el
-     * manejador de llamadas encadenadas más abajo. ===== */
-    if (objNode && objNode->type && !objNode->id &&
-        (strcmp(objNode->type, "LIST") == 0 || strcmp(objNode->type, "OBJECT_LITERAL") == 0)) {
-        static int _lit_seq = 0;
-        char tmp[40];
-        snprintf(tmp, sizeof(tmp), "__lit_%d__", _lit_seq++);
-        add_or_update_variable(tmp, objNode);
-        /* add_or_update_variable guarda OBJECT_LITERAL con type "OBJECT_LITERAL",
-         * pero los dispatchers de MAP exigen type "MAP" (igual que declare_variable). */
-        if (strcmp(objNode->type, "OBJECT_LITERAL") == 0) {
-            Variable *tv = find_variable(tmp);
-            if (tv && tv->type) { free(tv->type); tv->type = strdup("MAP"); }
-        }
-        ASTNode *id = (ASTNode*)calloc(1, sizeof(ASTNode));
-        id->type = strdup("ID");
-        id->id = strdup(tmp);
-        node->left = id;
-        objNode = id;
-    }
-
-    /* ===== v0.0.11-pre: DataFrame analytics fast-path =====
-     * Si el receptor es un LIST con DataFrame columnar adjunto, intentamos
-     * despachar a sum/min/max/count/group_sum/print directamente sobre las
-     * columnas (SIMD AVX2 + pthread parallel). Si el método no aplica,
-     * caemos al dispatch estándar. */
-    {
-        ASTNode *recv_list = NULL;
-        if (objNode && objNode->type) {
-            if (strcmp(objNode->type, "LIST") == 0) {
-                recv_list = objNode;
-            } else if (strcmp(objNode->type, "ID") == 0 || strcmp(objNode->type, "IDENTIFIER") == 0) {
-                Variable *lv = find_variable(objNode->id);
-                if (lv && lv->type && strcmp(lv->type, "LIST") == 0)
-                    recv_list = (ASTNode*)(intptr_t)lv->value.object_value;
-            }
-        }
-        DataFrame *df_recv = te_list_df(recv_list);
-        if (df_recv) {
-            if (te_df_dispatch_method(df_recv, node)) return;
-            /* fallthrough si el método no es analítico */
-        }
-    }
-
-    /* ===== v0.0.12 #5 Fusion peephole: where(p).{select|map|first|find|firstWhere|sum} =====
-     * Detect `xs.where(p).OUTER(...)` where xs is an ID resolving to a LIST.
-     * Avoids materializing the intermediate filtered list. Falls through to
-     * standard chained-call handling if pattern doesn't match. */
+/* Extraído de interpret_call_method_impl (Fase 2): devuelve 1 si manejó la llamada. */
+static int te_cm_fusion_where_chain(ASTNode *node, ASTNode *objNode) {
     if (objNode && objNode->type && strcmp(objNode->type, "CALL_METHOD") == 0 &&
         objNode->id && node->id) {
         const char *inner_m = objNode->id;
@@ -7342,11 +7288,11 @@ static void interpret_call_method_impl(ASTNode *node) {
                                     }
                                     if (at) {
                                         add_or_update_variable("__ret__", build_item_from_value(item));
-                                        return;
+                                        return 1;
                                     }
                                 } else {
                                     add_or_update_variable("__ret__", build_item_from_value(item));
-                                    return;
+                                    return 1;
                                 }
                             } else if (outer_kind == 3) {
                                 double v = item->str_value ? atof(item->str_value) : (double)item->value;
@@ -7358,11 +7304,11 @@ static void interpret_call_method_impl(ASTNode *node) {
                     }
                     if (outer_kind == 1) {
                         add_or_update_variable("__ret__", result);
-                        return;
+                        return 1;
                     }
                     if (outer_kind == 2) {
                         add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
-                        return;
+                        return 1;
                     }
                     if (outer_kind == 3) {
                         if (sum_is_int && sum_acc == (double)(long long)sum_acc) {
@@ -7371,18 +7317,17 @@ static void interpret_call_method_impl(ASTNode *node) {
                             char buf[64]; te_fmt_double(buf, sizeof(buf), sum_acc);
                             add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                         }
-                        return;
+                        return 1;
                     }
                 }
             }
         }
     }
+    return 0;
+}
 
-    /* ===== v0.0.12 #N Fusion-parallel: where(pred).sumBy(proj) / .countWhere(p2) =====
-     * Detect `xs.where(pred).sumBy(proj)` and `xs.where(pred).countWhere(p2)`
-     * where BOTH lambdas are fast-pathable (SPEC_*). Runs as a single parallel
-     * pass with OpenMP, never materializing the intermediate filtered list.
-     * Falls through if any lambda is not fast-pathable. */
+/* Extraído de interpret_call_method_impl (Fase 2): devuelve 1 si manejó la llamada. */
+static int te_cm_fusion_where_aggregate(ASTNode *node, ASTNode *objNode) {
     if (objNode && objNode->type && strcmp(objNode->type, "CALL_METHOD") == 0 &&
         objNode->id && node->id) {
         const char *inner_m = objNode->id;
@@ -7434,7 +7379,7 @@ static void interpret_call_method_impl(ASTNode *node) {
                                     long long total = te_colcache_count(cc, mask);
                                     free(mask);
                                     add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)total, NULL, NULL));
-                                    return;
+                                    return 1;
                                 }
                                 long long itotal = 0; double dtotal = 0.0; int is_int = 1;
                                 if (te_colcache_sum(cc, jidx, mask, &itotal, &dtotal, &is_int)) {
@@ -7450,7 +7395,7 @@ static void interpret_call_method_impl(ASTNode *node) {
                                         char buf[64]; te_fmt_double(buf, sizeof(buf), dtotal);
                                         add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                                     }
-                                    return;
+                                    return 1;
                                 }
                             }
                             free(mask);
@@ -7497,7 +7442,7 @@ static void interpret_call_method_impl(ASTNode *node) {
                                     char buf[64]; te_fmt_double(buf, sizeof(buf), dtotal + (double)itotal);
                                     add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                                 }
-                                return;
+                                return 1;
                             }
                         }
 #endif
@@ -7528,7 +7473,7 @@ static void interpret_call_method_impl(ASTNode *node) {
                                 char buf[64]; te_fmt_double(buf, sizeof(buf), dtotal + (double)itotal);
                                 add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
                             }
-                            return;
+                            return 1;
                         }
                         /* fall through to standard chained handling */
                     }
@@ -7536,6 +7481,251 @@ static void interpret_call_method_impl(ASTNode *node) {
             }
         }
     }
+    return 0;
+}
+
+/* Extraído de interpret_call_method_impl (Fase 2): devuelve 1 si manejó la llamada. */
+static int te_cm_list_builtin(ASTNode *node, ASTNode *objNode, Variable *v) {
+    if (v && v->type && strcmp(v->type, "LIST") == 0) {
+        ASTNode *list = (ASTNode*)(intptr_t)v->value.object_value;
+
+        /* ===== Nivel B paso 2.f: LINQ-with-lambda dispatcher (~1040 LOC).
+         * Implemented in te_linq_ops.c. Methods: map/filter/reduce/forEach/
+         * find/any/every/none/where/select/all/firstWhere/lastWhere/countWhere/
+         * sumBy/avgBy/minBy/maxBy/takeWhile/skipWhile/flatMap/selectMany/groupBy/
+         * orderBy/orderByDescending/distinctBy/aggregate/fold/toMap/toDictionary,
+         * incl. COLUMNAR + OpenMP fast-paths. ===== */
+        if (te_linq_ops_method_dispatch(node, list)) return 1;
+
+
+        /* ===== v0.0.12 #8 Lazy iterator promotion + v0.0.11 numeric/no-arg LINQ.
+         * Dispatched in te_linq.c (Nivel B paso 2.e). ===== */
+        if (te_linq_list_method_dispatch(node, list)) return 1;
+
+        if (list && node->id && strcmp(node->id, "push") == 0) {
+            ASTNode *arg = node->right;
+            if (!arg) return 1;
+            ASTNode *new_item = (ASTNode*)calloc(1, sizeof(ASTNode));
+            memset(new_item, 0, sizeof(ASTNode));
+            if (arg->type && (strcmp(arg->type, "OBJECT_LITERAL") == 0 ||
+                              strcmp(arg->type, "MAP") == 0)) {
+                /* gotcha #18: push of a `{...}` object literal. Previously fell
+                 * through to evaluate_expression (-> 0), storing [0,0,...].
+                 * Snapshot the literal so each push is an independent, readable
+                 * map item (works with list[i]["k"], list.length, etc.). */
+                ASTNode *snap = te_snapshot_object_literal(arg);
+                free(new_item);
+                if (snap) {
+                    snap->next = NULL;
+                    te_list_append(list, snap);
+                    te_colcache_invalidate(list);
+                }
+                return 1;
+            }
+            if (arg->type && strcmp(arg->type, "OBJECT") == 0) {
+                /* Fix: empujar objetos creados con `new ClaseX(args)`.
+                 * El parser eager-construye un OBJECT ASTNode con extra=ObjectNode*
+                 * y left=args, pero no corre el constructor. Para que cada push
+                 * en un loop produzca instancias independientes, clonamos el
+                 * objeto y corremos el constructor con los args reevaluados. */
+                ObjectNode *obj_orig = NULL;
+                if (arg->extra) obj_orig = (ObjectNode*)arg->extra;
+                else obj_orig = (ObjectNode*)(intptr_t)arg->value;
+                if (obj_orig && obj_orig->class) {
+                    ObjectNode *obj_clone = clone_object(obj_orig);
+                    MethodNode *m = obj_clone->class->methods;
+                    while (m && strcmp(m->name, "__constructor") != 0) m = m->next;
+                    if (m) {
+                        ParameterNode *p = m->params;
+                        ASTNode *carg = arg->left;
+                        while (p && carg) {
+                            ASTNode *vn = NULL;
+                            if (carg->type && strcmp(carg->type, "STRING") == 0) {
+                                vn = create_ast_leaf("STRING", 0, carg->str_value, NULL);
+                            } else if (carg->type && strcmp(carg->type, "FLOAT") == 0) {
+                                vn = create_ast_leaf("FLOAT", 0, carg->str_value, NULL);
+                            } else if (carg->type && (strcmp(carg->type, "ID") == 0 || strcmp(carg->type, "IDENTIFIER") == 0)) {
+                                Variable *vv = find_variable(carg->id);
+                                if (vv && vv->vtype == VAL_STRING) {
+                                    vn = create_ast_leaf("STRING", 0, strdup(vv->value.string_value), NULL);
+                                } else if (vv && vv->vtype == VAL_FLOAT) {
+                                    char fbuf[64];
+                                    te_fmt_double(fbuf, sizeof(fbuf), vv->value.float_value);
+                                    vn = create_ast_leaf("FLOAT", 0, fbuf, NULL);
+                                } else if (vv) {
+                                    vn = create_ast_leaf_number("INT", vv->value.int_value, NULL, NULL);
+                                } else {
+                                    vn = create_ast_leaf_number("INT", 0, NULL, NULL);
+                                }
+                            } else {
+                                long long val = (long long)evaluate_expression(carg);
+                                vn = create_ast_leaf_number("INT", val, NULL, NULL);
+                            }
+                            add_or_update_variable(p->name, vn);
+                            p = p->next;
+                            carg = carg->next; /* gotcha #1: step ctor args via ->next */
+                        }
+                        call_method(obj_clone, "__constructor");
+                        return_flag = 0;
+                        return_node = NULL;
+                    }
+                    new_item->type = strdup("OBJECT");
+                    new_item->extra = (struct ASTNode*)obj_clone;
+                    new_item->value = (int)(intptr_t)obj_clone;
+                } else {
+                    /* Sin clase resoluble: degradar a NUMBER 0 para no segfaultear */
+                    new_item->type = strdup("NUMBER");
+                    new_item->value = 0;
+                }
+            } else if (arg->type && strcmp(arg->type, "STRING") == 0) {
+                new_item->type = strdup("STRING");
+                new_item->str_value = strdup(arg->str_value);
+            } else if (arg->type && (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0)) {
+                Variable *av = find_variable(arg->id);
+                if (av && av->vtype == VAL_OBJECT && av->value.object_value) {
+                    /* Root fix (prod UAF SIGSEGV in te_expr_is_null/is_string_type):
+                     * a CLASS instance pushed via a variable used to SHARE the
+                     * ObjectNode pointer. When the source variable's object was
+                     * later freed (free_object_node on scope/lambda teardown) the
+                     * list element dangled -> use-after-free reading
+                     * obj->class->attributes[i].id (== NULL after the chunk was
+                     * reused). Clone the instance so the list OWNS its own copy,
+                     * exactly like the push(new X()) and push({...}) paths already
+                     * do. Only class instances (type "OBJECT") are cloned;
+                     * MAP/LIST/LAMBDA (also VAL_OBJECT) keep the shared pointer. */
+                    if (av->type && strcmp(av->type, "OBJECT") == 0) {
+                        ObjectNode *cl = clone_object((ObjectNode*)av->value.object_value);
+                        new_item->type = strdup("OBJECT");
+                        new_item->extra = (struct ASTNode*)cl;
+                        new_item->value = (int)(intptr_t)cl;
+                    } else {
+                        new_item->type = strdup("OBJECT");
+                        new_item->extra = (struct ASTNode*)av->value.object_value;
+                        new_item->value = (int)(intptr_t)av->value.object_value;
+                    }
+                } else if (av && av->vtype == VAL_STRING) {
+                    new_item->type = strdup("STRING");
+                    new_item->str_value = strdup(av->value.string_value);
+                } else if (av && av->vtype == VAL_FLOAT) {
+                    new_item->type = strdup("FLOAT");
+                    char buf[64]; te_fmt_double(buf, sizeof(buf), av->value.float_value);
+                    new_item->str_value = strdup(buf);
+                } else if (av) {
+                    new_item->type = strdup("NUMBER");
+                    new_item->value = av->value.int_value;
+                }
+            } else {
+                double vv = evaluate_expression(arg);
+                if (vv == (int)vv) { new_item->type = strdup("NUMBER"); new_item->value = (int)vv; }
+                else { new_item->type = strdup("FLOAT"); char buf[64]; te_fmt_double(buf, sizeof(buf), vv); new_item->str_value = strdup(buf); }
+            }
+            new_item->next = NULL;
+            te_list_append(list, new_item);   /* Ola 14b: O(1) amortizado */
+            te_colcache_invalidate(list);     /* v0.0.13 (perf) */
+            return 1;
+        }
+        if (list && node->id && strcmp(node->id, "pop") == 0) {
+            ASTNode *cur = list->left;
+            if (!cur) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return 1; }
+            te_colcache_invalidate(list);     /* v0.0.13 (perf) */
+            if (!cur->next) {
+                /* single element: capture it, then empty the list */
+                add_or_update_variable("__ret__", build_item_from_value(cur));
+                list->left = NULL; te_invalidate_list_cache(list); return 1;
+            }
+            while (cur->next && cur->next->next) cur = cur->next;
+            /* cur->next is the last element — capture its value into __ret__ */
+            add_or_update_variable("__ret__", build_item_from_value(cur->next));
+            cur->next = NULL;
+            te_invalidate_list_cache(list);  /* Ola 14 */
+            return 1;
+        }
+        /* Ola 13: list extras (size/length/contains/reverse/sort/get) + join.
+         * Dispatched in te_list.c (Nivel B paso 2.c). */
+        if (te_list_method_dispatch(node, list)) return 1;
+    }
+    return 0;
+}
+
+/* Extraído de interpret_call_method_impl (Fase 2): devuelve 1 si manejó la llamada. */
+static int te_cm_map_builtin(ASTNode *node, ASTNode *objNode, Variable *v) {
+    if (v && v->type &&
+        (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0)) {
+        ASTNode *map = (ASTNode*)(intptr_t)v->value.object_value;
+        if (te_map_method_dispatch(node, map)) return 1;
+        fprintf(stderr, "[method] unknown method '%s' on %s value\n",
+                node->id ? node->id : "?", v->type);
+        ASTNode *nullret = create_ast_leaf("NULL", 0, NULL, NULL);
+        add_or_update_variable("__ret__", nullret);
+        free_ast(nullret);
+        return 1;
+    }
+    return 0;
+}
+
+static void interpret_call_method_impl(ASTNode *node) {
+    ASTNode *objNode = node->left;
+
+    /* ===== Gotcha #2: método sobre literal — `[1,2,3].map(...)`, `{...}.keys()`.
+     * Si el receptor es un literal LIST/OBJECT_LITERAL no tiene `id`, así que la
+     * resolución `find_variable(objNode->id)` da NULL y ningún dispatcher LIST/MAP
+     * corre (silenciosamente no hace nada / null-deref). Materializamos el literal
+     * en una variable temporal y reescribimos node->left a un ID, igual que el
+     * manejador de llamadas encadenadas más abajo. ===== */
+    if (objNode && objNode->type && !objNode->id &&
+        (strcmp(objNode->type, "LIST") == 0 || strcmp(objNode->type, "OBJECT_LITERAL") == 0)) {
+        static int _lit_seq = 0;
+        char tmp[40];
+        snprintf(tmp, sizeof(tmp), "__lit_%d__", _lit_seq++);
+        add_or_update_variable(tmp, objNode);
+        /* add_or_update_variable guarda OBJECT_LITERAL con type "OBJECT_LITERAL",
+         * pero los dispatchers de MAP exigen type "MAP" (igual que declare_variable). */
+        if (strcmp(objNode->type, "OBJECT_LITERAL") == 0) {
+            Variable *tv = find_variable(tmp);
+            if (tv && tv->type) { free(tv->type); tv->type = strdup("MAP"); }
+        }
+        ASTNode *id = (ASTNode*)calloc(1, sizeof(ASTNode));
+        id->type = strdup("ID");
+        id->id = strdup(tmp);
+        node->left = id;
+        objNode = id;
+    }
+
+    /* ===== v0.0.11-pre: DataFrame analytics fast-path =====
+     * Si el receptor es un LIST con DataFrame columnar adjunto, intentamos
+     * despachar a sum/min/max/count/group_sum/print directamente sobre las
+     * columnas (SIMD AVX2 + pthread parallel). Si el método no aplica,
+     * caemos al dispatch estándar. */
+    {
+        ASTNode *recv_list = NULL;
+        if (objNode && objNode->type) {
+            if (strcmp(objNode->type, "LIST") == 0) {
+                recv_list = objNode;
+            } else if (strcmp(objNode->type, "ID") == 0 || strcmp(objNode->type, "IDENTIFIER") == 0) {
+                Variable *lv = find_variable(objNode->id);
+                if (lv && lv->type && strcmp(lv->type, "LIST") == 0)
+                    recv_list = (ASTNode*)(intptr_t)lv->value.object_value;
+            }
+        }
+        DataFrame *df_recv = te_list_df(recv_list);
+        if (df_recv) {
+            if (te_df_dispatch_method(df_recv, node)) return;
+            /* fallthrough si el método no es analítico */
+        }
+    }
+
+    /* ===== v0.0.12 #5 Fusion peephole: where(p).{select|map|first|find|firstWhere|sum} =====
+     * Detect `xs.where(p).OUTER(...)` where xs is an ID resolving to a LIST.
+     * Avoids materializing the intermediate filtered list. Falls through to
+     * standard chained-call handling if pattern doesn't match. */
+    if (te_cm_fusion_where_chain(node, objNode)) return;
+
+    /* ===== v0.0.12 #N Fusion-parallel: where(pred).sumBy(proj) / .countWhere(p2) =====
+     * Detect `xs.where(pred).sumBy(proj)` and `xs.where(pred).countWhere(p2)`
+     * where BOTH lambdas are fast-pathable (SPEC_*). Runs as a single parallel
+     * pass with OpenMP, never materializing the intermediate filtered list.
+     * Falls through if any lambda is not fast-pathable. */
+    if (te_cm_fusion_where_aggregate(node, objNode)) return;
 
     /* v0.0.11: chained method/function call — `a.foo().bar()` or `foo().bar()`.
      * Evaluate the inner call first, bind result to a unique temp variable,
@@ -7645,164 +7835,7 @@ static void interpret_call_method_impl(ASTNode *node) {
     if (te_linq_lazy_method_dispatch(node, v)) return;
 
     /* Fase 1b: métodos built-in en LIST: push, pop */
-    if (v && v->type && strcmp(v->type, "LIST") == 0) {
-        ASTNode *list = (ASTNode*)(intptr_t)v->value.object_value;
-
-        /* ===== Nivel B paso 2.f: LINQ-with-lambda dispatcher (~1040 LOC).
-         * Implemented in te_linq_ops.c. Methods: map/filter/reduce/forEach/
-         * find/any/every/none/where/select/all/firstWhere/lastWhere/countWhere/
-         * sumBy/avgBy/minBy/maxBy/takeWhile/skipWhile/flatMap/selectMany/groupBy/
-         * orderBy/orderByDescending/distinctBy/aggregate/fold/toMap/toDictionary,
-         * incl. COLUMNAR + OpenMP fast-paths. ===== */
-        if (te_linq_ops_method_dispatch(node, list)) return;
-
-
-        /* ===== v0.0.12 #8 Lazy iterator promotion + v0.0.11 numeric/no-arg LINQ.
-         * Dispatched in te_linq.c (Nivel B paso 2.e). ===== */
-        if (te_linq_list_method_dispatch(node, list)) return;
-
-        if (list && node->id && strcmp(node->id, "push") == 0) {
-            ASTNode *arg = node->right;
-            if (!arg) return;
-            ASTNode *new_item = (ASTNode*)calloc(1, sizeof(ASTNode));
-            memset(new_item, 0, sizeof(ASTNode));
-            if (arg->type && (strcmp(arg->type, "OBJECT_LITERAL") == 0 ||
-                              strcmp(arg->type, "MAP") == 0)) {
-                /* gotcha #18: push of a `{...}` object literal. Previously fell
-                 * through to evaluate_expression (-> 0), storing [0,0,...].
-                 * Snapshot the literal so each push is an independent, readable
-                 * map item (works with list[i]["k"], list.length, etc.). */
-                ASTNode *snap = te_snapshot_object_literal(arg);
-                free(new_item);
-                if (snap) {
-                    snap->next = NULL;
-                    te_list_append(list, snap);
-                    te_colcache_invalidate(list);
-                }
-                return;
-            }
-            if (arg->type && strcmp(arg->type, "OBJECT") == 0) {
-                /* Fix: empujar objetos creados con `new ClaseX(args)`.
-                 * El parser eager-construye un OBJECT ASTNode con extra=ObjectNode*
-                 * y left=args, pero no corre el constructor. Para que cada push
-                 * en un loop produzca instancias independientes, clonamos el
-                 * objeto y corremos el constructor con los args reevaluados. */
-                ObjectNode *obj_orig = NULL;
-                if (arg->extra) obj_orig = (ObjectNode*)arg->extra;
-                else obj_orig = (ObjectNode*)(intptr_t)arg->value;
-                if (obj_orig && obj_orig->class) {
-                    ObjectNode *obj_clone = clone_object(obj_orig);
-                    MethodNode *m = obj_clone->class->methods;
-                    while (m && strcmp(m->name, "__constructor") != 0) m = m->next;
-                    if (m) {
-                        ParameterNode *p = m->params;
-                        ASTNode *carg = arg->left;
-                        while (p && carg) {
-                            ASTNode *vn = NULL;
-                            if (carg->type && strcmp(carg->type, "STRING") == 0) {
-                                vn = create_ast_leaf("STRING", 0, carg->str_value, NULL);
-                            } else if (carg->type && strcmp(carg->type, "FLOAT") == 0) {
-                                vn = create_ast_leaf("FLOAT", 0, carg->str_value, NULL);
-                            } else if (carg->type && (strcmp(carg->type, "ID") == 0 || strcmp(carg->type, "IDENTIFIER") == 0)) {
-                                Variable *vv = find_variable(carg->id);
-                                if (vv && vv->vtype == VAL_STRING) {
-                                    vn = create_ast_leaf("STRING", 0, strdup(vv->value.string_value), NULL);
-                                } else if (vv && vv->vtype == VAL_FLOAT) {
-                                    char fbuf[64];
-                                    te_fmt_double(fbuf, sizeof(fbuf), vv->value.float_value);
-                                    vn = create_ast_leaf("FLOAT", 0, fbuf, NULL);
-                                } else if (vv) {
-                                    vn = create_ast_leaf_number("INT", vv->value.int_value, NULL, NULL);
-                                } else {
-                                    vn = create_ast_leaf_number("INT", 0, NULL, NULL);
-                                }
-                            } else {
-                                long long val = (long long)evaluate_expression(carg);
-                                vn = create_ast_leaf_number("INT", val, NULL, NULL);
-                            }
-                            add_or_update_variable(p->name, vn);
-                            p = p->next;
-                            carg = carg->next; /* gotcha #1: step ctor args via ->next */
-                        }
-                        call_method(obj_clone, "__constructor");
-                        return_flag = 0;
-                        return_node = NULL;
-                    }
-                    new_item->type = strdup("OBJECT");
-                    new_item->extra = (struct ASTNode*)obj_clone;
-                    new_item->value = (int)(intptr_t)obj_clone;
-                } else {
-                    /* Sin clase resoluble: degradar a NUMBER 0 para no segfaultear */
-                    new_item->type = strdup("NUMBER");
-                    new_item->value = 0;
-                }
-            } else if (arg->type && strcmp(arg->type, "STRING") == 0) {
-                new_item->type = strdup("STRING");
-                new_item->str_value = strdup(arg->str_value);
-            } else if (arg->type && (strcmp(arg->type, "IDENTIFIER") == 0 || strcmp(arg->type, "ID") == 0)) {
-                Variable *av = find_variable(arg->id);
-                if (av && av->vtype == VAL_OBJECT && av->value.object_value) {
-                    /* Root fix (prod UAF SIGSEGV in te_expr_is_null/is_string_type):
-                     * a CLASS instance pushed via a variable used to SHARE the
-                     * ObjectNode pointer. When the source variable's object was
-                     * later freed (free_object_node on scope/lambda teardown) the
-                     * list element dangled -> use-after-free reading
-                     * obj->class->attributes[i].id (== NULL after the chunk was
-                     * reused). Clone the instance so the list OWNS its own copy,
-                     * exactly like the push(new X()) and push({...}) paths already
-                     * do. Only class instances (type "OBJECT") are cloned;
-                     * MAP/LIST/LAMBDA (also VAL_OBJECT) keep the shared pointer. */
-                    if (av->type && strcmp(av->type, "OBJECT") == 0) {
-                        ObjectNode *cl = clone_object((ObjectNode*)av->value.object_value);
-                        new_item->type = strdup("OBJECT");
-                        new_item->extra = (struct ASTNode*)cl;
-                        new_item->value = (int)(intptr_t)cl;
-                    } else {
-                        new_item->type = strdup("OBJECT");
-                        new_item->extra = (struct ASTNode*)av->value.object_value;
-                        new_item->value = (int)(intptr_t)av->value.object_value;
-                    }
-                } else if (av && av->vtype == VAL_STRING) {
-                    new_item->type = strdup("STRING");
-                    new_item->str_value = strdup(av->value.string_value);
-                } else if (av && av->vtype == VAL_FLOAT) {
-                    new_item->type = strdup("FLOAT");
-                    char buf[64]; te_fmt_double(buf, sizeof(buf), av->value.float_value);
-                    new_item->str_value = strdup(buf);
-                } else if (av) {
-                    new_item->type = strdup("NUMBER");
-                    new_item->value = av->value.int_value;
-                }
-            } else {
-                double vv = evaluate_expression(arg);
-                if (vv == (int)vv) { new_item->type = strdup("NUMBER"); new_item->value = (int)vv; }
-                else { new_item->type = strdup("FLOAT"); char buf[64]; te_fmt_double(buf, sizeof(buf), vv); new_item->str_value = strdup(buf); }
-            }
-            new_item->next = NULL;
-            te_list_append(list, new_item);   /* Ola 14b: O(1) amortizado */
-            te_colcache_invalidate(list);     /* v0.0.13 (perf) */
-            return;
-        }
-        if (list && node->id && strcmp(node->id, "pop") == 0) {
-            ASTNode *cur = list->left;
-            if (!cur) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return; }
-            te_colcache_invalidate(list);     /* v0.0.13 (perf) */
-            if (!cur->next) {
-                /* single element: capture it, then empty the list */
-                add_or_update_variable("__ret__", build_item_from_value(cur));
-                list->left = NULL; te_invalidate_list_cache(list); return;
-            }
-            while (cur->next && cur->next->next) cur = cur->next;
-            /* cur->next is the last element — capture its value into __ret__ */
-            add_or_update_variable("__ret__", build_item_from_value(cur->next));
-            cur->next = NULL;
-            te_invalidate_list_cache(list);  /* Ola 14 */
-            return;
-        }
-        /* Ola 13: list extras (size/length/contains/reverse/sort/get) + join.
-         * Dispatched in te_list.c (Nivel B paso 2.c). */
-        if (te_list_method_dispatch(node, list)) return;
-    }
+    if (te_cm_list_builtin(node, objNode, v)) return;
 
     /* Fase 1c + Ola 13: métodos built-in en MAP (keys/values/has/remove/size/length/clear).
      * Dispatched in te_map.c (Nivel B paso 2.d).
@@ -7815,17 +7848,7 @@ static void interpret_call_method_impl(ASTNode *node) {
      * (e.g. calling a string method like `.contains()` on a `{...}` value or on
      * the sql_exec envelope object). For an unknown method we return null
      * instead of crashing. */
-    if (v && v->type &&
-        (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0)) {
-        ASTNode *map = (ASTNode*)(intptr_t)v->value.object_value;
-        if (te_map_method_dispatch(node, map)) return;
-        fprintf(stderr, "[method] unknown method '%s' on %s value\n",
-                node->id ? node->id : "?", v->type);
-        ASTNode *nullret = create_ast_leaf("NULL", 0, NULL, NULL);
-        add_or_update_variable("__ret__", nullret);
-        free_ast(nullret);
-        return;
-    }
+    if (te_cm_map_builtin(node, objNode, v)) return;
     
     if (!v || v->vtype != VAL_OBJECT) {
         printf("Error: '%s' is not a valid object.\n", objNode->id);
@@ -8329,407 +8352,7 @@ fastcall_args_done:
         }
 }
 
-static void interpret_call_method_alone(ASTNode *node) {
-    if (call_native_function(node->id, node->right)) {
-        return_flag = 0;
-        return_node = NULL;
-        return;
-    }
-    // ...existing code...
-    // Si node->left (objeto) existe, buscar método de clase
-    if (node->left) {
-        ObjectNode *obj = (ObjectNode*)node->left;
-        MethodNode *m = obj->class->methods;
-        while (m && strcmp(m->name, node->id) != 0) m = m->next;
-        if (m) {
-            // Ejecutar método de clase normalmente
-            ParameterNode *p_class = m->params;
-            ASTNode *arg_class = node->right;
-            while (p_class && arg_class) {
-                ASTNode *vn = NULL;
-                if (arg_class->type && strcmp(arg_class->type, "STRING") == 0) {
-                    vn = create_ast_leaf("STRING", 0, arg_class->str_value, NULL);
-                } else if (arg_class->type && (strcmp(arg_class->type,"ID")==0 || strcmp(arg_class->type,"IDENTIFIER")==0)) {
-                    Variable *v_arg = find_variable(arg_class->id);
-                    if (!v_arg) {
-                        printf("Error: variable '%s' not found.\n", arg_class->id);
-                        return;
-                    }
-                    if (v_arg->vtype == VAL_STRING) {
-                        vn = create_ast_leaf("STRING", 0, strdup(v_arg->value.string_value), NULL);
-                    } else {
-                        vn = create_ast_leaf_number("INT", v_arg->value.int_value, NULL, NULL);
-                    }
-                } else {
-                    int val = evaluate_expression(arg_class);
-                    vn = create_ast_leaf_number("INT", val, NULL, NULL);
-                }
-                add_or_update_variable(p_class->name, vn);
-                p_class   = p_class->next;
-                arg_class = arg_class->next; /* gotcha #1: step args via ->next */
-            }
-            debugger_push_frame(m->name, node);
-            interpret_ast(m->body);
-            debugger_pop_frame();
-          //  printf("[DIAG] interpret_call_method_alone: después de interpretar cuerpo de método, return_flag=%d\n", return_flag);
-            // ...manejo de return para método de clase si aplica...
-            if (return_flag && return_node) {
-                if (return_node && return_node->type && strcmp(return_node->type, "CALL_FUNC") == 0 && return_node->id && strcmp(return_node->id, "json") == 0) {
-              //     printf("[DIAG] Entrando a native_json desde interpret_call_method_alone\n");
-                    native_json(return_node->left);
-                }
-            }
-            return;
-        }
-    }
-    // Si no hay objeto, buscar método global
-    MethodNode *gm = global_methods;
-    while (gm && strcmp(gm->name, node->id) != 0) gm = gm->next;
-    if (!gm) {
-        printf("Error: method '%s' not found as a global method.\n", node->id);
-        return;
-    }
-    if (g_debug_mode) te_log_ast("[LOG] Ejecutando método global: %s", node->id);
-    ParameterNode *p_global = gm->params;
-    ASTNode *arg_global = node->right;
-    while (p_global && arg_global) {
-        ASTNode *vn = NULL;
-        if (arg_global->type && strcmp(arg_global->type, "STRING") == 0) {
-            vn = create_ast_leaf("STRING", 0, arg_global->str_value, NULL);
-        } else if (arg_global->type && (strcmp(arg_global->type,"ID")==0 || strcmp(arg_global->type,"IDENTIFIER")==0)) {
-            Variable *v_arg = find_variable(arg_global->id);
-            if (!v_arg) {
-                printf("Error: variable '%s' not found.\n", arg_global->id);
-                return;
-            }
-            if (v_arg->vtype == VAL_STRING) {
-                vn = create_ast_leaf("STRING", 0, strdup(v_arg->value.string_value), NULL);
-            } else {
-                vn = create_ast_leaf_number("INT", v_arg->value.int_value, NULL, NULL);
-            }
-        } else {
-            int val = evaluate_expression(arg_global);
-            vn = create_ast_leaf_number("INT", val, NULL, NULL);
-        }
-        add_or_update_variable(p_global->name, vn);
-        p_global   = p_global->next;
-        arg_global = arg_global->next; /* gotcha #1: step args via ->next */
-    }
-    debugger_push_frame(gm->name, node);
-    interpret_ast(gm->body);
-    debugger_pop_frame();
-   // printf("[DIAG] interpret_call_method_alone: after interpret_ast(gm->body), about to check return_flag and return_node\n");
-   // printf("[DIAG] interpret_call_method: después de interpretar gm->body, return_flag=%d, return_node=%p\n", return_flag, (void*)return_node);
-   // if (return_node) {
-    //    printf("[DIAG] return_node: type=%s, id=%s, left=%p, right=%p, str_value=%s\n",
-      //      return_node->type ? return_node->type : "NULL",
-      //      return_node->id ? return_node->id : "NULL",
-      //      (void*)return_node->left,
-       //     (void*)return_node->right,
-       //     return_node->str_value ? return_node->str_value : "NULL");
-   // } else {
-   //     printf("[DIAG] return_node is NULL after gm->body\n");
-    //}
-    if (return_flag && return_node) {
-       // printf("[DIAG] interpret_call_method_alone: (global) about to check for CALL_FUNC/json, return_node type=%s id=%s left=%p\n",
-        //    return_node->type ? return_node->type : "NULL",
-        //    return_node->id ? return_node->id : "NULL",
-        //    (void*)return_node->left);
-        // Si el return es una llamada a función nativa 'json', ejecutarla directamente
-        if (strcmp(return_node->type, "CALL_FUNC") == 0 && return_node->id && strcmp(return_node->id, "json") == 0) {
-         //   printf("[DIAG] interpret_call_method: llamando native_json desde método global\n");
-            native_json(return_node->left);
-            return_flag = 0;
-            return_node = NULL;
-            return;
-        }
-        // ...existing code for other return types...
-        ASTNode *lit = NULL;
-        if (return_node->type && strcmp(return_node->type, "STRING") == 0) {
-            lit = create_ast_leaf("STRING", 0, return_node->str_value, NULL);
-        } else if (return_node->id) {
-            Variable *rv = find_variable(return_node->id);
-            if (rv) {
-                if (rv->vtype == VAL_STRING) {
-                    lit = create_ast_leaf("STRING", 0, strdup(rv->value.string_value), NULL);
-                } else if (rv->vtype == VAL_FLOAT) {
-                    lit = create_ast_leaf("FLOAT", 0, double_to_string(rv->value.float_value), NULL);
-                } else if (rv->vtype == VAL_INT) {
-                    lit = create_ast_leaf_number("INT", rv->value.int_value, NULL, NULL);
-                }
-            } else {
-                printf("Error: variable '%s' not found in return statement.\n", return_node->id);
-                return;
-            }
-        } else if (return_node->type && strcmp(return_node->type, "ACCESS_ATTR") == 0) {
-            ASTNode *objN = return_node->left;
-            ASTNode *attrN = return_node->right;
-            Variable *ov = find_variable(objN->id);
-            if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "OBJECT") == 0) {
-                ObjectNode *oobj = ov->value.object_value; int i = -1;
-                int idx = -1;
-                for (i=0; i<oobj->class->attr_count; i++) {
-                    if (strcmp(oobj->class->attributes[i].id, attrN->id)==0) { idx=i; break; }
-                }
-                if (idx>=0) {
-                    if (strcmp(oobj->class->attributes[idx].type,"string")==0)
-                        lit = create_ast_leaf("STRING",0,strdup(oobj->attributes[idx].value.string_value),NULL);
-                    else if (strcmp(oobj->attributes[idx].type,"float")==0)
-                        lit = create_ast_leaf("FLOAT",0,double_to_string(oobj->attributes[idx].value.float_value),NULL);
-                    else
-                        lit = create_ast_leaf_number("INT",oobj->attributes[idx].value.int_value,NULL,NULL);
-                }
-            }
-        } else {
-            double rv_double = evaluate_expression(return_node);
-            if (rv_double == (int)rv_double) {
-                lit = create_ast_leaf_number("INT", (long long)rv_double, NULL, NULL);
-            } else {
-                lit = create_ast_leaf("FLOAT", 0, double_to_string(rv_double), NULL);
-            }
-        }
-        if (lit) {
-            add_or_update_variable("__ret__", lit);
-            if (g_debug_mode) te_log_ast("[LOG] Método global '%s' retornó valor en __ret__", node->id);
-        }
-        return_flag = 0;
-        return_node = NULL;
-    }
-    return;
-    printf("Warning: METHOD_CALL_ALONE is deprecated, use CALL_METHOD instead.\n"); 
-    ASTNode *objNode = node->left;
-    Variable *v = find_variable(objNode->id);
-    return_flag = 0;
-    return_node = NULL;
-
-    if (__ret_var_active) {
-        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
-            free(__ret_var.value.string_value);
-        }
-        if (__ret_var.id) free(__ret_var.id);
-        if (__ret_var.type) free(__ret_var.type);
-        memset(&__ret_var, 0, sizeof(Variable));
-        // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
-    }
-    
-    if (!v || v->vtype != VAL_OBJECT) {
-        printf("Error: '%s' is not a valid object.\n", objNode->id);
-        return;
-    }
-    if (v->type && strcmp(v->type, "OBJECT") != 0) {
-        printf("Error: '%s' is not a valid object.\n", objNode->id);
-        return;
-    }
-    ObjectNode *obj = v->value.object_value;
-
-    // === FIX START: Handle Bridge method calls ===
-    if (strcmp(obj->class->name, "Bridge") == 0) {
-        if (g_debug_mode) te_log_ast("Calling native bridge: %s.%s", v->id, node->id);
-        if (strcmp(v->id, "Chat") == 0) {
-            if (g_bridge_handlers.handle_chat_bridge) g_bridge_handlers.handle_chat_bridge(node->id, node->right);
-        } else if (strcmp(v->id, "NLU") == 0) {
-            if (g_debug_mode) te_log_ast("Calling NLU bridge");
-            if (g_bridge_handlers.handle_nlu_bridge) {
-                g_bridge_handlers.handle_nlu_bridge(node->id, node->right);
-                if (g_debug_mode) {
-                    if (__ret_var_active) {
-                        te_log_ast("[DEBUG] After NLU bridge: __ret__ active=1 type='%s'", __ret_var.type ? __ret_var.type : "(null)");
-                    } else {
-                        te_log_ast("[DEBUG] After NLU bridge: __ret__ active=0");
-                    }
-                }
-            }
-        } else if (strcmp(v->id, "API") == 0) {
-            if (g_bridge_handlers.handle_api_bridge) g_bridge_handlers.handle_api_bridge(node->id, node->right);
-        } else if (strcmp(v->id, "Gemini") == 0) {
-            if (g_bridge_handlers.handle_gemini_bridge) g_bridge_handlers.handle_gemini_bridge(node->id, node->right);
-        } else {
-            printf("Warning: Bridge '%s' unknown or not implemented in this executable.\n", v->id);
-        }
-        return;
-    }
-    // === FIX END ===
-
-    MethodNode *m = obj->class->methods;
-    while (m && strcmp(m->name, node->id) != 0) m = m->next;
-    if (!m) {
-        // Buscar método global (fuera de clase)
-        MethodNode *gm = global_methods;
-        while (gm && strcmp(gm->name, node->id) != 0) gm = gm->next;
-        if (!gm) {
-            printf("Error: method '%s' not found in class '%s' nor as a global method.\n", node->id, obj->class->name);
-            return;
-        }
-        ParameterNode *p = gm->params;
-        ASTNode *arg = node->right;
-        while (p && arg) {
-            ASTNode *vn = NULL;
-            if (arg->type && strcmp(arg->type, "STRING") == 0) {
-                vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
-            } else if (arg->type && (strcmp(arg->type,"ID")==0 || strcmp(arg->type,"IDENTIFIER")==0)) {
-                Variable *v_arg = find_variable(arg->id);
-                if (!v_arg) {
-                    printf("Error: variable '%s' not found.\n", arg->id);
-                    return;
-                }
-                if (v_arg->vtype == VAL_STRING) {
-                    vn = create_ast_leaf("STRING", 0, strdup(v_arg->value.string_value), NULL);
-                } else {
-                    vn = create_ast_leaf_number("INT", v_arg->value.int_value, NULL, NULL);
-                }
-            } else {
-                int val = evaluate_expression(arg);
-                vn = create_ast_leaf_number("INT", val, NULL, NULL);
-            }
-            add_or_update_variable(p->name, vn);
-            p   = p->next;
-            arg = arg->next; /* gotcha #1: step args via ->next */
-        }
-        debugger_push_frame(gm->name, node);
-        interpret_ast(gm->body);
-        debugger_pop_frame();
-          //  printf("[DIAG] interpret_call_method_alone: antes de check, return_flag=%d, return_node=%p\n", return_flag, (void*)return_node);
-            if (return_flag && return_node) {
-           //     printf("[DIAG] interpret_call_method_alone: return_node type=%s id=%s\n", return_node->type ? return_node->type : "NULL", return_node->id ? return_node->id : "NULL");
-            ASTNode *lit = NULL;
-            if (return_node->type && strcmp(return_node->type, "STRING") == 0) {
-                lit = create_ast_leaf("STRING", 0, return_node->str_value, NULL);
-            } else if (return_node->id) {
-                Variable *rv = find_variable(return_node->id);
-                if (rv) {
-                    if (rv->vtype == VAL_STRING) {
-                        lit = create_ast_leaf("STRING", 0, strdup(rv->value.string_value), NULL);
-                    } else if (rv->vtype == VAL_FLOAT) {
-                        lit = create_ast_leaf("FLOAT", 0, double_to_string(rv->value.float_value), NULL);
-                    } else if (rv->vtype == VAL_INT) {
-                        lit = create_ast_leaf_number("INT", rv->value.int_value, NULL, NULL);
-                    }
-                } else {
-                    printf("Error: variable '%s' not found in return statement.\n", return_node->id);
-                    return;
-                }
-            } else if (return_node->type && strcmp(return_node->type, "ACCESS_ATTR") == 0) {
-                ASTNode *objN = return_node->left;
-                ASTNode *attrN = return_node->right;
-                Variable *ov = find_variable(objN->id);
-                if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "OBJECT") == 0) {
-                    ObjectNode *oobj = ov->value.object_value; int i = -1;
-                    int idx = -1;
-                    for (i=0; i<oobj->class->attr_count; i++) {
-                        if (strcmp(oobj->class->attributes[i].id, attrN->id)==0) { idx=i; break; }
-                    }
-                    if (idx>=0) {
-                        if (strcmp(oobj->class->attributes[idx].type,"string")==0)
-                            lit = create_ast_leaf("STRING",0,strdup(oobj->attributes[idx].value.string_value),NULL);
-                        else if (strcmp(oobj->attributes[idx].type,"float")==0)
-                            lit = create_ast_leaf("FLOAT",0,double_to_string(oobj->attributes[idx].value.float_value),NULL);
-                        else
-                            lit = create_ast_leaf_number("INT",oobj->attributes[idx].value.int_value,NULL,NULL);
-                    }
-                }
-            } else {
-                double rv_double = evaluate_expression(return_node);
-                if (rv_double == (int)rv_double) {
-                    lit = create_ast_leaf_number("INT", (long long)rv_double, NULL, NULL);
-                } else {
-                    lit = create_ast_leaf("FLOAT", 0, double_to_string(rv_double), NULL);
-                }
-            }
-            if (lit) {
-                add_or_update_variable("__ret__", lit);
-            }
-            return_flag = 0;
-            return_node = NULL;
-        }
-        return;
-    }
-    ASTNode *thisNode = calloc(1, sizeof(ASTNode));
-    thisNode->type = strdup("OBJECT");
-    thisNode->id = strdup("this");
-    thisNode->left = thisNode->right = NULL;
-    thisNode->extra = (struct ASTNode*)obj;
-    thisNode->value = 0;
-    add_or_update_variable("this", thisNode);
-    ParameterNode *p = m->params;
-    ASTNode *arg = node->right;
-    while (p && arg) {
-        ASTNode *vn = NULL;
-        if (arg->type && strcmp(arg->type, "STRING") == 0) {
-            vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
-        } else if (arg->type && (strcmp(arg->type,"ID")==0 || strcmp(arg->type,"IDENTIFIER")==0)) {
-            Variable *v_arg = find_variable(arg->id);
-            if (!v_arg) {
-                printf("Error: variable '%s' not found.\n", arg->id);
-                return;
-            }
-            if (v_arg->vtype == VAL_STRING) {
-                vn = create_ast_leaf("STRING", 0, strdup(v_arg->value.string_value), NULL);
-            } else {
-                vn = create_ast_leaf_number("INT", v_arg->value.int_value, NULL, NULL);
-            }
-        } else {
-            int val = evaluate_expression(arg);
-            vn = create_ast_leaf_number("INT", val, NULL, NULL);
-        }
-        add_or_update_variable(p->name, vn);
-        p = p->next;
-        arg = arg->next; /* gotcha #1: step args via ->next */
-    }
-    debugger_push_frame(m->name, NULL);
-    interpret_ast(m->body);
-    debugger_pop_frame();
-    if (return_flag && return_node) {
-        ASTNode *lit = NULL;
-        if (return_node->type && strcmp(return_node->type, "STRING") == 0) {
-            lit = create_ast_leaf("STRING", 0, return_node->str_value, NULL);
-        } else if (return_node->id) {
-            Variable *rv = find_variable(return_node->id);
-            if (rv) {
-                if (rv->vtype == VAL_STRING) {
-                    lit = create_ast_leaf("STRING", 0, strdup(rv->value.string_value), NULL);
-                } else if (rv->vtype == VAL_FLOAT) {
-                    lit = create_ast_leaf("FLOAT", 0, double_to_string(rv->value.float_value), NULL);
-                } else if (rv->vtype == VAL_INT) {
-                    lit = create_ast_leaf_number("INT", rv->value.int_value, NULL, NULL);
-                }
-            } else {
-                printf("Error: variable '%s' not found in return statement.\n", return_node->id);
-                return;
-            }
-        } else if (return_node->type && strcmp(return_node->type, "ACCESS_ATTR") == 0) {
-            ASTNode *objN = return_node->left;
-            ASTNode *attrN = return_node->right;
-            Variable *ov = find_variable(objN->id);
-            if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "OBJECT") == 0) {
-                ObjectNode *oobj = ov->value.object_value; int i = -1;
-                int idx = -1;
-                for (i=0; i<oobj->class->attr_count; i++) {
-                    if (strcmp(oobj->class->attributes[i].id, attrN->id)==0) { idx=i; break; }
-                }
-                if (idx>=0) {
-                    if (strcmp(oobj->class->attributes[idx].type,"string")==0)
-                        lit = create_ast_leaf("STRING",0,strdup(oobj->attributes[idx].value.string_value),NULL);
-                    else if (strcmp(oobj->attributes[idx].type,"float")==0)
-                        lit = create_ast_leaf("FLOAT",0,double_to_string(oobj->attributes[idx].value.float_value),NULL);
-                    else
-                        lit = create_ast_leaf_number("INT",oobj->attributes[idx].value.int_value,NULL,NULL);
-                }
-            }
-        } else {
-            double rv_double = evaluate_expression(return_node);
-            if (rv_double == (int)rv_double) {
-                lit = create_ast_leaf_number("INT", (long long)rv_double, NULL, NULL);
-            } else {
-                lit = create_ast_leaf("FLOAT", 0, double_to_string(rv_double), NULL);
-            }
-        }
-        if (lit) {
-            add_or_update_variable("__ret__", lit);
-        }
-        return_flag = 0;
-        return_node = NULL;
-    }
-}
+/* interpret_call_method_alone: eliminada (codigo muerto, 400 lineas sin llamadores; Fase 2). */
 ObjectNode* clone_object(ObjectNode *original) {
     if (!original || !original->class) {
         /* clone_object debug log removed */
