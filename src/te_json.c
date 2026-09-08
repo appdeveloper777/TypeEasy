@@ -7,6 +7,7 @@
 #include "te_json.h"
 #include "te_buf.h"
 #include "ast.h"
+#include "te_value.h"
 
 #include <ctype.h>
 #include <stdint.h>
@@ -161,8 +162,12 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
             te_json_emit_str(b, s ? s : "");
             if (s) free(s);
         } else {
-            double d = evaluate_expression(n);
-            if (d == (long long)d) {
+            long long i64v;
+            double d = te_eval_i64(n, &i64v) ? (double)i64v : evaluate_expression(n);   /* Fase 1b */
+            if (te_eval_i64(n, &i64v)) {
+                char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", i64v);
+                tebuf_puts(b, tmp);
+            } else if (d == (long long)d) {
                 char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)d);
                 tebuf_puts(b, tmp);
             } else {
@@ -185,8 +190,12 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
             te_json_emit_str(b, s ? s : "");
             if (s) free(s);
         } else {
-            double d = evaluate_expression(n);
-            if (d == (long long)d) {
+            long long i64v;
+            double d = te_eval_i64(n, &i64v) ? (double)i64v : evaluate_expression(n);   /* Fase 1b */
+            if (te_eval_i64(n, &i64v)) {
+                char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", i64v);
+                tebuf_puts(b, tmp);
+            } else if (d == (long long)d) {
                 char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)d);
                 tebuf_puts(b, tmp);
             } else {

@@ -261,9 +261,12 @@ void interpret_print(ASTNode *node) {
         else
             dbg_printf("Object of class: %s\n", v->value.object_value->class->name);
     } else {
-        double val = evaluate_expression(arg);
-        if (val == (int)val) {
-            dbg_printf("%d", (int)val);
+        long long i64v;
+        double val = te_eval_i64(arg, &i64v) ? (double)i64v : evaluate_expression(arg);
+        if (te_eval_i64(arg, &i64v)) {   /* Fase 1b */
+            dbg_printf("%lld", i64v);
+        } else if (val == (long long)val) {
+            dbg_printf("%lld", (long long)val);
         } else {
             char b[64]; te_fmt_double(b, sizeof(b), val); dbg_printf("%s", b);
         }
@@ -612,8 +615,11 @@ void interpret_println(ASTNode *node) {
         }
     } else {
         double val = evaluate_expression(arg);
-        if (val == (int)val) {
-            dbg_printf("%d\n", (int)val);
+        long long i64v;
+        if (te_eval_i64(arg, &i64v)) {   /* Fase 1b */
+            dbg_printf("%lld\n", i64v);
+        } else if (val == (long long)val) {
+            dbg_printf("%lld\n", (long long)val);
         } else {
             char b[64]; te_fmt_double(b, sizeof(b), val); dbg_printf("%s\n", b);
         }

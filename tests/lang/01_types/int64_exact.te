@@ -1,0 +1,19 @@
+// int64 exacto mas alla de 2^53 (Fase 1b, te_eval_i64): literales, + - * / exacta, comparacion, fn, loop, lista[i]; 10/4 sigue siendo float.
+let a = 9007199254740993;
+let b = a + 2;
+println(b);
+var c = 9223372036854775000;
+c = c + 800;
+println(c);
+let big = 4611686018427387904;
+println(big * 2 - 1);
+println(9007199254740993 > 9007199254740992);
+let f = fn(x) => { return x + 1; };
+println(f(9007199254740993));
+var acc = 0;
+for (var i = 0; i < 3; i++) { acc = acc + 3002399751580330; }
+println(acc);
+println(10 / 4);
+println(3000000000 / 2);
+let lst = [9007199254740993];
+println(lst[0] + 0);

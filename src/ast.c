@@ -1035,6 +1035,8 @@ char* get_node_string(ASTNode* node) {
             free(l); free(r);
             return out;
         }
+        long long i64v;
+        if (te_eval_i64(node, &i64v)) { snprintf(temp, sizeof(temp), "%lld", i64v); return strdup(temp); }   /* Fase 1b */
         double d = evaluate_expression(node);
         te_fmt_double(temp, sizeof(temp), d);
         return strdup(temp);
@@ -3506,8 +3508,15 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
             g_vm.vars[my_index].value.string_value = s;
             return;
         }
+        long long i64v;
+        if (te_eval_i64(value, &i64v)) {   /* Fase 1b: entero exacto de 64 bits */
+            g_vm.vars[my_index].vtype = VAL_INT;
+            g_vm.vars[my_index].value.int_value = i64v;
+            g_vm.vars[my_index].type = strdup("INT");
+            return;
+        }
         double result = evaluate_expression(value);
-        if (result == (int)result) {
+        if (result == (long long)result) {
             g_vm.vars[my_index].vtype = VAL_INT;
             g_vm.vars[my_index].value.int_value = (long long)result;
             g_vm.vars[my_index].type = strdup("INT");
@@ -8193,7 +8202,9 @@ fastcall_args_done:
                     && strcmp(g_vm.return_node->type, "CALL_METHOD") != 0
                     && strcmp(g_vm.return_node->type, "RETURN_JSON") != 0
                     && strcmp(g_vm.return_node->type, "RETURN_XML")  != 0) {
-                    double rv = evaluate_expression(g_vm.return_node);
+                    long long rv_i64;
+                    int rv_is_i64 = te_eval_i64(g_vm.return_node, &rv_i64);   /* Fase 1b */
+                    double rv = rv_is_i64 ? (double)rv_i64 : evaluate_expression(g_vm.return_node);
                     /* Reset and write __ret_var directly. */
                     if (__ret_var_active) {
                         if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
@@ -8211,7 +8222,7 @@ fastcall_args_done:
                     } else {
                         __ret_var.type  = strdup("INT");
                         __ret_var.vtype = VAL_INT;
-                        __ret_var.value.int_value = (long long)rv;
+                        __ret_var.value.int_value = rv_is_i64 ? rv_i64 : (long long)rv;
                     }
                     __ret_var_active = 1;
                     g_vm.return_flag = 0;
@@ -9281,8 +9292,11 @@ static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
                     valNode = create_ast_leaf("STRING", 0, s, NULL);
                     free(s);
                 } else {
-                    double r = evaluate_expression(cur_arg);
-                    if (r == (double)(long long)r) {
+                    long long i64v;
+                    double r = te_eval_i64(cur_arg, &i64v) ? (double)i64v : evaluate_expression(cur_arg);
+                    if (te_eval_i64(cur_arg, &i64v)) {   /* Fase 1b */
+                        valNode = create_ast_leaf_number("NUMBER", i64v, NULL, NULL);
+                    } else if (r == (double)(long long)r) {
                         valNode = create_ast_leaf_number("NUMBER", (long long)r, NULL, NULL);
                     } else {
                         char buf[64]; te_fmt_double(buf, sizeof(buf), r);
@@ -9392,6 +9406,8 @@ static ASTNode* call_lambda_exec_body(ASTNode *lambda) {
                 }
             }
         }
+        long long i64r;
+        if (te_eval_i64(ret, &i64r)) return create_ast_leaf_number("NUMBER", i64r, NULL, NULL);   /* Fase 1b */
         double dr = evaluate_expression(ret);
         if (dr == (double)(long long)dr) return create_ast_leaf_number("NUMBER", (long long)dr, NULL, NULL);
         char buf[64]; te_fmt_double(buf, sizeof(buf), dr);
@@ -9496,6 +9512,8 @@ static ASTNode* call_lambda_exec_body(ASTNode *lambda) {
             }
         }
     }
+    long long i64v;
+    if (te_eval_i64(body, &i64v)) return create_ast_leaf_number("NUMBER", i64v, NULL, NULL);   /* Fase 1b */
     double r = evaluate_expression(body);
     if (r == (double)(long long)r) {
         return create_ast_leaf_number("NUMBER", (long long)r, NULL, NULL);
@@ -9692,8 +9710,12 @@ static void interpret_assign(ASTNode *node) {
                 || vk == NK_IDENTIFIER) {
                 /* Avoid string-typed ADD (concat) which needs the slow path. */
                 if (!(vk == NK_ADD && is_string_type(value_node))) {
-                    double r = evaluate_expression(value_node);
-                    if (r == (double)(int)r) {
+                    long long i64v;
+                    double r = te_eval_i64(value_node, &i64v) ? (double)i64v : evaluate_expression(value_node);
+                    if (te_eval_i64(value_node, &i64v)) {   /* Fase 1b */
+                        fv->vtype = VAL_INT;
+                        fv->value.int_value = i64v;
+                    } else if (r == (double)(long long)r) {
                         fv->vtype = VAL_INT;
                         fv->value.int_value = (long long)r;
                     } else {
@@ -9880,9 +9902,12 @@ static void interpret_assign(ASTNode *node) {
             free_ast(temp_node);
             return;
         }
-        double result = evaluate_expression(value_node);
+        long long i64v;
+        double result = te_eval_i64(value_node, &i64v) ? (double)i64v : evaluate_expression(value_node);
         ASTNode* temp_node = NULL;
-        if (result == (int)result) {
+        if (te_eval_i64(value_node, &i64v)) {   /* Fase 1b */
+            temp_node = create_ast_leaf_number("INT", i64v, NULL, NULL);
+        } else if (result == (long long)result) {
             temp_node = create_ast_leaf_number("INT", (long long)result, NULL, NULL);
         } else {
             char* str_res = double_to_string(result);

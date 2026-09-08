@@ -9,6 +9,7 @@
 #include "te_bytecode.h"
 #include "debugger.h"
 #include "te_vm.h"
+#include "te_value.h"
 
 /* Estado global del intérprete definido en ast.c (la Fase 3 lo agrupa en TeVM). */
 

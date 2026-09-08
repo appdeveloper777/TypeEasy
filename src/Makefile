@@ -24,7 +24,7 @@ WITH_SYBASE ?= 1
 WITH_CURL   ?= 1
 WITH_OPENMP ?= 1
 
-MOTOR_C_FILES = ast.c bytecode.c db_params.c orm_bridge.c typeeasy_api.c typeeasy_api_server.c wasm_backend.c debugger.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c te_xlsx.c te_colcache.c te_stdlib.c te_bridge.c te_async.c te_evloop.c te_linq.c te_linq_ops.c te_math.c te_string.c te_list.c te_map.c te_print.c te_interp_flow.c db_stubs_optional.c
+MOTOR_C_FILES = ast.c bytecode.c db_params.c orm_bridge.c typeeasy_api.c typeeasy_api_server.c wasm_backend.c debugger.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c te_xlsx.c te_colcache.c te_stdlib.c te_bridge.c te_async.c te_evloop.c te_linq.c te_linq_ops.c te_math.c te_string.c te_list.c te_map.c te_print.c te_interp_flow.c te_value.c db_stubs_optional.c
 
 # Bridge real solo si su motor esta ON; si no, db_stubs_optional.c aporta stubs.
 ifeq ($(WITH_MYSQL),1)
