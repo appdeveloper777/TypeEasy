@@ -5462,48 +5462,8 @@ int te_expr_is_null(ASTNode *l) {
 
 /* Bytecode VM (compile+exec), profiler, tracer and x86_64 JIT now live in
  * te_bytecode.c (Fase 2 modularization). Public API in te_bytecode.h. */
-double evaluate_expression(ASTNode *node) {
-    if (!node) return 0;
-
-    /* Gotcha #2: `let x = make(10)(5)` — CALL_EXPR dentro de una expresión.
-     * No está mapeado en NodeKind; se intercepta por nombre antes del
-     * fast-path de bytecode. interpret_call_expr deja el resultado en __ret__. */
-    if (node->type && node->type[0] == 'C' && strcmp(node->type, "CALL_EXPR") == 0) {
-        interpret_call_expr(node);
-        Variable *r = find_variable("__ret__");
-        if (!r) return 0;
-        if (r->vtype == VAL_INT)   return (double)r->value.int_value;
-        if (r->vtype == VAL_FLOAT) return r->value.float_value;
-        if (r->vtype == VAL_STRING && r->value.string_value)
-            return atof(r->value.string_value);
-        return 0;
-    }
-
-    /* Fase 3 (perf): bytecode fast-path. Compile & cache on first hit;
-     * on subsequent calls (loop bodies, conditions) skip the AST walker
-     * entirely and run the flat opcode stream via computed goto. */
-    {
-        static int bc_init = 0;
-        static int bc_enabled = 1;
-        if (!bc_init) {
-            const char *e = getenv("TYPEEASY_NO_BC");
-            if (e && e[0] && e[0] != '0') bc_enabled = 0;
-            bc_init = 1;
-        }
-        if (bc_enabled && !g_debug_enabled) {
-            BCInfo *info = bc_get_or_compile(node);
-            if (info) return bc_exec(info->code);
-        }
-    }
-
-    /* Fase 1 (perf): single dispatch via cached NodeKind enum. */
-    NodeKind k = nk_of(node);
-
-    switch (k) {
-    case NK_NULL:
-        return 0; /* null como número = 0 */
-
-    case NK_IDENTIFIER: {
+/* NK_IDENTIFIER — extraído de evaluate_expression (Fase 2). */
+static double te_ev_identifier(ASTNode *node) {
         /* Fase 2 (perf): cache Variable* on first lookup.
          * vars[] is append-only with stable pointers, so this is safe.
          * EXCEPT: runtime_reset_vars_to_initial_state() between API
@@ -5540,25 +5500,10 @@ double evaluate_expression(ASTNode *node) {
             printf("Error: variable '%s' is not defined.\n", node->id);
             return 0;
         }
-    }
+}
 
-    case NK_NUMBER:
-    case NK_INT:
-        return (double)node->value;
-
-    case NK_FLOAT:
-        return atof(node->str_value);
-
-    case NK_GT:
-        return evaluate_expression(node->left) > evaluate_expression(node->right);
-    case NK_LT:
-        return evaluate_expression(node->left) < evaluate_expression(node->right);
-    case NK_GT_EQ:
-        return evaluate_expression(node->left) <= evaluate_expression(node->right);
-    case NK_LT_EQ:
-        return evaluate_expression(node->left) >= evaluate_expression(node->right);
-
-    case NK_EQ: {
+/* NK_EQ — extraído de evaluate_expression (Fase 2). */
+static double te_ev_eq(ASTNode *node) {
         int left_null = 0, right_null = 0;
         if (node->left  && nk_of(node->left)  == NK_NULL) left_null = 1;
         if (node->right && nk_of(node->right) == NK_NULL) right_null = 1;
@@ -5619,9 +5564,10 @@ double evaluate_expression(ASTNode *node) {
              return (double)res;
         }
         return evaluate_expression(node->left) == evaluate_expression(node->right);
-    }
+}
 
-    case NK_DIFF: {
+/* NK_DIFF — extraído de evaluate_expression (Fase 2). */
+static double te_ev_diff(ASTNode *node) {
         int left_null = 0, right_null = 0;
         if (node->left  && nk_of(node->left)  == NK_NULL) left_null = 1;
         if (node->right && nk_of(node->right) == NK_NULL) right_null = 1;
@@ -5674,81 +5620,10 @@ double evaluate_expression(ASTNode *node) {
              return (double)res;
         }
         return evaluate_expression(node->left) != evaluate_expression(node->right);
-    }
+}
 
-    case NK_AND:
-        if (!evaluate_expression(node->left)) return 0;
-        return evaluate_expression(node->right) ? 1 : 0;
-    case NK_OR:
-        if (evaluate_expression(node->left)) return 1;
-        return evaluate_expression(node->right) ? 1 : 0;
-    case NK_NOT:
-        return evaluate_expression(node->left) ? 0 : 1;
-
-    case NK_NULL_COALESCE: {
-        ASTNode *l = node->left;
-        if (te_expr_is_null(l)) return evaluate_expression(node->right);
-        return evaluate_expression(l);
-    }
-
-    case NK_TERNARY:
-        /* cond ? then : else  — node->left=cond, node->right=then, node->extra=else */
-        return evaluate_expression(node->left)
-                   ? evaluate_expression(node->right)
-                   : evaluate_expression(node->extra);
-
-    case NK_ADD:
-        return evaluate_expression(node->left) + evaluate_expression(node->right);
-    case NK_SUB:
-        return evaluate_expression(node->left) - evaluate_expression(node->right);
-    case NK_MUL:
-        return evaluate_expression(node->left) * evaluate_expression(node->right);
-    case NK_DIV: {
-        double right = evaluate_expression(node->right);
-        if (right == 0.0) {
-            printf("Error: division by zero.\n");
-            return 0;
-        }
-        return evaluate_expression(node->left) / right;
-    }
-    case NK_MOD: {
-        long long lv = (long long)evaluate_expression(node->left);
-        long long rv = (long long)evaluate_expression(node->right);
-        if (rv == 0) { printf("Error: modulo by zero.\n"); return 0; }
-        return (double)(lv % rv);
-    }
-    case NK_NEG:
-        return -evaluate_expression(node->left);
-    case NK_BIT_AND: {
-        long long a = (long long)evaluate_expression(node->left);
-        long long b = (long long)evaluate_expression(node->right);
-        return (double)(a & b);
-    }
-    case NK_BIT_OR: {
-        long long a = (long long)evaluate_expression(node->left);
-        long long b = (long long)evaluate_expression(node->right);
-        return (double)(a | b);
-    }
-    case NK_BIT_XOR: {
-        long long a = (long long)evaluate_expression(node->left);
-        long long b = (long long)evaluate_expression(node->right);
-        return (double)(a ^ b);
-    }
-    case NK_BIT_NOT: {
-        long long a = (long long)evaluate_expression(node->left);
-        return (double)(~a);
-    }
-    case NK_SHL: {
-        long long a = (long long)evaluate_expression(node->left);
-        long long b = (long long)evaluate_expression(node->right);
-        return (double)(a << b);
-    }
-    case NK_SHR: {
-        long long a = (long long)evaluate_expression(node->left);
-        long long b = (long long)evaluate_expression(node->right);
-        return (double)(a >> b);
-    }
-    case NK_IN: {
+/* NK_IN — extraído de evaluate_expression (Fase 2). */
+static double te_ev_in(ASTNode *node) {
         /* `key in container` — container puede ser map (busca clave) o list (busca elemento) */
         ASTNode *container = node->right;
         ASTNode *map = resolve_to_map(container);
@@ -5778,9 +5653,10 @@ double evaluate_expression(ASTNode *node) {
             return (double)found;
         }
         return 0;
-    }
+}
 
-    case NK_ACCESS_ATTR: {
+/* NK_ACCESS_ATTR — extraído de evaluate_expression (Fase 2). */
+static double te_ev_access_attr(ASTNode *node) {
         ASTNode *objRef = node->left;
         ASTNode *attr   = node->right;
 
@@ -5965,9 +5841,10 @@ double evaluate_expression(ASTNode *node) {
 
         printf("Error: attribute '%s' not found in object '%s'.\n", attr->id, objRef->id);
         return 0;
-    }
+}
 
-    case NK_ACCESS_EXPR: {
+/* NK_ACCESS_EXPR — extraído de evaluate_expression (Fase 2). */
+static double te_ev_access_expr(ASTNode *node) {
         /* Map indexing m["key"] */
         ASTNode *map = resolve_to_map(node->left);
         if (map) {
@@ -6008,15 +5885,11 @@ double evaluate_expression(ASTNode *node) {
             return 0;
         }
         return evaluate_expression(item);
-    }
+}
 
-    /* v1.0.0: CALL_FUNC / CALL_METHOD inside an expression context.
-     * Previously these fell through to `default` returning 0, which broke
-     * `builtin(x) OP y` inside LINQ lambdas and `{"k": builtin()}` in map
-     * literals. interpret_call_* sets __ret__; we read it back here. */
-    case NK_CALL_FUNC:
-    case NK_CALL_METHOD: {
-        if (k == NK_CALL_FUNC) interpret_call_func(node);
+/* NK_CALL_METHOD — extraído de evaluate_expression (Fase 2). */
+static double te_ev_call(ASTNode *node) {
+        if (nk_of(node) == NK_CALL_FUNC) interpret_call_func(node);
         else                   interpret_call_method(node);
         Variable *r = find_variable("__ret__");
         if (!r) return 0;
@@ -6033,7 +5906,155 @@ double evaluate_expression(ASTNode *node) {
         }
         if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) return 0;
         return 0;
+}
+
+double evaluate_expression(ASTNode *node) {
+    if (!node) return 0;
+
+    /* Gotcha #2: `let x = make(10)(5)` — CALL_EXPR dentro de una expresión.
+     * No está mapeado en NodeKind; se intercepta por nombre antes del
+     * fast-path de bytecode. interpret_call_expr deja el resultado en __ret__. */
+    if (node->type && node->type[0] == 'C' && strcmp(node->type, "CALL_EXPR") == 0) {
+        interpret_call_expr(node);
+        Variable *r = find_variable("__ret__");
+        if (!r) return 0;
+        if (r->vtype == VAL_INT)   return (double)r->value.int_value;
+        if (r->vtype == VAL_FLOAT) return r->value.float_value;
+        if (r->vtype == VAL_STRING && r->value.string_value)
+            return atof(r->value.string_value);
+        return 0;
     }
+
+    /* Fase 3 (perf): bytecode fast-path. Compile & cache on first hit;
+     * on subsequent calls (loop bodies, conditions) skip the AST walker
+     * entirely and run the flat opcode stream via computed goto. */
+    {
+        static int bc_init = 0;
+        static int bc_enabled = 1;
+        if (!bc_init) {
+            const char *e = getenv("TYPEEASY_NO_BC");
+            if (e && e[0] && e[0] != '0') bc_enabled = 0;
+            bc_init = 1;
+        }
+        if (bc_enabled && !g_debug_enabled) {
+            BCInfo *info = bc_get_or_compile(node);
+            if (info) return bc_exec(info->code);
+        }
+    }
+
+    /* Fase 1 (perf): single dispatch via cached NodeKind enum. */
+    NodeKind k = nk_of(node);
+
+    switch (k) {
+    case NK_NULL:
+        return 0; /* null como número = 0 */
+
+    case NK_IDENTIFIER: return te_ev_identifier(node);
+
+    case NK_NUMBER:
+    case NK_INT:
+        return (double)node->value;
+
+    case NK_FLOAT:
+        return atof(node->str_value);
+
+    case NK_GT:
+        return evaluate_expression(node->left) > evaluate_expression(node->right);
+    case NK_LT:
+        return evaluate_expression(node->left) < evaluate_expression(node->right);
+    case NK_GT_EQ:
+        return evaluate_expression(node->left) <= evaluate_expression(node->right);
+    case NK_LT_EQ:
+        return evaluate_expression(node->left) >= evaluate_expression(node->right);
+
+    case NK_EQ: return te_ev_eq(node);
+
+    case NK_DIFF: return te_ev_diff(node);
+
+    case NK_AND:
+        if (!evaluate_expression(node->left)) return 0;
+        return evaluate_expression(node->right) ? 1 : 0;
+    case NK_OR:
+        if (evaluate_expression(node->left)) return 1;
+        return evaluate_expression(node->right) ? 1 : 0;
+    case NK_NOT:
+        return evaluate_expression(node->left) ? 0 : 1;
+
+    case NK_NULL_COALESCE: {
+        ASTNode *l = node->left;
+        if (te_expr_is_null(l)) return evaluate_expression(node->right);
+        return evaluate_expression(l);
+    }
+
+    case NK_TERNARY:
+        /* cond ? then : else  — node->left=cond, node->right=then, node->extra=else */
+        return evaluate_expression(node->left)
+                   ? evaluate_expression(node->right)
+                   : evaluate_expression(node->extra);
+
+    case NK_ADD:
+        return evaluate_expression(node->left) + evaluate_expression(node->right);
+    case NK_SUB:
+        return evaluate_expression(node->left) - evaluate_expression(node->right);
+    case NK_MUL:
+        return evaluate_expression(node->left) * evaluate_expression(node->right);
+    case NK_DIV: {
+        double right = evaluate_expression(node->right);
+        if (right == 0.0) {
+            printf("Error: division by zero.\n");
+            return 0;
+        }
+        return evaluate_expression(node->left) / right;
+    }
+    case NK_MOD: {
+        long long lv = (long long)evaluate_expression(node->left);
+        long long rv = (long long)evaluate_expression(node->right);
+        if (rv == 0) { printf("Error: modulo by zero.\n"); return 0; }
+        return (double)(lv % rv);
+    }
+    case NK_NEG:
+        return -evaluate_expression(node->left);
+    case NK_BIT_AND: {
+        long long a = (long long)evaluate_expression(node->left);
+        long long b = (long long)evaluate_expression(node->right);
+        return (double)(a & b);
+    }
+    case NK_BIT_OR: {
+        long long a = (long long)evaluate_expression(node->left);
+        long long b = (long long)evaluate_expression(node->right);
+        return (double)(a | b);
+    }
+    case NK_BIT_XOR: {
+        long long a = (long long)evaluate_expression(node->left);
+        long long b = (long long)evaluate_expression(node->right);
+        return (double)(a ^ b);
+    }
+    case NK_BIT_NOT: {
+        long long a = (long long)evaluate_expression(node->left);
+        return (double)(~a);
+    }
+    case NK_SHL: {
+        long long a = (long long)evaluate_expression(node->left);
+        long long b = (long long)evaluate_expression(node->right);
+        return (double)(a << b);
+    }
+    case NK_SHR: {
+        long long a = (long long)evaluate_expression(node->left);
+        long long b = (long long)evaluate_expression(node->right);
+        return (double)(a >> b);
+    }
+    case NK_IN: return te_ev_in(node);
+
+    case NK_ACCESS_ATTR: return te_ev_access_attr(node);
+
+    case NK_ACCESS_EXPR: return te_ev_access_expr(node);
+
+    /* v1.0.0: CALL_FUNC / CALL_METHOD inside an expression context.
+     * Previously these fell through to `default` returning 0, which broke
+     * `builtin(x) OP y` inside LINQ lambdas and `{"k": builtin()}` in map
+     * literals. interpret_call_* sets __ret__; we read it back here. */
+    case NK_CALL_FUNC:
+    case NK_CALL_METHOD: return te_ev_call(node);
 
     default:
         return (double)node->value;
