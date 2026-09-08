@@ -292,19 +292,8 @@ static char* te_http_headers_arg(ASTNode *n) {
  * te_builtin_dispatch — legacy if-chain dispatcher for builtins
  * not yet migrated to the registry. Returns 1 on hit.
  * ============================================================ */
-int te_builtin_dispatch(ASTNode *node) {
-    if (!node || !node->id) return 0;
-    const char *fn = node->id;
-    /* CALL_FUNC stores args on node->left; METHOD_CALL_ALONE on node->right.
-     * Pick the non-null side. */
-    ASTNode *a0 = node->left ? node->left : node->right;
-    ASTNode *a1 = a0 ? a0->next : NULL; /* gotcha #1: 2nd arg via ->next */
-
-    /* Fase 1: registry first. New builtins (and plugins loaded via
-     * load_native) live in the hash table; the legacy if-chain below
-     * remains as transparent fallback for builtins not yet migrated. */
-    if (te_builtin_dispatch_registry(node, a0)) return 1;
-
+/* Extraído de te_builtin_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_bi_core(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
     /* ---- len(x): string | list | map ---- */
     if (strcmp(fn, "len") == 0) {
         int n = 0;
@@ -524,7 +513,11 @@ int te_builtin_dispatch(ASTNode *node) {
         add_or_update_variable("__ret__", create_ast_leaf_number("INT", eq, NULL, NULL));
         return 1;
     }
+    return 0;
+}
 
+/* Extraído de te_builtin_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_bi_json(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
     /* ---- Phase D: stdlib JSON / HTTP ---- */
     if (strcmp(fn, "json_stringify") == 0) {
         const char *rt = NULL;
@@ -554,7 +547,11 @@ int te_builtin_dispatch(ASTNode *node) {
         add_or_update_variable("__ret__", r);
         return 1;
     }
+    return 0;
+}
 
+/* Extraído de te_builtin_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_bi_crypto(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
     /* ===== Crypto / encoding stdlib (mayo 2026) =====
      * sha1(s)/sha1_hex(s), sha256(s), md5_hex(s), hmac_sha256(key, msg),
      * base64_encode(s), base64_decode(s). Devuelven STRING. */
@@ -640,7 +637,11 @@ int te_builtin_dispatch(ASTNode *node) {
         add_or_update_variable("__ret__", r);
         return 1;
     }
+    return 0;
+}
 
+/* Extraído de te_builtin_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_bi_jwt(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
     /* ===== JWT (HS256) =====
      * jwt_sign(payload_json, secret)  -> "header.payload.signature" (base64url).
      * jwt_verify(token, secret)       -> payload JSON if the signature is valid
@@ -685,7 +686,11 @@ int te_builtin_dispatch(ASTNode *node) {
         free_ast(r); /* __ret__ copia el valor; el nodo temporal no se reusa */
         return 1;
     }
+    return 0;
+}
 
+/* Extraído de te_builtin_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_bi_http(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
     /* ===== Rate limiting (mayo 2026) =====
      * rate_limit(key, max_requests, window_seconds) → 1 si permitido, 0 si excedido.
      * Bucket array de 1024 slots con FNV-1a + linear probe. Sin sync (single-thread
@@ -780,6 +785,31 @@ int te_builtin_dispatch(ASTNode *node) {
             create_ast_leaf_number("INT", te_http_last_status(), NULL, NULL));
         return 1;
     }
+    return 0;
+}
+
+int te_builtin_dispatch(ASTNode *node) {
+    if (!node || !node->id) return 0;
+    const char *fn = node->id;
+    /* CALL_FUNC stores args on node->left; METHOD_CALL_ALONE on node->right.
+     * Pick the non-null side. */
+    ASTNode *a0 = node->left ? node->left : node->right;
+    ASTNode *a1 = a0 ? a0->next : NULL; /* gotcha #1: 2nd arg via ->next */
+
+    /* Fase 1: registry first. New builtins (and plugins loaded via
+     * load_native) live in the hash table; the legacy if-chain below
+     * remains as transparent fallback for builtins not yet migrated. */
+    if (te_builtin_dispatch_registry(node, a0)) return 1;
+
+    if (te_bi_core(fn, node, a0, a1)) return 1;
+
+    if (te_bi_json(fn, node, a0, a1)) return 1;
+
+    if (te_bi_crypto(fn, node, a0, a1)) return 1;
+
+    if (te_bi_jwt(fn, node, a0, a1)) return 1;
+
+    if (te_bi_http(fn, node, a0, a1)) return 1;
 
     return 0;
 }

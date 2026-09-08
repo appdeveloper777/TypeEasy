@@ -7669,6 +7669,434 @@ static int te_cm_map_builtin(ASTNode *node, ASTNode *objNode, Variable *v) {
     return 0;
 }
 
+/* Extraído de interpret_call_method_impl (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_cm_bridge(ASTNode *node, ObjectNode *obj, Variable *v) {
+    if (obj && strcmp(obj->class->name, "Bridge") == 0) {
+        if (g_debug_mode) te_log_ast("Calling native bridge: %s.%s", v->id, node->id);
+        // Aquí es donde la magia ocurre. Delegamos al manejador específico del bridge.
+        if (strcmp(v->id, "Chat") == 0) {
+            if (g_bridge_handlers.handle_chat_bridge) g_bridge_handlers.handle_chat_bridge(node->id, node->right);
+        } else if (strcmp(v->id, "NLU") == 0) {
+            if (g_debug_mode) te_log_ast("Calling NLU bridge");
+            if (g_bridge_handlers.handle_nlu_bridge) {
+                g_bridge_handlers.handle_nlu_bridge(node->id, node->right);
+                // Diagnostic: did the bridge set __ret__? (only print when debug mode enabled)
+                if (g_debug_mode) {
+                    if (__ret_var_active) {
+                        te_log_ast("[DEBUG] After NLU bridge: __ret__ active=1 type='%s'", __ret_var.type ? __ret_var.type : "(null)");
+                    } else {
+                        te_log_ast("[DEBUG] After NLU bridge: __ret__ active=0");
+                    }
+                }
+            }
+        } else if (strcmp(v->id, "API") == 0) {
+            if (g_bridge_handlers.handle_api_bridge) g_bridge_handlers.handle_api_bridge(node->id, node->right);
+        } else if (strcmp(v->id, "Gemini") == 0) {
+            if (g_bridge_handlers.handle_gemini_bridge) g_bridge_handlers.handle_gemini_bridge(node->id, node->right);
+        } else {
+            printf("Warning: Bridge '%s' unknown or not implemented in this executable.\n", v->id);
+        }
+        // Los bridges pueden o no devolver un valor. Si lo hacen, lo ponen en __ret_var.
+        // Por ahora, no necesitamos un valor de retorno falso.
+        // ASTNode* dummy_return = create_ast_leaf("STRING", 0, "dummy_return_from_bridge", NULL);
+        // add_or_update_variable("__ret__", dummy_return);
+        // free_ast(dummy_return);
+        return 1; // Skip normal method dispatch
+    }
+    return 0;
+}
+
+/* Extraído de interpret_call_method_impl (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_cm_bind_this(ASTNode *node, ObjectNode *obj, Variable *v) {
+    /* ====================================================================
+     * Ola 3 Fase D (perf): FAST `this` setup.
+     * Cached: persistent Variable* "this" + single reusable wrapper.
+     * Hot path patches both pointers (no calloc/strdup/add_or_update).
+     * Switch: TYPEEASY_NO_FASTTHIS=1.
+     * ==================================================================== */
+    static int      ft_init        = 0;
+    static int      ft_enabled     = 1;
+    static Variable *g_this_var    = NULL;
+    static ASTNode  *g_this_wrap   = NULL;
+    if (!ft_init) {
+        const char *e = getenv("TYPEEASY_NO_FASTTHIS");
+        if (e && e[0] && e[0] != '0') ft_enabled = 0;
+        ft_init = 1;
+    }
+    if (ft_enabled && g_this_var && g_this_wrap) {
+        /* Hot path: just patch the cached objects. */
+        g_this_var->vtype              = VAL_OBJECT;
+        g_this_var->value.object_value = obj;
+        g_this_wrap->extra             = (struct ASTNode*)obj;
+    } else {
+        /* Cold path: original setup, plus capture the cache. */
+        ASTNode *thisNode = calloc(1, sizeof(ASTNode));
+        thisNode->type  = strdup("OBJECT");
+        thisNode->id    = strdup("this");
+        thisNode->left  = thisNode->right = NULL;
+        thisNode->extra = (struct ASTNode*)obj;
+        thisNode->value = 0;
+        add_or_update_variable("this", thisNode);
+        if (ft_enabled) {
+            g_this_var  = find_variable_for("this");
+            g_this_wrap = thisNode;
+        }
+    }
+    return 0;
+}
+
+/* Extraído de interpret_call_method_impl (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_cm_bind_args(ASTNode *node, MethodNode *m, ObjectNode *obj) {
+    ParameterNode *p = m->params;
+    ASTNode      *arg = node->right; // CORRECCIÓN
+    /* ====================================================================
+     * Ola 3 Fase B: FAST CALL PATH
+     * --------------------------------------------------------------------
+     * If every declared parameter is numeric (int/float) we bypass
+     * create_ast_leaf_number + add_or_update_variable per arg and write
+     * directly into the param's cached Variable*. Switch TYPEEASY_NO_FASTCALL=1
+     * to disable.
+     * ==================================================================== */
+    {
+        static int fc_init = 0;
+        static int fc_enabled = 1;
+        if (!fc_init) {
+            const char *e = getenv("TYPEEASY_NO_FASTCALL");
+            if (e && e[0] && e[0] != '0') fc_enabled = 0;
+            fc_init = 1;
+        }
+        if (fc_enabled && p) {
+            int all_numeric = 1;
+            ParameterNode *pp = p;
+            while (pp) {
+                if (!pp->type
+                    || (strcmp(pp->type, "int")    != 0
+                     && strcmp(pp->type, "float")  != 0
+                     && strcmp(pp->type, "INT")    != 0
+                     && strcmp(pp->type, "FLOAT")  != 0)) {
+                    all_numeric = 0; break;
+                }
+                pp = pp->next;
+            }
+            if (all_numeric) {
+                ParameterNode *cur_p = p;
+                ASTNode       *cur_a = arg;
+                while (cur_p && cur_a) {
+                    Variable *fv = (Variable*)cur_p->cached_var;
+                    if (!fv) {
+                        fv = find_variable_for(cur_p->name);
+                        if (!fv) {
+                            /* Create a fresh slot only once. */
+                            if (g_vm.var_count < MAX_VARS) {
+                                g_vm.vars[g_vm.var_count].id       = strdup(cur_p->name);
+                                g_vm.vars[g_vm.var_count].type     = strdup(cur_p->type);
+                                g_vm.vars[g_vm.var_count].is_const = 0;
+                                g_vm.vars[g_vm.var_count].vtype    = (strcmp(cur_p->type, "float")==0
+                                                           || strcmp(cur_p->type, "FLOAT")==0)
+                                                           ? VAL_FLOAT : VAL_INT;
+                                if (g_vm.vars[g_vm.var_count].vtype == VAL_FLOAT)
+                                    g_vm.vars[g_vm.var_count].value.float_value = 0.0;
+                                else
+                                    g_vm.vars[g_vm.var_count].value.int_value = 0;
+                                fv = &g_vm.vars[g_vm.var_count];
+                                g_vm.var_count++;
+                            }
+                        }
+                        cur_p->cached_var = fv;
+                    }
+                    if (fv) {
+                        double d = evaluate_expression(cur_a);
+                        if (fv->vtype == VAL_FLOAT) {
+                            fv->value.float_value = d;
+                        } else {
+                            fv->vtype = VAL_INT;
+                            fv->value.int_value  = (int)d;
+                        }
+                    }
+                    cur_p = cur_p->next;
+                    cur_a = cur_a->next; /* gotcha #1: step args via ->next */
+                }
+                /* args bound directly; skip slow path */
+                goto fastcall_args_done;
+            }
+        }
+    }
+    while (p && arg) {
+        ASTNode *vn = NULL;
+        if (arg->type && strcmp(arg->type, "STRING") == 0) {
+            vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
+        } else if (arg->type && (strcmp(arg->type,"ID")==0 || strcmp(arg->type,"IDENTIFIER")==0)) {
+            Variable *v_arg = find_variable(arg->id);
+            if (!v_arg) {
+                printf("Error: variable '%s' not found.\n", arg->id);
+                return 1;
+            }
+            if (v_arg->vtype == VAL_STRING) {
+                vn = create_ast_leaf("STRING", 0, strdup(v_arg->value.string_value), NULL);
+            } else {
+                vn = create_ast_leaf_number("INT", v_arg->value.int_value, NULL, NULL);
+            }
+        } else {
+            int val = evaluate_expression(arg);
+            vn = create_ast_leaf_number("INT", val, NULL, NULL);
+        }
+        add_or_update_variable(p->name, vn);
+        p   = p->next;
+        arg = arg->next; /* gotcha #1: step args via ->next */
+    }
+fastcall_args_done:
+    return 0;
+}
+
+/* Extraído de interpret_call_method_impl (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_cm_body_bytecode(ASTNode *node, MethodNode *m, ObjectNode *obj) {
+    /* ====================================================================
+     * Ola 4 (perf): METHOD-BODY BYTECODE.
+     * If the body is a single `return <numeric expr>;` and the declared
+     * return type is int/float, run a precompiled bytecode program that
+     * reads parameters and `this.attr` directly from cached pointers.
+     * Skips both interpret_ast(m->body) and the FAST RETURN evaluator.
+     * Switch: TYPEEASY_NO_BCMETHOD=1 disables.
+     * ==================================================================== */
+    {
+        static int bcm_init = 0;
+        static int bcm_enabled = 1;
+        if (!bcm_init) {
+            const char *e = getenv("TYPEEASY_NO_BCMETHOD");
+            if (e && e[0] && e[0] != '0') bcm_enabled = 0;
+            bcm_init = 1;
+        }
+        if (bcm_enabled
+            && m->return_type
+            && (strcmp(m->return_type, "int")   == 0
+             || strcmp(m->return_type, "float") == 0)
+            && obj && obj->class) {
+            BCInfo *bi = bc_get_or_compile_method(m, obj->class);
+            if (bi) {
+                ObjectNode *saved_this = g_bc_this;
+                g_bc_this = obj;
+                double rv = bc_exec(bi->code);
+                g_bc_this = saved_this;
+                /* Write __ret_var directly (mirrors FAST RETURN path). */
+                if (__ret_var_active) {
+                    if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
+                        free(__ret_var.value.string_value);
+                        __ret_var.value.string_value = NULL;
+                    }
+                    if (__ret_var.id)   { free(__ret_var.id);   __ret_var.id   = NULL; }
+                    if (__ret_var.type) { free(__ret_var.type); __ret_var.type = NULL; }
+                }
+                __ret_var.id = strdup("__ret__");
+                if (strcmp(m->return_type, "float") == 0) {
+                    __ret_var.type  = strdup("FLOAT");
+                    __ret_var.vtype = VAL_FLOAT;
+                    __ret_var.value.float_value = rv;
+                } else {
+                    __ret_var.type  = strdup("INT");
+                    __ret_var.vtype = VAL_INT;
+                    __ret_var.value.int_value = (long long)rv;
+                }
+                __ret_var_active = 1;
+                g_vm.return_flag = 0;
+                g_vm.return_node = NULL;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Extraído de interpret_call_method_impl (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_cm_materialize_return(ASTNode *node, MethodNode *m, ObjectNode *obj) {
+        if (g_vm.return_flag && g_vm.return_node) {
+            /* ============================================================
+             * Ola 3 Fase B: FAST RETURN path.
+             * If the declared return type is numeric and the return
+             * expression is NOT a special form (STRING/CALL/ACCESS_ATTR/
+             * pure identifier), write the result straight into __ret_var
+             * without allocating an intermediate ASTNode literal.
+             * Switch: TYPEEASY_NO_FASTRET=1
+             * ============================================================ */
+            {
+                static int fr_init = 0;
+                static int fr_enabled = 1;
+                if (!fr_init) {
+                    const char *e = getenv("TYPEEASY_NO_FASTRET");
+                    if (e && e[0] && e[0] != '0') fr_enabled = 0;
+                    fr_init = 1;
+                }
+                if (fr_enabled
+                    && m->return_type
+                    && (strcmp(m->return_type, "int")   == 0
+                     || strcmp(m->return_type, "float") == 0)
+                    && g_vm.return_node->type
+                    && strcmp(g_vm.return_node->type, "STRING")      != 0
+                    && strcmp(g_vm.return_node->type, "CALL_FUNC")   != 0
+                    && strcmp(g_vm.return_node->type, "CALL_METHOD") != 0
+                    && strcmp(g_vm.return_node->type, "RETURN_JSON") != 0
+                    && strcmp(g_vm.return_node->type, "RETURN_XML")  != 0) {
+                    long long rv_i64; double rv; int rv_is_i64 = te_eval_num(g_vm.return_node, &rv_i64, &rv);   /* Fase 1b */
+                    /* Reset and write __ret_var directly. */
+                    if (__ret_var_active) {
+                        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
+                            free(__ret_var.value.string_value);
+                            __ret_var.value.string_value = NULL;
+                        }
+                        if (__ret_var.id) { free(__ret_var.id); __ret_var.id = NULL; }
+                        if (__ret_var.type) { free(__ret_var.type); __ret_var.type = NULL; }
+                    }
+                    __ret_var.id   = strdup("__ret__");
+                    if (strcmp(m->return_type, "float") == 0) {
+                        __ret_var.type  = strdup("FLOAT");
+                        __ret_var.vtype = VAL_FLOAT;
+                        __ret_var.value.float_value = rv;
+                    } else {
+                        __ret_var.type  = strdup("INT");
+                        __ret_var.vtype = VAL_INT;
+                        __ret_var.value.int_value = rv_is_i64 ? rv_i64 : (long long)rv;
+                    }
+                    __ret_var_active = 1;
+                    g_vm.return_flag = 0;
+                    g_vm.return_node = NULL;
+                    return 1;
+                }
+            }
+            /* `return <call>` (e.g. `return Math.sqrt(x)` or `return helper()`):
+             * the nested call already placed its result in __ret__ while the
+             * return expression was evaluated. Skip the literal re-extraction
+             * below (which would treat return_node->id as a variable name and
+             * fail). The json builtin keeps its dedicated path below. */
+            if (g_vm.return_node->type
+                && (strcmp(g_vm.return_node->type, "CALL_METHOD") == 0
+                 || (strcmp(g_vm.return_node->type, "CALL_FUNC") == 0
+                     && !(g_vm.return_node->id && strcmp(g_vm.return_node->id, "json") == 0)))) {
+                g_vm.return_flag = 0;
+                g_vm.return_node = NULL;
+                return 1;
+            }
+            // If the return is a call to json, print the JSON output
+            if (g_vm.return_node && g_vm.return_node->type && strcmp(g_vm.return_node->type, "CALL_FUNC") == 0 && g_vm.return_node->id && strcmp(g_vm.return_node->id, "json") == 0) {
+            //    printf("[DIAG] Entrando a native_json desde interpret_call_method\n");
+                native_json(g_vm.return_node->left);
+            } else {
+                ASTNode *lit = NULL;
+                if (g_vm.return_node->type && strcmp(g_vm.return_node->type, "STRING") == 0) {
+                    lit = create_ast_leaf("STRING", 0, g_vm.return_node->str_value, NULL);
+                } else if (g_vm.return_node->id) {
+                    Variable *rv = find_variable(g_vm.return_node->id);
+                    if (rv) {
+                        if (rv->vtype == VAL_STRING) {
+                            lit = create_ast_leaf("STRING", 0, strdup(rv->value.string_value), NULL);
+                        } else if (rv->vtype == VAL_FLOAT) {
+                            lit = create_ast_leaf("FLOAT", 0, double_to_string(rv->value.float_value), NULL);
+                        } else if (rv->vtype == VAL_INT) {
+                            lit = create_ast_leaf_number("INT", rv->value.int_value, NULL, NULL);
+                        }
+                    } else {
+                        printf("Error: variable '%s' not found in return statement.\n", g_vm.return_node->id);
+                        return 1;
+                    }
+                } else if (g_vm.return_node->type && strcmp(g_vm.return_node->type, "ACCESS_ATTR") == 0) {
+                    ASTNode *objN = g_vm.return_node->left;
+                    ASTNode *attrN = g_vm.return_node->right;
+                    Variable *ov = find_variable(objN->id);
+                    if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "OBJECT") == 0) {
+                        ObjectNode *oobj = ov->value.object_value; int i = -1;
+                        int idx = -1;
+                        for (i=0; i<oobj->class->attr_count; i++) { // Inicializa 'i'
+                            if (strcmp(oobj->class->attributes[i].id, attrN->id)==0) { idx=i; break; }
+                        }
+                        if (idx>=0) {
+                            if (strcmp(oobj->class->attributes[idx].type,"string")==0)
+                                lit = create_ast_leaf("STRING",0,strdup(oobj->attributes[idx].value.string_value),NULL);
+                            else if (strcmp(oobj->attributes[idx].type,"float")==0)
+                                lit = create_ast_leaf("FLOAT",0,double_to_string(oobj->attributes[idx].value.float_value),NULL); // Usar idx
+                            else
+                                lit = create_ast_leaf_number("INT",oobj->attributes[idx].value.int_value,NULL,NULL);
+                        }
+                    }
+                } else if (g_vm.return_node->type
+                           && strcmp(g_vm.return_node->type, "ADD") == 0
+                           && is_string_type(g_vm.return_node)) {
+                    /* String concatenation, e.g. `return "Hi " + this.name;`.
+                     * Resolve to a STRING value instead of a numeric ADD. */
+                    char *s = get_node_string(g_vm.return_node);
+                    lit = create_ast_leaf("STRING", 0, s ? s : "", NULL);
+                    if (s) free(s);
+                } else if (g_vm.return_node->type
+                           && (strcmp(g_vm.return_node->type, "GT") == 0
+                            || strcmp(g_vm.return_node->type, "LT") == 0
+                            || strcmp(g_vm.return_node->type, "EQ") == 0
+                            || strcmp(g_vm.return_node->type, "GT_EQ") == 0
+                            || strcmp(g_vm.return_node->type, "LT_EQ") == 0
+                            || strcmp(g_vm.return_node->type, "DIFF") == 0
+                            || strcmp(g_vm.return_node->type, "AND") == 0
+                            || strcmp(g_vm.return_node->type, "OR") == 0
+                            || strcmp(g_vm.return_node->type, "NOT") == 0)) {
+                    /* Comparison / logical operator yields a boolean (0|1).
+                     * Tag it as BOOL so the type check accepts `: bool` and
+                     * print emits true/false. */
+                    int b = evaluate_expression(g_vm.return_node) != 0 ? 1 : 0;
+                    lit = create_ast_leaf_number("BOOL", b, NULL, NULL);
+                } else {
+                    double rv_double = evaluate_expression(g_vm.return_node);
+                    if (rv_double == (int)rv_double) {
+                        lit = create_ast_leaf_number("INT", (long long)rv_double, NULL, NULL);
+                    } else {
+                        lit = create_ast_leaf("FLOAT", 0, double_to_string(rv_double), NULL);
+                    }
+                }
+                if (lit) {
+                    // --- TYPE CHECK: validate lit->type against declared return_type ---
+                    if (m->return_type
+                        && strcmp(m->return_type, "dynamic") != 0
+                        && strcmp(m->return_type, "void") != 0
+                        && lit->type) {
+                        const char *expected = m->return_type;
+                        const char *actual = lit->type;
+                        /* T? : strip trailing '?' for the comparison; null is always OK for optional */
+                        char base_expected[64];
+                        size_t el = strlen(expected);
+                        int optional = (el > 0 && expected[el-1] == '?');
+                        if (optional) { strncpy(base_expected, expected, el-1); base_expected[el-1] = '\0'; }
+                        else { strncpy(base_expected, expected, sizeof(base_expected)-1); base_expected[sizeof(base_expected)-1]='\0'; }
+                        if (optional && strcmp(actual, "NULL") == 0) {
+                            /* OK: optional type returning null */
+                        } else {
+                            const char *expected_cmp = base_expected;
+                            int ok = 0;
+                            if (strcmp(expected_cmp, "int") == 0    && strcmp(actual, "INT") == 0)    ok = 1;
+                            if (strcmp(expected_cmp, "string") == 0 && strcmp(actual, "STRING") == 0) ok = 1;
+                            if (strcmp(expected_cmp, "float") == 0  && (strcmp(actual, "FLOAT") == 0 || strcmp(actual, "INT") == 0)) ok = 1;
+                            if (strcmp(expected_cmp, "bool") == 0   && (strcmp(actual, "BOOL") == 0 || strcmp(actual, "INT") == 0)) ok = 1;
+                            if (!ok) {
+                                const char *actual_lower = "?";
+                                if (strcmp(actual, "INT") == 0)    actual_lower = "int";
+                                else if (strcmp(actual, "STRING") == 0) actual_lower = "string";
+                                else if (strcmp(actual, "FLOAT") == 0)  actual_lower = "float";
+                                else if (strcmp(actual, "BOOL") == 0)   actual_lower = "bool";
+                                else if (strcmp(actual, "NULL") == 0)   actual_lower = "null";
+                                char buf[256];
+                                snprintf(buf, sizeof(buf),
+                                    "TypeError: method '%s' is declared as '%s' but returns a value of type '%s'.",
+                                    m->name, expected, actual_lower);
+                                if (throw_message) free(throw_message);
+                                throw_message = strdup(buf);
+                                g_vm.throw_flag = 1;
+                                g_vm.return_flag = 0; g_vm.return_node = NULL;
+                                return 1;
+                            }
+                        }
+                    }
+                    add_or_update_variable("__ret__", lit);
+                }
+            }
+            g_vm.return_flag = 0;
+            g_vm.return_node = NULL;
+        }
+    return 0;
+}
+
 static void interpret_call_method_impl(ASTNode *node) {
     ASTNode *objNode = node->left;
 
@@ -7895,38 +8323,7 @@ static void interpret_call_method_impl(ASTNode *node) {
    // }
 
     // === FIX START: Handle Bridge method calls ===
-    if (obj && strcmp(obj->class->name, "Bridge") == 0) {
-        if (g_debug_mode) te_log_ast("Calling native bridge: %s.%s", v->id, node->id);
-        // Aquí es donde la magia ocurre. Delegamos al manejador específico del bridge.
-        if (strcmp(v->id, "Chat") == 0) {
-            if (g_bridge_handlers.handle_chat_bridge) g_bridge_handlers.handle_chat_bridge(node->id, node->right);
-        } else if (strcmp(v->id, "NLU") == 0) {
-            if (g_debug_mode) te_log_ast("Calling NLU bridge");
-            if (g_bridge_handlers.handle_nlu_bridge) {
-                g_bridge_handlers.handle_nlu_bridge(node->id, node->right);
-                // Diagnostic: did the bridge set __ret__? (only print when debug mode enabled)
-                if (g_debug_mode) {
-                    if (__ret_var_active) {
-                        te_log_ast("[DEBUG] After NLU bridge: __ret__ active=1 type='%s'", __ret_var.type ? __ret_var.type : "(null)");
-                    } else {
-                        te_log_ast("[DEBUG] After NLU bridge: __ret__ active=0");
-                    }
-                }
-            }
-        } else if (strcmp(v->id, "API") == 0) {
-            if (g_bridge_handlers.handle_api_bridge) g_bridge_handlers.handle_api_bridge(node->id, node->right);
-        } else if (strcmp(v->id, "Gemini") == 0) {
-            if (g_bridge_handlers.handle_gemini_bridge) g_bridge_handlers.handle_gemini_bridge(node->id, node->right);
-        } else {
-            printf("Warning: Bridge '%s' unknown or not implemented in this executable.\n", v->id);
-        }
-        // Los bridges pueden o no devolver un valor. Si lo hacen, lo ponen en __ret_var.
-        // Por ahora, no necesitamos un valor de retorno falso.
-        // ASTNode* dummy_return = create_ast_leaf("STRING", 0, "dummy_return_from_bridge", NULL);
-        // add_or_update_variable("__ret__", dummy_return);
-        // free_ast(dummy_return);
-        return; // Skip normal method dispatch
-    }
+    if (te_cm_bridge(node, obj, v)) return;
     // === FIX END ===
 
     MethodNode *m = obj->class->methods;
@@ -7945,192 +8342,10 @@ static void interpret_call_method_impl(ASTNode *node) {
         }
     }
 
-    /* ====================================================================
-     * Ola 3 Fase D (perf): FAST `this` setup.
-     * Cached: persistent Variable* "this" + single reusable wrapper.
-     * Hot path patches both pointers (no calloc/strdup/add_or_update).
-     * Switch: TYPEEASY_NO_FASTTHIS=1.
-     * ==================================================================== */
-    static int      ft_init        = 0;
-    static int      ft_enabled     = 1;
-    static Variable *g_this_var    = NULL;
-    static ASTNode  *g_this_wrap   = NULL;
-    if (!ft_init) {
-        const char *e = getenv("TYPEEASY_NO_FASTTHIS");
-        if (e && e[0] && e[0] != '0') ft_enabled = 0;
-        ft_init = 1;
-    }
-    if (ft_enabled && g_this_var && g_this_wrap) {
-        /* Hot path: just patch the cached objects. */
-        g_this_var->vtype              = VAL_OBJECT;
-        g_this_var->value.object_value = obj;
-        g_this_wrap->extra             = (struct ASTNode*)obj;
-    } else {
-        /* Cold path: original setup, plus capture the cache. */
-        ASTNode *thisNode = calloc(1, sizeof(ASTNode));
-        thisNode->type  = strdup("OBJECT");
-        thisNode->id    = strdup("this");
-        thisNode->left  = thisNode->right = NULL;
-        thisNode->extra = (struct ASTNode*)obj;
-        thisNode->value = 0;
-        add_or_update_variable("this", thisNode);
-        if (ft_enabled) {
-            g_this_var  = find_variable_for("this");
-            g_this_wrap = thisNode;
-        }
-    }
-    ParameterNode *p = m->params;
-    ASTNode      *arg = node->right; // CORRECCIÓN
-    /* ====================================================================
-     * Ola 3 Fase B: FAST CALL PATH
-     * --------------------------------------------------------------------
-     * If every declared parameter is numeric (int/float) we bypass
-     * create_ast_leaf_number + add_or_update_variable per arg and write
-     * directly into the param's cached Variable*. Switch TYPEEASY_NO_FASTCALL=1
-     * to disable.
-     * ==================================================================== */
-    {
-        static int fc_init = 0;
-        static int fc_enabled = 1;
-        if (!fc_init) {
-            const char *e = getenv("TYPEEASY_NO_FASTCALL");
-            if (e && e[0] && e[0] != '0') fc_enabled = 0;
-            fc_init = 1;
-        }
-        if (fc_enabled && p) {
-            int all_numeric = 1;
-            ParameterNode *pp = p;
-            while (pp) {
-                if (!pp->type
-                    || (strcmp(pp->type, "int")    != 0
-                     && strcmp(pp->type, "float")  != 0
-                     && strcmp(pp->type, "INT")    != 0
-                     && strcmp(pp->type, "FLOAT")  != 0)) {
-                    all_numeric = 0; break;
-                }
-                pp = pp->next;
-            }
-            if (all_numeric) {
-                ParameterNode *cur_p = p;
-                ASTNode       *cur_a = arg;
-                while (cur_p && cur_a) {
-                    Variable *fv = (Variable*)cur_p->cached_var;
-                    if (!fv) {
-                        fv = find_variable_for(cur_p->name);
-                        if (!fv) {
-                            /* Create a fresh slot only once. */
-                            if (g_vm.var_count < MAX_VARS) {
-                                g_vm.vars[g_vm.var_count].id       = strdup(cur_p->name);
-                                g_vm.vars[g_vm.var_count].type     = strdup(cur_p->type);
-                                g_vm.vars[g_vm.var_count].is_const = 0;
-                                g_vm.vars[g_vm.var_count].vtype    = (strcmp(cur_p->type, "float")==0
-                                                           || strcmp(cur_p->type, "FLOAT")==0)
-                                                           ? VAL_FLOAT : VAL_INT;
-                                if (g_vm.vars[g_vm.var_count].vtype == VAL_FLOAT)
-                                    g_vm.vars[g_vm.var_count].value.float_value = 0.0;
-                                else
-                                    g_vm.vars[g_vm.var_count].value.int_value = 0;
-                                fv = &g_vm.vars[g_vm.var_count];
-                                g_vm.var_count++;
-                            }
-                        }
-                        cur_p->cached_var = fv;
-                    }
-                    if (fv) {
-                        double d = evaluate_expression(cur_a);
-                        if (fv->vtype == VAL_FLOAT) {
-                            fv->value.float_value = d;
-                        } else {
-                            fv->vtype = VAL_INT;
-                            fv->value.int_value  = (int)d;
-                        }
-                    }
-                    cur_p = cur_p->next;
-                    cur_a = cur_a->next; /* gotcha #1: step args via ->next */
-                }
-                /* args bound directly; skip slow path */
-                goto fastcall_args_done;
-            }
-        }
-    }
-    while (p && arg) {
-        ASTNode *vn = NULL;
-        if (arg->type && strcmp(arg->type, "STRING") == 0) {
-            vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
-        } else if (arg->type && (strcmp(arg->type,"ID")==0 || strcmp(arg->type,"IDENTIFIER")==0)) {
-            Variable *v_arg = find_variable(arg->id);
-            if (!v_arg) {
-                printf("Error: variable '%s' not found.\n", arg->id);
-                return;
-            }
-            if (v_arg->vtype == VAL_STRING) {
-                vn = create_ast_leaf("STRING", 0, strdup(v_arg->value.string_value), NULL);
-            } else {
-                vn = create_ast_leaf_number("INT", v_arg->value.int_value, NULL, NULL);
-            }
-        } else {
-            int val = evaluate_expression(arg);
-            vn = create_ast_leaf_number("INT", val, NULL, NULL);
-        }
-        add_or_update_variable(p->name, vn);
-        p   = p->next;
-        arg = arg->next; /* gotcha #1: step args via ->next */
-    }
-fastcall_args_done:
+    if (te_cm_bind_this(node, obj, v)) return;
+    if (te_cm_bind_args(node, m, obj)) return;
 
-    /* ====================================================================
-     * Ola 4 (perf): METHOD-BODY BYTECODE.
-     * If the body is a single `return <numeric expr>;` and the declared
-     * return type is int/float, run a precompiled bytecode program that
-     * reads parameters and `this.attr` directly from cached pointers.
-     * Skips both interpret_ast(m->body) and the FAST RETURN evaluator.
-     * Switch: TYPEEASY_NO_BCMETHOD=1 disables.
-     * ==================================================================== */
-    {
-        static int bcm_init = 0;
-        static int bcm_enabled = 1;
-        if (!bcm_init) {
-            const char *e = getenv("TYPEEASY_NO_BCMETHOD");
-            if (e && e[0] && e[0] != '0') bcm_enabled = 0;
-            bcm_init = 1;
-        }
-        if (bcm_enabled
-            && m->return_type
-            && (strcmp(m->return_type, "int")   == 0
-             || strcmp(m->return_type, "float") == 0)
-            && obj && obj->class) {
-            BCInfo *bi = bc_get_or_compile_method(m, obj->class);
-            if (bi) {
-                ObjectNode *saved_this = g_bc_this;
-                g_bc_this = obj;
-                double rv = bc_exec(bi->code);
-                g_bc_this = saved_this;
-                /* Write __ret_var directly (mirrors FAST RETURN path). */
-                if (__ret_var_active) {
-                    if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
-                        free(__ret_var.value.string_value);
-                        __ret_var.value.string_value = NULL;
-                    }
-                    if (__ret_var.id)   { free(__ret_var.id);   __ret_var.id   = NULL; }
-                    if (__ret_var.type) { free(__ret_var.type); __ret_var.type = NULL; }
-                }
-                __ret_var.id = strdup("__ret__");
-                if (strcmp(m->return_type, "float") == 0) {
-                    __ret_var.type  = strdup("FLOAT");
-                    __ret_var.vtype = VAL_FLOAT;
-                    __ret_var.value.float_value = rv;
-                } else {
-                    __ret_var.type  = strdup("INT");
-                    __ret_var.vtype = VAL_INT;
-                    __ret_var.value.int_value = (long long)rv;
-                }
-                __ret_var_active = 1;
-                g_vm.return_flag = 0;
-                g_vm.return_node = NULL;
-                return;
-            }
-        }
-    }
+    if (te_cm_body_bytecode(node, m, obj)) return;
 
     debugger_push_frame(m->name, node);
     interpret_ast(m->body);
@@ -8170,192 +8385,7 @@ fastcall_args_done:
         }
     }
    // printf("[DIAG] interpret_call_method: después de interpretar cuerpo de método, return_flag=%d\n", return_flag);
-        if (g_vm.return_flag && g_vm.return_node) {
-            /* ============================================================
-             * Ola 3 Fase B: FAST RETURN path.
-             * If the declared return type is numeric and the return
-             * expression is NOT a special form (STRING/CALL/ACCESS_ATTR/
-             * pure identifier), write the result straight into __ret_var
-             * without allocating an intermediate ASTNode literal.
-             * Switch: TYPEEASY_NO_FASTRET=1
-             * ============================================================ */
-            {
-                static int fr_init = 0;
-                static int fr_enabled = 1;
-                if (!fr_init) {
-                    const char *e = getenv("TYPEEASY_NO_FASTRET");
-                    if (e && e[0] && e[0] != '0') fr_enabled = 0;
-                    fr_init = 1;
-                }
-                if (fr_enabled
-                    && m->return_type
-                    && (strcmp(m->return_type, "int")   == 0
-                     || strcmp(m->return_type, "float") == 0)
-                    && g_vm.return_node->type
-                    && strcmp(g_vm.return_node->type, "STRING")      != 0
-                    && strcmp(g_vm.return_node->type, "CALL_FUNC")   != 0
-                    && strcmp(g_vm.return_node->type, "CALL_METHOD") != 0
-                    && strcmp(g_vm.return_node->type, "RETURN_JSON") != 0
-                    && strcmp(g_vm.return_node->type, "RETURN_XML")  != 0) {
-                    long long rv_i64; double rv; int rv_is_i64 = te_eval_num(g_vm.return_node, &rv_i64, &rv);   /* Fase 1b */
-                    /* Reset and write __ret_var directly. */
-                    if (__ret_var_active) {
-                        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
-                            free(__ret_var.value.string_value);
-                            __ret_var.value.string_value = NULL;
-                        }
-                        if (__ret_var.id) { free(__ret_var.id); __ret_var.id = NULL; }
-                        if (__ret_var.type) { free(__ret_var.type); __ret_var.type = NULL; }
-                    }
-                    __ret_var.id   = strdup("__ret__");
-                    if (strcmp(m->return_type, "float") == 0) {
-                        __ret_var.type  = strdup("FLOAT");
-                        __ret_var.vtype = VAL_FLOAT;
-                        __ret_var.value.float_value = rv;
-                    } else {
-                        __ret_var.type  = strdup("INT");
-                        __ret_var.vtype = VAL_INT;
-                        __ret_var.value.int_value = rv_is_i64 ? rv_i64 : (long long)rv;
-                    }
-                    __ret_var_active = 1;
-                    g_vm.return_flag = 0;
-                    g_vm.return_node = NULL;
-                    return;
-                }
-            }
-            /* `return <call>` (e.g. `return Math.sqrt(x)` or `return helper()`):
-             * the nested call already placed its result in __ret__ while the
-             * return expression was evaluated. Skip the literal re-extraction
-             * below (which would treat return_node->id as a variable name and
-             * fail). The json builtin keeps its dedicated path below. */
-            if (g_vm.return_node->type
-                && (strcmp(g_vm.return_node->type, "CALL_METHOD") == 0
-                 || (strcmp(g_vm.return_node->type, "CALL_FUNC") == 0
-                     && !(g_vm.return_node->id && strcmp(g_vm.return_node->id, "json") == 0)))) {
-                g_vm.return_flag = 0;
-                g_vm.return_node = NULL;
-                return;
-            }
-            // If the return is a call to json, print the JSON output
-            if (g_vm.return_node && g_vm.return_node->type && strcmp(g_vm.return_node->type, "CALL_FUNC") == 0 && g_vm.return_node->id && strcmp(g_vm.return_node->id, "json") == 0) {
-            //    printf("[DIAG] Entrando a native_json desde interpret_call_method\n");
-                native_json(g_vm.return_node->left);
-            } else {
-                ASTNode *lit = NULL;
-                if (g_vm.return_node->type && strcmp(g_vm.return_node->type, "STRING") == 0) {
-                    lit = create_ast_leaf("STRING", 0, g_vm.return_node->str_value, NULL);
-                } else if (g_vm.return_node->id) {
-                    Variable *rv = find_variable(g_vm.return_node->id);
-                    if (rv) {
-                        if (rv->vtype == VAL_STRING) {
-                            lit = create_ast_leaf("STRING", 0, strdup(rv->value.string_value), NULL);
-                        } else if (rv->vtype == VAL_FLOAT) {
-                            lit = create_ast_leaf("FLOAT", 0, double_to_string(rv->value.float_value), NULL);
-                        } else if (rv->vtype == VAL_INT) {
-                            lit = create_ast_leaf_number("INT", rv->value.int_value, NULL, NULL);
-                        }
-                    } else {
-                        printf("Error: variable '%s' not found in return statement.\n", g_vm.return_node->id);
-                        return;
-                    }
-                } else if (g_vm.return_node->type && strcmp(g_vm.return_node->type, "ACCESS_ATTR") == 0) {
-                    ASTNode *objN = g_vm.return_node->left;
-                    ASTNode *attrN = g_vm.return_node->right;
-                    Variable *ov = find_variable(objN->id);
-                    if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "OBJECT") == 0) {
-                        ObjectNode *oobj = ov->value.object_value; int i = -1;
-                        int idx = -1;
-                        for (i=0; i<oobj->class->attr_count; i++) { // Inicializa 'i'
-                            if (strcmp(oobj->class->attributes[i].id, attrN->id)==0) { idx=i; break; }
-                        }
-                        if (idx>=0) {
-                            if (strcmp(oobj->class->attributes[idx].type,"string")==0)
-                                lit = create_ast_leaf("STRING",0,strdup(oobj->attributes[idx].value.string_value),NULL);
-                            else if (strcmp(oobj->attributes[idx].type,"float")==0)
-                                lit = create_ast_leaf("FLOAT",0,double_to_string(oobj->attributes[idx].value.float_value),NULL); // Usar idx
-                            else
-                                lit = create_ast_leaf_number("INT",oobj->attributes[idx].value.int_value,NULL,NULL);
-                        }
-                    }
-                } else if (g_vm.return_node->type
-                           && strcmp(g_vm.return_node->type, "ADD") == 0
-                           && is_string_type(g_vm.return_node)) {
-                    /* String concatenation, e.g. `return "Hi " + this.name;`.
-                     * Resolve to a STRING value instead of a numeric ADD. */
-                    char *s = get_node_string(g_vm.return_node);
-                    lit = create_ast_leaf("STRING", 0, s ? s : "", NULL);
-                    if (s) free(s);
-                } else if (g_vm.return_node->type
-                           && (strcmp(g_vm.return_node->type, "GT") == 0
-                            || strcmp(g_vm.return_node->type, "LT") == 0
-                            || strcmp(g_vm.return_node->type, "EQ") == 0
-                            || strcmp(g_vm.return_node->type, "GT_EQ") == 0
-                            || strcmp(g_vm.return_node->type, "LT_EQ") == 0
-                            || strcmp(g_vm.return_node->type, "DIFF") == 0
-                            || strcmp(g_vm.return_node->type, "AND") == 0
-                            || strcmp(g_vm.return_node->type, "OR") == 0
-                            || strcmp(g_vm.return_node->type, "NOT") == 0)) {
-                    /* Comparison / logical operator yields a boolean (0|1).
-                     * Tag it as BOOL so the type check accepts `: bool` and
-                     * print emits true/false. */
-                    int b = evaluate_expression(g_vm.return_node) != 0 ? 1 : 0;
-                    lit = create_ast_leaf_number("BOOL", b, NULL, NULL);
-                } else {
-                    double rv_double = evaluate_expression(g_vm.return_node);
-                    if (rv_double == (int)rv_double) {
-                        lit = create_ast_leaf_number("INT", (long long)rv_double, NULL, NULL);
-                    } else {
-                        lit = create_ast_leaf("FLOAT", 0, double_to_string(rv_double), NULL);
-                    }
-                }
-                if (lit) {
-                    // --- TYPE CHECK: validate lit->type against declared return_type ---
-                    if (m->return_type
-                        && strcmp(m->return_type, "dynamic") != 0
-                        && strcmp(m->return_type, "void") != 0
-                        && lit->type) {
-                        const char *expected = m->return_type;
-                        const char *actual = lit->type;
-                        /* T? : strip trailing '?' for the comparison; null is always OK for optional */
-                        char base_expected[64];
-                        size_t el = strlen(expected);
-                        int optional = (el > 0 && expected[el-1] == '?');
-                        if (optional) { strncpy(base_expected, expected, el-1); base_expected[el-1] = '\0'; }
-                        else { strncpy(base_expected, expected, sizeof(base_expected)-1); base_expected[sizeof(base_expected)-1]='\0'; }
-                        if (optional && strcmp(actual, "NULL") == 0) {
-                            /* OK: optional type returning null */
-                        } else {
-                            const char *expected_cmp = base_expected;
-                            int ok = 0;
-                            if (strcmp(expected_cmp, "int") == 0    && strcmp(actual, "INT") == 0)    ok = 1;
-                            if (strcmp(expected_cmp, "string") == 0 && strcmp(actual, "STRING") == 0) ok = 1;
-                            if (strcmp(expected_cmp, "float") == 0  && (strcmp(actual, "FLOAT") == 0 || strcmp(actual, "INT") == 0)) ok = 1;
-                            if (strcmp(expected_cmp, "bool") == 0   && (strcmp(actual, "BOOL") == 0 || strcmp(actual, "INT") == 0)) ok = 1;
-                            if (!ok) {
-                                const char *actual_lower = "?";
-                                if (strcmp(actual, "INT") == 0)    actual_lower = "int";
-                                else if (strcmp(actual, "STRING") == 0) actual_lower = "string";
-                                else if (strcmp(actual, "FLOAT") == 0)  actual_lower = "float";
-                                else if (strcmp(actual, "BOOL") == 0)   actual_lower = "bool";
-                                else if (strcmp(actual, "NULL") == 0)   actual_lower = "null";
-                                char buf[256];
-                                snprintf(buf, sizeof(buf),
-                                    "TypeError: method '%s' is declared as '%s' but returns a value of type '%s'.",
-                                    m->name, expected, actual_lower);
-                                if (throw_message) free(throw_message);
-                                throw_message = strdup(buf);
-                                g_vm.throw_flag = 1;
-                                g_vm.return_flag = 0; g_vm.return_node = NULL;
-                                return;
-                            }
-                        }
-                    }
-                    add_or_update_variable("__ret__", lit);
-                }
-            }
-            g_vm.return_flag = 0;
-            g_vm.return_node = NULL;
-        }
+    if (te_cm_materialize_return(node, m, obj)) return;
 }
 
 /* interpret_call_method_alone: eliminada (codigo muerto, 400 lineas sin llamadores; Fase 2). */

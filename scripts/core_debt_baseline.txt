@@ -77,9 +77,7 @@ global src/typeeasy_api_server.c g_start_time
 global src/typeeasy_api_server.c g_stop_requested
 fn src/ast.c evaluate_expression 576
 fn src/ast.c interpret_ast 338
-fn src/ast.c interpret_call_method_impl 687
 fn src/te_interp_decl.c interpret_assign 336
 fn src/te_interp_decl.c interpret_var_decl 496
 fn src/te_print.c interpret_println 349
-fn src/te_stdlib.c te_builtin_dispatch 490
 fn src/typeeasy_api_server.c request_handler 352
