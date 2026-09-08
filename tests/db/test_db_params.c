@@ -26,7 +26,7 @@
  * test NO invoca. Los definimos mínimamente para resolver el enlace sin
  * arrastrar todo el intérprete (ast.c).
  */
-ASTNode *create_ast_leaf(char *type, int value, char *str_value, char *id) {
+ASTNode *create_ast_leaf(char *type, long long value, char *str_value, char *id) {
     ASTNode *n = (ASTNode *)calloc(1, sizeof(ASTNode));
     n->type = type ? strdup(type) : NULL;
     n->value = value;
@@ -45,7 +45,7 @@ Variable *find_variable(char *name) { (void)name; return NULL; }
 
 /* db_arg_as_typed_map_head() (no ejercitado por este test) referencia estos
  * símbolos; se stubean para resolver el enlace sin arrastrar ast.c. */
-ASTNode *create_ast_leaf_number(char *type, int value, char *str_value, char *id) {
+ASTNode *create_ast_leaf_number(char *type, long long value, char *str_value, char *id) {
     return create_ast_leaf(type, value, str_value, id);
 }
 void te_fmt_double(char *buf, size_t cap, double v) {
@@ -121,6 +121,28 @@ int main(void) {
         ASTNode *params = pair("@x", create_ast_leaf("NULL", 0, NULL, NULL), NULL);
         char *sql = db_substitute_params("SELECT @x", params, test_escape, NULL);
         check("null_param", sql, "SELECT NULL");
+        free(sql);
+    }
+    /* 4b) Inyeccion clasica en un STRING: el payload queda como literal (comilla
+     *     duplicada por escape), la sentencia extra NO sale del literal. */
+    {
+        ASTNode *params = pair("@n", create_ast_leaf("STRING", 0, "x'); DROP TABLE t; --", NULL), NULL);
+        char *sql = db_substitute_params("INSERT INTO t(name) VALUES (@n)", params, test_escape, NULL);
+        check("injection_string", sql, "INSERT INTO t(name) VALUES ('x''); DROP TABLE t; --')");
+        free(sql);
+    }
+    /* 4c) Inyeccion via valor "numerico" que llega como STRING: se cita, nunca crudo. */
+    {
+        ASTNode *params = pair("@id", create_ast_leaf("STRING", 0, "1 OR 1=1", NULL), NULL);
+        char *sql = db_substitute_params("SELECT * FROM t WHERE id = @id", params, test_escape, NULL);
+        check("injection_or_1eq1", sql, "SELECT * FROM t WHERE id = '1 OR 1=1'");
+        free(sql);
+    }
+    /* 4d) Enteros de 64 bits no se truncan al interpolar (Fase 1a). */
+    {
+        ASTNode *params = pair("@big", create_ast_leaf_number("NUMBER", 3000000000LL, NULL, NULL), NULL);
+        char *sql = db_substitute_params("SELECT * FROM t WHERE id = @big", params, test_escape, NULL);
+        check("int64_param", sql, "SELECT * FROM t WHERE id = 3000000000");
         free(sql);
     }
     /* 5) mezcla int + string + float (INSERT de la doc) */

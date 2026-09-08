@@ -1,0 +1,47 @@
+// expect: rows=1 tables=1 name_ok=1 id_ok=1 comment_ok=1 union_rows=0
+// Seguridad: un valor de @param NUNCA se interpreta como SQL. Los payloads clasicos de
+// inyeccion (cierre de comilla + DROP, comentario --, OR 1=1, UNION) deben quedar
+// almacenados/comparados como texto literal. Cubre el binding nativo del plugin SQLite;
+// mysql/postgres pasan por db_substitute_params (escape + comillas) con el mismo contrato.
+load_native("sqlite");
+
+let db = sqlite_connect(":memory:");
+sqlite_exec(db, "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
+
+// 1) Cierre de comilla + sentencia extra: debe guardarse como nombre literal.
+let evil = "x'); DROP TABLE users; --";
+sqlite_exec(db, "INSERT INTO users (name) VALUES (@n)", { "@n": evil });
+let rows = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c FROM users", "json"));
+let r0 = rows[0];
+print("rows="); print(r0["c"]);
+
+// La tabla sigue existiendo.
+let t = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name='users'", "json"));
+let t0 = t[0];
+print(" tables="); print(t0["c"]);
+
+// El valor almacenado es exactamente el payload.
+let back = json_parse(sqlite_query(db, "SELECT name FROM users WHERE id = 1", "json"));
+let b0 = back[0];
+var name_ok = 0;
+if (b0["name"] == evil) { name_ok = 1; }
+print(" name_ok="); print(name_ok);
+
+// 2) OR 1=1 en un parametro numerico comparado como texto: no devuelve todo.
+let idRows = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c FROM users WHERE id = @id", { "@id": "1 OR 1=1" }, "json"));
+let i0 = idRows[0];
+var id_ok = 0;
+if (i0["c"] == 0) { id_ok = 1; }
+print(" id_ok="); print(id_ok);
+
+// 3) Comentario SQL dentro del valor no corta la consulta.
+let cRows = json_parse(sqlite_query(db, "SELECT COUNT(*) AS c FROM users WHERE name = @n AND id > 0", { "@n": "a' -- " }, "json"));
+let c0 = cRows[0];
+var comment_ok = 0;
+if (c0["c"] == 0) { comment_ok = 1; }
+print(" comment_ok="); print(comment_ok);
+
+// 4) UNION en el valor no agrega filas.
+let uRows = json_parse(sqlite_query(db, "SELECT name FROM users WHERE name = @n", { "@n": "zz' UNION SELECT name FROM users --" }, "json"));
+print(" union_rows="); println(uRows.length);
+sqlite_close(db);

@@ -377,7 +377,7 @@ ASTNode* mysql_query_result(int conn_id, const char* query) {
             const char* field_value = row[i] ? row[i] : "";
             ASTNode* field_node = NULL;
             if (IS_NUM(fields[i].type)) {
-                int int_value = row[i] ? atoi(row[i]) : 0;
+                long long int_value = row[i] ? atoll(row[i]) : 0;
                 field_node = create_ast_leaf("NUMBER", int_value, NULL, (char*)field_name);
             } else {
                 field_node = create_ast_leaf("STRING", 0, (char*)field_value, (char*)field_name);

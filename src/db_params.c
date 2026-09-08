@@ -172,7 +172,7 @@ static ASTNode* db_value_to_typed_leaf(ASTNode* val) {
         Variable* v = find_variable(val->id);
         if (!v) return create_ast_leaf("NULL", 0, NULL, NULL);
         if (v->vtype == VAL_INT)
-            return create_ast_leaf_number("INT", (int)v->value.int_value, NULL, NULL);
+            return create_ast_leaf_number("INT", v->value.int_value, NULL, NULL);
         if (v->vtype == VAL_FLOAT) {
             char b[64]; te_fmt_double(b, sizeof(b), v->value.float_value);
             return create_ast_leaf("DB_RAW", 0, b, NULL);
@@ -192,7 +192,7 @@ static ASTNode* db_value_to_typed_leaf(ASTNode* val) {
         Variable* r = find_variable("__ret__");
         ASTNode* leaf;
         if (r && r->vtype == VAL_INT)
-            leaf = create_ast_leaf_number("INT", (int)r->value.int_value, NULL, NULL);
+            leaf = create_ast_leaf_number("INT", r->value.int_value, NULL, NULL);
         else if (r && r->vtype == VAL_FLOAT) {
             char b[64]; te_fmt_double(b, sizeof(b), r->value.float_value);
             leaf = create_ast_leaf("DB_RAW", 0, b, NULL);
@@ -219,7 +219,7 @@ static ASTNode* db_value_to_typed_leaf(ASTNode* val) {
             if (strpbrk(s, ".eE"))
                 leaf = create_ast_leaf("DB_RAW", 0, s, NULL);
             else
-                leaf = create_ast_leaf_number("INT", (int)atoll(s), NULL, NULL);
+                leaf = create_ast_leaf_number("INT", atoll(s), NULL, NULL);
         } else {
             leaf = create_ast_leaf("STRING", 0, s, NULL);
         }
@@ -291,7 +291,7 @@ static int append_value(char** buf, size_t* len, size_t* cap,
     }
     /* Resolver IDENTIFIER → variable */
     const char* tipo = val->type;
-    int     vi = 0;
+    long long vi = 0;
     double  vf = 0;
     const char* vs = NULL;
     int kind = 0; /* 1=int 2=float 3=str 4=null */
@@ -410,7 +410,7 @@ static int append_value(char** buf, size_t* len, size_t* cap,
     int n;
     switch (kind) {
         case 1:
-            n = snprintf(tmp, sizeof(tmp), "%d", vi);
+            n = snprintf(tmp, sizeof(tmp), "%lld", vi);
             buf_append(buf, len, cap, tmp, (size_t)n);
             return 1;
         case 2:
