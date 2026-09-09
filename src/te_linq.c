@@ -275,54 +275,8 @@ static int te_list_contains_item(ASTNode *result, ASTNode *target) {
     return 0;
 }
 
-int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
-    if (!list || !node || !node->id) return 0;
-    const char *fname = node->id;
-
-    /* ===== v0.0.12 #8 Lazy iterator promotion: xs.lazy() -> LAZY_ITER ===== */
-    if (strcmp(fname, "lazy") == 0) {
-        ASTNode *lz = (ASTNode*)calloc(1, sizeof(ASTNode));
-        lz->type = strdup("LAZY_ITER");
-        lz->left = list;   /* source LIST (shared ref) */
-        lz->right = NULL;  /* empty op chain */
-        add_or_update_variable("__ret__", lz);
-        return 1;
-    }
-
-    /* ===== xs.count() no-arg: equivalente a C# .Count() => longitud =====
-     * Antes `count` solo se reconocía en cadenas lazy y en CSV; sobre una
-     * LIST plana caía a un path no manejado y segfaulteaba. La forma con
-     * predicado es `countWhere(pred)` (manejada en te_linq_ops.c). */
-    if (strcmp(fname, "count") == 0 && !node->right) {
-        long long n = 0;
-        for (ASTNode *it = list->left; it; it = it->next) n++;
-        te_ret_scalar(create_ast_leaf_number("INT", (long long)n, NULL, NULL));
-        return 1;
-    }
-
-    /* ===== v0.0.11 LINQ: numeric / no-arg methods on LIST ===== */
-    if (!(strcmp(fname, "sum") == 0 ||
-          strcmp(fname, "avg") == 0 ||
-          strcmp(fname, "average") == 0 ||
-          strcmp(fname, "minVal") == 0 ||
-          strcmp(fname, "maxVal") == 0 ||
-          strcmp(fname, "first") == 0 ||
-          strcmp(fname, "last") == 0 ||
-          strcmp(fname, "single") == 0 ||
-          strcmp(fname, "firstOrDefault") == 0 ||
-          strcmp(fname, "lastOrDefault") == 0 ||
-          strcmp(fname, "take") == 0 ||
-          strcmp(fname, "skip") == 0 ||
-          strcmp(fname, "distinct") == 0 ||
-          strcmp(fname, "toList") == 0 ||
-          strcmp(fname, "concat") == 0 ||
-          strcmp(fname, "union") == 0 ||
-          strcmp(fname, "intersect") == 0 ||
-          strcmp(fname, "except") == 0 ||
-          strcmp(fname, "zip") == 0)) {
-        return 0;
-    }
-
+/* Extraído de te_linq_list_method_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_ll_numeric(ASTNode *node, ASTNode *list, const char *fname) {
     if (strcmp(fname, "sum") == 0) {
         double acc = 0.0; int is_int = 1;
         ASTNode *it = list->left;
@@ -376,6 +330,11 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
         add_or_update_variable("__ret__", build_item_from_value(best_node));
         return 1;
     }
+    return 0;
+}
+
+/* Extraído de te_linq_list_method_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_ll_positional(ASTNode *node, ASTNode *list, const char *fname) {
     if (strcmp(fname, "first") == 0) {
         if (list->left) add_or_update_variable("__ret__", build_item_from_value(list->left));
         else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
@@ -439,6 +398,11 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
         te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
         return 1;
     }
+    return 0;
+}
+
+/* Extraído de te_linq_list_method_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_ll_set_ops(ASTNode *node, ASTNode *list, const char *fname) {
     if (strcmp(fname, "distinct") == 0) {
         /* Hash-based dedupe with parallel int/string tables. */
         ASTNode *result = create_list_node(NULL);
@@ -627,5 +591,59 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
         te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
         return 1;
     }
+    return 0;
+}
+
+int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
+    if (!list || !node || !node->id) return 0;
+    const char *fname = node->id;
+
+    /* ===== v0.0.12 #8 Lazy iterator promotion: xs.lazy() -> LAZY_ITER ===== */
+    if (strcmp(fname, "lazy") == 0) {
+        ASTNode *lz = (ASTNode*)calloc(1, sizeof(ASTNode));
+        lz->type = strdup("LAZY_ITER");
+        lz->left = list;   /* source LIST (shared ref) */
+        lz->right = NULL;  /* empty op chain */
+        add_or_update_variable("__ret__", lz);
+        return 1;
+    }
+
+    /* ===== xs.count() no-arg: equivalente a C# .Count() => longitud =====
+     * Antes `count` solo se reconocía en cadenas lazy y en CSV; sobre una
+     * LIST plana caía a un path no manejado y segfaulteaba. La forma con
+     * predicado es `countWhere(pred)` (manejada en te_linq_ops.c). */
+    if (strcmp(fname, "count") == 0 && !node->right) {
+        long long n = 0;
+        for (ASTNode *it = list->left; it; it = it->next) n++;
+        te_ret_scalar(create_ast_leaf_number("INT", (long long)n, NULL, NULL));
+        return 1;
+    }
+
+    /* ===== v0.0.11 LINQ: numeric / no-arg methods on LIST ===== */
+    if (!(strcmp(fname, "sum") == 0 ||
+          strcmp(fname, "avg") == 0 ||
+          strcmp(fname, "average") == 0 ||
+          strcmp(fname, "minVal") == 0 ||
+          strcmp(fname, "maxVal") == 0 ||
+          strcmp(fname, "first") == 0 ||
+          strcmp(fname, "last") == 0 ||
+          strcmp(fname, "single") == 0 ||
+          strcmp(fname, "firstOrDefault") == 0 ||
+          strcmp(fname, "lastOrDefault") == 0 ||
+          strcmp(fname, "take") == 0 ||
+          strcmp(fname, "skip") == 0 ||
+          strcmp(fname, "distinct") == 0 ||
+          strcmp(fname, "toList") == 0 ||
+          strcmp(fname, "concat") == 0 ||
+          strcmp(fname, "union") == 0 ||
+          strcmp(fname, "intersect") == 0 ||
+          strcmp(fname, "except") == 0 ||
+          strcmp(fname, "zip") == 0)) {
+        return 0;
+    }
+
+    if (te_ll_numeric(node, list, fname)) return 1;
+    if (te_ll_positional(node, list, fname)) return 1;
+    if (te_ll_set_ops(node, list, fname)) return 1;
     return 0;
 }
