@@ -24,6 +24,23 @@
   multi-sucursal, facturación electrónica DGI (PAC Factura Fácil), CxC, inventario, contabilidad, sync offline.
 
 ## 2) Gotchas críticos del lenguaje `.te` (los que más rompen)
+> ⚠️ **2026-09-07:** el checklist de `SINTAXIS_Y_GOTCHAS.md` se reescribió en 3 listas: **(A) reglas del lenguaje**, **(B) vigentes**
+> (MariaDB STRICT, `@param` sin afinidad, single-flight…), **(C) resueltos por versión de TE**. Los ítems
+> **0.0.33** (frames de fn = causa real de #38/30c, `[]` fresco por llamada, `(""+map)`→JSON, `lista[i]` anidada, errores con
+> `archivo:línea`) están **INSTALADOS desde 2026-09-08** en la VM (15 backends) y en `%LOCALAPPDATA%`: sus workarounds ya no
+> hacen falta en código nuevo. Los puntos de abajo marcados ✅ quedan como historia; los ⚠️ siguen vigentes.
+> **2026-09-08:** los **15 backends** (PROD 8090, qa, xp, 12 demos) corren con **`--workers 2`** (prefork SO_REUSEPORT; bench
+> +35 % rps / −28 % p50, y una request colgada ya no congela a todos). Consecuencia: **NO agregar estado mutable global** al
+> `.te` (contadores, caches, rate-limit en memoria) — cada worker tendría su copia; usar la BD. Backups: `*.service.bak-w1-20260908`.
+> **0.0.34 (tag `v0.0.34` = `f56e98c`, INSTALADO 2026-09-08 en VM + local):** `for (var i=0; i<n; i++)` estilo Java, `--syntax-check` semántico (detecta reasignar
+> `let`, comparación en `for` clásico), `--profile`. Ya se puede usar el `for` Java en el ERP. Fix win64: el 500 por error fatal ya no tumba el server
+> (`_setjmp(buf, NULL)`, regresión de `--profile` en `cce457e`). Backups: VM `/usr/bin/typeeasy-bin.bak-20260908-76cc519c`, local `typeeasy-bin.exe.bak-0.0.33-174839d0`.
+> **0.1.0 (tag `v0.1.0` = `88a6ee8`, INSTALADO 2026-09-09 en VM (15 backends, md5 `b3cc2a2a`) + local):** plan de deuda del núcleo **completo** (Fases 0–4).
+> Para el ERP: **enteros de 64 bits exactos** (`let a = 3000000000` ya no da negativo; `@param` int64 y filas MySQL sin truncar → ya se pueden
+> calcular ids/epoch-ms/montos grandes en `.te`), recovery completa tras un 500 fatal (ningún flag "en vuelo" pasa al siguiente request),
+> `typeeasy --selftest-vm`. Semántica del lenguaje **sin cambios**. ⚠️ El primer build de 0.1.0 (bc3a31f, 2026-09-08) tenía roto el **debugger de
+> VS Code** (vista de variables): si alguien lo instaló localmente, reinstalar. Backups: VM `/usr/bin/typeeasy-bin.bak-*-010a`, BD
+> `/home/azureuser/backup_erp_pre010b_*.sql.gz`, local `typeeasy-bin.exe.bak-0.1.0a-*`.
 - `let` = **CONSTANTE**, `var` = mutable. Reasignar un `let` → error **en runtime** (el `--syntax-check` NO lo detecta). Los default-value reassignment (`if (x=="") { x=... }`) exigen `var`.
 - `fn` anónima con flecha: `let f = fn(a) => { ... };`. Métodos requieren tipo de retorno. **No hay `super`.**
 - `for` clásico: `for(i=INIT; LÍMITE; PASO)` con **límite EXCLUSIVO** y **PASO** (no condición). No existe `for(i=0;i<4;i++)`.
