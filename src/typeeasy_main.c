@@ -285,8 +285,6 @@ static int run_syntax_check(const char *path) {
 /* --symbols <file>: parse, then dump classes + global methods + top-level vars
  * as JSON {classes:[{name,line,methods:[{name,params,line}],attrs:[{name,type}]}],
  *          functions:[{name,params,line}], variables:[{name,type,line}]} */
-extern ClassNode **classes;
-extern int class_count;
 
 static int run_symbols(const char *path) {
     g_capture_errors = 1;
@@ -297,8 +295,8 @@ static int run_symbols(const char *path) {
     fclose(fp);
     (void)ast;
     printf("{\"ok\":true,\"classes\":[");
-    for (int i = 0; i < class_count; i++) {
-        ClassNode *c = classes[i];
+    for (int i = 0; i < g_vm.class_count; i++) {
+        ClassNode *c = g_vm.classes[i];
         if (i) fputc(',', stdout);
         printf("{\"name\":");
         json_emit_str(stdout, c->name ? c->name : "");
@@ -328,7 +326,7 @@ static int run_symbols(const char *path) {
     }
     printf("],\"functions\":[");
     int first = 1;
-    for (MethodNode *m = global_methods; m; m = m->next) {
+    for (MethodNode *m = g_vm.global_methods; m; m = m->next) {
         if (!first) fputc(',', stdout);
         first = 0;
         printf("{\"name\":");
@@ -489,7 +487,7 @@ static int te_main_emit(ASTNode *script_ast, int emit_wat_mode, int emit_wasm_mo
 /* --discover: lista rutas del .te como JSON (extraído de main, Fase 2). */
 static int te_main_discover(ASTNode *script_ast) {
     printf("[");
-    MethodNode *m = global_methods;
+    MethodNode *m = g_vm.global_methods;
     int first = 1;
     while (m) {
         if (m->route_path) {
@@ -557,7 +555,7 @@ static int te_main_api(char **argv, ASTNode *script_ast, const char *script_path
 
 /* --invoke <fn>: ejecuta una función y vuelca __ret__ (extraído de main, Fase 2). 0 ok, 1 no encontrada. */
 static int te_main_invoke(const char *invoke_func) {
-    MethodNode *m = global_methods;
+    MethodNode *m = g_vm.global_methods;
     int found = 0;
     while (m) {
         if (strcmp(m->name, invoke_func) == 0) {

@@ -5,6 +5,7 @@
 #include <string.h>
 #include <math.h>
 #include "ast.h"
+#include "te_vm.h"
 #include "ast_internal.h"
 
 /* Render a LIST node. Object lists keep the legacy multi-line Mostrar
@@ -269,11 +270,11 @@ void interpret_print(ASTNode *node) {
         }
     }
 
-    if (__ret_var_active) {
-        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
-        if (__ret_var.id) free(__ret_var.id);
-        if (__ret_var.type) free(__ret_var.type);
-        memset(&__ret_var, 0, sizeof(Variable));
+    if (g_vm.ret_var_active) {
+        if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) free(g_vm.ret_var.value.string_value);
+        if (g_vm.ret_var.id) free(g_vm.ret_var.id);
+        if (g_vm.ret_var.type) free(g_vm.ret_var.type);
+        memset(&g_vm.ret_var, 0, sizeof(Variable));
         // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
     }
 }
@@ -631,11 +632,11 @@ void interpret_println(ASTNode *node) {
         }
     }
 
-    if (__ret_var_active) {
-        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
-        if (__ret_var.id) free(__ret_var.id);
-        if (__ret_var.type) free(__ret_var.type);
-        memset(&__ret_var, 0, sizeof(Variable));
+    if (g_vm.ret_var_active) {
+        if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) free(g_vm.ret_var.value.string_value);
+        if (g_vm.ret_var.id) free(g_vm.ret_var.id);
+        if (g_vm.ret_var.type) free(g_vm.ret_var.type);
+        memset(&g_vm.ret_var, 0, sizeof(Variable));
         // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
     }
 }

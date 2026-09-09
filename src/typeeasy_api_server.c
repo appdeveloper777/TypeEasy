@@ -319,7 +319,7 @@ static int match_route_pattern(const char *pattern, const char *uri) {
 
 static MethodNode *find_route(const char *uri, const char *method) {
     /* Pass 1: exact match. */
-    for (MethodNode *m = global_methods; m; m = m->next) {
+    for (MethodNode *m = g_vm.global_methods; m; m = m->next) {
         if (!m->route_path) continue;
         const char *mh = m->http_method ? m->http_method : "GET";
         if (strcmp(mh, method) != 0) continue;
@@ -328,7 +328,7 @@ static MethodNode *find_route(const char *uri, const char *method) {
         }
     }
     /* Pass 2: pattern match. */
-    for (MethodNode *m = global_methods; m; m = m->next) {
+    for (MethodNode *m = g_vm.global_methods; m; m = m->next) {
         if (!m->route_path) continue;
         const char *mh = m->http_method ? m->http_method : "GET";
         if (strcmp(mh, method) != 0) continue;
@@ -363,7 +363,7 @@ static int serve_root_swagger_ui(struct mg_connection *conn) {
     } while (0)
 
     int route_count = 0;
-    for (MethodNode *m = global_methods; m; m = m->next) if (m->route_path) route_count++;
+    for (MethodNode *m = g_vm.global_methods; m; m = m->next) if (m->route_path) route_count++;
 
     ENSURE_CAP(8192);
     off += snprintf(html + off, cap - off,
@@ -437,7 +437,7 @@ static int serve_root_swagger_ui(struct mg_connection *conn) {
             "<div class='empty'>No routes registered. Define endpoints with <code>[HttpGet(\"/path\")]</code> in your .te files.</div>");
     } else {
         int eid = 0;
-        for (MethodNode *m = global_methods; m; m = m->next) {
+        for (MethodNode *m = g_vm.global_methods; m; m = m->next) {
             if (!m->route_path) continue;
             const char *http_m = m->http_method ? m->http_method : "GET";
             char lower_m[16] = {0};
@@ -613,7 +613,7 @@ static int te_rh_probes(struct mg_connection *conn, const char *method, const ch
             snprintf(body, sizeof(body),
                      "{\"status\":\"ok\",\"uptime_s\":%ld}", uptime);
         } else {
-            int routes_ok = (global_methods != NULL);
+            int routes_ok = (g_vm.global_methods != NULL);
             /* The embedded server only reaches this point after the caller has
              * parsed and interpreted the script at global scope, so by
              * construction the interpreter is initialized whenever we serve. */
@@ -1077,7 +1077,7 @@ static int run_single_server(const char *host, int port, int worker_index) {
 
     /* Banner: list registered routes. */
     int route_count = 0;
-    for (MethodNode *m = global_methods; m; m = m->next) {
+    for (MethodNode *m = g_vm.global_methods; m; m = m->next) {
         if (m->route_path) route_count++;
     }
     if (route_count == 0) {
@@ -1144,7 +1144,7 @@ static int run_single_server(const char *host, int port, int worker_index) {
         printf("[typeeasy --api] Listening on http://%s:%d (%d route%s)\n",
                (host && *host) ? host : "0.0.0.0", port,
                route_count, route_count == 1 ? "" : "s");
-        for (MethodNode *m = global_methods; m; m = m->next) {
+        for (MethodNode *m = g_vm.global_methods; m; m = m->next) {
             if (m->route_path) {
                 printf("    %-6s %s -> %s()\n",
                        m->http_method ? m->http_method : "GET",
@@ -1323,7 +1323,7 @@ static int run_windows_pool(const char *host, int port, int num_workers,
 
     printf("[typeeasy --api] Starting pool of %d workers (load-balancer) at http://%s:%d\n",
            num_workers, (host && *host) ? host : "0.0.0.0", port);
-    for (MethodNode *m = global_methods; m; m = m->next) {
+    for (MethodNode *m = g_vm.global_methods; m; m = m->next) {
         if (m->route_path) {
             printf("    %-6s %s -> %s()\n",
                    m->http_method ? m->http_method : "GET",
@@ -1457,7 +1457,7 @@ int typeeasy_run_api_server_pool(const char *host, int port, int num_workers,
     (void)script_path; /* not needed on POSIX (children inherit via fork). */
     printf("[typeeasy --api] Starting pool of %d workers at http://%s:%d\n",
            num_workers, (host && *host) ? host : "0.0.0.0", port);
-    for (MethodNode *m = global_methods; m; m = m->next) {
+    for (MethodNode *m = g_vm.global_methods; m; m = m->next) {
         if (m->route_path) {
             printf("    %-6s %s -> %s()\n",
                    m->http_method ? m->http_method : "GET",

@@ -39,8 +39,6 @@
 /* ---- interpreter globals we snapshot per fiber (defined in ast.c) -------- */
 /* MAX_VARS comes from ast.h — must match ast.c's vars[] size or async fibers
  * silently truncate the snapshot. */
-extern Variable __ret_var;
-extern int      __ret_var_active;
 
 /* ---- platform: fibers, monotonic clock, sleep ---------------------------- */
 #if defined(_WIN32)
@@ -134,8 +132,8 @@ static void ctx_save(CtxSnapshot *s) {
     memcpy(s->vars_copy, g_vm.vars, (size_t)n * sizeof(Variable));
     for (int i = 0; i < n; i++) var_dup_owned(&s->vars_copy[i]);
     s->var_count   = n;
-    s->ret         = __ret_var;
-    s->ret_active  = __ret_var_active;
+    s->ret         = g_vm.ret_var;
+    s->ret_active  = g_vm.ret_var_active;
     if (s->ret_active) var_dup_owned(&s->ret);
     s->return_flag = g_vm.return_flag;
     s->throw_flag  = g_vm.throw_flag;
@@ -155,14 +153,14 @@ static void ctx_restore(const CtxSnapshot *s) {
     if (live < 0) live = 0;
     if (live > MAX_VARS) live = MAX_VARS;
     for (int i = 0; i < live; i++) var_free_owned(&g_vm.vars[i]);
-    if (__ret_var_active) var_free_owned(&__ret_var);
+    if (g_vm.ret_var_active) var_free_owned(&g_vm.ret_var);
     /* copy in the snapshot, giving the live scope its own fresh strings */
     memcpy(g_vm.vars, s->vars_copy, (size_t)n * sizeof(Variable));
     for (int i = 0; i < n; i++) var_dup_owned(&g_vm.vars[i]);
     g_vm.var_count        = n;
-    __ret_var        = s->ret;
-    __ret_var_active = s->ret_active;
-    if (__ret_var_active) var_dup_owned(&__ret_var);
+    g_vm.ret_var        = s->ret;
+    g_vm.ret_var_active = s->ret_active;
+    if (g_vm.ret_var_active) var_dup_owned(&g_vm.ret_var);
     g_vm.return_flag      = s->return_flag;
     g_vm.throw_flag       = s->throw_flag;
     g_vm.call_depth     = s->call_depth;

@@ -40,6 +40,10 @@ typedef struct TeVM {
     int initial_var_count;                 /* globales del script; lo que sigue es por request */
     TESymSlot sym_slots[TE_SYM_CAP]; int sym_init;
     struct TeFrame *frame_top;             /* frames de fn activos */
+    /* --- Fase 3C: registros del programa que antes eran globales de proceso --- */
+    ClassNode **classes; int classes_cap; int class_count;   /* clases declaradas (parser + runtime) */
+    MethodNode *global_methods;                              /* endpoints/métodos globales (lista enlazada) */
+    Variable ret_var; int ret_var_active;                    /* valor de retorno (__ret_var) */
 } TeVM;
 
 /* VM actual. Todo el intérprete accede al estado vía `g_vm.campo`, que expande a la VM

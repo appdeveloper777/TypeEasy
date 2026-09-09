@@ -2196,7 +2196,6 @@ static int dbg_eprintf(const char *fmt, ...) {
     return n;
 }
 
-MethodNode* global_methods = NULL;
 
 ASTNode* create_call_node(const char* funcName, ASTNode* args) {
     //printf("[DEBUG] Entering create_call_node: %s\n", funcName); fflush(stdout);
@@ -2311,12 +2310,7 @@ extern int g_debug_mode;
  * un objeto VACIO sin error 422. En ERPs con muchas clases importadas, las
  * registradas "tarde" (#51+) perdian el binding. Ahora es un array DINAMICO que
  * crece con realloc en add_class: sin limite practico de clases. */
-ClassNode **classes = NULL;
-int classes_cap = 0;
-Variable __ret_var; // Global variable for return values
-int __ret_var_active = 0; // Flag to indicate if __ret_var holds a valid value
 /* int var_count = 0;  -> ahora en g_vm (te_vm.h, Fase 3) */
-int class_count = 0;
 
 // Estado de retorno
 /* int return_flag = 0;  -> ahora en g_vm (te_vm.h, Fase 3) */
@@ -2425,11 +2419,11 @@ void runtime_reset_vars_to_initial_state() {
     te_sym_reset_to(g_vm.initial_var_count);
 
     // También limpia la variable de retorno global
-    if (__ret_var_active) {
-        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
-        if (__ret_var.id) free(__ret_var.id);
-        if (__ret_var.type) free(__ret_var.type);
-        memset(&__ret_var, 0, sizeof(Variable));
+    if (g_vm.ret_var_active) {
+        if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) free(g_vm.ret_var.value.string_value);
+        if (g_vm.ret_var.id) free(g_vm.ret_var.id);
+        if (g_vm.ret_var.type) free(g_vm.ret_var.type);
+        memset(&g_vm.ret_var, 0, sizeof(Variable));
         // __ret_var_active = 0;  // COMMENTED: No desactivar para permitir uso en requests subsiguientes
     }
 
@@ -2612,23 +2606,23 @@ void inherit_from(ClassNode *child, char *parent_name) {
 }
 
 void add_class(ClassNode *class) {
-    if (class_count >= classes_cap) {
-        int newcap = classes_cap ? classes_cap * 2 : 64;
-        ClassNode **grown = realloc(classes, (size_t)newcap * sizeof(*grown));
+    if (g_vm.class_count >= g_vm.classes_cap) {
+        int newcap = g_vm.classes_cap ? g_vm.classes_cap * 2 : 64;
+        ClassNode **grown = realloc(g_vm.classes, (size_t)newcap * sizeof(*grown));
         if (!grown) {
-            fprintf(stderr, "[add_class] out of memory while growing the class registry (count=%d)\n", class_count);
+            fprintf(stderr, "[add_class] out of memory while growing the class registry (count=%d)\n", g_vm.class_count);
             return;
         }
-        classes = grown;
-        classes_cap = newcap;
+        g_vm.classes = grown;
+        g_vm.classes_cap = newcap;
     }
-    classes[class_count++] = class;
+    g_vm.classes[g_vm.class_count++] = class;
 }
 
 ClassNode *find_class(char *name) {
-    for (int i = 0; i < class_count; i++) {
-        if (strcmp(classes[i]->name, name) == 0) {
-            return classes[i];
+    for (int i = 0; i < g_vm.class_count; i++) {
+        if (strcmp(g_vm.classes[i]->name, name) == 0) {
+            return g_vm.classes[i];
         }
     }
     /* Fase 2: silent — `new IDENTIFIER(...)` may be a builtin call, not a
@@ -2960,10 +2954,10 @@ void *te_reqstate_save(void) {
     g_vm.var_count = base;
     te_runtime_rebuild_symtab();
 
-    s->ret        = __ret_var;          /* ownership moves */
-    s->ret_active = __ret_var_active;
-    memset(&__ret_var, 0, sizeof(Variable));
-    __ret_var_active = 0;
+    s->ret        = g_vm.ret_var;          /* ownership moves */
+    s->ret_active = g_vm.ret_var_active;
+    memset(&g_vm.ret_var, 0, sizeof(Variable));
+    g_vm.ret_var_active = 0;
 
     s->return_flag = g_vm.return_flag;
     s->throw_flag  = g_vm.throw_flag;
@@ -3011,9 +3005,9 @@ void te_reqstate_restore(void *st) {
     free(s->slice);
     te_runtime_rebuild_symtab();
 
-    if (__ret_var_active) te_var_free_owned(&__ret_var);
-    __ret_var = s->ret;                 /* ownership moves */
-    __ret_var_active = s->ret_active;
+    if (g_vm.ret_var_active) te_var_free_owned(&g_vm.ret_var);
+    g_vm.ret_var = s->ret;                 /* ownership moves */
+    g_vm.ret_var_active = s->ret_active;
 
     g_vm.return_flag = s->return_flag;
     g_vm.throw_flag  = s->throw_flag;
@@ -3106,8 +3100,8 @@ void te_coop_yield_end(void *st) {
 
 Variable *find_variable(char *id) {    
     if (!id) return NULL;  /* Bug fix: caller paths sometimes pass NULL (e.g. arr[i].attr access where 'o' is ACCESS_EXPR with NULL id). */
-    if (strcmp(id, "__ret__") == 0 && __ret_var_active) {
-        return &__ret_var;
+    if (strcmp(id, "__ret__") == 0 && g_vm.ret_var_active) {
+        return &g_vm.ret_var;
     }
 
     /* Ola 16: hash side-index. */
@@ -3162,8 +3156,8 @@ ASTNode *create_listener_node(ASTNode *event_expr, ASTNode *body) {
 }
 
 Variable *find_variable_for(char *id) {
-    if (strcmp(id, "__ret__") == 0 && __ret_var_active) {
-        return &__ret_var;
+    if (strcmp(id, "__ret__") == 0 && g_vm.ret_var_active) {
+        return &g_vm.ret_var;
     }
 
     /* Ola 16: hash side-index. */
@@ -3209,7 +3203,7 @@ static void te_frame_push(TeFrame *f) {
 }
 
 static void te_frame_shadow_slot(TeFrame *f, Variable *ex) {
-    if (!f || !ex || ex == &__ret_var) return;
+    if (!f || !ex || ex == &g_vm.ret_var) return;
     for (int i = 0; i < f->n; i++)
         if (f->sh[i].slot == ex) return;   /* already saved in this frame */
     if (f->n >= f->cap) {
@@ -3267,7 +3261,7 @@ void  te_frames_restore(void *t) { g_vm.frame_top = (TeFrame *)t; }
  * existe, appendea como antes. Devuelve NULL solo si vars[] está lleno. */
 Variable *te_decl_slot(const char *id) {
     Variable *ex = find_variable_for((char *)id);
-    if (ex && ex != &__ret_var) {
+    if (ex && ex != &g_vm.ret_var) {
         int idx = (int)(ex - g_vm.vars);
         if (idx >= g_vm.initial_var_count && idx < g_vm.var_count) {
             /* Frames: a local (re)declared inside a fn call shadows the slot the
@@ -3782,16 +3776,16 @@ void add_or_update_variable(char *id, ASTNode *value) {
     // printf("[DEBUG] add_or_update_variable: id=%s, type=%s, value=%d, str_value=%s\n", id, value->type ? value->type : "NULL", value->value, value->str_value ? value->str_value : "NULL");
 
     if (strcmp(id, "__ret__") == 0) {
-        if (__ret_var_active) {
-            if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
-            if (__ret_var.id) free(__ret_var.id);
-            if (__ret_var.type) free(__ret_var.type);
-            memset(&__ret_var, 0, sizeof(Variable));
+        if (g_vm.ret_var_active) {
+            if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) free(g_vm.ret_var.value.string_value);
+            if (g_vm.ret_var.id) free(g_vm.ret_var.id);
+            if (g_vm.ret_var.type) free(g_vm.ret_var.type);
+            memset(&g_vm.ret_var, 0, sizeof(Variable));
         }
-        __ret_var.id = strdup(id);
-        __ret_var.is_const = 0;
-        te_value_to_variable(&__ret_var, value);
-        __ret_var_active = 1;
+        g_vm.ret_var.id = strdup(id);
+        g_vm.ret_var.is_const = 0;
+        te_value_to_variable(&g_vm.ret_var, value);
+        g_vm.ret_var_active = 1;
         return;
     }
 
@@ -6335,7 +6329,7 @@ static void te_stmt_method_call_alone(ASTNode *node) {
         /* Phase F: top-level bare calls like `assert(0);` are parsed as
          * METHOD_CALL_ALONE; try built-ins before user-defined methods. */
         if (te_builtin_dispatch(node)) return;
-        MethodNode *m = global_methods;
+        MethodNode *m = g_vm.global_methods;
         int matched = 0;
         while (m) {
             if (strcmp(m->name, node->id) == 0) {
@@ -7121,7 +7115,7 @@ static void interpret_call_func_impl(ASTNode *node) {
     }
 
     // If not native, check for global user functions
-    MethodNode *m = global_methods;
+    MethodNode *m = g_vm.global_methods;
     while (m) {
         if (strcmp(m->name, node->id) == 0) {
              // Setup arguments and execute body
@@ -7697,8 +7691,8 @@ static int te_cm_bridge(ASTNode *node, ObjectNode *obj, Variable *v) {
                 g_bridge_handlers.handle_nlu_bridge(node->id, node->right);
                 // Diagnostic: did the bridge set __ret__? (only print when debug mode enabled)
                 if (g_debug_mode) {
-                    if (__ret_var_active) {
-                        te_log_ast("[DEBUG] After NLU bridge: __ret__ active=1 type='%s'", __ret_var.type ? __ret_var.type : "(null)");
+                    if (g_vm.ret_var_active) {
+                        te_log_ast("[DEBUG] After NLU bridge: __ret__ active=1 type='%s'", g_vm.ret_var.type ? g_vm.ret_var.type : "(null)");
                     } else {
                         te_log_ast("[DEBUG] After NLU bridge: __ret__ active=0");
                     }
@@ -7893,25 +7887,25 @@ static int te_cm_body_bytecode(ASTNode *node, MethodNode *m, ObjectNode *obj) {
                 double rv = bc_exec(bi->code);
                 g_bc_this = saved_this;
                 /* Write __ret_var directly (mirrors FAST RETURN path). */
-                if (__ret_var_active) {
-                    if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
-                        free(__ret_var.value.string_value);
-                        __ret_var.value.string_value = NULL;
+                if (g_vm.ret_var_active) {
+                    if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) {
+                        free(g_vm.ret_var.value.string_value);
+                        g_vm.ret_var.value.string_value = NULL;
                     }
-                    if (__ret_var.id)   { free(__ret_var.id);   __ret_var.id   = NULL; }
-                    if (__ret_var.type) { free(__ret_var.type); __ret_var.type = NULL; }
+                    if (g_vm.ret_var.id)   { free(g_vm.ret_var.id);   g_vm.ret_var.id   = NULL; }
+                    if (g_vm.ret_var.type) { free(g_vm.ret_var.type); g_vm.ret_var.type = NULL; }
                 }
-                __ret_var.id = strdup("__ret__");
+                g_vm.ret_var.id = strdup("__ret__");
                 if (strcmp(m->return_type, "float") == 0) {
-                    __ret_var.type  = strdup("FLOAT");
-                    __ret_var.vtype = VAL_FLOAT;
-                    __ret_var.value.float_value = rv;
+                    g_vm.ret_var.type  = strdup("FLOAT");
+                    g_vm.ret_var.vtype = VAL_FLOAT;
+                    g_vm.ret_var.value.float_value = rv;
                 } else {
-                    __ret_var.type  = strdup("INT");
-                    __ret_var.vtype = VAL_INT;
-                    __ret_var.value.int_value = (long long)rv;
+                    g_vm.ret_var.type  = strdup("INT");
+                    g_vm.ret_var.vtype = VAL_INT;
+                    g_vm.ret_var.value.int_value = (long long)rv;
                 }
-                __ret_var_active = 1;
+                g_vm.ret_var_active = 1;
                 g_vm.return_flag = 0;
                 g_vm.return_node = NULL;
                 return 1;
@@ -7952,25 +7946,25 @@ static int te_cm_materialize_return(ASTNode *node, MethodNode *m, ObjectNode *ob
                     && strcmp(g_vm.return_node->type, "RETURN_XML")  != 0) {
                     long long rv_i64; double rv; int rv_is_i64 = te_eval_num(g_vm.return_node, &rv_i64, &rv);   /* Fase 1b */
                     /* Reset and write __ret_var directly. */
-                    if (__ret_var_active) {
-                        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
-                            free(__ret_var.value.string_value);
-                            __ret_var.value.string_value = NULL;
+                    if (g_vm.ret_var_active) {
+                        if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) {
+                            free(g_vm.ret_var.value.string_value);
+                            g_vm.ret_var.value.string_value = NULL;
                         }
-                        if (__ret_var.id) { free(__ret_var.id); __ret_var.id = NULL; }
-                        if (__ret_var.type) { free(__ret_var.type); __ret_var.type = NULL; }
+                        if (g_vm.ret_var.id) { free(g_vm.ret_var.id); g_vm.ret_var.id = NULL; }
+                        if (g_vm.ret_var.type) { free(g_vm.ret_var.type); g_vm.ret_var.type = NULL; }
                     }
-                    __ret_var.id   = strdup("__ret__");
+                    g_vm.ret_var.id   = strdup("__ret__");
                     if (strcmp(m->return_type, "float") == 0) {
-                        __ret_var.type  = strdup("FLOAT");
-                        __ret_var.vtype = VAL_FLOAT;
-                        __ret_var.value.float_value = rv;
+                        g_vm.ret_var.type  = strdup("FLOAT");
+                        g_vm.ret_var.vtype = VAL_FLOAT;
+                        g_vm.ret_var.value.float_value = rv;
                     } else {
-                        __ret_var.type  = strdup("INT");
-                        __ret_var.vtype = VAL_INT;
-                        __ret_var.value.int_value = rv_is_i64 ? rv_i64 : (long long)rv;
+                        g_vm.ret_var.type  = strdup("INT");
+                        g_vm.ret_var.vtype = VAL_INT;
+                        g_vm.ret_var.value.int_value = rv_is_i64 ? rv_i64 : (long long)rv;
                     }
-                    __ret_var_active = 1;
+                    g_vm.ret_var_active = 1;
                     g_vm.return_flag = 0;
                     g_vm.return_node = NULL;
                     return 1;
@@ -8268,13 +8262,13 @@ static void interpret_call_method_impl(ASTNode *node) {
      * + Ola 13 extras). Dispatched in te_string.c (Nivel B paso 2.b). */
     if (te_string_method_dispatch(node, objNode, v)) return;
 
-    if (__ret_var_active) {
-        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
-            free(__ret_var.value.string_value);
+    if (g_vm.ret_var_active) {
+        if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) {
+            free(g_vm.ret_var.value.string_value);
         }
-        if (__ret_var.id) free(__ret_var.id);
-        if (__ret_var.type) free(__ret_var.type);
-        memset(&__ret_var, 0, sizeof(Variable));
+        if (g_vm.ret_var.id) free(g_vm.ret_var.id);
+        if (g_vm.ret_var.type) free(g_vm.ret_var.type);
+        memset(&g_vm.ret_var, 0, sizeof(Variable));
         // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
     }
 
@@ -8392,7 +8386,7 @@ static void interpret_call_method_impl(ASTNode *node) {
     }
 
     // --- STORE RESULT IN CACHE IF NEEDED ---
-    if (m->cache_ttl > 0 && __ret_var_active) {
+    if (m->cache_ttl > 0 && g_vm.ret_var_active) {
         Variable *ret = find_variable("__ret__");
         if (ret && ret->type) {
             ASTNode *ret_node = create_ast_leaf(ret->type, ret->value.int_value, ret->value.string_value, ret->id);
@@ -9150,11 +9144,11 @@ static void interpret_fprint(ASTNode *node) {
         }
     }
 
-    if (__ret_var_active) {
-        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
-        if (__ret_var.id) free(__ret_var.id);
-        if (__ret_var.type) free(__ret_var.type);
-        memset(&__ret_var, 0, sizeof(Variable));
+    if (g_vm.ret_var_active) {
+        if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) free(g_vm.ret_var.value.string_value);
+        if (g_vm.ret_var.id) free(g_vm.ret_var.id);
+        if (g_vm.ret_var.type) free(g_vm.ret_var.type);
+        memset(&g_vm.ret_var, 0, sizeof(Variable));
         // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
     }
 }
@@ -9237,11 +9231,11 @@ static void interpret_fprintln(ASTNode *node) {
         }
     }
 
-    if (__ret_var_active) {
-        if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
-        if (__ret_var.id) free(__ret_var.id);
-        if (__ret_var.type) free(__ret_var.type);
-        memset(&__ret_var, 0, sizeof(Variable));
+    if (g_vm.ret_var_active) {
+        if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) free(g_vm.ret_var.value.string_value);
+        if (g_vm.ret_var.id) free(g_vm.ret_var.id);
+        if (g_vm.ret_var.type) free(g_vm.ret_var.type);
+        memset(&g_vm.ret_var, 0, sizeof(Variable));
         // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
     }
 }

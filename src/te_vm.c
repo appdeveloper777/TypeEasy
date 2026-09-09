@@ -30,6 +30,9 @@ TeVM *te_vm_cur = &g_vm_main_storage;
 
 TeVM *te_vm_main(void) { return &g_vm_main_storage; }
 
+/* Accessor para código que no incluye headers del intérprete (api_server/te_websocket.c). */
+struct MethodNode *te_global_methods(void) { return g_vm.global_methods; }
+
 TeVM *te_vm_create(void) {
     return (TeVM *)calloc(1, sizeof(TeVM));
 }
@@ -75,11 +78,25 @@ int te_vm_selftest(void) {
     TeVM *a = te_vm_create(), *b = te_vm_create();
     if (!a || !b) { printf("{\"ok\":false,\"error\":\"calloc\"}\n"); return 1; }
     TeVM *prev = te_vm_set_current(a);
-    ASTNode *ast_a = te_vm_parse_src("let x = 10; var acc = 0; for (i = 0; 5; 1) { acc = acc + i; }", 1);
+    /* Fase 3C: cada VM declara su PROPIA clase y su PROPIO endpoint (registros que antes eran
+     * globales de proceso: classes[] / global_methods). */
+    ASTNode *ast_a = te_vm_parse_src(
+        "class Punto { public int px = 1; Dob() : int { return this.px * 2; } }\n"
+        "endpoint { [HttpGet(\"/a\")] RutaA() { return json({ vm: \"a\" }); } }\n"
+        "let x = 10; var acc = 0; for (i = 0; 5; 1) { acc = acc + i; }\n"
+        "let p = new Punto(); p.px = 21; let dob = p.Dob();", 1);
     if (ast_a) interpret_ast(ast_a); else fails++;
+    int a_classes = g_vm.class_count; const char *a_route = g_vm.global_methods && g_vm.global_methods->name ? g_vm.global_methods->name : "";
     te_vm_set_current(b);
-    ASTNode *ast_b = te_vm_parse_src("let x = 20; let y = 5;", 2);
+    ASTNode *ast_b = te_vm_parse_src(
+        "class Caja { public string tag = \"b\"; }\n"
+        "endpoint { [HttpGet(\"/b\")] RutaB() { return json({ vm: \"b\" }); } }\n"
+        "let x = 20; let y = 5;", 2);
     if (ast_b) interpret_ast(ast_b); else fails++;
+    int b_classes = g_vm.class_count; const char *b_route = g_vm.global_methods && g_vm.global_methods->name ? g_vm.global_methods->name : "";
+    /* B: una sola clase (Caja), un solo endpoint (RutaB), sin rastro de A */
+    if (b_classes != 1 || strcmp(b_route, "RutaB") != 0 || (g_vm.global_methods && g_vm.global_methods->next)) fails++;
+    if (find_class("Punto") != NULL) fails++;
 
     /* B ve lo suyo y NO ve lo de A */
     long long bx = te_vm_int_of("x", &f); if (!f || bx != 20) fails++;
@@ -91,17 +108,20 @@ int te_vm_selftest(void) {
     te_vm_set_current(a);
     long long ax = te_vm_int_of("x", &f); if (!f || ax != 10) fails++;
     long long aacc = te_vm_int_of("acc", &f); if (!f || aacc != 10) fails++;
+    long long adob = te_vm_int_of("dob", &f); if (!f || adob != 42) fails++;
     te_vm_int_of("y", &f); if (f) fails++;
+    if (a_classes != 1 || strcmp(a_route, "RutaA") != 0) fails++;
+    if (find_class("Caja") != NULL || find_class("Punto") == NULL) fails++;
     int a_count = g_vm.var_count;
 
-    /* la VM principal sigue vacía */
+    /* la VM principal sigue vacía (sin variables, clases ni endpoints) */
     te_vm_set_current(prev);
-    if (g_vm.var_count != 0) fails++;
+    if (g_vm.var_count != 0 || g_vm.class_count != 0 || g_vm.global_methods != NULL) fails++;
     te_vm_destroy(a); te_vm_destroy(b);
 
-    printf("{\"ok\":%s,\"vm_a\":{\"x\":%lld,\"acc\":%lld,\"var_count\":%d},"
-           "\"vm_b\":{\"x\":%lld,\"y\":%lld,\"var_count\":%d},\"main_var_count\":%d,\"sizeof_TeVM\":%zu}\n",
-           fails ? "false" : "true", ax, aacc, a_count, bx, by, b_count, g_vm.var_count, sizeof(TeVM));
+    printf("{\"ok\":%s,\"vm_a\":{\"x\":%lld,\"acc\":%lld,\"dob\":%lld,\"var_count\":%d,\"classes\":%d,\"route\":\"%s\"},"
+           "\"vm_b\":{\"x\":%lld,\"y\":%lld,\"var_count\":%d,\"classes\":%d,\"route\":\"%s\"},\"main\":{\"var_count\":%d,\"classes\":%d},\"sizeof_TeVM\":%zu}\n",
+           fails ? "false" : "true", ax, aacc, adob, a_count, a_classes, a_route, bx, by, b_count, b_classes, b_route, g_vm.var_count, g_vm.class_count, sizeof(TeVM));
     fflush(stdout);
     return fails ? 1 : 0;
 }

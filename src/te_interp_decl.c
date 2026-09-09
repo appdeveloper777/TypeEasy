@@ -6,6 +6,7 @@
 #include <math.h>
 #include <stdint.h>
 #include "ast.h"
+#include "te_vm.h"
 #include "ast_internal.h"
 
 /* Extraído de interpret_var_decl (Fase 2). Devuelve 1 si manejó la llamada. */
@@ -284,7 +285,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         evaluated_value_var = find_variable("__ret__");
         //printf("[DEBUG] interpret_var_decl: find_variable returned %p\n", (void*)evaluated_value_var); fflush(stdout);
         if (!evaluated_value_var) {
-            te_runtime_fatalf("Error: no return value captured from expression '%s'. __ret_var_active=%d", value_node->type ? value_node->type : "unknown", __ret_var_active);
+            te_runtime_fatalf("Error: no return value captured from expression '%s'. __ret_var_active=%d", value_node->type ? value_node->type : "unknown", g_vm.ret_var_active);
         }
     }
     // ... (rest of function)
@@ -417,11 +418,11 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value; // Apunta al nodo LIST
                // printf("[DEBUG] interpret_var_decl: declared LIST variable\n"); fflush(stdout);
                 // Limpia la variable de retorno
-                if (__ret_var_active) {
-                    if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
-                    if (__ret_var.id) free(__ret_var.id);
-                    if (__ret_var.type) free(__ret_var.type);
-                    memset(&__ret_var, 0, sizeof(Variable));
+                if (g_vm.ret_var_active) {
+                    if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) free(g_vm.ret_var.value.string_value);
+                    if (g_vm.ret_var.id) free(g_vm.ret_var.id);
+                    if (g_vm.ret_var.type) free(g_vm.ret_var.type);
+                    memset(&g_vm.ret_var, 0, sizeof(Variable));
                     // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
                 }
                 vm->return_flag = 0;
@@ -435,11 +436,11 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 var->vtype = VAL_OBJECT;
                 var->type = strdup("MAP");
                 var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value;
-                if (__ret_var_active) {
-                    if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
-                    if (__ret_var.id) free(__ret_var.id);
-                    if (__ret_var.type) free(__ret_var.type);
-                    memset(&__ret_var, 0, sizeof(Variable));
+                if (g_vm.ret_var_active) {
+                    if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) free(g_vm.ret_var.value.string_value);
+                    if (g_vm.ret_var.id) free(g_vm.ret_var.id);
+                    if (g_vm.ret_var.type) free(g_vm.ret_var.type);
+                    memset(&g_vm.ret_var, 0, sizeof(Variable));
                 }
                 vm->return_flag = 0;
                 vm->return_node = NULL;
@@ -455,11 +456,11 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 var->vtype = VAL_OBJECT;
                 var->type = strdup("LAMBDA");
                 var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value;
-                if (__ret_var_active) {
-                    if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
-                    if (__ret_var.id) free(__ret_var.id);
-                    if (__ret_var.type) free(__ret_var.type);
-                    memset(&__ret_var, 0, sizeof(Variable));
+                if (g_vm.ret_var_active) {
+                    if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) free(g_vm.ret_var.value.string_value);
+                    if (g_vm.ret_var.id) free(g_vm.ret_var.id);
+                    if (g_vm.ret_var.type) free(g_vm.ret_var.type);
+                    memset(&g_vm.ret_var, 0, sizeof(Variable));
                 }
                 vm->return_flag = 0;
                 vm->return_node = NULL;
@@ -495,11 +496,11 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         
         // Limpia la variable de retorno
        // printf("[DEBUG] interpret_var_decl: cleaning __ret_var\n"); fflush(stdout);
-        if (__ret_var_active) {
-            if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
-            if (__ret_var.id) free(__ret_var.id);
-            if (__ret_var.type) free(__ret_var.type);
-            memset(&__ret_var, 0, sizeof(Variable));
+        if (g_vm.ret_var_active) {
+            if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) free(g_vm.ret_var.value.string_value);
+            if (g_vm.ret_var.id) free(g_vm.ret_var.id);
+            if (g_vm.ret_var.type) free(g_vm.ret_var.type);
+            memset(&g_vm.ret_var, 0, sizeof(Variable));
             // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
         }
         vm->return_flag = 0;
@@ -682,8 +683,8 @@ static void te_assign_from_call(TeVM *vm, ASTNode *node, ASTNode *var_node, ASTN
                 if (e && e[0] && e[0] != '0') fr_enabled = 0;
                 fr_init = 1;
             }
-            if (fr_enabled && __ret_var_active
-                && (__ret_var.vtype == VAL_INT || __ret_var.vtype == VAL_FLOAT)) {
+            if (fr_enabled && g_vm.ret_var_active
+                && (g_vm.ret_var.vtype == VAL_INT || g_vm.ret_var.vtype == VAL_FLOAT)) {
                 Variable *fv = (Variable *)var_node->cached_var;
                 if (fv && (!fv->id || strcmp(fv->id, var_node->id) != 0)) {
                     /* slot reciclado: revalidar por id */
@@ -696,12 +697,12 @@ static void te_assign_from_call(TeVM *vm, ASTNode *node, ASTNode *var_node, ASTN
                 }
                 if (fv && !fv->is_const
                     && (fv->vtype == VAL_INT || fv->vtype == VAL_FLOAT)) {
-                    if (__ret_var.vtype == VAL_FLOAT) {
+                    if (g_vm.ret_var.vtype == VAL_FLOAT) {
                         fv->vtype = VAL_FLOAT;
-                        fv->value.float_value = __ret_var.value.float_value;
+                        fv->value.float_value = g_vm.ret_var.value.float_value;
                     } else {
                         fv->vtype = VAL_INT;
-                        fv->value.int_value = __ret_var.value.int_value;
+                        fv->value.int_value = g_vm.ret_var.value.int_value;
                     }
                     /* Reset return state but DO NOT free __ret_var fields:
                      * leaving them avoids strdup/free churn. */
@@ -782,11 +783,11 @@ static void te_assign_from_call(TeVM *vm, ASTNode *node, ASTNode *var_node, ASTN
         }
 
         // 6. Limpiar __ret_var
-        if (__ret_var_active) {
-            if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) free(__ret_var.value.string_value);
-            if (__ret_var.id) free(__ret_var.id);
-            if (__ret_var.type) free(__ret_var.type);
-            memset(&__ret_var, 0, sizeof(Variable));
+        if (g_vm.ret_var_active) {
+            if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) free(g_vm.ret_var.value.string_value);
+            if (g_vm.ret_var.id) free(g_vm.ret_var.id);
+            if (g_vm.ret_var.type) free(g_vm.ret_var.type);
+            memset(&g_vm.ret_var, 0, sizeof(Variable));
             // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
         }
         vm->return_flag = 0;

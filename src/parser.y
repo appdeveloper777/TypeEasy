@@ -1,5 +1,6 @@
 %{   
     #include <stdio.h>
+#include "te_vm.h"
     #include <stdlib.h>
     #include "ast.h"
     #include "te_csv.h"
@@ -184,9 +185,9 @@ guard_endpoint_decl:
 
 endpoint_methods:
     endpoint_method
-        { if (global_methods) { global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; global_methods->is_async = g_pending_async; global_methods->guard_name = g_pending_guard ? g_pending_guard : (g_endpoint_guard_all ? strdup(g_endpoint_guard_all) : NULL); } g_pending_auth = 0; g_pending_async = 0; g_pending_guard = NULL; $$ = NULL; }
+        { if (g_vm.global_methods) { g_vm.global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; g_vm.global_methods->is_async = g_pending_async; g_vm.global_methods->guard_name = g_pending_guard ? g_pending_guard : (g_endpoint_guard_all ? strdup(g_endpoint_guard_all) : NULL); } g_pending_auth = 0; g_pending_async = 0; g_pending_guard = NULL; $$ = NULL; }
     | endpoint_methods endpoint_method
-        { if (global_methods) { global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; global_methods->is_async = g_pending_async; global_methods->guard_name = g_pending_guard ? g_pending_guard : (g_endpoint_guard_all ? strdup(g_endpoint_guard_all) : NULL); } g_pending_auth = 0; g_pending_async = 0; g_pending_guard = NULL; $$ = NULL; }
+        { if (g_vm.global_methods) { g_vm.global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; g_vm.global_methods->is_async = g_pending_async; g_vm.global_methods->guard_name = g_pending_guard ? g_pending_guard : (g_endpoint_guard_all ? strdup(g_endpoint_guard_all) : NULL); } g_pending_auth = 0; g_pending_async = 0; g_pending_guard = NULL; $$ = NULL; }
     | auth_marker
         { $$ = NULL; }
     | endpoint_methods auth_marker
@@ -218,8 +219,8 @@ endpoint_method:
         m->route_path = strdup($4);
         m->http_method = strdup("GET");
         m->cache_ttl = 0;  // No cache by default
-        m->next = global_methods;
-        global_methods = m;
+        m->next = g_vm.global_methods;
+        g_vm.global_methods = m;
         $$ = NULL;
     }
     | LSBRACKET HTTPPOST LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
@@ -227,28 +228,28 @@ endpoint_method:
         MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
         m->name = strdup($7); m->body = $12; m->params = $9;
         m->route_path = strdup($4); m->http_method = strdup("POST");
-        m->cache_ttl = 0; m->next = global_methods; global_methods = m; $$ = NULL;
+        m->cache_ttl = 0; m->next = g_vm.global_methods; g_vm.global_methods = m; $$ = NULL;
     }
     | LSBRACKET HTTPPUT LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
     {
         MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
         m->name = strdup($7); m->body = $12; m->params = $9;
         m->route_path = strdup($4); m->http_method = strdup("PUT");
-        m->cache_ttl = 0; m->next = global_methods; global_methods = m; $$ = NULL;
+        m->cache_ttl = 0; m->next = g_vm.global_methods; g_vm.global_methods = m; $$ = NULL;
     }
     | LSBRACKET HTTPDELETE LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
     {
         MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
         m->name = strdup($7); m->body = $12; m->params = $9;
         m->route_path = strdup($4); m->http_method = strdup("DELETE");
-        m->cache_ttl = 0; m->next = global_methods; global_methods = m; $$ = NULL;
+        m->cache_ttl = 0; m->next = g_vm.global_methods; g_vm.global_methods = m; $$ = NULL;
     }
     | LSBRACKET HTTPPATCH LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
     {
         MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
         m->name = strdup($7); m->body = $12; m->params = $9;
         m->route_path = strdup($4); m->http_method = strdup("PATCH");
-        m->cache_ttl = 0; m->next = global_methods; global_methods = m; $$ = NULL;
+        m->cache_ttl = 0; m->next = g_vm.global_methods; g_vm.global_methods = m; $$ = NULL;
     }
     | LSBRACKET WEBSOCKET { g_ws_is_lifecycle = 0; g_ws_on_open = NULL; g_ws_on_message = NULL; g_ws_on_close = NULL; g_ws_msg_param = NULL; } LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET ws_body RBRACKET
     {
@@ -265,7 +266,7 @@ endpoint_method:
         } else {
             m->body = $13;                       /* legacy single-shot handler */
         }
-        m->next = global_methods; global_methods = m; $$ = NULL;
+        m->next = g_vm.global_methods; g_vm.global_methods = m; $$ = NULL;
     }
     | cache_decorator LSBRACKET HTTPGET LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
     {
@@ -276,8 +277,8 @@ endpoint_method:
         m->route_path = strdup($5);
         m->http_method = strdup("GET");
         m->cache_ttl = $1;
-        m->next = global_methods;
-        global_methods = m;
+        m->next = g_vm.global_methods;
+        g_vm.global_methods = m;
         $$ = NULL;
     }
     | cache_decorator LSBRACKET HTTPPOST LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
@@ -285,28 +286,28 @@ endpoint_method:
         MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
         m->name = strdup($8); m->body = $13; m->params = $10;
         m->route_path = strdup($5); m->http_method = strdup("POST");
-        m->cache_ttl = $1; m->next = global_methods; global_methods = m; $$ = NULL;
+        m->cache_ttl = $1; m->next = g_vm.global_methods; g_vm.global_methods = m; $$ = NULL;
     }
     | cache_decorator LSBRACKET HTTPPUT LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
     {
         MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
         m->name = strdup($8); m->body = $13; m->params = $10;
         m->route_path = strdup($5); m->http_method = strdup("PUT");
-        m->cache_ttl = $1; m->next = global_methods; global_methods = m; $$ = NULL;
+        m->cache_ttl = $1; m->next = g_vm.global_methods; g_vm.global_methods = m; $$ = NULL;
     }
     | cache_decorator LSBRACKET HTTPDELETE LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
     {
         MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
         m->name = strdup($8); m->body = $13; m->params = $10;
         m->route_path = strdup($5); m->http_method = strdup("DELETE");
-        m->cache_ttl = $1; m->next = global_methods; global_methods = m; $$ = NULL;
+        m->cache_ttl = $1; m->next = g_vm.global_methods; g_vm.global_methods = m; $$ = NULL;
     }
     | cache_decorator LSBRACKET HTTPPATCH LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET
     {
         MethodNode *m = (MethodNode*)malloc(sizeof(MethodNode));
         m->name = strdup($8); m->body = $13; m->params = $10;
         m->route_path = strdup($5); m->http_method = strdup("PATCH");
-        m->cache_ttl = $1; m->next = global_methods; global_methods = m; $$ = NULL;
+        m->cache_ttl = $1; m->next = g_vm.global_methods; g_vm.global_methods = m; $$ = NULL;
     }
     ;
 
@@ -348,8 +349,8 @@ httpget_method_decl:
             m->body = $9;
             m->params = $6;
             m->guard_name = NULL;
-            m->next = global_methods;
-            global_methods = m;            
+            m->next = g_vm.global_methods;
+            g_vm.global_methods = m;            
             $$ = NULL;           
      }
     ;

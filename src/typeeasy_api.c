@@ -19,13 +19,10 @@
 
 // Declaraciones externas de funciones del intérprete
 extern ASTNode* parse_file(FILE* file);
-extern MethodNode* global_methods;
 extern int g_debug_mode;
 extern FILE *yyin;  // Variable global de Flex para el parser
 
 // Declaraciones externas para manejo de return values
-extern Variable __ret_var;
-extern int __ret_var_active;
 
 // Funciones auxiliares para captura de stdout
 static int stdout_backup = -1;
@@ -220,11 +217,11 @@ int typeeasy_embedded_load_script(TypeEasyEmbeddedContext* ctx, const char* scri
     printf("[TYPEEASY_API] Running global scope...\n");
     
     // CRITICAL: Activar __ret_var antes de ejecutar scope global
-    if (!__ret_var_active) {
-        memset(&__ret_var, 0, sizeof(Variable));
-        __ret_var_active = 1;
+    if (!g_vm.ret_var_active) {
+        memset(&g_vm.ret_var, 0, sizeof(Variable));
+        g_vm.ret_var_active = 1;
     }
-    fprintf(stderr, "[DEBUG] ANTES de interpret_ast(scope global): __ret_var_active=%d\n", __ret_var_active);
+    fprintf(stderr, "[DEBUG] ANTES de interpret_ast(scope global): __ret_var_active=%d\n", g_vm.ret_var_active);
     
     /* Bloque D: clear interpreter control-flow flags before running this
      * file's global scope. Without this, an aborted previous file (uncaught
@@ -235,7 +232,7 @@ int typeeasy_embedded_load_script(TypeEasyEmbeddedContext* ctx, const char* scri
     // Ejecutar scope global para inicializar clases, variables globales, etc.
     interpret_ast(ast);
     
-    fprintf(stderr, "[DEBUG] AFTER interpret_ast(global scope): __ret_var_active=%d\n", __ret_var_active);
+    fprintf(stderr, "[DEBUG] AFTER interpret_ast(global scope): __ret_var_active=%d\n", g_vm.ret_var_active);
     
     // Snapshot DESPUES del bootstrap: top-level `let`/`var` quedan por debajo
     // del marcador y sobreviven a runtime_reset_vars_to_initial_state() entre
@@ -290,7 +287,7 @@ char* typeeasy_embedded_discover(TypeEasyEmbeddedContext* ctx, const char* scrip
     strcpy(result, "[");
     int first = 1;
     
-    MethodNode *m = global_methods;
+    MethodNode *m = g_vm.global_methods;
     while (m) {
         if (m->route_path) {
             if (!first) strcat(result, ",");
@@ -332,7 +329,7 @@ static int te_verbose(void) {
 /* Lookup MethodNode* por nombre. Cachealo en el router para evitar repetir. */
 MethodNode* typeeasy_find_method(const char* function_name) {
     if (!function_name) return NULL;
-    for (MethodNode* m = global_methods; m; m = m->next) {
+    for (MethodNode* m = g_vm.global_methods; m; m = m->next) {
         if (m->name && strcmp(m->name, function_name) == 0) return m;
     }
     return NULL;
@@ -509,18 +506,18 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
     extern int g_te_request_active;
     g_te_request_active++;
 
-    if (!__ret_var_active) {
-        memset(&__ret_var, 0, sizeof(Variable));
-        __ret_var_active = 1;
+    if (!g_vm.ret_var_active) {
+        memset(&g_vm.ret_var, 0, sizeof(Variable));
+        g_vm.ret_var_active = 1;
     }
-    if (__ret_var.vtype == VAL_STRING && __ret_var.value.string_value) {
-        free(__ret_var.value.string_value);
-        __ret_var.value.string_value = NULL;
+    if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) {
+        free(g_vm.ret_var.value.string_value);
+        g_vm.ret_var.value.string_value = NULL;
     }
-    if (__ret_var.id)   { free(__ret_var.id);   __ret_var.id = NULL; }
-    if (__ret_var.type) { free(__ret_var.type); __ret_var.type = NULL; }
-    __ret_var.vtype = VAL_INT;
-    __ret_var.value.int_value = 0;
+    if (g_vm.ret_var.id)   { free(g_vm.ret_var.id);   g_vm.ret_var.id = NULL; }
+    if (g_vm.ret_var.type) { free(g_vm.ret_var.type); g_vm.ret_var.type = NULL; }
+    g_vm.ret_var.vtype = VAL_INT;
+    g_vm.ret_var.value.int_value = 0;
     g_vm.return_flag = 0;
 
     /* v0.0.16: @auth decorator — require a valid Bearer JWT before the handler

@@ -32,7 +32,9 @@
 
 /* Forward decls from the interpreter / api_server */
 struct MethodNode;
-extern struct MethodNode *global_methods;
+/* Fase 3C: la lista de métodos vive en la VM actual (g_vm.global_methods); este archivo no
+ * incluye headers del intérprete, así que la lee por accessor (definido en src/te_vm.c). */
+struct MethodNode *te_global_methods(void);
 char *typeeasy_embedded_invoke_method(struct MethodNode *m);
 
 /* v0.1.0 — WebSocket lifecycle invocation (defined in src/typeeasy_api.c).
@@ -424,7 +426,7 @@ void te_ws_register_routes(struct mg_context *ctx) {
     te_ws_init();
     if (!ctx) return;
     int count = 0;
-    for (MN *m = (MN*)global_methods; m; m = m->next) {
+    for (MN *m = (MN*)te_global_methods(); m; m = m->next) {
         if (!m->http_method || strcmp(m->http_method, "WS") != 0) continue;
         if (!m->route_path) continue;
         char *cw_pattern = translate_to_civetweb_pattern(m->route_path);

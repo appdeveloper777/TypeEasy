@@ -263,7 +263,6 @@ typedef struct ParameterNode {
     void *cached_var;
     struct ParameterNode *next;
 } ParameterNode;
-extern MethodNode *global_methods;
 void runtime_save_initial_var_count();
 void runtime_reset_vars_to_initial_state();
 void te_runtime_reset_flags(void);
@@ -382,8 +381,6 @@ ASTNode *create_float_node(int value);
 ASTNode *create_train_node(const char *model_name, const char *dataset_name, ASTNode *options);
 ASTNode *create_train_option_node(const char *option_name, int value);
 
-extern Variable __ret_var;
-extern int __ret_var_active;
 
 /* Ruta del script en ejecución (para mensajes de error). La asigna main(). */
 extern const char *g_script_path;
