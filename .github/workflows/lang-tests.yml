@@ -7,6 +7,8 @@ on:
       - 'src/**'
       - 'tests/lang/**'
       - 'tests/api/**'
+      - 'tests/dbreal/**'
+      - 'tests/regress/**'
       - 'tests/fuzz/**'
       - 'typeeasycode/endpoint.te'
       - 'tools/te-test/**'
@@ -24,6 +26,8 @@ on:
       - 'src/**'
       - 'tests/lang/**'
       - 'tests/api/**'
+      - 'tests/dbreal/**'
+      - 'tests/regress/**'
       - 'tests/fuzz/**'
       - 'typeeasycode/endpoint.te'
       - 'tools/te-test/**'
@@ -167,6 +171,58 @@ jobs:
           name: junit-asan
           path: tests/.report/junit-asan.xml
           if-no-files-found: warn
+
+  db-real:
+    # Banco de bases de datos REALES (0.1.x, deuda "solo se prueba en producción"): MariaDB y
+    # PostgreSQL como service containers; tests/dbreal/*.te ejercitan el contrato completo de
+    # mysql_* / postgres_* con @params (DDL, INSERT/insert_id/RETURNING, SELECT json, int64,
+    # UTF-8, DECIMAL, NULL, affected_rows). Hasta 0.1.0 la única cobertura de MySQL/PG real era
+    # el ERP en la VM; los tests de tests/db son unitarios con stubs (sin servidor).
+    runs-on: ubuntu-latest
+    container: gcc:13.2.0
+    timeout-minutes: 25
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: te_test_ci
+          MARIADB_DATABASE: te_test
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: te_test
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TE_TEST_MYSQL_HOST: mariadb
+      TE_TEST_MYSQL_PORT: "3306"
+      TE_TEST_MYSQL_USER: root
+      TE_TEST_MYSQL_PASS: te_test_ci
+      TE_TEST_MYSQL_DB: te_test
+      TE_TEST_PG_HOST: postgres
+      TE_TEST_PG_PORT: "5432"
+      TE_TEST_PG_USER: postgres
+      TE_TEST_PG_PASS: postgres
+      TE_TEST_PG_DB: te_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq flex bison libssl-dev default-libmysqlclient-dev \
+            libcurl4-openssl-dev libpq-dev freetds-dev libsqlite3-dev zlib1g-dev python3
+
+      - name: Build interpreter
+        run: make -C src typeeasy
+
+      - name: Run real-DB contract tests (MariaDB + PostgreSQL)
+        run: bash tests/dbreal/run.sh --bin src/typeeasy --require
 
   fuzz-smoke:
     # Fuzzing del front-end (production-ready bloqueante #8): construye el harness

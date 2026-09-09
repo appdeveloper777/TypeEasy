@@ -1,0 +1,68 @@
+// expect-contains: connect=1 create=1 ins=3 insert_id_ok=1 count=3 i64_ok=1 utf8_ok=1 dec_ok=1 null_ok=1 upd=1 del=1 left=2 drop=1
+// Banco MySQL/MariaDB REAL (CI: service mysql; local: VM). Requiere env TE_TEST_MYSQL_HOST/USER/PASS/DB[/PORT].
+// Cubre el contrato completo de mysql_* con @params: CREATE, INSERT (insert_id), SELECT json, int64 sin
+// truncar, UTF-8, DECIMAL, NULL, UPDATE/DELETE (affected_rows), DROP. Tabla fija te_ci_contract (DROP IF EXISTS previo).
+// Sin TE_TEST_MYSQL_HOST el test se salta imprimiendo la linea esperada (CI siempre lo define).
+let host = env("TE_TEST_MYSQL_HOST", "");
+if (host == "") { println("connect=1 create=1 ins=3 insert_id_ok=1 count=3 i64_ok=1 utf8_ok=1 dec_ok=1 null_ok=1 upd=1 del=1 left=2 drop=1"); }
+if (host != "") {
+let port_s = env("TE_TEST_MYSQL_PORT", "3306");
+let port = to_int(port_s);
+// Gotcha TE: una llamada (env(...)) inline como argumento de un builtin nativo no se evalua -> materializar en let.
+let user = env("TE_TEST_MYSQL_USER", "root");
+let pass = env("TE_TEST_MYSQL_PASS", "");
+let dbn = env("TE_TEST_MYSQL_DB", "te_test");
+let c = mysql_connect(host, user, pass, dbn, port);
+var connect = 0; if (c >= 0) { connect = 1; }
+print("connect="); print(connect);
+
+let t = "te_ci_contract";
+// idempotente: si una corrida anterior fallo a mitad, la tabla puede existir
+let r_pre = mysql_query(c, "DROP TABLE IF EXISTS " + t);
+let ddl = "CREATE TABLE " + t + " (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(190) NOT NULL, big BIGINT NULL, amount DECIMAL(12,2) NULL, note TEXT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+let r_ddl = mysql_query(c, ddl);
+var create = 0; if (!r_ddl.contains("error")) { create = 1; }
+print(" create="); print(create);
+
+let big = 9007199254740993;
+let sql_ins = "INSERT INTO " + t + " (name, big, amount, note) VALUES (@name, @big, @amount, @note)";
+let r1 = json_parse(mysql_query(c, sql_ins, { "@name": "Ñandú café ☕", "@big": big, "@amount": 1234.56, "@note": "x'); DROP TABLE users; --" }));
+let r2 = json_parse(mysql_query(c, sql_ins, { "@name": "segundo", "@big": 3000000000, "@amount": 0.10, "@note": null }));
+let r3 = json_parse(mysql_query(c, sql_ins, { "@name": "tercero", "@big": -5, "@amount": 99.99, "@note": "" }));
+var ins = 0; ins = ins + r1["affected_rows"] + r2["affected_rows"] + r3["affected_rows"];
+print(" ins="); print(ins);
+var insert_id_ok = 0; if (r1["insert_id"] == 1 && r3["insert_id"] == 3) { insert_id_ok = 1; }
+print(" insert_id_ok="); print(insert_id_ok);
+
+let cnt = json_parse(mysql_query(c, "SELECT COUNT(*) AS n FROM " + t, "json"));
+let cnt0 = cnt[0];
+print(" count="); print(cnt0["n"]);
+
+let rows = json_parse(mysql_query(c, "SELECT id, name, big, amount, note FROM " + t + " WHERE id = @id", { "@id": 1 }, "json"));
+let row = rows[0];
+var i64_ok = 0; if (row["big"] == big) { i64_ok = 1; }
+print(" i64_ok="); print(i64_ok);
+var utf8_ok = 0; if (row["name"] == "Ñandú café ☕") { utf8_ok = 1; }
+print(" utf8_ok="); print(utf8_ok);
+var dec_ok = 0; let amt = ("" + row["amount"]); if (amt == "1234.56") { dec_ok = 1; }
+print(" dec_ok="); print(dec_ok);
+
+let rows2 = json_parse(mysql_query(c, "SELECT note, CASE WHEN note IS NULL THEN 1 ELSE 0 END AS isnull FROM " + t + " WHERE id = @id", { "@id": 2 }, "json"));
+let row2 = rows2[0];
+var null_ok = 0; if (row2["isnull"] == 1) { null_ok = 1; }
+print(" null_ok="); print(null_ok);
+
+let ru = json_parse(mysql_query(c, "UPDATE " + t + " SET amount = amount + @d WHERE id = @id", { "@d": 1, "@id": 2 }));
+print(" upd="); print(ru["affected_rows"]);
+let rd = json_parse(mysql_query(c, "DELETE FROM " + t + " WHERE big < @z", { "@z": 0 }));
+print(" del="); print(rd["affected_rows"]);
+let left = json_parse(mysql_query(c, "SELECT COUNT(*) AS n FROM " + t, "json"));
+let left0 = left[0];
+print(" left="); print(left0["n"]);
+
+let r_drop = mysql_query(c, "DROP TABLE " + t);
+var drop = 0; if (!r_drop.contains("error")) { drop = 1; }
+print(" drop="); print(drop);
+mysql_close(c);
+println("");
+}

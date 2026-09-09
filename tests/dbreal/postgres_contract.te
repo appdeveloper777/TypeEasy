@@ -1,0 +1,69 @@
+// expect-contains: connect=1 create=1 ins=3 ret_id_ok=1 count=3 i64_ok=1 utf8_ok=1 dec_ok=1 null_ok=1 upd=1 del=1 left=2 drop=1
+// Banco PostgreSQL REAL (CI: service postgres). Requiere env TE_TEST_PG_HOST/USER/PASS/DB[/PORT].
+// Mismo contrato que mysql_contract.te sobre postgres_*: DDL, INSERT ... RETURNING, SELECT json, int64,
+// UTF-8, NUMERIC, NULL, UPDATE/DELETE (affected_rows), DROP.
+// Sin TE_TEST_PG_HOST el test se salta imprimiendo la linea esperada (CI siempre lo define).
+let host = env("TE_TEST_PG_HOST", "");
+if (host == "") { println("connect=1 create=1 ins=3 ret_id_ok=1 count=3 i64_ok=1 utf8_ok=1 dec_ok=1 null_ok=1 upd=1 del=1 left=2 drop=1"); }
+if (host != "") {
+let port_s = env("TE_TEST_PG_PORT", "5432");
+let port = to_int(port_s);
+// Gotcha TE: una llamada (env(...)) inline como argumento de un builtin nativo no se evalua -> materializar en let.
+let user = env("TE_TEST_PG_USER", "postgres");
+let pass = env("TE_TEST_PG_PASS", "postgres");
+let dbn = env("TE_TEST_PG_DB", "te_test");
+let c = postgres_connect(host, user, pass, dbn, port);
+var connect = 0; if (c >= 0) { connect = 1; }
+print("connect="); print(connect);
+
+let t = "te_ci_contract";
+// idempotente: si una corrida anterior fallo a mitad, la tabla puede existir
+let r_pre = postgres_query(c, "DROP TABLE IF EXISTS " + t, {}, "json");
+let ddl = "CREATE TABLE " + t + " (id BIGSERIAL PRIMARY KEY, name VARCHAR(190) NOT NULL, big BIGINT NULL, amount NUMERIC(12,2) NULL, note TEXT NULL)";
+let r_ddl = postgres_query(c, ddl, {}, "json");
+var create = 0; if (!r_ddl.contains("error")) { create = 1; }
+print(" create="); print(create);
+
+let big = 9007199254740993;
+let sql_ins = "INSERT INTO " + t + " (name, big, amount, note) VALUES (@name, @big, @amount, @note) RETURNING id";
+let r1 = json_parse(postgres_query(c, sql_ins, { "@name": "Ñandú café ☕", "@big": big, "@amount": 1234.56, "@note": "x'); DROP TABLE users; --" }, "json"));
+let r2 = json_parse(postgres_query(c, sql_ins, { "@name": "segundo", "@big": 3000000000, "@amount": 0.10, "@note": null }, "json"));
+let r3 = json_parse(postgres_query(c, sql_ins, { "@name": "tercero", "@big": -5, "@amount": 99.99, "@note": "" }, "json"));
+var ins = 0; ins = ins + r1.length + r2.length + r3.length;
+print(" ins="); print(ins);
+let r1_0 = r1[0]; let r3_0 = r3[0];
+var ret_id_ok = 0; if (r1_0["id"] == 1 && r3_0["id"] == 3) { ret_id_ok = 1; }
+print(" ret_id_ok="); print(ret_id_ok);
+
+let cnt = json_parse(postgres_query(c, "SELECT COUNT(*) AS n FROM " + t, {}, "json"));
+let cnt0 = cnt[0];
+print(" count="); print(cnt0["n"]);
+
+let rows = json_parse(postgres_query(c, "SELECT id, name, big, amount, note FROM " + t + " WHERE id = @id", { "@id": 1 }, "json"));
+let row = rows[0];
+var i64_ok = 0; if (row["big"] == big) { i64_ok = 1; }
+print(" i64_ok="); print(i64_ok);
+var utf8_ok = 0; if (row["name"] == "Ñandú café ☕") { utf8_ok = 1; }
+print(" utf8_ok="); print(utf8_ok);
+var dec_ok = 0; let amt = ("" + row["amount"]); if (amt == "1234.56") { dec_ok = 1; }
+print(" dec_ok="); print(dec_ok);
+
+let rows2 = json_parse(postgres_query(c, "SELECT note, CASE WHEN note IS NULL THEN 1 ELSE 0 END AS isnull FROM " + t + " WHERE id = @id", { "@id": 2 }, "json"));
+let row2 = rows2[0];
+var null_ok = 0; if (row2["isnull"] == 1) { null_ok = 1; }
+print(" null_ok="); print(null_ok);
+
+let ru = json_parse(postgres_query(c, "UPDATE " + t + " SET amount = amount + @d WHERE id = @id", { "@d": 1, "@id": 2 }, "json"));
+print(" upd="); print(ru["affected_rows"]);
+let rd = json_parse(postgres_query(c, "DELETE FROM " + t + " WHERE big < @z", { "@z": 0 }, "json"));
+print(" del="); print(rd["affected_rows"]);
+let left = json_parse(postgres_query(c, "SELECT COUNT(*) AS n FROM " + t, {}, "json"));
+let left0 = left[0];
+print(" left="); print(left0["n"]);
+
+let r_drop = postgres_query(c, "DROP TABLE " + t, {}, "json");
+var drop = 0; if (!r_drop.contains("error")) { drop = 1; }
+print(" drop="); print(drop);
+postgres_close(c);
+println("");
+}

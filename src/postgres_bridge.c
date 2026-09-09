@@ -29,10 +29,18 @@ static char* pg_escape_cb(const char* in, void* ctx) {
     return out;
 }
 
-/* ---- helpers para leer argumentos (copiados de mysql_bridge) ---- */
-static const char* pg_arg_str(ASTNode* args, int index) {
+/* ---- helpers para leer argumentos (copiados de mysql_bridge) ----
+ * Las listas de argumentos se encadenan por ->next desde v0.0.12 (fallback ->right por compat).
+ * Hasta 0.1.0 este bridge recorría solo ->right: postgres_connect leía únicamente el 1er argumento
+ * y toda conexión con >1 args fallaba en silencio (lo detectó tests/dbreal/postgres_contract.te). */
+static ASTNode* pg_arg_at(ASTNode* args, int index) {
     ASTNode* current = args;
-    for (int i = 0; i < index && current; i++) current = current->right;
+    for (int i = 0; i < index && current; i++) current = current->next ? current->next : current->right;
+    return current;
+}
+
+static const char* pg_arg_str(ASTNode* args, int index) {
+    ASTNode* current = pg_arg_at(args, index);
     if (!current) return NULL;
     if (current->type && strcmp(current->type, "STRING") == 0 && current->str_value) return current->str_value;
     if (current->left && current->left->type &&
@@ -46,8 +54,7 @@ static const char* pg_arg_str(ASTNode* args, int index) {
 }
 
 static int pg_arg_int(ASTNode* args, int index) {
-    ASTNode* current = args;
-    for (int i = 0; i < index && current; i++) current = current->right;
+    ASTNode* current = pg_arg_at(args, index);
     if (!current) return -1;
     if (current->type && strcmp(current->type, "NUMBER") == 0) return current->value;
     if (current->type && strcmp(current->type, "STRING") == 0 && current->str_value) {
@@ -192,6 +199,17 @@ void native_postgres_connect(ASTNode* args) {
 void native_postgres_query(ASTNode* args) {
     int conn_id = pg_arg_int(args, 0);
     const char* query = pg_arg_str(args, 1);
+    /* Como mysql_query (v0.0.21): si el SQL es una expresión (concatenación, llamada, ternario)
+     * pg_arg_str no lo resuelve -> evaluarlo con get_node_string() (heap, se libera al salir). */
+    char* query_owned = NULL;
+    if (!query) {
+        ASTNode* qn = pg_arg_at(args, 1);
+        if (qn) {
+            query_owned = get_node_string(qn);
+            if (query_owned && query_owned[0] != '\0') query = query_owned;
+            else { free(query_owned); query_owned = NULL; }
+        }
+    }
 
     /* Estilo Dapper: arg #2 puede ser un MAP de params */
     int params_owned = 0;
@@ -203,6 +221,7 @@ void native_postgres_query(ASTNode* args) {
         ASTNode* r = create_ast_leaf("STRING", 0, strdup("{\"error\":\"invalid_connection\"}"), NULL);
         add_or_update_variable("__ret__", r); free_ast(r);
         if (params_owned && params_head) free_ast(params_head);
+        free(query_owned);
         return;
     }
     if (!query) {
@@ -220,13 +239,20 @@ void native_postgres_query(ASTNode* args) {
         query = final_query;
         if (params_owned) { free_ast(params_head); params_head = NULL; }
     }
+    /* A partir de aquí `final_query` es lo único que se libera en las salidas: si el SQL vino
+     * como expresión y no hubo params, transferir la propiedad a final_query. */
+    if (query_owned && !final_query) { final_query = query_owned; query_owned = NULL; }
+    free(query_owned); query_owned = NULL;
 
     PGresult* res = PQexec(conn, query);
     ExecStatusType st = PQresultStatus(res);
 
     if (st == PGRES_COMMAND_OK) {
         char buf[128];
-        snprintf(buf, sizeof(buf), "{\"affected_rows\":%s}", PQcmdTuples(res));
+        /* PQcmdTuples devuelve "" para DDL (CREATE/DROP/...): sin esto el JSON quedaba
+         * inválido ({"affected_rows":}). Detectado por tests/dbreal/postgres_contract.te. */
+        const char *ct = PQcmdTuples(res);
+        snprintf(buf, sizeof(buf), "{\"affected_rows\":%s}", (ct && *ct) ? ct : "0");
         PQclear(res);
         ASTNode* r = create_ast_leaf("STRING", 0, strdup(buf), NULL);
         add_or_update_variable("__ret__", r); free_ast(r);
