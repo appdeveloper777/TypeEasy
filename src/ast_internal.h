@@ -68,7 +68,7 @@ char* double_to_string(double x);
 ASTNode *te_capture_lambda(ASTNode *lam);
 Variable *te_decl_slot(const char *id);
 ASTNode* resolve_access_item(ASTNode *node);
-inline void te_sym_insert(const char *id, int idx);
+void te_sym_insert(const char *id, int idx);
 void te_value_to_variable(Variable *dst, ASTNode *value);
 
 #endif /* TE_AST_INTERNAL_H */

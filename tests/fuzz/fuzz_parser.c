@@ -33,8 +33,9 @@
  * fatal on adversarial input, and a raw exit(1) makes libFuzzer report
  * "fuzz target exited" and abort the whole run (exit 77) — not a real crash.
  * Installing a recovery point turns those benign fatals into a clean longjmp so
- * the fuzzer keeps hunting actual memory-safety bugs. */
-extern jmp_buf *g_runtime_recovery;
+ * the fuzzer keeps hunting actual memory-safety bugs. Since Fase 3 the recovery
+ * point lives in the VM state (g_vm.runtime_recovery, te_vm.h). */
+#include "te_vm.h"
 
 /* parse_file lives in parser.y; prototype it here so LLP64 (Windows) would
  * never truncate the returned pointer — same rule the rest of the tree follows.
@@ -92,11 +93,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
      * lexer via te_lexer_full_reset(), so an aborted parse leaves no residue. */
     ASTNode *root = NULL;
     jmp_buf recovery;
-    g_runtime_recovery = &recovery;
+    g_vm.runtime_recovery = &recovery;
     if (setjmp(recovery) == 0) {
         root = parse_file(fp);
     }
-    g_runtime_recovery = NULL;
+    g_vm.runtime_recovery = NULL;
     fclose(fp);
 
     if (root)
