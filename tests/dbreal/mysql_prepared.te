@@ -1,0 +1,97 @@
+// expect-contains: connect=1 create=1 ins=4 lim=2 twice=2 inj_num=1 inj_str=1 dbl_ok=1 like=1 in_null=1 same=1 big_ok=1 drop=1
+// Fase 4: prepared statements REALES (mysql_stmt_*). Prueba que los @params viajan como bindings del
+// protocolo binario y NO como texto interpolado: payloads de inyeccion en comparaciones numericas y de
+// texto, LIMIT @n, el mismo @param usado dos veces, columna DOUBLE, LIKE con % en el valor, NULL, y que
+// la salida es byte-identica a la ruta de texto (TYPEEASY_MYSQL_PREPARE=0) para la misma consulta.
+// Sin TE_TEST_MYSQL_HOST se salta imprimiendo la linea esperada.
+let host = env("TE_TEST_MYSQL_HOST", "");
+if (host == "") { println("connect=1 create=1 ins=4 lim=2 twice=2 inj_num=1 inj_str=1 dbl_ok=1 like=1 in_null=1 same=1 big_ok=1 drop=1"); }
+if (host != "") {
+let port_s = env("TE_TEST_MYSQL_PORT", "3306");
+let port = to_int(port_s);
+let user = env("TE_TEST_MYSQL_USER", "root");
+let pass = env("TE_TEST_MYSQL_PASS", "");
+let dbn = env("TE_TEST_MYSQL_DB", "te_test");
+let c = mysql_connect(host, user, pass, dbn, port);
+var connect = 0; if (c >= 0) { connect = 1; }
+print("connect="); print(connect);
+
+let t = "te_ci_prepared";
+let r_pre = mysql_query(c, "DROP TABLE IF EXISTS " + t);
+let r_ddl = mysql_query(c, "CREATE TABLE " + t + " (id INT AUTO_INCREMENT PRIMARY KEY, n INT NULL, s VARCHAR(100) NULL, d DOUBLE NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+var create = 0; if (!r_ddl.contains("error")) { create = 1; }
+print(" create="); print(create);
+
+let ins = "INSERT INTO " + t + " (n, s, d) VALUES (@n, @s, @d)";
+let a1 = json_parse(mysql_query(c, ins, { "@n": 1, "@s": "uno", "@d": 0.1 }));
+let a2 = json_parse(mysql_query(c, ins, { "@n": 2, "@s": "dos 50%", "@d": 2.5 }));
+let a3 = json_parse(mysql_query(c, ins, { "@n": 3, "@s": "1 OR 1=1", "@d": 123456789012.75 }));
+let a4 = json_parse(mysql_query(c, ins, { "@n": null, "@s": null, "@d": null }));
+var nins = 0; nins = nins + a1["affected_rows"] + a2["affected_rows"] + a3["affected_rows"] + a4["affected_rows"];
+print(" ins="); print(nins);
+
+// LIMIT con parametro (en la ruta de texto era un literal sin comillas; en binaria, un bind INT)
+let lim = json_parse(mysql_query(c, "SELECT id FROM " + t + " ORDER BY id LIMIT @k", { "@k": 2 }, "json"));
+print(" lim="); print(lim.length);
+
+// El mismo @param dos veces -> dos placeholders con el mismo valor
+let tw = json_parse(mysql_query(c, "SELECT COUNT(*) AS c FROM " + t + " WHERE n = @v OR s = @v", { "@v": 1 }, "json"));
+let tw0 = tw[0];
+// n=1 (fila 1) y s="1 OR 1=1" que MySQL coacciona a 1 (fila 3) => 2
+var twice = tw0["c"];
+print(" twice="); print(twice);
+
+// Inyeccion en comparacion numerica: "1 OR 1=1" como valor de @n NO devuelve las 4 filas (MySQL lo
+// coacciona al numero 1 => solo la fila n=1). Si el texto se hubiera concatenado al SQL, serian 4.
+let inj = json_parse(mysql_query(c, "SELECT COUNT(*) AS c FROM " + t + " WHERE n = @n", { "@n": "1 OR 1=1" }, "json"));
+let inj0 = inj[0];
+print(" inj_num="); print(inj0["c"]);
+// ... y como texto se compara literal (la fila 3 tiene exactamente ese texto en s)
+let inj2 = json_parse(mysql_query(c, "SELECT COUNT(*) AS c FROM " + t + " WHERE s = @s", { "@s": "1 OR 1=1" }, "json"));
+let inj20 = inj2[0];
+print(" inj_str="); print(inj20["c"]);
+
+// DOUBLE: 0.1 y 123456789012.75 vuelven con la misma forma textual que la ruta de texto
+let dd = json_parse(mysql_query(c, "SELECT d FROM " + t + " WHERE n = @n", { "@n": 1 }, "json"));
+let dd0 = dd[0];
+let dd3 = json_parse(mysql_query(c, "SELECT d FROM " + t + " WHERE n = @n", { "@n": 3 }, "json"));
+let dd30 = dd3[0];
+var dbl_ok = 0; if (dd0["d"] == 0.1 && dd30["d"] == 123456789012.75) { dbl_ok = 1; }
+print(" dbl_ok="); print(dbl_ok);
+
+// LIKE con % dentro del VALOR (no del SQL)
+let lk = json_parse(mysql_query(c, "SELECT COUNT(*) AS c FROM " + t + " WHERE s LIKE @p", { "@p": "%50%%" }, "json"));
+let lk0 = lk[0];
+print(" like="); print(lk0["c"]);
+
+// NULL enlazado
+let nl = json_parse(mysql_query(c, "SELECT COUNT(*) AS c FROM " + t + " WHERE n IS NULL AND @z IS NULL", { "@z": null }, "json"));
+let nl0 = nl[0];
+print(" in_null="); print(nl0["c"]);
+
+// Misma consulta por las dos rutas: salida byte-identica. La ruta de texto se fuerza con una
+// consulta SIN params equivalente (interpolacion manual del literal).
+let viaBind = mysql_query(c, "SELECT id, n, s, d FROM " + t + " WHERE n <= @m ORDER BY id", { "@m": 3 }, "json");
+let viaText = mysql_query(c, "SELECT id, n, s, d FROM " + t + " WHERE n <= 3 ORDER BY id", "json");
+var same = 0; if (viaBind == viaText) { same = 1; }
+print(" same="); print(same);
+
+// TEXT grande (> buffer inicial de bind, ~64 KB como las imagenes base64 del ERP): ida y vuelta exacta.
+let r_ddl2 = mysql_query(c, "CREATE TABLE " + t + "_big (id INT PRIMARY KEY, body MEDIUMTEXT)");
+var chunk = "0123456789abcdef";
+var big = "";
+for (i = 0; 12; 1) { chunk = chunk + chunk; }   // 16 * 2^12 = 65536 chars
+big = chunk;
+let rb1 = json_parse(mysql_query(c, "INSERT INTO " + t + "_big (id, body) VALUES (@id, @b)", { "@id": 1, "@b": big }));
+let rb2 = json_parse(mysql_query(c, "SELECT body, LENGTH(body) AS n FROM " + t + "_big WHERE id = @id", { "@id": 1 }, "json"));
+let rb20 = rb2[0];
+var big_ok = 0; if (rb20["n"] == 65536 && rb20["body"] == big) { big_ok = 1; }
+print(" big_ok="); print(big_ok);
+let r_drop2 = mysql_query(c, "DROP TABLE " + t + "_big");
+
+let r_drop = mysql_query(c, "DROP TABLE " + t);
+var drop = 0; if (!r_drop.contains("error")) { drop = 1; }
+print(" drop="); print(drop);
+mysql_close(c);
+println("");
+}

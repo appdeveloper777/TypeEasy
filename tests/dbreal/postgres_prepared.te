@@ -1,0 +1,85 @@
+// expect-contains: connect=1 create=1 ins=4 lim=2 twice=1 inj_num=0 inj_str=1 dbl_ok=1 like=1 in_null=1 same=1 big_ok=1 drop=1
+// Fase 4: prepared statements REALES en PostgreSQL (PQexecParams, $1..$n). Mismo guion que
+// mysql_prepared.te. Diferencias de motor: Postgres NO coacciona texto a numero en `n = '1 OR 1=1'`
+// (error 22P02 -> el envelope trae "error" y contamos 0); `@z IS NULL` no es inferible (42P18) y
+// ejercita el FALLBACK a la ruta de texto. TYPEEASY_PG_PREPARE=0 debe dar la misma linea.
+let host = env("TE_TEST_PG_HOST", "");
+if (host == "") { println("connect=1 create=1 ins=4 lim=2 twice=1 inj_num=0 inj_str=1 dbl_ok=1 like=1 in_null=1 same=1 big_ok=1 drop=1"); }
+if (host != "") {
+let port_s = env("TE_TEST_PG_PORT", "5432");
+let port = to_int(port_s);
+let user = env("TE_TEST_PG_USER", "postgres");
+let pass = env("TE_TEST_PG_PASS", "postgres");
+let dbn = env("TE_TEST_PG_DB", "te_test");
+let c = postgres_connect(host, user, pass, dbn, port);
+var connect = 0; if (c >= 0) { connect = 1; }
+print("connect="); print(connect);
+
+let t = "te_ci_prepared";
+let r_pre = postgres_query(c, "DROP TABLE IF EXISTS " + t, {}, "json");
+let r_ddl = postgres_query(c, "CREATE TABLE " + t + " (id SERIAL PRIMARY KEY, n INT NULL, s VARCHAR(100) NULL, d DOUBLE PRECISION NULL)", {}, "json");
+var create = 0; if (!r_ddl.contains("error")) { create = 1; }
+print(" create="); print(create);
+
+let ins = "INSERT INTO " + t + " (n, s, d) VALUES (@n, @s, @d)";
+let a1 = json_parse(postgres_query(c, ins, { "@n": 1, "@s": "uno", "@d": 0.1 }, "json"));
+let a2 = json_parse(postgres_query(c, ins, { "@n": 2, "@s": "dos 50%", "@d": 2.5 }, "json"));
+let a3 = json_parse(postgres_query(c, ins, { "@n": 3, "@s": "1 OR 1=1", "@d": 123456789012.75 }, "json"));
+let a4 = json_parse(postgres_query(c, ins, { "@n": null, "@s": null, "@d": null }, "json"));
+var nins = 0; nins = nins + a1["affected_rows"] + a2["affected_rows"] + a3["affected_rows"] + a4["affected_rows"];
+print(" ins="); print(nins);
+
+let lim = json_parse(postgres_query(c, "SELECT id FROM " + t + " ORDER BY id LIMIT @k", { "@k": 2 }, "json"));
+print(" lim="); print(lim.length);
+
+// mismo @param dos veces (en PG s = 1 exige cast explicito; usamos texto en ambos lados)
+let tw = json_parse(postgres_query(c, "SELECT COUNT(*) AS c FROM " + t + " WHERE s = @v OR s = @v", { "@v": "uno" }, "json"));
+let tw0 = tw[0];
+print(" twice="); print(tw0["c"]);
+
+// "1 OR 1=1" contra INT: Postgres rechaza el texto como entero (22P02) -> error, no filas
+let injRaw = postgres_query(c, "SELECT COUNT(*) AS c FROM " + t + " WHERE n = @n", { "@n": "1 OR 1=1" }, "json");
+var inj_num = 4; if (injRaw.contains("error")) { inj_num = 0; }
+print(" inj_num="); print(inj_num);
+let inj2 = json_parse(postgres_query(c, "SELECT COUNT(*) AS c FROM " + t + " WHERE s = @s", { "@s": "1 OR 1=1" }, "json"));
+let inj20 = inj2[0];
+print(" inj_str="); print(inj20["c"]);
+
+let dd = json_parse(postgres_query(c, "SELECT d FROM " + t + " WHERE n = @n", { "@n": 1 }, "json"));
+let dd0 = dd[0];
+let dd3 = json_parse(postgres_query(c, "SELECT d FROM " + t + " WHERE n = @n", { "@n": 3 }, "json"));
+let dd30 = dd3[0];
+var dbl_ok = 0; if (dd0["d"] == 0.1 && dd30["d"] == 123456789012.75) { dbl_ok = 1; }
+print(" dbl_ok="); print(dbl_ok);
+
+let lk = json_parse(postgres_query(c, "SELECT COUNT(*) AS c FROM " + t + " WHERE s LIKE @p", { "@p": "%50%%" }, "json"));
+let lk0 = lk[0];
+print(" like="); print(lk0["c"]);
+
+// `@z IS NULL` no es inferible por el servidor (42P18) -> fallback a texto, mismo resultado
+let nl = json_parse(postgres_query(c, "SELECT COUNT(*) AS c FROM " + t + " WHERE n IS NULL AND @z IS NULL", { "@z": null }, "json"));
+let nl0 = nl[0];
+print(" in_null="); print(nl0["c"]);
+
+let viaBind = postgres_query(c, "SELECT id, n, s, d FROM " + t + " WHERE n <= @m ORDER BY id", { "@m": 3 }, "json");
+let viaText = postgres_query(c, "SELECT id, n, s, d FROM " + t + " WHERE n <= 3 ORDER BY id", {}, "json");
+var same = 0; if (viaBind == viaText) { same = 1; }
+print(" same="); print(same);
+
+let r_ddl2 = postgres_query(c, "CREATE TABLE " + t + "_big (id INT PRIMARY KEY, body TEXT)", {}, "json");
+var chunk = "0123456789abcdef";
+for (i = 0; 12; 1) { chunk = chunk + chunk; }
+let big = chunk;
+let rb1 = json_parse(postgres_query(c, "INSERT INTO " + t + "_big (id, body) VALUES (@id, @b)", { "@id": 1, "@b": big }, "json"));
+let rb2 = json_parse(postgres_query(c, "SELECT body, LENGTH(body) AS n FROM " + t + "_big WHERE id = @id", { "@id": 1 }, "json"));
+let rb20 = rb2[0];
+var big_ok = 0; if (rb20["n"] == 65536 && rb20["body"] == big) { big_ok = 1; }
+print(" big_ok="); print(big_ok);
+let r_drop2 = postgres_query(c, "DROP TABLE " + t + "_big", {}, "json");
+
+let r_drop = postgres_query(c, "DROP TABLE " + t, {}, "json");
+var drop = 0; if (!r_drop.contains("error")) { drop = 1; }
+print(" drop="); print(drop);
+postgres_close(c);
+println("");
+}

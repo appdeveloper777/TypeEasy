@@ -888,6 +888,168 @@ static ClassNode* mysql_arg_as_class(ASTNode* args, int idx) {
     return NULL;
 }
 
+/* =====================================================================================
+ * Fase 4 (0.1.x): prepared statements REALES (mysql_stmt_*).
+ *
+ * Cuando la query trae @params, el SQL se convierte a `?` + lista de valores tipados
+ * (db_prepare_params) y se ejecuta por el protocolo binario: el valor NUNCA se concatena
+ * al SQL. La salida (JSON/XML/envelope de escritura) es idéntica a la ruta de texto: los
+ * resultados se piden al servidor como STRING (misma representación textual que
+ * mysql_fetch_row) y se serializan con el mismo criterio IS_NUM.
+ *
+ * Fallback: si mysql_stmt_prepare() falla (sentencia no preparable como ER_UNSUPPORTED_PS,
+ * o error de sintaxis) devolvemos -1 y el caller sigue por la ruta de texto de siempre, que
+ * reporta el error con el mismo formato que antes. TYPEEASY_MYSQL_PREPARE=0 desactiva la
+ * ruta binaria (kill-switch operativo).
+ * ===================================================================================== */
+static int mysql_prepare_enabled(void) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("TYPEEASY_MYSQL_PREPARE"); on = (e && *e == '0') ? 0 : 1; }
+    return on;
+}
+
+/* Ejecuta `qsql` (con `?`) enlazando `binds`. Deja el resultado (heap) en *out (JSON/XML/envelope)
+ * y devuelve 1; devuelve 0 si hubo error de EJECUCIÓN (*out = {"error":...}); devuelve -1 si la
+ * sentencia no se pudo preparar (caller: fallback a texto). */
+static int mysql_run_prepared(MYSQL *conn, const char *qsql, DbBindList *binds, const char *format, char **out) {
+    *out = NULL;
+    MYSQL_STMT *st = mysql_stmt_init(conn);
+    if (!st) return -1;
+    if (mysql_stmt_prepare(st, qsql, (unsigned long)strlen(qsql)) != 0) { mysql_stmt_close(st); return -1; }
+    if ((int)mysql_stmt_param_count(st) != binds->n) { mysql_stmt_close(st); return -1; }
+
+    /* --- bind de parámetros --- */
+    MYSQL_BIND *pb = NULL; unsigned long *plen = NULL; my_bool *pnull = NULL;
+    if (binds->n > 0) {
+        pb = (MYSQL_BIND*)calloc((size_t)binds->n, sizeof(MYSQL_BIND));
+        plen = (unsigned long*)calloc((size_t)binds->n, sizeof(unsigned long));
+        pnull = (my_bool*)calloc((size_t)binds->n, sizeof(my_bool));
+        for (int k = 0; k < binds->n; k++) {
+            DbBindVal *v = &binds->v[k];
+            switch (v->kind) {
+                case DB_BIND_INT:    pb[k].buffer_type = MYSQL_TYPE_LONGLONG; pb[k].buffer = &v->i; break;
+                case DB_BIND_DOUBLE: pb[k].buffer_type = MYSQL_TYPE_DOUBLE;   pb[k].buffer = &v->d; break;
+                case DB_BIND_STRING:
+                case DB_BIND_NUMTEXT:
+                    /* NUMTEXT (literal float, DB_RAW, expresión numérica) viaja como texto: el
+                     * servidor lo coacciona al tipo de la columna/expresión, igual que el literal
+                     * sin comillas de la ruta de texto (y sin perder precisión DECIMAL). */
+                    pb[k].buffer_type = MYSQL_TYPE_STRING; pb[k].buffer = v->s ? v->s : (char*)"";
+                    plen[k] = (unsigned long)(v->s ? strlen(v->s) : 0); pb[k].length = &plen[k]; break;
+                default: pnull[k] = 1; pb[k].buffer_type = MYSQL_TYPE_NULL; break;
+            }
+            pb[k].is_null = &pnull[k];
+        }
+        if (mysql_stmt_bind_param(st, pb) != 0) { free(pb); free(plen); free(pnull); mysql_stmt_close(st); return -1; }
+    }
+
+    int rc;
+    if (mysql_stmt_execute(st) != 0) {
+        const char *me = mysql_stmt_error(st);
+        SB eb; sb_init(&eb);
+        sb_puts(&eb, "{\"error\":\""); sb_put_json_escaped_n(&eb, me ? me : "", me ? strlen(me) : 0); sb_puts(&eb, "\"}"); sb_putc(&eb, '\0');
+        *out = (eb.p && !eb.oom) ? eb.p : strdup("{\"error\":\"db_error\"}");
+        if (eb.oom) free(eb.p);
+        rc = 0;
+        goto done;
+    }
+
+    MYSQL_RES *meta = mysql_stmt_result_metadata(st);
+    if (!meta) {
+        /* Sin result set: INSERT/UPDATE/DELETE/DDL -> mismo envelope que la ruta de texto. */
+        char ar_buf[96];
+        snprintf(ar_buf, sizeof(ar_buf), "{\"affected_rows\":%llu,\"insert_id\":%llu}",
+                 (unsigned long long)mysql_stmt_affected_rows(st), (unsigned long long)mysql_stmt_insert_id(st));
+        *out = strdup(ar_buf);
+        rc = 1;
+        goto done;
+    }
+
+    /* --- result set: todas las columnas como STRING (misma forma textual que el protocolo de texto) ---
+     * Guardamos el result set completo y pedimos max_length por columna para dimensionar los
+     * buffers UNA vez: mysql_stmt_bind_result() copia el array de binds, así que cambiar
+     * rb[i].buffer después de bindear sin re-bindear corrompe el heap (el fetch escribe en el
+     * puntero viejo). */
+    my_bool upd_max = 1;
+    mysql_stmt_attr_set(st, STMT_ATTR_UPDATE_MAX_LENGTH, &upd_max);
+    if (mysql_stmt_store_result(st) != 0) {
+        const char *me = mysql_stmt_error(st);
+        SB eb; sb_init(&eb);
+        sb_puts(&eb, "{\"error\":\""); sb_put_json_escaped_n(&eb, me ? me : "", me ? strlen(me) : 0); sb_puts(&eb, "\"}"); sb_putc(&eb, '\0');
+        *out = (eb.p && !eb.oom) ? eb.p : strdup("{\"error\":\"db_error\"}");
+        if (eb.oom) free(eb.p);
+        mysql_free_result(meta);
+        rc = 0;
+        goto done;
+    }
+    int nf = (int)mysql_num_fields(meta);
+    MYSQL_FIELD *fields = mysql_fetch_fields(meta);
+    MYSQL_BIND *rb = (MYSQL_BIND*)calloc((size_t)nf, sizeof(MYSQL_BIND));
+    char **rbuf = (char**)calloc((size_t)nf, sizeof(char*));
+    unsigned long *rcap = (unsigned long*)calloc((size_t)nf, sizeof(unsigned long));
+    unsigned long *rlen = (unsigned long*)calloc((size_t)nf, sizeof(unsigned long));
+    my_bool *rnull = (my_bool*)calloc((size_t)nf, sizeof(my_bool));
+    my_bool *rerr  = (my_bool*)calloc((size_t)nf, sizeof(my_bool));
+    for (int i = 0; i < nf; i++) {
+        rcap[i] = fields[i].max_length + 1; if (rcap[i] < 32) rcap[i] = 32;
+        rbuf[i] = (char*)malloc(rcap[i]);
+        rb[i].buffer_type = MYSQL_TYPE_STRING; rb[i].buffer = rbuf[i]; rb[i].buffer_length = rcap[i];
+        rb[i].length = &rlen[i]; rb[i].is_null = &rnull[i]; rb[i].error = &rerr[i];
+    }
+    mysql_stmt_bind_result(st, rb);
+
+    SB sb; sb_init(&sb);
+    int is_xml = (format && strcmp(format, "xml") == 0);
+    if (is_xml) sb_puts(&sb, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rows>\n"); else sb_putc(&sb, '[');
+    int first_row = 1, frc;
+    while ((frc = mysql_stmt_fetch(st)) == 0 || frc == MYSQL_DATA_TRUNCATED) {
+        /* Defensa: si aun así una columna se truncó, agrandar, RE-BINDEAR y re-leer esa columna. */
+        if (frc == MYSQL_DATA_TRUNCATED) {
+            for (int i = 0; i < nf; i++) {
+                if (!rnull[i] && rlen[i] >= rcap[i]) {
+                    rcap[i] = rlen[i] + 1; rbuf[i] = (char*)realloc(rbuf[i], rcap[i]);
+                    rb[i].buffer = rbuf[i]; rb[i].buffer_length = rcap[i];
+                    mysql_stmt_bind_result(st, rb);
+                    mysql_stmt_fetch_column(st, &rb[i], (unsigned int)i, 0);
+                }
+            }
+        }
+        if (is_xml) {
+            sb_puts(&sb, "  <row>\n");
+            for (int i = 0; i < nf; i++) {
+                sb_puts(&sb, "    <"); sb_puts(&sb, fields[i].name); sb_putc(&sb, '>');
+                if (!rnull[i]) sb_put_xml_escaped_n(&sb, rbuf[i], rlen[i]);
+                sb_puts(&sb, "</"); sb_puts(&sb, fields[i].name); sb_puts(&sb, ">\n");
+            }
+            sb_puts(&sb, "  </row>\n");
+        } else {
+            if (!first_row) sb_putc(&sb, ',');
+            first_row = 0;
+            sb_putc(&sb, '{');
+            for (int i = 0; i < nf; i++) {
+                if (i > 0) sb_putc(&sb, ',');
+                sb_putc(&sb, '"'); sb_put_json_escaped_n(&sb, fields[i].name, strlen(fields[i].name)); sb_puts(&sb, "\":");
+                if (rnull[i]) sb_puts(&sb, "null");
+                else if (IS_NUM(fields[i].type)) sb_putn(&sb, rbuf[i], rlen[i]);
+                else { sb_putc(&sb, '"'); sb_put_json_escaped_n(&sb, rbuf[i], rlen[i]); sb_putc(&sb, '"'); }
+            }
+            sb_putc(&sb, '}');
+        }
+    }
+    if (is_xml) sb_puts(&sb, "</rows>"); else sb_putc(&sb, ']');
+    for (int i = 0; i < nf; i++) free(rbuf[i]);
+    free(rb); free(rbuf); free(rcap); free(rlen); free(rnull); free(rerr);
+    mysql_free_result(meta);
+    if (sb.oom) { free(sb.p); *out = strdup("{\"error\":\"memory_allocation_failed\"}"); rc = 0; goto done; }
+    sb.p[sb.len] = '\0';
+    *out = sb.p;
+    rc = 1;
+done:
+    free(pb); free(plen); free(pnull);
+    mysql_stmt_close(st);
+    return rc;
+}
+
 void native_mysql_query(ASTNode* args) {
     int conn_id = get_arg_int(args, 0);
     const char* query = get_arg_string(args, 1);
@@ -957,6 +1119,26 @@ void native_mysql_query(ASTNode* args) {
     /* Sustituir @placeholders si hay params */
     char* final_query = NULL;
     if (params_head) {
+        /* Fase 4: primero la ruta binaria (prepared statement real). Solo si la sentencia
+         * no es preparable caemos a la interpolación escapada de siempre. El modo ORM
+         * (orm_class) sigue por texto: orm_run_mapped_query recibe SQL final. */
+        if (!orm_class && mysql_prepare_enabled()) {
+            DbBindList binds;
+            char* qsql = db_prepare_params(query, params_head, &binds, 0);
+            char* out = NULL;
+            int prc = qsql ? mysql_run_prepared(conn, qsql, &binds, format, &out) : -1;
+            free(qsql); db_bindlist_free(&binds);
+            if (prc >= 0) {
+                ASTNode* ret_node = create_ast_leaf("STRING", 0, out, NULL);   /* copia */
+                add_or_update_variable("__ret__", ret_node);
+                free_ast(ret_node);
+                free(out);
+                if (prc == 0) { extern int g_api_mode; if (g_db_strict_errors && g_api_mode) typeeasy_http_set_status(500); }
+                if (query_owned) free(query_owned);
+                if (params_owned) free_ast(params_head);
+                return;
+            }
+        }
         final_query = db_substitute_params(query, params_head, mysql_escape_cb, conn);
         query = final_query;
         if (query_owned) { free(query_owned); query_owned = NULL; }

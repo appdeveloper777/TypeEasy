@@ -46,6 +46,18 @@ typedef char* (*db_escape_fn)(const char* in, void* ctx);
 char* db_substitute_params(const char* sql, ASTNode* params_head,
                            db_escape_fn escape, void* ctx);
 
+/* ---- Fase 4 (0.1.x): prepared statements REALES ----
+ * db_prepare_params() recorre el SQL igual que db_substitute_params() pero, en vez de interpolar
+ * cada @param, emite un placeholder (`?` para MySQL; `$1..$n` si numbered=1, para PostgreSQL) y
+ * acumula el valor tipado en `out`. La clasificación de tipos es EXACTAMENTE la misma (mismo
+ * código), así que la semántica int/float/string/NULL/expresión no cambia; solo cambia que el
+ * valor viaja por el protocolo binario en vez de escaparse dentro del SQL. */
+typedef enum { DB_BIND_NULL = 0, DB_BIND_INT, DB_BIND_DOUBLE, DB_BIND_STRING, DB_BIND_NUMTEXT } DbBindKind;
+typedef struct { DbBindKind kind; long long i; double d; char* s; } DbBindVal;   /* s: heap (string/numtext) */
+typedef struct { DbBindVal* v; int n; int cap; int numbered; } DbBindList;
+char* db_prepare_params(const char* sql, ASTNode* params_head, DbBindList* out, int numbered);
+void  db_bindlist_free(DbBindList* b);
+
 /* Flag opt-in: si != 0, los parametros STRING cuyo valor es "" se enlazan
  * como SQL NULL en vez de ''. Se cambia desde TypeEasy con el builtin
  * sql_set_empty_as_null(true) (o env TYPEEASY_SQL_EMPTY_AS_NULL=1). Pensado

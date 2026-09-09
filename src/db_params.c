@@ -109,6 +109,32 @@ static void buf_append(char** buf, size_t* len, size_t* cap, const char* s, size
     (*buf)[*len] = '\0';
 }
 
+/* ---- Fase 4: sink de bindings. Si sink != NULL, cada punto de emisión de
+ * append_value/db_emit_resolved escribe un placeholder y guarda el valor tipado. ---- */
+static void sink_push(DbBindList* b, DbBindKind kind, long long i, double d, const char* s) {
+    if (b->n == b->cap) { b->cap = b->cap ? b->cap * 2 : 8; b->v = (DbBindVal*)realloc(b->v, (size_t)b->cap * sizeof(DbBindVal)); }
+    DbBindVal* v = &b->v[b->n++];
+    v->kind = kind; v->i = i; v->d = d; v->s = s ? strdup(s) : NULL;
+}
+
+/* Emite el placeholder en el SQL de salida y registra el valor. Devuelve 1 ("manejado"). */
+static int sink_emit(DbBindList* sink, char** buf, size_t* len, size_t* cap, DbBindKind kind, long long i, double d, const char* s) {
+    sink_push(sink, kind, i, d, s);
+    if (sink->numbered) {
+        char ph[16]; int n = snprintf(ph, sizeof(ph), "$%d", sink->n);
+        buf_append(buf, len, cap, ph, (size_t)n);
+    } else {
+        buf_append(buf, len, cap, "?", 1);
+    }
+    return 1;
+}
+
+void db_bindlist_free(DbBindList* b) {
+    if (!b) return;
+    for (int k = 0; k < b->n; k++) free(b->v[k].s);
+    free(b->v); b->v = NULL; b->n = b->cap = 0;
+}
+
 /* ¿Es `s` un literal numérico (entero o flotante, con signo/exponente)? Se usa
  * para decidir si un valor resuelto vía get_node_string puede interpolarse SIN
  * comillas. Importa para `LIMIT @n` (MySQL rechaza `LIMIT '5'`) y para mantener
@@ -263,14 +289,16 @@ ASTNode* db_arg_as_typed_map_head(ASTNode* args, int idx, int* out_owned) {
  * Mismo enfoque que la rama CALL_FUNC; cubre la variante inline del bug donde
  * un valor numérico de una colección se perdía como NULL. */
 static int db_emit_resolved(char** buf, size_t* len, size_t* cap,
-                            ASTNode* val, db_escape_fn escape, void* ctx) {
+                            ASTNode* val, db_escape_fn escape, void* ctx, DbBindList* sink) {
     char* s = get_node_string(val);
-    if (!s || !*s) { if (s) free(s); buf_append(buf, len, cap, "NULL", 4); return 1; }
+    if (!s || !*s) { if (s) free(s); if (sink) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL); buf_append(buf, len, cap, "NULL", 4); return 1; }
     if (db_str_is_number(s)) {
+        if (sink) { int r = sink_emit(sink, buf, len, cap, DB_BIND_NUMTEXT, 0, 0, s); free(s); return r; }
         buf_append(buf, len, cap, s, strlen(s));
         free(s);
         return 1;
     }
+    if (sink) { int r = sink_emit(sink, buf, len, cap, DB_BIND_STRING, 0, 0, s); free(s); return r; }
     char* esc = escape(s, ctx);
     free(s);
     if (!esc) { buf_append(buf, len, cap, "NULL", 4); return 1; }
@@ -284,8 +312,9 @@ static int db_emit_resolved(char** buf, size_t* len, size_t* cap,
 /* Formatea un valor TypeEasy para inlining en SQL.
  * Devuelve 1 si OK, 0 si no se pudo (caller deja literal). */
 static int append_value(char** buf, size_t* len, size_t* cap,
-                        ASTNode* val, db_escape_fn escape, void* ctx) {
+                        ASTNode* val, db_escape_fn escape, void* ctx, DbBindList* sink) {
     if (!val || !val->type) {
+        if (sink) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL);
         buf_append(buf, len, cap, "NULL", 4);
         return 1;
     }
@@ -310,6 +339,10 @@ static int append_value(char** buf, size_t* len, size_t* cap,
     } else if (strcmp(tipo, "DB_RAW") == 0) {
         /* Valor crudo ya formateado (ej. float "%g"). Se interpola sin comillas. */
         const char* raw = val->str_value ? val->str_value : "NULL";
+        if (sink) {
+            if (strcmp(raw, "NULL") == 0) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL);
+            return sink_emit(sink, buf, len, cap, db_str_is_number(raw) ? DB_BIND_NUMTEXT : DB_BIND_STRING, 0, 0, raw);
+        }
         buf_append(buf, len, cap, raw, strlen(raw));
         return 1;
     } else if (strcmp(tipo, "FLOAT") == 0 || strcmp(tipo, "FLOAT_LITERAL") == 0) {
@@ -319,6 +352,10 @@ static int append_value(char** buf, size_t* len, size_t* cap,
          * valor en INSERT/UPDATE con params { "@price": 19.9 }. Se interpola
          * crudo, sin comillas, igual que un número. */
         const char* raw = (val->str_value && *val->str_value) ? val->str_value : "NULL";
+        if (sink) {
+            if (strcmp(raw, "NULL") == 0) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL);
+            return sink_emit(sink, buf, len, cap, DB_BIND_NUMTEXT, 0, 0, raw);
+        }
         buf_append(buf, len, cap, raw, strlen(raw));
         return 1;
     } else if (strcmp(tipo, "BOOL") == 0) {
@@ -373,7 +410,7 @@ static int append_value(char** buf, size_t* len, size_t* cap,
             /* Acceso a miembro sobre un MAP (mapVar.clave) o no resuelto:
              * resolver por la forma string del runtime (numérico sin comillas,
              * texto entrecomillado, ausente/null -> NULL). */
-            return db_emit_resolved(buf, len, cap, val, escape, ctx);
+            return db_emit_resolved(buf, len, cap, val, escape, ctx, sink);
         }
     } else if (strcmp(tipo, "ACCESS_EXPR") == 0) {
         /* Indexación inline como valor de bind-param: `{ "@x": row["activo"] }`,
@@ -381,7 +418,7 @@ static int append_value(char** buf, size_t* len, size_t* cap,
          * final (kind=4) y se interpolaba NULL, perdiendo valores numéricos de
          * una colección (variante inline del bug "número de objeto -> NULL").
          * Se resuelve por la forma string del runtime con detección numérica. */
-        return db_emit_resolved(buf, len, cap, val, escape, ctx);
+        return db_emit_resolved(buf, len, cap, val, escape, ctx, sink);
     } else if (strcmp(tipo, "CALL_FUNC") == 0 || strcmp(tipo, "CALL_METHOD") == 0) {
         /* Valor que es una llamada inline en el map, p.ej.
          * { "@c": now(), "@u": uuid_v4(), "@n": to_int(x) }. get_node_string
@@ -391,7 +428,7 @@ static int append_value(char** buf, size_t* len, size_t* cap,
          * to_int(...) se interpola SIN comillas (evita `x < '6'`, que en motores
          * sin afinidad numérica rompe comparaciones), y now()/uuid_v4() se
          * escapan + entrecomillan. Vacío/null -> SQL NULL. */
-        return db_emit_resolved(buf, len, cap, val, escape, ctx);
+        return db_emit_resolved(buf, len, cap, val, escape, ctx, sink);
     } else {
         /* Cualquier otro nodo es una EXPRESION inline en el map de params
          * (p.ej. ("" + i), un ternario, una indexacion compuesta). Antes caia
@@ -403,11 +440,21 @@ static int append_value(char** buf, size_t* len, size_t* cap,
          * materializa a su valor real en vez de perderse. Pasar el valor por
          * una variable ya funcionaba via la rama IDENTIFIER; esto cubre el
          * caso inline. */
-        return db_emit_resolved(buf, len, cap, val, escape, ctx);
+        return db_emit_resolved(buf, len, cap, val, escape, ctx, sink);
     }
 
     char tmp[64];
     int n;
+    if (sink) {
+        switch (kind) {
+            case 1:  return sink_emit(sink, buf, len, cap, DB_BIND_INT, vi, 0, NULL);
+            case 2:  return sink_emit(sink, buf, len, cap, DB_BIND_DOUBLE, 0, vf, NULL);
+            case 3:
+                if (g_db_empty_as_null && (!vs || !*vs)) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL);
+                return sink_emit(sink, buf, len, cap, DB_BIND_STRING, 0, 0, vs ? vs : "");
+            default: return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL);
+        }
+    }
     switch (kind) {
         case 1:
             n = snprintf(tmp, sizeof(tmp), "%lld", vi);
@@ -438,8 +485,9 @@ static int append_value(char** buf, size_t* len, size_t* cap,
     }
 }
 
-char* db_substitute_params(const char* sql, ASTNode* params_head,
-                           db_escape_fn escape, void* ctx) {
+/* Escaneo compartido por db_substitute_params (interpola) y db_prepare_params (placeholders). */
+static char* db_scan_params(const char* sql, ASTNode* params_head,
+                            db_escape_fn escape, void* ctx, DbBindList* sink) {
     if (!sql) return NULL;
     if (!params_head) return strdup(sql);
 
@@ -492,7 +540,7 @@ char* db_substitute_params(const char* sql, ASTNode* params_head,
                 val = find_param(params_head, with_at);
             }
             if (val) {
-                append_value(&out, &len, &cap, val, escape, ctx);
+                append_value(&out, &len, &cap, val, escape, ctx, sink);
                 p = q;
                 continue;
             }
@@ -505,4 +553,17 @@ char* db_substitute_params(const char* sql, ASTNode* params_head,
         p++;
     }
     return out;
+}
+
+char* db_substitute_params(const char* sql, ASTNode* params_head,
+                           db_escape_fn escape, void* ctx) {
+    return db_scan_params(sql, params_head, escape, ctx, NULL);
+}
+
+static char* db_noescape_cb(const char* in, void* ctx) { (void)ctx; return in ? strdup(in) : NULL; }
+
+char* db_prepare_params(const char* sql, ASTNode* params_head, DbBindList* out, int numbered) {
+    if (!out) return NULL;
+    out->v = NULL; out->n = out->cap = 0; out->numbered = numbered;
+    return db_scan_params(sql, params_head, db_noescape_cb, NULL, out);   /* el escape nunca se invoca en modo sink */
 }

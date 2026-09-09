@@ -234,9 +234,47 @@ void native_postgres_query(ASTNode* args) {
     PGconn* conn = pg_connections[conn_id];
 
     char* final_query = NULL;
+    PGresult* res = NULL;
     if (params_head) {
-        final_query = db_substitute_params(query, params_head, pg_escape_cb, conn);
-        query = final_query;
+        /* Fase 4 (0.1.x): prepared statement REAL via PQexecParams ($1..$n, valores como texto
+         * tipado por el servidor). Si Postgres no puede inferir el tipo de un parámetro
+         * (42P18 indeterminate_datatype, 42P08, 42804, 42883) caemos a la interpolación escapada
+         * de siempre. TYPEEASY_PG_PREPARE=0 fuerza la ruta de texto. */
+        static int pg_prep_on = -1;
+        if (pg_prep_on < 0) { const char *e = getenv("TYPEEASY_PG_PREPARE"); pg_prep_on = (e && *e == '0') ? 0 : 1; }
+        if (pg_prep_on) {
+            DbBindList binds;
+            char* qsql = db_prepare_params(query, params_head, &binds, 1);
+            if (qsql) {
+                const char** vals = (const char**)calloc((size_t)(binds.n ? binds.n : 1), sizeof(char*));
+                char** owned = (char**)calloc((size_t)(binds.n ? binds.n : 1), sizeof(char*));
+                for (int k = 0; k < binds.n; k++) {
+                    DbBindVal* v = &binds.v[k];
+                    char tmp[64];
+                    switch (v->kind) {
+                        case DB_BIND_INT:    snprintf(tmp, sizeof(tmp), "%lld", v->i); owned[k] = strdup(tmp); vals[k] = owned[k]; break;
+                        case DB_BIND_DOUBLE: snprintf(tmp, sizeof(tmp), "%.15g", v->d); owned[k] = strdup(tmp); vals[k] = owned[k]; break;
+                        case DB_BIND_STRING:
+                        case DB_BIND_NUMTEXT: vals[k] = v->s ? v->s : ""; break;
+                        default: vals[k] = NULL; break;   /* SQL NULL */
+                    }
+                }
+                res = PQexecParams(conn, qsql, binds.n, NULL, vals, NULL, NULL, 0);
+                if (res && PQresultStatus(res) == PGRES_FATAL_ERROR) {
+                    const char* ss = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+                    if (ss && (!strcmp(ss, "42P18") || !strcmp(ss, "42P08") || !strcmp(ss, "42804") || !strcmp(ss, "42883"))) {
+                        PQclear(res); res = NULL;   /* no inferible: fallback a texto */
+                    }
+                }
+                for (int k = 0; k < binds.n; k++) free(owned[k]);
+                free(owned); free(vals); free(qsql);
+            }
+            db_bindlist_free(&binds);
+        }
+        if (!res) {
+            final_query = db_substitute_params(query, params_head, pg_escape_cb, conn);
+            query = final_query;
+        }
         if (params_owned) { free_ast(params_head); params_head = NULL; }
     }
     /* A partir de aquí `final_query` es lo único que se libera en las salidas: si el SQL vino
@@ -244,7 +282,7 @@ void native_postgres_query(ASTNode* args) {
     if (query_owned && !final_query) { final_query = query_owned; query_owned = NULL; }
     free(query_owned); query_owned = NULL;
 
-    PGresult* res = PQexec(conn, query);
+    if (!res) res = PQexec(conn, query);
     ExecStatusType st = PQresultStatus(res);
 
     if (st == PGRES_COMMAND_OK) {
