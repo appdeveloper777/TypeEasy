@@ -141,6 +141,381 @@ static int bc_compile(ASTNode *node, Instr *out, int *pos, int max);
 /* Try to compile `node` as a numeric expression. Returns 1 on success,
  * appending instructions to out[*pos..]. On failure returns 0 and *pos may
  * be partially advanced — caller discards the buffer. */
+/* case NK_AND: case NK_OR: — extraído de bc_compile (Fase 2). */
+static int bc_c_binop(ASTNode *node, Instr *out, int *pos, int max) {
+    NodeKind k = nk_of(node);
+    /* String concat must NOT use bytecode path (handled by AST walker). */
+    if (k == NK_ADD && is_string_type(node)) return 0;
+    int saved = *pos;
+    if (!bc_compile(node->left,  out, pos, max)) return 0;
+    if (!bc_compile(node->right, out, pos, max)) return 0;
+
+    /* Constant folding (#3): if both operands are LOAD_CONST, evaluate
+     * at compile time and replace with a single LOAD_CONST. */
+    if (*pos >= saved + 2 &&
+        out[*pos - 2].op == BC_LOAD_CONST &&
+        out[*pos - 1].op == BC_LOAD_CONST) {
+        double a = out[*pos - 2].u.constant;
+        double b = out[*pos - 1].u.constant;
+        double r = 0;
+        int folded = 1;
+        switch (k) {
+            case NK_ADD:   r = a + b; break;
+            case NK_SUB:   r = a - b; break;
+            case NK_MUL:   r = a * b; break;
+            case NK_DIV:   if (b == 0) { folded = 0; } else r = a / b; break;
+            case NK_LT:    r = (a <  b); break;
+            case NK_GT:    r = (a >  b); break;
+            /* NK_GT_EQ / NK_LT_EQ have inverted semantics in TypeEasy
+             * (GT_EQ is evaluated as <=, LT_EQ as >=). Mirror that. */
+            case NK_GT_EQ: r = (a <= b); break;
+            case NK_LT_EQ: r = (a >= b); break;
+            case NK_EQ:    r = (a == b); break;
+            case NK_DIFF:  r = (a != b); break;
+            case NK_AND:   r = (a && b) ? 1 : 0; break;
+            case NK_OR:    r = (a || b) ? 1 : 0; break;
+            default:       folded = 0; break;
+        }
+        if (folded) {
+            *pos -= 2;
+            out[*pos].op = BC_LOAD_CONST;
+            out[*pos].u.constant = r;
+            (*pos)++;
+            return 1;
+        }
+    }
+
+    BCOp op;
+    switch (k) {
+        case NK_ADD:   op = BC_ADD; break;
+        case NK_SUB:   op = BC_SUB; break;
+        case NK_MUL:   op = BC_MUL; break;
+        case NK_DIV:   op = BC_DIV; break;
+        case NK_LT:    op = BC_LT;  break;
+        case NK_GT:    op = BC_GT;  break;
+        /* Inverted: GT_EQ in TypeEasy means <=, LT_EQ means >=. */
+        case NK_GT_EQ: op = BC_LE;  break;
+        case NK_LT_EQ: op = BC_GE;  break;
+        case NK_EQ:    op = BC_EQ;  break;
+        case NK_DIFF:  op = BC_NEQ; break;
+        case NK_AND:   op = BC_AND; break;
+        case NK_OR:    op = BC_OR;  break;
+        default:       return 0;
+    }
+    out[*pos].op = op;
+    (*pos)++;
+    return 1;
+}
+
+/* case NK_SHL: case NK_SHR: — extraído de bc_compile (Fase 2). */
+static int bc_c_intop(ASTNode *node, Instr *out, int *pos, int max) {
+    NodeKind k = nk_of(node);
+    int saved = *pos;
+    if (!bc_compile(node->left,  out, pos, max)) return 0;
+    if (!bc_compile(node->right, out, pos, max)) return 0;
+    if (*pos >= saved + 2 &&
+        out[*pos - 2].op == BC_LOAD_CONST &&
+        out[*pos - 1].op == BC_LOAD_CONST) {
+        long long a = (long long)out[*pos - 2].u.constant;
+        long long b = (long long)out[*pos - 1].u.constant;
+        long long r = 0;
+        int folded = 1;
+        switch (k) {
+            case NK_MOD:     if (b == 0) folded = 0; else r = a % b; break;
+            case NK_BIT_AND: r = a & b; break;
+            case NK_BIT_OR:  r = a | b; break;
+            case NK_BIT_XOR: r = a ^ b; break;
+            case NK_SHL:     r = a << b; break;
+            case NK_SHR:     r = a >> b; break;
+            default:         folded = 0; break;
+        }
+        if (folded) {
+            *pos -= 2;
+            out[*pos].op = BC_LOAD_CONST;
+            out[*pos].u.constant = (double)r;
+            (*pos)++;
+            return 1;
+        }
+    }
+    BCOp op;
+    switch (k) {
+        case NK_MOD:     op = BC_MOD;  break;
+        case NK_BIT_AND: op = BC_BAND; break;
+        case NK_BIT_OR:  op = BC_BOR;  break;
+        case NK_BIT_XOR: op = BC_BXOR; break;
+        case NK_SHL:     op = BC_SHL;  break;
+        case NK_SHR:     op = BC_SHR;  break;
+        default:         return 0;
+    }
+    if (*pos >= max) return 0;
+    out[*pos].op = op;
+    (*pos)++;
+    return 1;
+}
+
+/* case NK_ACCESS_ATTR: — extraído de bc_compile (Fase 2). */
+static int bc_c_access_attr(ASTNode *node, Instr *out, int *pos, int max) {
+    ASTNode *objRef = node->left;
+    ASTNode *attr   = node->right;
+    if (!objRef || !attr || !attr->id) return 0;
+
+    /* Ola 14d: arr[idx_expr].attr fastpath. Detect when objRef is an
+     * ACCESS_EXPR whose left is an IDENTIFIER bound to a non-empty
+     * LIST whose items[0] is an OBJECT of a known class with a
+     * numeric attribute matching attr->id. Compile idx_expr onto the
+     * stack, then emit BC_LIST_ITEM_ATTR. */
+    if (nk_of(objRef) == NK_ACCESS_EXPR) {
+        ASTNode *list_id = objRef->left;
+        ASTNode *idx_exp = objRef->right;
+        if (!list_id || !idx_exp) return 0;
+        if (nk_of(list_id) != NK_IDENTIFIER && nk_of(list_id) != NK_ID) return 0;
+        Variable *lv = find_variable(list_id->id);
+        if (!lv || !lv->type || strcmp(lv->type, "LIST") != 0) return 0;
+        ASTNode *list = (ASTNode*)(intptr_t)lv->value.object_value;
+        if (!list) return 0;
+        TEListIdx *ix = (TEListIdx*)list->extra;
+        if (!ix || ix->len <= 0) return 0;
+        ASTNode *first = ix->items[0];
+        if (!first || !first->type || strcmp(first->type, "OBJECT") != 0) return 0;
+        ObjectNode *fobj = first->extra ? (ObjectNode*)first->extra
+                                        : (ObjectNode*)(intptr_t)first->value;
+        if (!fobj || !fobj->class) return 0;
+        int slot = -1;
+        for (int i = 0; i < fobj->class->attr_count; i++) {
+            if (strcmp(fobj->class->attributes[i].id, attr->id) == 0) {
+                const char *t = fobj->class->attributes[i].type;
+                if (!t || (strcmp(t, "int") != 0 && strcmp(t, "float") != 0
+                        && strcmp(t, "INT") != 0 && strcmp(t, "FLOAT") != 0))
+                    return 0;
+                slot = i;
+                break;
+            }
+        }
+        if (slot < 0) return 0;
+        /* Compile idx expression onto stack. */
+        if (!bc_compile(idx_exp, out, pos, max)) return 0;
+        if (*pos >= max) return 0;
+        ListItemAttrSite *s = (ListItemAttrSite*)calloc(1, sizeof(ListItemAttrSite));
+        if (!s) return 0;
+        s->list_var = lv;
+        s->expected_class = fobj->class;
+        s->attr_slot = slot;
+        out[*pos].op = BC_LIST_ITEM_ATTR;
+        out[*pos].u.lia_site = s;
+        (*pos)++;
+        return 1;
+    }
+
+    /* Ola 4: support `this.attr` in method bodies. We compile only
+     * when:
+     *  - left is the identifier "this"
+     *  - g_bc_compile_class is set (we know which class the method
+     *    belongs to)
+     *  - the attribute exists in the class and is INT or FLOAT
+     * The attr slot index is baked into the instruction. At runtime
+     * BC_LOAD_THIS_ATTR reads from g_bc_this->attributes[slot]. */
+    if (!objRef->id) return 0;
+    if (strcmp(objRef->id, "this") != 0) return 0;
+    if (!g_bc_compile_class) return 0;
+    int slot = -1;
+    for (int i = 0; i < g_bc_compile_class->attr_count; i++) {
+        if (strcmp(g_bc_compile_class->attributes[i].id, attr->id) == 0) {
+            /* Only numeric attrs supported. */
+            const char *t = g_bc_compile_class->attributes[i].type;
+            if (!t || (strcmp(t, "int") != 0 && strcmp(t, "float") != 0
+                    && strcmp(t, "INT") != 0 && strcmp(t, "FLOAT") != 0))
+                return 0;
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) return 0;
+    out[*pos].op = BC_LOAD_THIS_ATTR;
+    out[*pos].u.slot = slot;
+    (*pos)++;
+    return 1;
+}
+
+/* case NK_CALL_METHOD: — extraído de bc_compile (Fase 2). */
+static int bc_c_call_method(ASTNode *node, Instr *out, int *pos, int max) {
+    /* Ola 5: inline method call. We compile to BC_CALL_METHOD when:
+     *  - left side is an identifier resolving to an object Variable*
+     *  - the method exists in that class with int/float return
+     *  - its body is bytecode-compilable via bc_get_or_compile_method
+     *  - all params are int/float
+     *  - all args are leaf nodes (NUMBER/INT/FLOAT/IDENTIFIER) since
+     *    args are linked via ->right which makes complex expressions
+     *    in multi-arg lists ambiguous in TypeEasy's AST.
+     * Switch: TYPEEASY_NO_BCCALL=1 disables. */
+    if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] entering NK_CALL_METHOD case\n");
+    static int bcc_init = 0;
+    static int bcc_enabled = 1;
+    if (!bcc_init) {
+        const char *e = getenv("TYPEEASY_NO_BCCALL");
+        if (e && e[0] && e[0] != '0') bcc_enabled = 0;
+        bcc_init = 1;
+    }
+    if (!bcc_enabled) return 0;
+
+    ASTNode *objRef = node->left;
+    if (!objRef || !objRef->id || !node->id) {
+        if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: no obj or method id\n");
+        return 0;
+    }
+    Variable *ov = find_variable(objRef->id);
+    if (!ov || ov->vtype != VAL_OBJECT) {
+        if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: obj '%s' not VAL_OBJECT (ov=%p vtype=%d)\n", objRef->id, (void*)ov, ov?ov->vtype:-1);
+        return 0;
+    }
+    ObjectNode *obj = ov->value.object_value;
+    if (!obj || !obj->class) {
+        if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: no class\n");
+        return 0;
+    }
+
+    MethodNode *mm = NULL;
+    for (MethodNode *it = obj->class->methods; it; it = it->next) {
+        if (it->name && strcmp(it->name, node->id) == 0) { mm = it; break; }
+    }
+    if (!mm) {
+        if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: method '%s' not found\n", node->id);
+        return 0;
+    }
+    if (!mm->return_type
+        || (strcmp(mm->return_type, "int")   != 0
+         && strcmp(mm->return_type, "float") != 0)) {
+        if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: return_type=%s\n", mm->return_type?mm->return_type:"(null)");
+        return 0;
+    }
+
+    BCInfo *body = bc_get_or_compile_method(mm, obj->class);
+    if (!body) {
+        if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: body bc_compile failed\n");
+        return 0;
+    }
+
+    if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] body compiled, len=%d\n", body->len);
+
+    /* Validate params.
+     * NOTE: TypeEasy's lexer does NOT set yylval.sval for INT/FLOAT
+     * tokens, so p->type may end up holding the param NAME instead of
+     * "int"/"float". We therefore skip the type-string check and
+     * rely on BC_STORE_VAR's runtime int/float detection. We just need
+     * each param to have a name and a slot of some numeric kind. */
+    int n_params = 0;
+    for (ParameterNode *p = mm->params; p; p = p->next) {
+        if (n_params >= 8) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: too many params\n"); return 0; }
+        if (!p->name) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: param no name\n"); return 0; }
+        n_params++;
+    }
+
+    /* Count args */
+    int n_args = 0;
+    ASTNode *a = node->right;
+    while (a) { n_args++; a = a->next; } /* gotcha #1: step args via ->next */
+    if (n_args != n_params) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: n_args=%d n_params=%d\n", n_args, n_params); return 0; }
+
+    /* Emit args (leaves only) */
+    a = node->right;
+    while (a) {
+        NodeKind ak = nk_of(a);
+        if (*pos >= max - 2) return 0;
+        if (ak == NK_NUMBER || ak == NK_INT) {
+            out[*pos].op = BC_LOAD_CONST;
+            out[*pos].u.constant = (double)a->value;
+            (*pos)++;
+        } else if (ak == NK_FLOAT) {
+            out[*pos].op = BC_LOAD_CONST;
+            out[*pos].u.constant = a->str_value ? atof(a->str_value) : 0.0;
+            (*pos)++;
+        } else if (ak == NK_IDENTIFIER || ak == NK_ID) {
+            Variable *v = (Variable *)a->cached_var;
+            if (!v) { v = find_variable(a->id); if (v) a->cached_var = v; }
+            if (!v) return 0;
+            if (v->vtype != VAL_INT && v->vtype != VAL_FLOAT) return 0;
+            out[*pos].op = BC_LOAD_VAR;
+            out[*pos].u.var = v;
+            (*pos)++;
+        } else {
+            return 0;
+        }
+        a = a->next; /* gotcha #1: step args via ->next */
+    }
+
+    /* Build site (cached param Variable*s) */
+    MethodCallSite *site = (MethodCallSite *)calloc(1, sizeof(MethodCallSite));
+    site->obj_var  = ov;
+    site->method   = mm;
+    site->body_bc  = body;
+    site->n_params = n_params;
+    int idx = 0;
+    for (ParameterNode *p = mm->params; p; p = p->next) {
+        Variable *pv = (Variable *)p->cached_var;
+        if (!pv) {
+            pv = find_variable_for(p->name);
+            if (!pv) {
+                if (g_vm.var_count < MAX_VARS) {
+                    int is_float = (p->type
+                                  && (strcmp(p->type, "float") == 0
+                                   || strcmp(p->type, "FLOAT") == 0));
+                    g_vm.vars[g_vm.var_count].id       = strdup(p->name);
+                    g_vm.vars[g_vm.var_count].type     = strdup(is_float ? "FLOAT" : "INT");
+                    g_vm.vars[g_vm.var_count].is_const = 0;
+                    g_vm.vars[g_vm.var_count].vtype    = is_float ? VAL_FLOAT : VAL_INT;
+                    if (is_float) g_vm.vars[g_vm.var_count].value.float_value = 0.0;
+                    else          g_vm.vars[g_vm.var_count].value.int_value   = 0;
+                    pv = &g_vm.vars[g_vm.var_count];
+                    g_vm.var_count++;
+                }
+            }
+            p->cached_var = pv;
+        }
+        if (!pv) { free(site); return 0; }
+        site->param_vars[idx++] = pv;
+    }
+
+    /* Ola 5b: INLINE EXPANSION instead of recursive bc_exec.
+     * After args are on stack we:
+     *   1) STORE_VAR each arg into its param slot (in reverse so last
+     *      pushed = last param).
+     *   2) BC_SET_THIS (pushes saved g_bc_this on this-stack, sets new).
+     *   3) Inline body opcodes (excluding the trailing HALT).
+     *   4) BC_RESTORE_THIS (pops this-stack back into g_bc_this).
+     * Stack net: -n_params (consumed) +1 (return value) = +1.
+     */
+    int body_len_no_halt = body->len - 1; /* drop trailing HALT */
+    if (body_len_no_halt < 0) body_len_no_halt = 0;
+    if (*pos + n_params + 2 + body_len_no_halt >= max) {
+        free(site);
+        return 0;
+    }
+    for (int i = n_params - 1; i >= 0; i--) {
+        out[*pos].op    = BC_STORE_VAR;
+        out[*pos].u.var = site->param_vars[i];
+        (*pos)++;
+    }
+    out[*pos].op    = BC_SET_THIS;
+    out[*pos].u.var = ov;
+    (*pos)++;
+    if (body_len_no_halt > 0) {
+        memcpy(&out[*pos], body->code, body_len_no_halt * sizeof(Instr));
+        *pos += body_len_no_halt;
+    }
+    out[*pos].op = BC_RESTORE_THIS;
+    (*pos)++;
+    /* site is no longer needed (we inlined); free it. */
+    free(site);
+    {
+        static int reported = 0;
+        if (!reported && getenv("TYPEEASY_BCDEBUG")) {
+            fprintf(stderr, "[OLA5] inlined call %s.%s n_params=%d body_len=%d\n",
+                    objRef->id, mm->name, n_params, body_len_no_halt);
+            reported = 1;
+        }
+    }
+    return 1;
+}
+
 static int bc_compile(ASTNode *node, Instr *out, int *pos, int max) {
     if (!node || *pos >= max - 1) return 0;
     NodeKind k = nk_of(node);
@@ -177,69 +552,7 @@ static int bc_compile(ASTNode *node, Instr *out, int *pos, int max) {
     case NK_LT:  case NK_GT:
     case NK_LT_EQ: case NK_GT_EQ:
     case NK_EQ:  case NK_DIFF:
-    case NK_AND: case NK_OR: {
-        /* String concat must NOT use bytecode path (handled by AST walker). */
-        if (k == NK_ADD && is_string_type(node)) return 0;
-        int saved = *pos;
-        if (!bc_compile(node->left,  out, pos, max)) return 0;
-        if (!bc_compile(node->right, out, pos, max)) return 0;
-
-        /* Constant folding (#3): if both operands are LOAD_CONST, evaluate
-         * at compile time and replace with a single LOAD_CONST. */
-        if (*pos >= saved + 2 &&
-            out[*pos - 2].op == BC_LOAD_CONST &&
-            out[*pos - 1].op == BC_LOAD_CONST) {
-            double a = out[*pos - 2].u.constant;
-            double b = out[*pos - 1].u.constant;
-            double r = 0;
-            int folded = 1;
-            switch (k) {
-                case NK_ADD:   r = a + b; break;
-                case NK_SUB:   r = a - b; break;
-                case NK_MUL:   r = a * b; break;
-                case NK_DIV:   if (b == 0) { folded = 0; } else r = a / b; break;
-                case NK_LT:    r = (a <  b); break;
-                case NK_GT:    r = (a >  b); break;
-                /* NK_GT_EQ / NK_LT_EQ have inverted semantics in TypeEasy
-                 * (GT_EQ is evaluated as <=, LT_EQ as >=). Mirror that. */
-                case NK_GT_EQ: r = (a <= b); break;
-                case NK_LT_EQ: r = (a >= b); break;
-                case NK_EQ:    r = (a == b); break;
-                case NK_DIFF:  r = (a != b); break;
-                case NK_AND:   r = (a && b) ? 1 : 0; break;
-                case NK_OR:    r = (a || b) ? 1 : 0; break;
-                default:       folded = 0; break;
-            }
-            if (folded) {
-                *pos -= 2;
-                out[*pos].op = BC_LOAD_CONST;
-                out[*pos].u.constant = r;
-                (*pos)++;
-                return 1;
-            }
-        }
-
-        BCOp op;
-        switch (k) {
-            case NK_ADD:   op = BC_ADD; break;
-            case NK_SUB:   op = BC_SUB; break;
-            case NK_MUL:   op = BC_MUL; break;
-            case NK_DIV:   op = BC_DIV; break;
-            case NK_LT:    op = BC_LT;  break;
-            case NK_GT:    op = BC_GT;  break;
-            /* Inverted: GT_EQ in TypeEasy means <=, LT_EQ means >=. */
-            case NK_GT_EQ: op = BC_LE;  break;
-            case NK_LT_EQ: op = BC_GE;  break;
-            case NK_EQ:    op = BC_EQ;  break;
-            case NK_DIFF:  op = BC_NEQ; break;
-            case NK_AND:   op = BC_AND; break;
-            case NK_OR:    op = BC_OR;  break;
-            default:       return 0;
-        }
-        out[*pos].op = op;
-        (*pos)++;
-        return 1;
-    }
+    case NK_AND: case NK_OR: return bc_c_binop(node, out, pos, max);
     case NK_NOT: {
         if (!node->left) return 0;
         int saved = *pos;
@@ -257,49 +570,7 @@ static int bc_compile(ASTNode *node, Instr *out, int *pos, int max) {
     /* Phase G: integer-only ops. Operands compiled via bc_compile (must be
      * numeric); folded if both are LOAD_CONST. Runtime cast a/b to long long. */
     case NK_MOD: case NK_BIT_AND: case NK_BIT_OR: case NK_BIT_XOR:
-    case NK_SHL: case NK_SHR: {
-        int saved = *pos;
-        if (!bc_compile(node->left,  out, pos, max)) return 0;
-        if (!bc_compile(node->right, out, pos, max)) return 0;
-        if (*pos >= saved + 2 &&
-            out[*pos - 2].op == BC_LOAD_CONST &&
-            out[*pos - 1].op == BC_LOAD_CONST) {
-            long long a = (long long)out[*pos - 2].u.constant;
-            long long b = (long long)out[*pos - 1].u.constant;
-            long long r = 0;
-            int folded = 1;
-            switch (k) {
-                case NK_MOD:     if (b == 0) folded = 0; else r = a % b; break;
-                case NK_BIT_AND: r = a & b; break;
-                case NK_BIT_OR:  r = a | b; break;
-                case NK_BIT_XOR: r = a ^ b; break;
-                case NK_SHL:     r = a << b; break;
-                case NK_SHR:     r = a >> b; break;
-                default:         folded = 0; break;
-            }
-            if (folded) {
-                *pos -= 2;
-                out[*pos].op = BC_LOAD_CONST;
-                out[*pos].u.constant = (double)r;
-                (*pos)++;
-                return 1;
-            }
-        }
-        BCOp op;
-        switch (k) {
-            case NK_MOD:     op = BC_MOD;  break;
-            case NK_BIT_AND: op = BC_BAND; break;
-            case NK_BIT_OR:  op = BC_BOR;  break;
-            case NK_BIT_XOR: op = BC_BXOR; break;
-            case NK_SHL:     op = BC_SHL;  break;
-            case NK_SHR:     op = BC_SHR;  break;
-            default:         return 0;
-        }
-        if (*pos >= max) return 0;
-        out[*pos].op = op;
-        (*pos)++;
-        return 1;
-    }
+    case NK_SHL: case NK_SHR: return bc_c_intop(node, out, pos, max);
     case NK_BIT_NOT: {
         if (!node->left) return 0;
         int saved = *pos;
@@ -326,265 +597,8 @@ static int bc_compile(ASTNode *node, Instr *out, int *pos, int max) {
         (*pos)++;
         return 1;
     }
-    case NK_ACCESS_ATTR: {
-        ASTNode *objRef = node->left;
-        ASTNode *attr   = node->right;
-        if (!objRef || !attr || !attr->id) return 0;
-
-        /* Ola 14d: arr[idx_expr].attr fastpath. Detect when objRef is an
-         * ACCESS_EXPR whose left is an IDENTIFIER bound to a non-empty
-         * LIST whose items[0] is an OBJECT of a known class with a
-         * numeric attribute matching attr->id. Compile idx_expr onto the
-         * stack, then emit BC_LIST_ITEM_ATTR. */
-        if (nk_of(objRef) == NK_ACCESS_EXPR) {
-            ASTNode *list_id = objRef->left;
-            ASTNode *idx_exp = objRef->right;
-            if (!list_id || !idx_exp) return 0;
-            if (nk_of(list_id) != NK_IDENTIFIER && nk_of(list_id) != NK_ID) return 0;
-            Variable *lv = find_variable(list_id->id);
-            if (!lv || !lv->type || strcmp(lv->type, "LIST") != 0) return 0;
-            ASTNode *list = (ASTNode*)(intptr_t)lv->value.object_value;
-            if (!list) return 0;
-            TEListIdx *ix = (TEListIdx*)list->extra;
-            if (!ix || ix->len <= 0) return 0;
-            ASTNode *first = ix->items[0];
-            if (!first || !first->type || strcmp(first->type, "OBJECT") != 0) return 0;
-            ObjectNode *fobj = first->extra ? (ObjectNode*)first->extra
-                                            : (ObjectNode*)(intptr_t)first->value;
-            if (!fobj || !fobj->class) return 0;
-            int slot = -1;
-            for (int i = 0; i < fobj->class->attr_count; i++) {
-                if (strcmp(fobj->class->attributes[i].id, attr->id) == 0) {
-                    const char *t = fobj->class->attributes[i].type;
-                    if (!t || (strcmp(t, "int") != 0 && strcmp(t, "float") != 0
-                            && strcmp(t, "INT") != 0 && strcmp(t, "FLOAT") != 0))
-                        return 0;
-                    slot = i;
-                    break;
-                }
-            }
-            if (slot < 0) return 0;
-            /* Compile idx expression onto stack. */
-            if (!bc_compile(idx_exp, out, pos, max)) return 0;
-            if (*pos >= max) return 0;
-            ListItemAttrSite *s = (ListItemAttrSite*)calloc(1, sizeof(ListItemAttrSite));
-            if (!s) return 0;
-            s->list_var = lv;
-            s->expected_class = fobj->class;
-            s->attr_slot = slot;
-            out[*pos].op = BC_LIST_ITEM_ATTR;
-            out[*pos].u.lia_site = s;
-            (*pos)++;
-            return 1;
-        }
-
-        /* Ola 4: support `this.attr` in method bodies. We compile only
-         * when:
-         *  - left is the identifier "this"
-         *  - g_bc_compile_class is set (we know which class the method
-         *    belongs to)
-         *  - the attribute exists in the class and is INT or FLOAT
-         * The attr slot index is baked into the instruction. At runtime
-         * BC_LOAD_THIS_ATTR reads from g_bc_this->attributes[slot]. */
-        if (!objRef->id) return 0;
-        if (strcmp(objRef->id, "this") != 0) return 0;
-        if (!g_bc_compile_class) return 0;
-        int slot = -1;
-        for (int i = 0; i < g_bc_compile_class->attr_count; i++) {
-            if (strcmp(g_bc_compile_class->attributes[i].id, attr->id) == 0) {
-                /* Only numeric attrs supported. */
-                const char *t = g_bc_compile_class->attributes[i].type;
-                if (!t || (strcmp(t, "int") != 0 && strcmp(t, "float") != 0
-                        && strcmp(t, "INT") != 0 && strcmp(t, "FLOAT") != 0))
-                    return 0;
-                slot = i;
-                break;
-            }
-        }
-        if (slot < 0) return 0;
-        out[*pos].op = BC_LOAD_THIS_ATTR;
-        out[*pos].u.slot = slot;
-        (*pos)++;
-        return 1;
-    }
-    case NK_CALL_METHOD: {
-        /* Ola 5: inline method call. We compile to BC_CALL_METHOD when:
-         *  - left side is an identifier resolving to an object Variable*
-         *  - the method exists in that class with int/float return
-         *  - its body is bytecode-compilable via bc_get_or_compile_method
-         *  - all params are int/float
-         *  - all args are leaf nodes (NUMBER/INT/FLOAT/IDENTIFIER) since
-         *    args are linked via ->right which makes complex expressions
-         *    in multi-arg lists ambiguous in TypeEasy's AST.
-         * Switch: TYPEEASY_NO_BCCALL=1 disables. */
-        if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] entering NK_CALL_METHOD case\n");
-        static int bcc_init = 0;
-        static int bcc_enabled = 1;
-        if (!bcc_init) {
-            const char *e = getenv("TYPEEASY_NO_BCCALL");
-            if (e && e[0] && e[0] != '0') bcc_enabled = 0;
-            bcc_init = 1;
-        }
-        if (!bcc_enabled) return 0;
-
-        ASTNode *objRef = node->left;
-        if (!objRef || !objRef->id || !node->id) {
-            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: no obj or method id\n");
-            return 0;
-        }
-        Variable *ov = find_variable(objRef->id);
-        if (!ov || ov->vtype != VAL_OBJECT) {
-            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: obj '%s' not VAL_OBJECT (ov=%p vtype=%d)\n", objRef->id, (void*)ov, ov?ov->vtype:-1);
-            return 0;
-        }
-        ObjectNode *obj = ov->value.object_value;
-        if (!obj || !obj->class) {
-            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: no class\n");
-            return 0;
-        }
-
-        MethodNode *mm = NULL;
-        for (MethodNode *it = obj->class->methods; it; it = it->next) {
-            if (it->name && strcmp(it->name, node->id) == 0) { mm = it; break; }
-        }
-        if (!mm) {
-            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: method '%s' not found\n", node->id);
-            return 0;
-        }
-        if (!mm->return_type
-            || (strcmp(mm->return_type, "int")   != 0
-             && strcmp(mm->return_type, "float") != 0)) {
-            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: return_type=%s\n", mm->return_type?mm->return_type:"(null)");
-            return 0;
-        }
-
-        BCInfo *body = bc_get_or_compile_method(mm, obj->class);
-        if (!body) {
-            if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: body bc_compile failed\n");
-            return 0;
-        }
-
-        if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] body compiled, len=%d\n", body->len);
-
-        /* Validate params.
-         * NOTE: TypeEasy's lexer does NOT set yylval.sval for INT/FLOAT
-         * tokens, so p->type may end up holding the param NAME instead of
-         * "int"/"float". We therefore skip the type-string check and
-         * rely on BC_STORE_VAR's runtime int/float detection. We just need
-         * each param to have a name and a slot of some numeric kind. */
-        int n_params = 0;
-        for (ParameterNode *p = mm->params; p; p = p->next) {
-            if (n_params >= 8) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: too many params\n"); return 0; }
-            if (!p->name) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: param no name\n"); return 0; }
-            n_params++;
-        }
-
-        /* Count args */
-        int n_args = 0;
-        ASTNode *a = node->right;
-        while (a) { n_args++; a = a->next; } /* gotcha #1: step args via ->next */
-        if (n_args != n_params) { if (getenv("TYPEEASY_BCDEBUG")) fprintf(stderr, "[OLA5] fail: n_args=%d n_params=%d\n", n_args, n_params); return 0; }
-
-        /* Emit args (leaves only) */
-        a = node->right;
-        while (a) {
-            NodeKind ak = nk_of(a);
-            if (*pos >= max - 2) return 0;
-            if (ak == NK_NUMBER || ak == NK_INT) {
-                out[*pos].op = BC_LOAD_CONST;
-                out[*pos].u.constant = (double)a->value;
-                (*pos)++;
-            } else if (ak == NK_FLOAT) {
-                out[*pos].op = BC_LOAD_CONST;
-                out[*pos].u.constant = a->str_value ? atof(a->str_value) : 0.0;
-                (*pos)++;
-            } else if (ak == NK_IDENTIFIER || ak == NK_ID) {
-                Variable *v = (Variable *)a->cached_var;
-                if (!v) { v = find_variable(a->id); if (v) a->cached_var = v; }
-                if (!v) return 0;
-                if (v->vtype != VAL_INT && v->vtype != VAL_FLOAT) return 0;
-                out[*pos].op = BC_LOAD_VAR;
-                out[*pos].u.var = v;
-                (*pos)++;
-            } else {
-                return 0;
-            }
-            a = a->next; /* gotcha #1: step args via ->next */
-        }
-
-        /* Build site (cached param Variable*s) */
-        MethodCallSite *site = (MethodCallSite *)calloc(1, sizeof(MethodCallSite));
-        site->obj_var  = ov;
-        site->method   = mm;
-        site->body_bc  = body;
-        site->n_params = n_params;
-        int idx = 0;
-        for (ParameterNode *p = mm->params; p; p = p->next) {
-            Variable *pv = (Variable *)p->cached_var;
-            if (!pv) {
-                pv = find_variable_for(p->name);
-                if (!pv) {
-                    if (g_vm.var_count < MAX_VARS) {
-                        int is_float = (p->type
-                                      && (strcmp(p->type, "float") == 0
-                                       || strcmp(p->type, "FLOAT") == 0));
-                        g_vm.vars[g_vm.var_count].id       = strdup(p->name);
-                        g_vm.vars[g_vm.var_count].type     = strdup(is_float ? "FLOAT" : "INT");
-                        g_vm.vars[g_vm.var_count].is_const = 0;
-                        g_vm.vars[g_vm.var_count].vtype    = is_float ? VAL_FLOAT : VAL_INT;
-                        if (is_float) g_vm.vars[g_vm.var_count].value.float_value = 0.0;
-                        else          g_vm.vars[g_vm.var_count].value.int_value   = 0;
-                        pv = &g_vm.vars[g_vm.var_count];
-                        g_vm.var_count++;
-                    }
-                }
-                p->cached_var = pv;
-            }
-            if (!pv) { free(site); return 0; }
-            site->param_vars[idx++] = pv;
-        }
-
-        /* Ola 5b: INLINE EXPANSION instead of recursive bc_exec.
-         * After args are on stack we:
-         *   1) STORE_VAR each arg into its param slot (in reverse so last
-         *      pushed = last param).
-         *   2) BC_SET_THIS (pushes saved g_bc_this on this-stack, sets new).
-         *   3) Inline body opcodes (excluding the trailing HALT).
-         *   4) BC_RESTORE_THIS (pops this-stack back into g_bc_this).
-         * Stack net: -n_params (consumed) +1 (return value) = +1.
-         */
-        int body_len_no_halt = body->len - 1; /* drop trailing HALT */
-        if (body_len_no_halt < 0) body_len_no_halt = 0;
-        if (*pos + n_params + 2 + body_len_no_halt >= max) {
-            free(site);
-            return 0;
-        }
-        for (int i = n_params - 1; i >= 0; i--) {
-            out[*pos].op    = BC_STORE_VAR;
-            out[*pos].u.var = site->param_vars[i];
-            (*pos)++;
-        }
-        out[*pos].op    = BC_SET_THIS;
-        out[*pos].u.var = ov;
-        (*pos)++;
-        if (body_len_no_halt > 0) {
-            memcpy(&out[*pos], body->code, body_len_no_halt * sizeof(Instr));
-            *pos += body_len_no_halt;
-        }
-        out[*pos].op = BC_RESTORE_THIS;
-        (*pos)++;
-        /* site is no longer needed (we inlined); free it. */
-        free(site);
-        {
-            static int reported = 0;
-            if (!reported && getenv("TYPEEASY_BCDEBUG")) {
-                fprintf(stderr, "[OLA5] inlined call %s.%s n_params=%d body_len=%d\n",
-                        objRef->id, mm->name, n_params, body_len_no_halt);
-                reported = 1;
-            }
-        }
-        return 1;
-    }
+    case NK_ACCESS_ATTR: return bc_c_access_attr(node, out, pos, max);
+    case NK_CALL_METHOD: return bc_c_call_method(node, out, pos, max);
     default:
         return 0;
     }
@@ -1609,238 +1623,99 @@ static int jit_emit_list_item_attr(uint8_t **p, uint8_t *base,
 }
 
 /* Intenta compilar la traza. Devuelve puntero a fn o NULL. */
-static void *jit_compile_trace(Trace *t) {
-    if (!g_jit_on || !g_jit_slab || !t || !t->complete || t->len < 2) return NULL;
-    if (t->len > TE_JIT_MAX_IDS) return NULL;
+/* Variable cacheada en registro callee-saved durante un loop trace (jit_compile_trace). */
+struct LoopVar { Variable *var; int lreg; };
+/* Helper: ¿está esta Variable* cacheada? Devuelve lreg o -1. */
+#define LREG_OF(V) ({ int _r = -1; \
+    for (int _k = 0; _k < n_lvars; _k++) if (lvars[_k].var == (V)) { _r = lvars[_k].lreg; break; } \
+    _r; })
 
-    /* Detectar tipo de traza por op final. */
-    int last_idx = t->len - 1;
-    int is_loop = (t->ops[last_idx].op == IR_LOOP_BACK);
-    int is_ret  = (t->ops[last_idx].op == IR_RETURN);
-    if (!is_loop && !is_ret) return NULL;
-    /* Ola 17: aceptamos return T_INT o T_FLOAT. */
-    if (is_ret && t->ops[last_idx].type != T_INT && t->ops[last_idx].type != T_FLOAT) return NULL;
-
-    /* Validación de ops permitidas. */
-    for (int i = 1; i < last_idx; i++) {
-        IRInst *ins = &t->ops[i];
-        switch (ins->op) {
-        case IR_NOP: break;
-        case IR_LOAD_CONST:
-            /* Ola 17: T_INT o T_FLOAT. */
-            if (ins->type != T_INT && ins->type != T_FLOAT) return NULL;
-            break;
-        case IR_LOAD_VAR:
-            if (ins->type == T_INT) {
-                if (!ins->aux.var || ins->aux.var->vtype != VAL_INT) return NULL;
-            } else if (ins->type == T_FLOAT) {
-                /* Ola 17: aceptamos VAL_FLOAT (y VAL_INT con auto-promote
-                 * NO — sería write inconsistente). Estricto: VAL_FLOAT. */
-                if (!ins->aux.var || ins->aux.var->vtype != VAL_FLOAT) return NULL;
-            } else {
-                return NULL;
-            }
-            break;
-        case IR_LOAD_THIS_ATTR:
-            if (ins->type != T_INT)              return NULL;
-            if (ins->aux.slot < 0)               return NULL;
-            break;
-        case IR_ADD_INT:
-        case IR_SUB_INT:
-        case IR_MUL_INT:
-        case IR_LT:
-            if (ins->a >= t->len || ins->b >= t->len) return NULL;
-            break;
-        /* Ola 17: float arithmetic. */
-        case IR_ADD_FLOAT:
-        case IR_SUB_FLOAT:
-        case IR_MUL_FLOAT:
-        case IR_DIV_FLOAT:
-            if (ins->a >= t->len || ins->b >= t->len) return NULL;
-            break;
-        case IR_GUARD_TRUE:
-            if (ins->a >= t->len) return NULL;
-            break;
-        case IR_LIST_ITEM_ATTR:
-            /* Ola 14e: T_INT only por ahora. */
-            if (ins->type != T_INT)              return NULL;
-            if (ins->a >= t->len)                return NULL;
-            if (!ins->aux.lia)                   return NULL;
-            if (!ins->aux.lia->list_var)         return NULL;
-            if (!ins->aux.lia->expected_class)   return NULL;
-            if (ins->aux.lia->attr_slot < 0)     return NULL;
-            break;
-        case IR_STORE_VAR:
-            if (!ins->aux.var)                   return NULL;
-            if (ins->type == T_INT) {
-                if (ins->aux.var->vtype != VAL_INT) return NULL;
-            } else if (ins->type == T_FLOAT) {
-                if (ins->aux.var->vtype != VAL_FLOAT) return NULL;
-            } else {
-                return NULL;
-            }
-            if (ins->a >= t->len)                return NULL;
-            break;
-        default:
-            return NULL;
+/* Pasada 1 de jit_compile_trace (extraída, Fase 2): ¿todas las ops del trace son compilables? */
+static int jit_trace_ops_supported(Trace *t, int last_idx) {
+for (int i = 1; i < last_idx; i++) {
+    IRInst *ins = &t->ops[i];
+    switch (ins->op) {
+    case IR_NOP: break;
+    case IR_LOAD_CONST:
+        /* Ola 17: T_INT o T_FLOAT. */
+        if (ins->type != T_INT && ins->type != T_FLOAT) return 0;
+        break;
+    case IR_LOAD_VAR:
+        if (ins->type == T_INT) {
+            if (!ins->aux.var || ins->aux.var->vtype != VAL_INT) return 0;
+        } else if (ins->type == T_FLOAT) {
+            /* Ola 17: aceptamos VAL_FLOAT (y VAL_INT con auto-promote
+             * NO — sería write inconsistente). Estricto: VAL_FLOAT. */
+            if (!ins->aux.var || ins->aux.var->vtype != VAL_FLOAT) return 0;
+        } else {
+            return 0;
         }
-    }
-
-    /* Generosa cota superior: 64 bytes/op para ops + prologo/epilogo. */
-    size_t max_bytes = 128 + 64 * t->len;
-    uint8_t *base = jit_alloc(max_bytes);
-    if (!base) return NULL;
-    uint8_t *p = base;
-
-    /* === Ola 12 — register allocation para loop-carried vars ===
-     * Una "loop-carried var" es una Variable* que aparece como destino de
-     * algún IR_STORE_VAR dentro de la traza. La cacheamos en un registro
-     * callee-saved durante todo el loop:
-     *   - pre-loop: cargamos su valor desde memoria al registro UNA vez.
-     *   - body: IR_LOAD_VAR(v) → mov [rsp+id*8], reg_v   (sin tocar memoria)
-     *           IR_STORE_VAR(v=src) → mov reg_v, [rsp+src*8] (sin escribir mem)
-     *   - deopt: writeback reg_v → memoria, restauramos callee-saved, ret. */
-    struct LoopVar { Variable *var; int lreg; } lvars[TE_JIT_MAX_LREGS];
-    int n_lvars = 0;
-    if (is_loop) {
-        for (int i = 1; i < last_idx; i++) {
-            if (t->ops[i].op != IR_STORE_VAR) continue;
-            /* Ola 17: float vars no participan en lreg cache. */
-            if (t->ops[i].type == T_FLOAT) continue;
-            Variable *v = t->ops[i].aux.var;
-            int found = 0;
-            for (int k = 0; k < n_lvars; k++) if (lvars[k].var == v) { found = 1; break; }
-            if (!found && n_lvars < TE_JIT_MAX_LREGS) {
-                lvars[n_lvars].var = v;
-                lvars[n_lvars].lreg = n_lvars;  /* asigna 0..4 → rbx, r12..r15 */
-                n_lvars++;
-            }
+        break;
+    case IR_LOAD_THIS_ATTR:
+        if (ins->type != T_INT)              return 0;
+        if (ins->aux.slot < 0)               return 0;
+        break;
+    case IR_ADD_INT:
+    case IR_SUB_INT:
+    case IR_MUL_INT:
+    case IR_LT:
+        if (ins->a >= t->len || ins->b >= t->len) return 0;
+        break;
+    /* Ola 17: float arithmetic. */
+    case IR_ADD_FLOAT:
+    case IR_SUB_FLOAT:
+    case IR_MUL_FLOAT:
+    case IR_DIV_FLOAT:
+        if (ins->a >= t->len || ins->b >= t->len) return 0;
+        break;
+    case IR_GUARD_TRUE:
+        if (ins->a >= t->len) return 0;
+        break;
+    case IR_LIST_ITEM_ATTR:
+        /* Ola 14e: T_INT only por ahora. */
+        if (ins->type != T_INT)              return 0;
+        if (ins->a >= t->len)                return 0;
+        if (!ins->aux.lia)                   return 0;
+        if (!ins->aux.lia->list_var)         return 0;
+        if (!ins->aux.lia->expected_class)   return 0;
+        if (ins->aux.lia->attr_slot < 0)     return 0;
+        break;
+    case IR_STORE_VAR:
+        if (!ins->aux.var)                   return 0;
+        if (ins->type == T_INT) {
+            if (ins->aux.var->vtype != VAL_INT) return 0;
+        } else if (ins->type == T_FLOAT) {
+            if (ins->aux.var->vtype != VAL_FLOAT) return 0;
+        } else {
+            return 0;
         }
+        if (ins->a >= t->len)                return 0;
+        break;
+    default:
+        return 0;
     }
-    /* Helper: ¿está esta Variable* cacheada? Devuelve lreg o -1. */
-    #define LREG_OF(V) ({ int _r = -1; \
-        for (int _k = 0; _k < n_lvars; _k++) if (lvars[_k].var == (V)) { _r = lvars[_k].lreg; break; } \
-        _r; })
+}
+    return 1;
+}
 
-    /* === Prólogo === */
-    /* push rbp; mov rbp,rsp; <push callee-saved>; sub rsp, frame */
-    e8(&p, 0x55);                                              /* push rbp */
-    e8(&p, 0x48); e8(&p, 0x89); e8(&p, 0xE5);                  /* mov rbp, rsp */
-    for (int k = 0; k < n_lvars; k++) emit_push_lreg(&p, lvars[k].lreg);
-    e8(&p, 0x48); e8(&p, 0x81); e8(&p, 0xEC); e32(&p, TE_JIT_FRAME_BYTES);  /* sub rsp,frame */
-
-    /* === Pre-loop: cargar cada loop-carried var en su registro === */
-    for (int k = 0; k < n_lvars; k++) {
-        emit_mov_rax_imm64(&p, (uint64_t)(uintptr_t)&lvars[k].var->value.int_value);
-        emit_mov_lreg_memrax(&p, lvars[k].lreg);
-    }
-
-    /* Para loop traces: marcar loop_top después de los pre-loads + LICM hoist.
-     * Recolectar offsets de cada `je deopt` para backpatch. */
-    size_t guard_patches[TE_JIT_MAX_IDS];
-    int n_patches = 0;
-
-    /* Ola 11: HOIST de invariants. Si es loop trace, primero emitimos los
-     * ops marcados [INV] (LICM) UNA vez antes del loop_top; en pass 2 se
-     * skipean. Para ops con efectos de control (guard/store/return/loop_back)
-     * NO hoist nunca. */
-    for (int hoist_pass = (is_loop ? 0 : 1); hoist_pass < 2; hoist_pass++) {
-        if (hoist_pass == 1) break;  /* dummy: arrancamos pass 2 abajo */
-
-        for (int i = 1; i < t->len; i++) {
-            IRInst *ins = &t->ops[i];
-            if (!(ins->flags & IR_FLAG_INV)) continue;
-            if (ins->op == IR_GUARD_TRUE || ins->op == IR_GUARD_FALSE
-             || ins->op == IR_STORE_VAR  || ins->op == IR_RETURN
-             || ins->op == IR_LOOP_BACK) continue;
-            switch (ins->op) {
-            case IR_NOP: break;
-            case IR_LOAD_CONST: {
-                uint64_t imm;
-                if (ins->type == T_FLOAT) {
-                    /* Ola 17: raw bits del double. */
-                    double d = ins->aux.cst;
-                    memcpy(&imm, &d, 8);
-                } else {
-                    imm = (uint64_t)(int64_t)ins->aux.cst;
-                }
-                emit_mov_rax_imm64(&p, imm);
-                emit_mov_rspdisp_rax(&p, i * 8);
-                break;
-            }
-            case IR_LOAD_VAR:
-                if (ins->type == T_FLOAT) {
-                    if (jit_emit_load_var_float(&p, ins->aux.var, i) < 0) goto fail;
-                } else {
-                    if (jit_emit_load_var(&p, ins->aux.var, i) < 0) goto fail;
-                }
-                break;
-            case IR_LOAD_THIS_ATTR:
-                if (jit_emit_load_this_attr(&p, ins->aux.slot, i) < 0) goto fail;
-                break;
-            case IR_ADD_INT:
-                emit_mov_rax_rspdisp(&p, ins->a * 8);
-                emit_add_rax_rspdisp(&p, ins->b * 8);
-                emit_mov_rspdisp_rax(&p, i * 8);
-                break;
-            case IR_SUB_INT:
-                emit_mov_rax_rspdisp(&p, ins->a * 8);
-                emit_sub_rax_rspdisp(&p, ins->b * 8);
-                emit_mov_rspdisp_rax(&p, i * 8);
-                break;
-            case IR_MUL_INT:
-                emit_mov_rax_rspdisp(&p, ins->a * 8);
-                emit_imul_rax_rspdisp(&p, ins->b * 8);
-                emit_mov_rspdisp_rax(&p, i * 8);
-                break;
-            case IR_ADD_FLOAT:
-                emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
-                emit_addsd_xmm0_rspdisp(&p, ins->b * 8);
-                emit_movsd_rspdisp_xmm0(&p, i * 8);
-                break;
-            case IR_SUB_FLOAT:
-                emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
-                emit_subsd_xmm0_rspdisp(&p, ins->b * 8);
-                emit_movsd_rspdisp_xmm0(&p, i * 8);
-                break;
-            case IR_MUL_FLOAT:
-                emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
-                emit_mulsd_xmm0_rspdisp(&p, ins->b * 8);
-                emit_movsd_rspdisp_xmm0(&p, i * 8);
-                break;
-            case IR_DIV_FLOAT:
-                emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
-                emit_divsd_xmm0_rspdisp(&p, ins->b * 8);
-                emit_movsd_rspdisp_xmm0(&p, i * 8);
-                break;
-            case IR_LT:
-                emit_mov_rax_rspdisp(&p, ins->a * 8);
-                emit_xor_edx_edx(&p);
-                emit_cmp_rax_rspdisp(&p, ins->b * 8);
-                emit_setl_dl(&p);
-                emit_mov_rspdisp_rdx(&p, i * 8);
-                break;
-            default: goto fail;
-            }
-        }
-    }
-
-    /* Marcar loop_top después de los hoisted invariants (o justo después
-     * del prologue si no hay hoisting). */
-    size_t loop_top_off = (size_t)(p - base);
+/* Hoisting de invariantes de loop (extraído de jit_compile_trace, Fase 2). 0 = fallo (caller: goto fail). */
+static int jit_emit_hoist(Trace *t, int is_loop, uint8_t **pp) {
+    uint8_t *p = *pp;
+for (int hoist_pass = (is_loop ? 0 : 1); hoist_pass < 2; hoist_pass++) {
+    if (hoist_pass == 1) break;  /* dummy: arrancamos pass 2 abajo */
 
     for (int i = 1; i < t->len; i++) {
         IRInst *ins = &t->ops[i];
-        /* Skip ops ya emitidos en el hoist (sólo loop traces). */
-        if (is_loop && (ins->flags & IR_FLAG_INV)
-            && ins->op != IR_GUARD_TRUE && ins->op != IR_GUARD_FALSE
-            && ins->op != IR_STORE_VAR  && ins->op != IR_RETURN
-            && ins->op != IR_LOOP_BACK) continue;
+        if (!(ins->flags & IR_FLAG_INV)) continue;
+        if (ins->op == IR_GUARD_TRUE || ins->op == IR_GUARD_FALSE
+         || ins->op == IR_STORE_VAR  || ins->op == IR_RETURN
+         || ins->op == IR_LOOP_BACK) continue;
         switch (ins->op) {
         case IR_NOP: break;
         case IR_LOAD_CONST: {
             uint64_t imm;
             if (ins->type == T_FLOAT) {
+                /* Ola 17: raw bits del double. */
                 double d = ins->aux.cst;
                 memcpy(&imm, &d, 8);
             } else {
@@ -1850,24 +1725,15 @@ static void *jit_compile_trace(Trace *t) {
             emit_mov_rspdisp_rax(&p, i * 8);
             break;
         }
-        case IR_LOAD_VAR: {
+        case IR_LOAD_VAR:
             if (ins->type == T_FLOAT) {
-                /* Ola 17: float vars no participan en lreg cache (Ola 12). */
-                if (jit_emit_load_var_float(&p, ins->aux.var, i) < 0) goto fail;
-                break;
-            }
-            int lr = LREG_OF(ins->aux.var);
-            if (lr >= 0) {
-                /* Cached: el valor live está en reg, sólo spillear al slot
-                 * para que el consumidor lo lea desde [rsp+id*8]. */
-                emit_mov_rspdisp_lreg(&p, i * 8, lr);
+                if (jit_emit_load_var_float(&p, ins->aux.var, i) < 0) return 0;
             } else {
-                if (jit_emit_load_var(&p, ins->aux.var, i) < 0) goto fail;
+                if (jit_emit_load_var(&p, ins->aux.var, i) < 0) return 0;
             }
             break;
-        }
         case IR_LOAD_THIS_ATTR:
-            if (jit_emit_load_this_attr(&p, ins->aux.slot, i) < 0) goto fail;
+            if (jit_emit_load_this_attr(&p, ins->aux.slot, i) < 0) return 0;
             break;
         case IR_ADD_INT:
             emit_mov_rax_rspdisp(&p, ins->a * 8);
@@ -1911,62 +1777,233 @@ static void *jit_compile_trace(Trace *t) {
             emit_setl_dl(&p);
             emit_mov_rspdisp_rdx(&p, i * 8);
             break;
-        case IR_LIST_ITEM_ATTR: {
-            /* Ola 14e: inline asm para arr[idx].attr (T_INT).
-             * idx_ref = ins->a (slot del frame con el idx int).
-             * dst slot = i*8.  Genera 6 guards que saltan a deopt label. */
-            if (jit_emit_list_item_attr(&p, base,
-                    ins->a * 8, i * 8,
-                    ins->aux.lia,
-                    guard_patches, &n_patches,
-                    TE_JIT_MAX_IDS) < 0) goto fail;
-            break;
-        }
-        case IR_GUARD_TRUE: {
-            emit_mov_rax_rspdisp(&p, ins->a * 8);
-            emit_test_rax_rax(&p);
-            size_t at = emit_je_rel32(&p, base);
-            if (n_patches >= TE_JIT_MAX_IDS) goto fail;
-            guard_patches[n_patches++] = at;
-            break;
-        }
-        case IR_STORE_VAR: {
-            if (ins->type == T_FLOAT) {
-                /* Ola 17: write directo a memoria, sin participar en lreg. */
-                if (jit_emit_store_var_float(&p, ins->aux.var, ins->a) < 0) goto fail;
-                break;
-            }
-            int lr = LREG_OF(ins->aux.var);
-            if (lr >= 0) {
-                /* Cached: actualizar reg desde slot. NO escribir a memoria;
-                 * el writeback se hace en el deopt label. */
-                emit_mov_lreg_rspdisp(&p, lr, ins->a * 8);
-            } else {
-                emit_mov_rax_rspdisp(&p, ins->a * 8);
-                emit_mov_rdx_imm64(&p, (uint64_t)(uintptr_t)&ins->aux.var->value.int_value);
-                emit_mov_memrdx_rax(&p);
-            }
-            break;
-        }
-        case IR_RETURN:
-            if (ins->type == T_FLOAT) {
-                /* Ola 17: ya está en bits raw double en el slot. */
-                emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
-            } else {
-                emit_mov_rax_rspdisp(&p, ins->a * 8);
-                emit_cvtsi2sd_xmm0_rax(&p);
-            }
-            /* RET trace: n_lvars==0, así que el epílogo simple basta. */
-            emit_epilogue(&p);
-            break;
-        case IR_LOOP_BACK: {
-            size_t at = emit_jmp_rel32(&p, base);
-            patch_rel32(base, at, loop_top_off);
-            break;
-        }
-        default: goto fail;
+        default: return 0;
         }
     }
+}
+    *pp = p; return 1;
+}
+
+/* Emisión del cuerpo del trace (extraída de jit_compile_trace, Fase 2). 0 = fallo (caller: goto fail). */
+static int jit_emit_body(Trace *t, int is_loop, uint8_t *base, uint8_t **pp, struct LoopVar *lvars, int n_lvars,
+                         size_t *guard_patches, int *p_n_patches, size_t loop_top_off) {
+    uint8_t *p = *pp; int n_patches = *p_n_patches;
+for (int i = 1; i < t->len; i++) {
+    IRInst *ins = &t->ops[i];
+    /* Skip ops ya emitidos en el hoist (sólo loop traces). */
+    if (is_loop && (ins->flags & IR_FLAG_INV)
+        && ins->op != IR_GUARD_TRUE && ins->op != IR_GUARD_FALSE
+        && ins->op != IR_STORE_VAR  && ins->op != IR_RETURN
+        && ins->op != IR_LOOP_BACK) continue;
+    switch (ins->op) {
+    case IR_NOP: break;
+    case IR_LOAD_CONST: {
+        uint64_t imm;
+        if (ins->type == T_FLOAT) {
+            double d = ins->aux.cst;
+            memcpy(&imm, &d, 8);
+        } else {
+            imm = (uint64_t)(int64_t)ins->aux.cst;
+        }
+        emit_mov_rax_imm64(&p, imm);
+        emit_mov_rspdisp_rax(&p, i * 8);
+        break;
+    }
+    case IR_LOAD_VAR: {
+        if (ins->type == T_FLOAT) {
+            /* Ola 17: float vars no participan en lreg cache (Ola 12). */
+            if (jit_emit_load_var_float(&p, ins->aux.var, i) < 0) return 0;
+            break;
+        }
+        int lr = LREG_OF(ins->aux.var);
+        if (lr >= 0) {
+            /* Cached: el valor live está en reg, sólo spillear al slot
+             * para que el consumidor lo lea desde [rsp+id*8]. */
+            emit_mov_rspdisp_lreg(&p, i * 8, lr);
+        } else {
+            if (jit_emit_load_var(&p, ins->aux.var, i) < 0) return 0;
+        }
+        break;
+    }
+    case IR_LOAD_THIS_ATTR:
+        if (jit_emit_load_this_attr(&p, ins->aux.slot, i) < 0) return 0;
+        break;
+    case IR_ADD_INT:
+        emit_mov_rax_rspdisp(&p, ins->a * 8);
+        emit_add_rax_rspdisp(&p, ins->b * 8);
+        emit_mov_rspdisp_rax(&p, i * 8);
+        break;
+    case IR_SUB_INT:
+        emit_mov_rax_rspdisp(&p, ins->a * 8);
+        emit_sub_rax_rspdisp(&p, ins->b * 8);
+        emit_mov_rspdisp_rax(&p, i * 8);
+        break;
+    case IR_MUL_INT:
+        emit_mov_rax_rspdisp(&p, ins->a * 8);
+        emit_imul_rax_rspdisp(&p, ins->b * 8);
+        emit_mov_rspdisp_rax(&p, i * 8);
+        break;
+    case IR_ADD_FLOAT:
+        emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+        emit_addsd_xmm0_rspdisp(&p, ins->b * 8);
+        emit_movsd_rspdisp_xmm0(&p, i * 8);
+        break;
+    case IR_SUB_FLOAT:
+        emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+        emit_subsd_xmm0_rspdisp(&p, ins->b * 8);
+        emit_movsd_rspdisp_xmm0(&p, i * 8);
+        break;
+    case IR_MUL_FLOAT:
+        emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+        emit_mulsd_xmm0_rspdisp(&p, ins->b * 8);
+        emit_movsd_rspdisp_xmm0(&p, i * 8);
+        break;
+    case IR_DIV_FLOAT:
+        emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+        emit_divsd_xmm0_rspdisp(&p, ins->b * 8);
+        emit_movsd_rspdisp_xmm0(&p, i * 8);
+        break;
+    case IR_LT:
+        emit_mov_rax_rspdisp(&p, ins->a * 8);
+        emit_xor_edx_edx(&p);
+        emit_cmp_rax_rspdisp(&p, ins->b * 8);
+        emit_setl_dl(&p);
+        emit_mov_rspdisp_rdx(&p, i * 8);
+        break;
+    case IR_LIST_ITEM_ATTR: {
+        /* Ola 14e: inline asm para arr[idx].attr (T_INT).
+         * idx_ref = ins->a (slot del frame con el idx int).
+         * dst slot = i*8.  Genera 6 guards que saltan a deopt label. */
+        if (jit_emit_list_item_attr(&p, base,
+                ins->a * 8, i * 8,
+                ins->aux.lia,
+                guard_patches, &n_patches,
+                TE_JIT_MAX_IDS) < 0) return 0;
+        break;
+    }
+    case IR_GUARD_TRUE: {
+        emit_mov_rax_rspdisp(&p, ins->a * 8);
+        emit_test_rax_rax(&p);
+        size_t at = emit_je_rel32(&p, base);
+        if (n_patches >= TE_JIT_MAX_IDS) return 0;
+        guard_patches[n_patches++] = at;
+        break;
+    }
+    case IR_STORE_VAR: {
+        if (ins->type == T_FLOAT) {
+            /* Ola 17: write directo a memoria, sin participar en lreg. */
+            if (jit_emit_store_var_float(&p, ins->aux.var, ins->a) < 0) return 0;
+            break;
+        }
+        int lr = LREG_OF(ins->aux.var);
+        if (lr >= 0) {
+            /* Cached: actualizar reg desde slot. NO escribir a memoria;
+             * el writeback se hace en el deopt label. */
+            emit_mov_lreg_rspdisp(&p, lr, ins->a * 8);
+        } else {
+            emit_mov_rax_rspdisp(&p, ins->a * 8);
+            emit_mov_rdx_imm64(&p, (uint64_t)(uintptr_t)&ins->aux.var->value.int_value);
+            emit_mov_memrdx_rax(&p);
+        }
+        break;
+    }
+    case IR_RETURN:
+        if (ins->type == T_FLOAT) {
+            /* Ola 17: ya está en bits raw double en el slot. */
+            emit_movsd_xmm0_rspdisp(&p, ins->a * 8);
+        } else {
+            emit_mov_rax_rspdisp(&p, ins->a * 8);
+            emit_cvtsi2sd_xmm0_rax(&p);
+        }
+        /* RET trace: n_lvars==0, así que el epílogo simple basta. */
+        emit_epilogue(&p);
+        break;
+    case IR_LOOP_BACK: {
+        size_t at = emit_jmp_rel32(&p, base);
+        patch_rel32(base, at, loop_top_off);
+        break;
+    }
+    default: return 0;
+    }
+}
+    *pp = p; *p_n_patches = n_patches; return 1;
+}
+
+static void *jit_compile_trace(Trace *t) {
+    if (!g_jit_on || !g_jit_slab || !t || !t->complete || t->len < 2) return NULL;
+    if (t->len > TE_JIT_MAX_IDS) return NULL;
+
+    /* Detectar tipo de traza por op final. */
+    int last_idx = t->len - 1;
+    int is_loop = (t->ops[last_idx].op == IR_LOOP_BACK);
+    int is_ret  = (t->ops[last_idx].op == IR_RETURN);
+    if (!is_loop && !is_ret) return NULL;
+    /* Ola 17: aceptamos return T_INT o T_FLOAT. */
+    if (is_ret && t->ops[last_idx].type != T_INT && t->ops[last_idx].type != T_FLOAT) return NULL;
+
+    if (!jit_trace_ops_supported(t, last_idx)) return NULL;
+
+    /* Generosa cota superior: 64 bytes/op para ops + prologo/epilogo. */
+    size_t max_bytes = 128 + 64 * t->len;
+    uint8_t *base = jit_alloc(max_bytes);
+    if (!base) return NULL;
+    uint8_t *p = base;
+
+    /* === Ola 12 — register allocation para loop-carried vars ===
+     * Una "loop-carried var" es una Variable* que aparece como destino de
+     * algún IR_STORE_VAR dentro de la traza. La cacheamos en un registro
+     * callee-saved durante todo el loop:
+     *   - pre-loop: cargamos su valor desde memoria al registro UNA vez.
+     *   - body: IR_LOAD_VAR(v) → mov [rsp+id*8], reg_v   (sin tocar memoria)
+     *           IR_STORE_VAR(v=src) → mov reg_v, [rsp+src*8] (sin escribir mem)
+     *   - deopt: writeback reg_v → memoria, restauramos callee-saved, ret. */
+    struct LoopVar lvars[TE_JIT_MAX_LREGS];
+    int n_lvars = 0;
+    if (is_loop) {
+        for (int i = 1; i < last_idx; i++) {
+            if (t->ops[i].op != IR_STORE_VAR) continue;
+            /* Ola 17: float vars no participan en lreg cache. */
+            if (t->ops[i].type == T_FLOAT) continue;
+            Variable *v = t->ops[i].aux.var;
+            int found = 0;
+            for (int k = 0; k < n_lvars; k++) if (lvars[k].var == v) { found = 1; break; }
+            if (!found && n_lvars < TE_JIT_MAX_LREGS) {
+                lvars[n_lvars].var = v;
+                lvars[n_lvars].lreg = n_lvars;  /* asigna 0..4 → rbx, r12..r15 */
+                n_lvars++;
+            }
+        }
+    }
+
+    /* === Prólogo === */
+    /* push rbp; mov rbp,rsp; <push callee-saved>; sub rsp, frame */
+    e8(&p, 0x55);                                              /* push rbp */
+    e8(&p, 0x48); e8(&p, 0x89); e8(&p, 0xE5);                  /* mov rbp, rsp */
+    for (int k = 0; k < n_lvars; k++) emit_push_lreg(&p, lvars[k].lreg);
+    e8(&p, 0x48); e8(&p, 0x81); e8(&p, 0xEC); e32(&p, TE_JIT_FRAME_BYTES);  /* sub rsp,frame */
+
+    /* === Pre-loop: cargar cada loop-carried var en su registro === */
+    for (int k = 0; k < n_lvars; k++) {
+        emit_mov_rax_imm64(&p, (uint64_t)(uintptr_t)&lvars[k].var->value.int_value);
+        emit_mov_lreg_memrax(&p, lvars[k].lreg);
+    }
+
+    /* Para loop traces: marcar loop_top después de los pre-loads + LICM hoist.
+     * Recolectar offsets de cada `je deopt` para backpatch. */
+    size_t guard_patches[TE_JIT_MAX_IDS];
+    int n_patches = 0;
+
+    /* Ola 11: HOIST de invariants. Si es loop trace, primero emitimos los
+     * ops marcados [INV] (LICM) UNA vez antes del loop_top; en pass 2 se
+     * skipean. Para ops con efectos de control (guard/store/return/loop_back)
+     * NO hoist nunca. */
+    if (!jit_emit_hoist(t, is_loop, &p)) goto fail;
+
+    /* Marcar loop_top después de los hoisted invariants (o justo después
+     * del prologue si no hay hoisting). */
+    size_t loop_top_off = (size_t)(p - base);
+
+    if (!jit_emit_body(t, is_loop, base, &p, lvars, n_lvars, guard_patches, &n_patches, loop_top_off)) goto fail;
 
     /* Para loop traces: deopt label + writeback de cached regs + epílogo. */
     if (is_loop) {

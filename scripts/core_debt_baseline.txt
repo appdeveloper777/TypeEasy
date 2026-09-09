@@ -167,7 +167,4 @@ global src/typeeasy_main.c g_test_assertions
 global src/typeeasy_main.c g_test_failed
 fn src/code_generation.c main_reg_allocation 312
 fn src/mysql_bridge.c native_mysql_connect 317
-fn src/te_bytecode.c bc_compile 447
-fn src/te_bytecode.c jit_compile_trace 387
-fn src/te_csv.c from_csv_to_list 318
 fn src/typeeasy_main.c main 431

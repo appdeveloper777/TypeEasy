@@ -3095,6 +3095,95 @@ static void csv_parse_sequential(ClassNode *cls, char *src, size_t len, size_t p
     *p_first = first; *p_worker_args = worker_args; *p_worker_args_n = worker_args_n; *p_worker_gcache = worker_gcache;
 }
 
+/* Fase de configuración de from_csv_to_list (extraída, Fase 2): clasifica atributos, mapea
+ * columnas CSV -> atributo, arenas compartidas y row template. Termina con te_runtime_fatal()
+ * si falta una columna no-nullable. Lo alocado se libera en from_csv_to_list vía cfg->*. */
+static void csv_build_cfg(ClassNode *cls, char **header, int header_n, const char *filename, CSVParseCfg *cfg) {
+    int nattr = cls->attr_count;
+    /* Pre-classify each attribute slot. v0.0.14 polish #6a: K_FLOAT añadido
+     * para soportar columnas float/double en el path columnar. */
+    enum { K_INT = 0, K_STRING = 1, K_OTHER = 2, K_FLOAT = 3 };
+    int *attr_kind = (int*)malloc(nattr * sizeof(int));
+    int *attr_nullable = (int*)malloc(nattr * sizeof(int));
+    for (int a = 0; a < nattr; a++) {
+        const char *t = cls->attributes[a].type;
+        attr_kind[a] = csv_attr_is_int(t)    ? K_INT
+                     : csv_attr_is_string(t) ? K_STRING
+                     : csv_attr_is_float(t)  ? K_FLOAT
+                     : K_OTHER;
+        attr_nullable[a] = csv_attr_is_nullable(t);
+    }
+
+    /* Map columnas CSV -> índice de atributo. */
+    int *col_to_attr = (int*)malloc(header_n * sizeof(int));
+    for (int c = 0; c < header_n; c++) col_to_attr[c] = -1;
+    for (int c = 0; c < header_n; c++) {
+        for (int a = 0; a < nattr; a++) {
+            if (cls->attributes[a].id && !strcmp(cls->attributes[a].id, header[c])) {
+                col_to_attr[c] = a; break;
+            }
+        }
+    }
+    for (int a = 0; a < nattr; a++) {
+        int found = 0;
+        for (int c = 0; c < header_n; c++) if (col_to_attr[c] == a) { found = 1; break; }
+        if (!found && !attr_nullable[a]) {
+            fprintf(stderr,
+                "CSVError: atributo '%s' (clase %s) no tiene columna en '%s'.\n",
+                cls->attributes[a].id, cls->name, filename);
+            csv_free_record(header, header_n);
+            free(col_to_attr); free(attr_kind); free(attr_nullable);
+            te_runtime_fatal();
+        }
+    }
+
+    /* Pre-cache attribute id/type strings UNA SOLA VEZ por carga, en arena
+     * (main thread). Workers usan estos punteros directos (read-only). */
+    char **shared_attr_id_arena   = (char**)malloc(nattr * sizeof(char*));
+    char **shared_attr_type_arena = (char**)malloc(nattr * sizeof(char*));
+    char *null_type_arena = csv_arena_strdup("NULL");
+    char *shared_class_name_arena = csv_arena_strdup(cls->name);
+    /* Inicializa una sola vez el literal global del type del wrapper. */
+    if (!g_csv_wrapper_obj_type) {
+        g_csv_wrapper_obj_type = csv_arena_strdup("OBJECT");
+    }
+    char *shared_obj_type = g_csv_wrapper_obj_type;
+    for (int a = 0; a < nattr; a++) {
+        shared_attr_id_arena[a]   = csv_arena_strdup(cls->attributes[a].id);
+        shared_attr_type_arena[a] = csv_arena_strdup(cls->attributes[a].type);
+    }
+
+    /* Row template: prebuild Variable[nattr] que se memcpy-ea por fila. */
+    Variable *row_template = (Variable*)csv_arena_alloc(nattr * sizeof(Variable));
+    memset(row_template, 0, nattr * sizeof(Variable));
+    for (int a = 0; a < nattr; a++) {
+        row_template[a].id = shared_attr_id_arena[a];
+        row_template[a].type = shared_attr_type_arena[a];
+        row_template[a].is_const = 0;
+        row_template[a].vtype = (attr_kind[a] == 0 /*INT*/) ? VAL_INT
+                              : (attr_kind[a] == 3 /*FLOAT*/) ? VAL_FLOAT
+                              : VAL_STRING;
+        /* value bytes ya en cero por memset; suficiente para int=0 y string_value=NULL. */
+    }
+
+    /* Config compartida read-only para workers. */
+    cfg->cls = cls;
+    cfg->nattr = nattr;
+    cfg->header_n = header_n;
+    cfg->attr_kind = attr_kind;
+    cfg->attr_nullable = attr_nullable;
+    cfg->col_to_attr = col_to_attr;
+    cfg->shared_attr_id = shared_attr_id_arena;
+    cfg->shared_attr_type = shared_attr_type_arena;
+    cfg->null_type = null_type_arena;
+    cfg->shared_class_name = shared_class_name_arena;
+    cfg->shared_obj_type = shared_obj_type;
+    cfg->header_for_errors = header;
+    cfg->filename_for_errors = filename;
+    cfg->row_template = row_template;
+    cfg->row_template_bytes = (size_t)nattr * sizeof(Variable);
+}
+
 ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
     /* Profiling opcional via env TE_CSV_TIMING=1 */
     const char *te_timing = getenv("TE_CSV_TIMING");
@@ -3169,89 +3258,8 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
 
     int nattr = cls->attr_count;
 
-    /* Pre-classify each attribute slot. v0.0.14 polish #6a: K_FLOAT añadido
-     * para soportar columnas float/double en el path columnar. */
-    enum { K_INT = 0, K_STRING = 1, K_OTHER = 2, K_FLOAT = 3 };
-    int *attr_kind = (int*)malloc(nattr * sizeof(int));
-    int *attr_nullable = (int*)malloc(nattr * sizeof(int));
-    for (int a = 0; a < nattr; a++) {
-        const char *t = cls->attributes[a].type;
-        attr_kind[a] = csv_attr_is_int(t)    ? K_INT
-                     : csv_attr_is_string(t) ? K_STRING
-                     : csv_attr_is_float(t)  ? K_FLOAT
-                     : K_OTHER;
-        attr_nullable[a] = csv_attr_is_nullable(t);
-    }
-
-    /* Map columnas CSV -> índice de atributo. */
-    int *col_to_attr = (int*)malloc(header_n * sizeof(int));
-    for (int c = 0; c < header_n; c++) col_to_attr[c] = -1;
-    for (int c = 0; c < header_n; c++) {
-        for (int a = 0; a < nattr; a++) {
-            if (cls->attributes[a].id && !strcmp(cls->attributes[a].id, header[c])) {
-                col_to_attr[c] = a; break;
-            }
-        }
-    }
-    for (int a = 0; a < nattr; a++) {
-        int found = 0;
-        for (int c = 0; c < header_n; c++) if (col_to_attr[c] == a) { found = 1; break; }
-        if (!found && !attr_nullable[a]) {
-            fprintf(stderr,
-                "CSVError: atributo '%s' (clase %s) no tiene columna en '%s'.\n",
-                cls->attributes[a].id, cls->name, filename);
-            csv_free_record(header, header_n);
-            free(col_to_attr); free(attr_kind); free(attr_nullable);
-            te_runtime_fatal();
-        }
-    }
-
-    /* Pre-cache attribute id/type strings UNA SOLA VEZ por carga, en arena
-     * (main thread). Workers usan estos punteros directos (read-only). */
-    char **shared_attr_id_arena   = (char**)malloc(nattr * sizeof(char*));
-    char **shared_attr_type_arena = (char**)malloc(nattr * sizeof(char*));
-    char *null_type_arena = csv_arena_strdup("NULL");
-    char *shared_class_name_arena = csv_arena_strdup(cls->name);
-    /* Inicializa una sola vez el literal global del type del wrapper. */
-    if (!g_csv_wrapper_obj_type) {
-        g_csv_wrapper_obj_type = csv_arena_strdup("OBJECT");
-    }
-    char *shared_obj_type = g_csv_wrapper_obj_type;
-    for (int a = 0; a < nattr; a++) {
-        shared_attr_id_arena[a]   = csv_arena_strdup(cls->attributes[a].id);
-        shared_attr_type_arena[a] = csv_arena_strdup(cls->attributes[a].type);
-    }
-
-    /* Row template: prebuild Variable[nattr] que se memcpy-ea por fila. */
-    Variable *row_template = (Variable*)csv_arena_alloc(nattr * sizeof(Variable));
-    memset(row_template, 0, nattr * sizeof(Variable));
-    for (int a = 0; a < nattr; a++) {
-        row_template[a].id = shared_attr_id_arena[a];
-        row_template[a].type = shared_attr_type_arena[a];
-        row_template[a].is_const = 0;
-        row_template[a].vtype = (attr_kind[a] == 0 /*INT*/) ? VAL_INT
-                              : (attr_kind[a] == 3 /*FLOAT*/) ? VAL_FLOAT
-                              : VAL_STRING;
-        /* value bytes ya en cero por memset; suficiente para int=0 y string_value=NULL. */
-    }
-
-    /* Config compartida read-only para workers. */
     CSVParseCfg cfg;
-    cfg.cls = cls;
-    cfg.nattr = nattr;
-    cfg.header_n = header_n;
-    cfg.attr_kind = attr_kind;
-    cfg.attr_nullable = attr_nullable;
-    cfg.col_to_attr = col_to_attr;
-    cfg.shared_attr_id = shared_attr_id_arena;
-    cfg.shared_attr_type = shared_attr_type_arena;
-    cfg.null_type = null_type_arena;
-    cfg.shared_class_name = shared_class_name_arena;
-    cfg.shared_obj_type = shared_obj_type;
-    cfg.header_for_errors = header;
-    cfg.filename_for_errors = filename;
-    cfg.row_template = row_template;
-    cfg.row_template_bytes = (size_t)nattr * sizeof(Variable);
+    csv_build_cfg(cls, header, header_n, filename, &cfg);
 
     ASTNode *first = NULL;
 
@@ -3316,15 +3324,15 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
         int n_workers = can_parallel >= 2 ? can_parallel : 1;
         struct timespec ts_after_count;
         DataFrame *df = csv_build_dataframe(src, len, pos, cls,
-                                             attr_kind, attr_nullable, col_to_attr,
+                                             cfg.attr_kind, cfg.attr_nullable, cfg.col_to_attr,
                                              header, header_n, n_workers,
                                              te_timing ? &ts_after_count : NULL,
                                              src_is_mmap);
         if (df) {
             if (te_timing) clock_gettime(CLOCK_MONOTONIC, &ts_after_parse);
             csv_free_record(header, header_n);
-            free(col_to_attr); free(attr_kind); free(attr_nullable);
-            free(shared_attr_id_arena); free(shared_attr_type_arena);
+            free(cfg.col_to_attr); free(cfg.attr_kind); free(cfg.attr_nullable);
+            free(cfg.shared_attr_id); free(cfg.shared_attr_type);
             /* Wrapper LIST con TEListIdx pre-set para que .length sea O(1)
              * sin crear ASTNodes hijos. left=NULL → iter no soportada.
              * v0.0.11-pre: stashea DataFrame* en ix->items con sentinel cap
@@ -3359,11 +3367,11 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
     if (te_timing) clock_gettime(CLOCK_MONOTONIC, &ts_after_parse);
 
     csv_free_record(header, header_n);
-    free(col_to_attr);
-    free(attr_kind);
-    free(attr_nullable);
-    free(shared_attr_id_arena);
-    free(shared_attr_type_arena);
+    free(cfg.col_to_attr);
+    free(cfg.attr_kind);
+    free(cfg.attr_nullable);
+    free(cfg.shared_attr_id);
+    free(cfg.shared_attr_type);
     /* `src` NO se libera: las strings de los objetos apuntan dentro (zero-copy
      * desde mmap con MAP_PRIVATE). Vive lo que dura el proceso. */
 
