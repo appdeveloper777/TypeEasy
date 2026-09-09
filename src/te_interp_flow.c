@@ -170,7 +170,7 @@ void interpret_for(TeVM *vm, ASTNode *node) {
         }
         if (bc_for_enabled && !g_debug_enabled) {
             BCInfo *info = bc_get_or_compile_stmt(node);
-            if (info) { bc_exec(info->code); return; }
+            if (info && bc_run(info, NULL)) return;
         }
     }
 

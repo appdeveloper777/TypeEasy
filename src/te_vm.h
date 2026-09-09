@@ -44,6 +44,11 @@ typedef struct TeVM {
     ClassNode **classes; int classes_cap; int class_count;   /* clases declaradas (parser + runtime) */
     MethodNode *global_methods;                              /* endpoints/métodos globales (lista enlazada) */
     Variable ret_var; int ret_var_active;                    /* valor de retorno (__ret_var) */
+    /* --- acelerador bytecode (te_bytecode.c): sin globales propios --- */
+    ASTNode **bc_nodes; int bc_nodes_n, bc_nodes_cap;        /* nodos con BCInfo cacheado (invalidar entre requests) */
+    MethodNode **bc_methods; int bc_methods_n, bc_methods_cap;
+    ObjectNode *bc_this;                                     /* `this` del cuerpo de método en ejecución */
+    ObjectNode *bc_this_stack[16]; int bc_this_sp;           /* llamadas inline anidadas */
 } TeVM;
 
 /* VM actual. Todo el intérprete accede al estado vía `g_vm.campo`, que expande a la VM

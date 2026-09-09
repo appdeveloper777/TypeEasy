@@ -1,4 +1,5 @@
 // uuid_v4() returns an RFC4122 string; assert it contains the canonical separators.
 // expect-contains: -
+// nondeterministic: random output (excluded from run_bc_diff.py)
 let id = uuid_v4();
 println(id);

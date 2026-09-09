@@ -24,7 +24,7 @@ WITH_SYBASE ?= 1
 WITH_CURL   ?= 1
 WITH_OPENMP ?= 1
 
-MOTOR_C_FILES = ast.c bytecode.c db_params.c orm_bridge.c typeeasy_api.c typeeasy_api_server.c wasm_backend.c debugger.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c te_xlsx.c te_colcache.c te_stdlib.c te_bridge.c te_async.c te_evloop.c te_linq.c te_linq_ops.c te_math.c te_string.c te_list.c te_map.c te_print.c te_interp_flow.c te_value.c te_vm.c te_interp_decl.c db_stubs_optional.c
+MOTOR_C_FILES = ast.c db_params.c orm_bridge.c typeeasy_api.c typeeasy_api_server.c wasm_backend.c debugger.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c te_xlsx.c te_colcache.c te_stdlib.c te_bridge.c te_async.c te_evloop.c te_linq.c te_linq_ops.c te_math.c te_string.c te_list.c te_map.c te_print.c te_interp_flow.c te_value.c te_vm.c te_interp_decl.c db_stubs_optional.c
 
 # Bridge real solo si su motor esta ON; si no, db_stubs_optional.c aporta stubs.
 ifeq ($(WITH_MYSQL),1)
@@ -43,7 +43,6 @@ BISON_H = parser.tab.h
 FLEX_C = lex.yy.c
 BISON_OBJ = parser.tab.o
 FLEX_OBJ = lex.yy.o
-STRVARS_OBJ = strvars.o
 
 # --- CIVETWEB (para el agente) ---
 CIVETWEB_C = ../api_server/civetweb.c
@@ -73,8 +72,6 @@ ifeq ($(filter x86_64 amd64 i686 i386,$(UNAME_M)),)
 else
   TE_ARCH_FLAGS ?= -mavx2 -mbmi
 endif
-# TE_ENABLE_JIT=1: trace JIT compilado dentro del binario (OFF en runtime salvo
-# TYPEEASY_JIT=1). Microsoft confirmo "No malware detected" para el binario.
 #
 # --- Defines + libs por feature (segun WITH_*). Default ON = build de siempre.
 TE_DB_CFLAGS =
@@ -106,7 +103,7 @@ else
   TE_OMP_LIBS =
 endif
 
-CFLAGS = -Wall -Werror=implicit-function-declaration -g $(TE_OPT) $(TE_ARCH_FLAGS) -pthread $(TE_OMP_CFLAGS) -DTE_ENABLE_JIT=1 -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET $(TE_DB_CFLAGS) $(TE_CURL_CFLAGS) $(CFLAGS_EXTRA)
+CFLAGS = -Wall -Werror=implicit-function-declaration -g $(TE_OPT) $(TE_ARCH_FLAGS) -pthread $(TE_OMP_CFLAGS) -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET $(TE_DB_CFLAGS) $(TE_CURL_CFLAGS) $(CFLAGS_EXTRA)
 CXXFLAGS = -Wall -g $(TE_OPT) -std=c++17 -fopenmp
 # -lfl (runtime de flex) no existe en algunos toolchains (p.ej. Android NDK).
 # parser.l define su propio yywrap(), asi que se puede enlazar sin -lfl pasando
@@ -151,18 +148,15 @@ $(CIVETWEB_OBJ): $(CIVETWEB_C)
 $(TE_WS_OBJ): $(TE_WS_C) ../api_server/te_websocket.h
 	$(CC) $(CFLAGS) -c $(TE_WS_C) -o $(TE_WS_OBJ)
     
-# Compila strvars.o
-$(STRVARS_OBJ): strvars.c
-	$(CC) $(CFLAGS) -c strvars.c -o $(STRVARS_OBJ)
 
 # --- REGLAS DE EJECUTABLES ---
 # 1. 'typeeasy' (intérprete para scripts) — ahora linkea civetweb para soporte --api
-$(EXEC_SCRIPT): $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ) $(TE_WS_OBJ)
-	$(CC) $(CFLAGS) -o $(EXEC_SCRIPT) $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ) $(TE_WS_OBJ) $(LIBS_SCRIPT)
+$(EXEC_SCRIPT): $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(CIVETWEB_OBJ) $(TE_WS_OBJ)
+	$(CC) $(CFLAGS) -o $(EXEC_SCRIPT) $(MAIN_SCRIPT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(CIVETWEB_OBJ) $(TE_WS_OBJ) $(LIBS_SCRIPT)
 
 # 2. 'servidor_agent' (servidor del agente)
-$(EXEC_AGENT): $(MAIN_AGENT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ) $(TE_WS_OBJ)
-	$(CC) $(CFLAGS) -o $(EXEC_AGENT) $(MAIN_AGENT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(STRVARS_OBJ) $(CIVETWEB_OBJ) $(TE_WS_OBJ) $(LIBS_AGENT)
+$(EXEC_AGENT): $(MAIN_AGENT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(CIVETWEB_OBJ) $(TE_WS_OBJ)
+	$(CC) $(CFLAGS) -o $(EXEC_AGENT) $(MAIN_AGENT_OBJ) $(BISON_OBJ) $(FLEX_OBJ) $(MOTOR_OBJS) $(CIVETWEB_OBJ) $(TE_WS_OBJ) $(LIBS_AGENT)
 
 # --- REGLAS DE EASYSPARK ---
 $(SPARK_OBJ): $(SPARK_DIR)/dataframe.cpp $(SPARK_DIR)/dataframe.hpp

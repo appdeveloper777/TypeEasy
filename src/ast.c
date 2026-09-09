@@ -17,7 +17,6 @@
 #else
 #include <unistd.h>
 #endif
-#include "bytecode.h"
 #include "mysql_bridge.h"
 #include "postgres_bridge.h"
 #include "sqlserver_bridge.h"
@@ -27,6 +26,7 @@
 #include "te_http.h"
 #include "te_json.h"
 #include "te_bytecode.h"
+#include "te_num.h"
 #include "te_csv.h"
 #include "te_xlsx.h"
 #include "te_colcache.h"
@@ -5459,24 +5459,26 @@ static double te_ev_identifier(ASTNode *node) {
             node->cached_var = var;
         }
         if (var) {
-            if (var->type && strcmp(var->type, "NULL") == 0) {
-                return 0;
-            }
-            if (var->vtype == VAL_INT) {
-                return var->value.int_value;
-            } else if (var->vtype == VAL_FLOAT) {
-                return var->value.float_value;
-            } else if (var->vtype == VAL_STRING) {
-                printf("Error: variable '%s' is a string, cannot be evaluated as a number.\n", node->id);
-                return 0;
-            } else {
-                printf("Error: variable '%s' is an object, cannot be evaluated as a number.\n", node->id);
-                return 0;
-            }
+            return te_var_as_double(var, node->id);
         } else {
             printf("Error: variable '%s' is not defined.\n", node->id);
             return 0;
         }
+}
+
+/* ---- Semántica numérica única: ver te_num.h (inline, compartida con el bytecode) ---- */
+
+double te_var_as_double(Variable *var, const char *name) {
+    if (!var) { printf("Error: variable '%s' is not defined.\n", name ? name : "?"); return 0; }
+    if (var->type && strcmp(var->type, "NULL") == 0) return 0;
+    if (var->vtype == VAL_INT)   return (double)var->value.int_value;
+    if (var->vtype == VAL_FLOAT) return var->value.float_value;
+    if (var->vtype == VAL_STRING) {
+        printf("Error: variable '%s' is a string, cannot be evaluated as a number.\n", name ? name : "?");
+        return 0;
+    }
+    printf("Error: variable '%s' is an object, cannot be evaluated as a number.\n", name ? name : "?");
+    return 0;
 }
 
 /* NK_EQ — extraído de evaluate_expression (Fase 2). */
@@ -5902,9 +5904,9 @@ double evaluate_expression(ASTNode *node) {
         return 0;
     }
 
-    /* Fase 3 (perf): bytecode fast-path. Compile & cache on first hit;
-     * on subsequent calls (loop bodies, conditions) skip the AST walker
-     * entirely and run the flat opcode stream via computed goto. */
+    /* Acelerador bytecode (te_bytecode.h): mismo resultado que el walker por
+     * construcción; si el guard de entrada falla (una variable cambió de tipo)
+     * bc_run devuelve 0 y se camina el árbol. */
     {
         static int bc_init = 0;
         static int bc_enabled = 1;
@@ -5915,11 +5917,16 @@ double evaluate_expression(ASTNode *node) {
         }
         if (bc_enabled && !g_debug_enabled) {
             BCInfo *info = bc_get_or_compile(node);
-            if (info) return bc_exec(info->code);
+            double r;
+            if (info && bc_run(info, &r)) return r;
         }
     }
+    return te_walk_expression(node);
+}
 
-    /* Fase 1 (perf): single dispatch via cached NodeKind enum. */
+/* El walker propiamente dicho. Aritmética/comparaciones/lógica via te_num.h. */
+double te_walk_expression(ASTNode *node) {
+    if (!node) return 0;
     NodeKind k = nk_of(node);
 
     switch (k) {
@@ -5935,14 +5942,13 @@ double evaluate_expression(ASTNode *node) {
     case NK_FLOAT:
         return atof(node->str_value);
 
-    case NK_GT:
-        return evaluate_expression(node->left) > evaluate_expression(node->right);
-    case NK_LT:
-        return evaluate_expression(node->left) < evaluate_expression(node->right);
-    case NK_GT_EQ:
-        return evaluate_expression(node->left) <= evaluate_expression(node->right);
-    case NK_LT_EQ:
-        return evaluate_expression(node->left) >= evaluate_expression(node->right);
+    case NK_GT: case NK_LT: case NK_GT_EQ: case NK_LT_EQ:
+    case NK_ADD: case NK_SUB: case NK_MUL: case NK_DIV: case NK_MOD:
+    case NK_BIT_AND: case NK_BIT_OR: case NK_BIT_XOR: case NK_SHL: case NK_SHR: {
+        double a = evaluate_expression(node->left);
+        double b = evaluate_expression(node->right);
+        return te_num_binop(k, a, b);
+    }
 
     case NK_EQ: return te_ev_eq(node);
 
@@ -5955,7 +5961,9 @@ double evaluate_expression(ASTNode *node) {
         if (evaluate_expression(node->left)) return 1;
         return evaluate_expression(node->right) ? 1 : 0;
     case NK_NOT:
-        return evaluate_expression(node->left) ? 0 : 1;
+    case NK_NEG:
+    case NK_BIT_NOT:
+        return te_num_unop(k, evaluate_expression(node->left));
 
     case NK_NULL_COALESCE: {
         ASTNode *l = node->left;
@@ -5969,57 +5977,6 @@ double evaluate_expression(ASTNode *node) {
                    ? evaluate_expression(node->right)
                    : evaluate_expression(node->extra);
 
-    case NK_ADD:
-        return evaluate_expression(node->left) + evaluate_expression(node->right);
-    case NK_SUB:
-        return evaluate_expression(node->left) - evaluate_expression(node->right);
-    case NK_MUL:
-        return evaluate_expression(node->left) * evaluate_expression(node->right);
-    case NK_DIV: {
-        double right = evaluate_expression(node->right);
-        if (right == 0.0) {
-            printf("Error: division by zero.\n");
-            return 0;
-        }
-        return evaluate_expression(node->left) / right;
-    }
-    case NK_MOD: {
-        long long lv = (long long)evaluate_expression(node->left);
-        long long rv = (long long)evaluate_expression(node->right);
-        if (rv == 0) { printf("Error: modulo by zero.\n"); return 0; }
-        return (double)(lv % rv);
-    }
-    case NK_NEG:
-        return -evaluate_expression(node->left);
-    case NK_BIT_AND: {
-        long long a = (long long)evaluate_expression(node->left);
-        long long b = (long long)evaluate_expression(node->right);
-        return (double)(a & b);
-    }
-    case NK_BIT_OR: {
-        long long a = (long long)evaluate_expression(node->left);
-        long long b = (long long)evaluate_expression(node->right);
-        return (double)(a | b);
-    }
-    case NK_BIT_XOR: {
-        long long a = (long long)evaluate_expression(node->left);
-        long long b = (long long)evaluate_expression(node->right);
-        return (double)(a ^ b);
-    }
-    case NK_BIT_NOT: {
-        long long a = (long long)evaluate_expression(node->left);
-        return (double)(~a);
-    }
-    case NK_SHL: {
-        long long a = (long long)evaluate_expression(node->left);
-        long long b = (long long)evaluate_expression(node->right);
-        return (double)(a << b);
-    }
-    case NK_SHR: {
-        long long a = (long long)evaluate_expression(node->left);
-        long long b = (long long)evaluate_expression(node->right);
-        return (double)(a >> b);
-    }
     case NK_IN: return te_ev_in(node);
 
     case NK_ACCESS_ATTR: return te_ev_access_attr(node);
@@ -6505,7 +6462,7 @@ static void te_stmt_while(ASTNode *node) {
             }
             if (bc4_enabled && !g_debug_enabled) {
                 BCInfo *info = bc_get_or_compile_stmt(node);
-                if (info) { bc_exec(info->code); return; }
+                if (info && bc_run(info, NULL)) return;
             }
         }
         /* Block scope: reclaim each iteration's body-local `let`s so they do
@@ -7881,11 +7838,12 @@ static int te_cm_body_bytecode(ASTNode *node, MethodNode *m, ObjectNode *obj) {
              || strcmp(m->return_type, "float") == 0)
             && obj && obj->class) {
             BCInfo *bi = bc_get_or_compile_method(m, obj->class);
-            if (bi) {
-                ObjectNode *saved_this = g_bc_this;
-                g_bc_this = obj;
-                double rv = bc_exec(bi->code);
-                g_bc_this = saved_this;
+            double rv;
+            ObjectNode *saved_this = g_vm.bc_this;
+            g_vm.bc_this = obj;
+            int ran = bi ? bc_run(bi, &rv) : 0;
+            g_vm.bc_this = saved_this;
+            if (ran) {
                 /* Write __ret_var directly (mirrors FAST RETURN path). */
                 if (g_vm.ret_var_active) {
                     if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) {

@@ -221,6 +221,9 @@ jobs:
       - name: Build interpreter
         run: make -C src typeeasy
 
+      - name: Bytecode accelerator == walker (differential, tests/lang)
+        run: python3 tests/regress/run_bc_diff.py --bin src/typeeasy
+
       - name: Run real-DB contract tests (MariaDB + PostgreSQL)
         run: bash tests/dbreal/run.sh --bin src/typeeasy --require
 

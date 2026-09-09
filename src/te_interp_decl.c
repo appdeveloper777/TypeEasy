@@ -6,6 +6,7 @@
 #include <math.h>
 #include <stdint.h>
 #include "ast.h"
+#include "te_num.h"
 #include "te_vm.h"
 #include "ast_internal.h"
 
@@ -834,14 +835,10 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
                 || vk == NK_IDENTIFIER) {
                 /* Avoid string-typed ADD (concat) which needs the slow path. */
                 if (!(vk == NK_ADD && is_string_type(value_node))) {
-                    long long i64v; double r;
-                    if (te_eval_num(value_node, &i64v, &r)) {   /* Fase 1b: entero exacto */
-                        fv->vtype = VAL_INT;
-                        fv->value.int_value = i64v;
-                    } else {
-                        fv->vtype = VAL_FLOAT;
-                        fv->value.float_value = r;
-                    }
+                    /* Mismas primitivas que BC_I64_STORE / BC_STORE_VAR (te_bytecode.c). */
+                    long long i64v;
+                    if (te_eval_i64(value_node, &i64v)) te_num_store_i64(fv, i64v);   /* Fase 1b: entero exacto */
+                    else                                te_num_store(fv, evaluate_expression(value_node));
                     return;
                 }
             }

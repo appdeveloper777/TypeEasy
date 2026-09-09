@@ -387,6 +387,9 @@ extern const char *g_script_path;
 
 // Funciones adicionales que faltan
 double evaluate_expression(ASTNode *node);
+/* Semántica numérica ÚNICA walker/bytecode: te_num.h (inline). Aquí solo lo no-inline. */
+double te_var_as_double(Variable *var, const char *name); /* lectura de identificador en contexto numérico */
+double te_walk_expression(ASTNode *node);               /* evaluate_expression SIN el acelerador */
 void generate_plot(double *values, int count);
 ASTNode* create_call_node_return_json(const char* funcName, ASTNode* args);
 ASTNode* create_call_node_return_xml(const char* funcName, ASTNode* args);
