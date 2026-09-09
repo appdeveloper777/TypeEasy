@@ -52,12 +52,11 @@ extern ASTNode *parse_file(FILE *file);
  * of thousands of malformed inputs per second; yyerror would otherwise flood
  * the CI log (hundreds of MB) with no added signal. Defined in parser.y. ASan
  * crash reports are written by the sanitizer, not yyerror, so they still show. */
-extern int g_quiet_parse_errors;
 
 int LLVMFuzzerInitialize(int *argc, char ***argv) {
     (void)argc;
     (void)argv;
-    g_quiet_parse_errors = 1;
+    g_vm.quiet_parse_errors = 1;
     return 0;
 }
 

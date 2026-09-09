@@ -307,7 +307,6 @@ void  te_frames_reset(void);
 void *te_frames_save(void);
 void  te_frames_restore(void *t);
 /* Source-file table + error location (see ast.c). */
-extern int g_lex_file_id;
 int  te_src_file_register(const char *path);
 const char *te_src_file_name(int id);
 void te_runtime_location(char *buf, size_t cap);

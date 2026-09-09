@@ -49,6 +49,13 @@ typedef struct TeVM {
     MethodNode **bc_methods; int bc_methods_n, bc_methods_cap;
     ObjectNode *bc_this;                                     /* `this` del cuerpo de método en ejecución */
     ObjectNode *bc_this_stack[16]; int bc_this_sp;           /* llamadas inline anidadas */
+    /* --- posición del lexer (antes yylineno/g_vm.lex_file_id/g_decl_stmt_line globales) --- */
+    int lex_line;              /* línea del último token (la actualiza el wrapper yylex) */
+    int lex_file_id;           /* archivo que se está lexeando (0 = principal) */
+    int decl_stmt_line;        /* línea del keyword que abre una declaración (let/var/...) */
+    void *parse_scanner;       /* scanner activo (para liberar si un fatal abortó el parse) */
+    int debug_mode;            /* --debug (antes g_debug_mode en parser.y) */
+    int quiet_parse_errors;    /* silenciar yyerror (fuzzer) */
 } TeVM;
 
 /* VM actual. Todo el intérprete accede al estado vía `g_vm.campo`, que expande a la VM

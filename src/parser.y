@@ -1,49 +1,33 @@
 %{   
     #include <stdio.h>
-#include "te_vm.h"
     #include <stdlib.h>
-    #include "ast.h"
-    #include "te_csv.h"
     #include <locale.h>
     #include <time.h>
+    #include "te_vm.h"
+    #include "ast.h"
+    #include "te_csv.h"
+    #include "te_parse.h"
 
-    ASTNode *root;
-    extern int yylineno;
-    extern FILE *yyin;
-    void yyerror(const char *s);
-    ClassNode *last_class = NULL;
-    int yylex();
-    void generate_code(const char* code);
-    void clean_generated_code();
-    int g_debug_mode = 0;
-    static int g_pending_auth = 0;   /* @auth decorator flag, applied to next endpoint_method */
-    static int g_endpoint_auth_all = 0; /* @auth at endpoint level, applied to ALL methods */
-    /* v0.0.24 — user-defined guard at endpoint level: `@<name> endpoint { ... }`
-     * (or `endpoint @<name> { ... }`) applies the guard to every method in the
-     * block. Holds the guard function name while the block is parsed; each
-     * endpoint_methods reduction strdup's it into MethodNode.guard_name when the
-     * method has no per-method `@<name>` of its own. */
-    static char *g_endpoint_guard_all = NULL;
-    /* C#/.NET-style `async` endpoint modifier. The lexer (parser.l) sets this to
-     * 1 when it strips an `async` that follows ']' (an endpoint handler), and the
-     * endpoint_methods reduction below copies it into MethodNode.is_async, then
-     * clears it. Non-static so the lexer translation unit shares it via extern. */
-    int g_pending_async = 0;
-    /* v0.0.24 — user-defined `@<name>` decorator. The grammar captures the guard
-     * function name here when a decorator_marker is reduced, and the
-     * endpoint_methods reduction transfers ownership into MethodNode.guard_name
-     * (then nulls this) so it applies to the next endpoint method only. */
-    static char *g_pending_guard = NULL;
-    /* v0.1.0 — WebSocket lifecycle blocks (on_open/on_message/on_close).
-     * Filled while parsing a single [WebSocket] handler body, then consumed by
-     * the WS endpoint_method action. Reset at the start of each WS handler. */
-    static int      g_ws_is_lifecycle = 0;
-    static ASTNode *g_ws_on_open    = NULL;
-    static ASTNode *g_ws_on_message = NULL;
-    static ASTNode *g_ws_on_close   = NULL;
-    static char    *g_ws_msg_param  = NULL;
-    ASTNode* parse_file(FILE* file);
+    /* Parser PURO (api.pure full) + scanner reentrante: sin globales. El estado
+     * de la pasada vive en TeParseCtx (ctx, %parse-param) y el scanner es
+     * `scanner` (%parse-param / %lex-param). yyerror recibe ambos. */
 %}
+
+%code requires {
+    #include "te_parse.h"
+    #ifndef YY_TYPEDEF_YY_SCANNER_T
+    #define YY_TYPEDEF_YY_SCANNER_T
+    typedef void *yyscan_t;
+    #endif
+}
+%code {
+    #include "lex.yy.h"
+    static void yyerror(yyscan_t scanner, TeParseCtx *ctx, const char *s);
+}
+
+%define api.pure full
+%lex-param   { yyscan_t scanner }
+%parse-param { yyscan_t scanner } { TeParseCtx *ctx }
 
 %union {
     long long ival;
@@ -104,7 +88,6 @@
 %type <node> predict_stmt
 %type <node> lambda
 %type <node> expr_list
-%define parse.trace
 %type <node> class_member
 %type <node> if_statement
 %type <node> match_statement case_clause case_list
@@ -137,22 +120,22 @@
 %%
 
 program:
-     program statement       { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; root = $$; }  
-    | program class_decl      { $$ = $1; root = $$; }
-    | program agent_decl      { $$ = $1 ? create_ast_node("AGENT_LIST", $1, $2) : $2; root = $$; }
-    | program bridge_decl     { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; root = $$; }
-    | program endpoint_decl   { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; root = $$; }
-    | endpoint_decl           { $$ = $1; root = $$; }
-    | program auth_endpoint_decl { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; root = $$; }
-    | auth_endpoint_decl      { $$ = $1; root = $$; }
-    | program guard_endpoint_decl { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; root = $$; }
-    | guard_endpoint_decl     { $$ = $1; root = $$; }
-    | cache_decorator endpoint_decl { if ($2 && $2->extra) ((MethodNode*)$2->extra)->cache_ttl = $1; $$ = $2; root = $$; }
-    | httpget_method_decl     { $$ = $1; root = $$; }
-    | cache_decorator httpget_method_decl { if ($2 && $2->extra) ((MethodNode*)$2->extra)->cache_ttl = $1; $$ = $2; root = $$; }
-    | class_decl              { $$ = $1; root = $$; }
-    | bridge_decl             { $$ = $1; root = $$; }   
-    | statement               { $$ = $1; root = $$; }
+     program statement       { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; ctx->root = $$; }  
+    | program class_decl      { $$ = $1; ctx->root = $$; }
+    | program agent_decl      { $$ = $1 ? create_ast_node("AGENT_LIST", $1, $2) : $2; ctx->root = $$; }
+    | program bridge_decl     { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; ctx->root = $$; }
+    | program endpoint_decl   { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; ctx->root = $$; }
+    | endpoint_decl           { $$ = $1; ctx->root = $$; }
+    | program auth_endpoint_decl { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; ctx->root = $$; }
+    | auth_endpoint_decl      { $$ = $1; ctx->root = $$; }
+    | program guard_endpoint_decl { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; ctx->root = $$; }
+    | guard_endpoint_decl     { $$ = $1; ctx->root = $$; }
+    | cache_decorator endpoint_decl { if ($2 && $2->extra) ((MethodNode*)$2->extra)->cache_ttl = $1; $$ = $2; ctx->root = $$; }
+    | httpget_method_decl     { $$ = $1; ctx->root = $$; }
+    | cache_decorator httpget_method_decl { if ($2 && $2->extra) ((MethodNode*)$2->extra)->cache_ttl = $1; $$ = $2; ctx->root = $$; }
+    | class_decl              { $$ = $1; ctx->root = $$; }
+    | bridge_decl             { $$ = $1; ctx->root = $$; }   
+    | statement               { $$ = $1; ctx->root = $$; }
 ;
 
 cache_decorator:
@@ -168,8 +151,8 @@ endpoint_decl:
 /* @auth endpoint { ... } : exige autenticacion en TODOS los metodos del bloque.
  * El mid-rule action arma el flag ANTES de parsear los metodos. */
 auth_endpoint_decl:
-    AUTH ENDPOINT LBRACKET { g_endpoint_auth_all = 1; } endpoint_methods RBRACKET
-        { g_endpoint_auth_all = 0; $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
+    AUTH ENDPOINT LBRACKET { ctx->endpoint_auth_all = 1; } endpoint_methods RBRACKET
+        { ctx->endpoint_auth_all = 0; $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
     ;
 
 /* v0.0.24 — user-defined guard applied to ALL methods of the block. Two
@@ -177,17 +160,17 @@ auth_endpoint_decl:
  * `@auth endpoint`) and `endpoint @<name> { ... }`. Per-method `@<name>` (if
  * present) overrides the block-level guard for that method. */
 guard_endpoint_decl:
-      DECORATOR ENDPOINT LBRACKET { g_endpoint_guard_all = $1; } endpoint_methods RBRACKET
-        { if (g_endpoint_guard_all) free(g_endpoint_guard_all); g_endpoint_guard_all = NULL; $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
-    | ENDPOINT DECORATOR LBRACKET { g_endpoint_guard_all = $2; } endpoint_methods RBRACKET
-        { if (g_endpoint_guard_all) free(g_endpoint_guard_all); g_endpoint_guard_all = NULL; $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
+      DECORATOR ENDPOINT LBRACKET { ctx->endpoint_guard_all = $1; } endpoint_methods RBRACKET
+        { if (ctx->endpoint_guard_all) free(ctx->endpoint_guard_all); ctx->endpoint_guard_all = NULL; $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
+    | ENDPOINT DECORATOR LBRACKET { ctx->endpoint_guard_all = $2; } endpoint_methods RBRACKET
+        { if (ctx->endpoint_guard_all) free(ctx->endpoint_guard_all); ctx->endpoint_guard_all = NULL; $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
     ;
 
 endpoint_methods:
     endpoint_method
-        { if (g_vm.global_methods) { g_vm.global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; g_vm.global_methods->is_async = g_pending_async; g_vm.global_methods->guard_name = g_pending_guard ? g_pending_guard : (g_endpoint_guard_all ? strdup(g_endpoint_guard_all) : NULL); } g_pending_auth = 0; g_pending_async = 0; g_pending_guard = NULL; $$ = NULL; }
+        { if (g_vm.global_methods) { g_vm.global_methods->requires_auth = ctx->pending_auth || ctx->endpoint_auth_all; g_vm.global_methods->is_async = ctx->pending_async; g_vm.global_methods->guard_name = ctx->pending_guard ? ctx->pending_guard : (ctx->endpoint_guard_all ? strdup(ctx->endpoint_guard_all) : NULL); } ctx->pending_auth = 0; ctx->pending_async = 0; ctx->pending_guard = NULL; $$ = NULL; }
     | endpoint_methods endpoint_method
-        { if (g_vm.global_methods) { g_vm.global_methods->requires_auth = g_pending_auth || g_endpoint_auth_all; g_vm.global_methods->is_async = g_pending_async; g_vm.global_methods->guard_name = g_pending_guard ? g_pending_guard : (g_endpoint_guard_all ? strdup(g_endpoint_guard_all) : NULL); } g_pending_auth = 0; g_pending_async = 0; g_pending_guard = NULL; $$ = NULL; }
+        { if (g_vm.global_methods) { g_vm.global_methods->requires_auth = ctx->pending_auth || ctx->endpoint_auth_all; g_vm.global_methods->is_async = ctx->pending_async; g_vm.global_methods->guard_name = ctx->pending_guard ? ctx->pending_guard : (ctx->endpoint_guard_all ? strdup(ctx->endpoint_guard_all) : NULL); } ctx->pending_auth = 0; ctx->pending_async = 0; ctx->pending_guard = NULL; $$ = NULL; }
     | auth_marker
         { $$ = NULL; }
     | endpoint_methods auth_marker
@@ -199,14 +182,14 @@ endpoint_methods:
     ;
 
 auth_marker:
-    AUTH { g_pending_auth = 1; }
+    AUTH { ctx->pending_auth = 1; }
     ;
 
 /* v0.0.24 \u2014 user-defined `@<name>` decorator marker. Captures the guard
  * function name; the enclosing endpoint_methods reduction attaches it to the
  * next endpoint method's MethodNode.guard_name. */
 decorator_marker:
-    DECORATOR { if (g_pending_guard) free(g_pending_guard); g_pending_guard = $1; }
+    DECORATOR { if (ctx->pending_guard) free(ctx->pending_guard); ctx->pending_guard = $1; }
     ;
 
 endpoint_method:
@@ -251,18 +234,18 @@ endpoint_method:
         m->route_path = strdup($4); m->http_method = strdup("PATCH");
         m->cache_ttl = 0; m->next = g_vm.global_methods; g_vm.global_methods = m; $$ = NULL;
     }
-    | LSBRACKET WEBSOCKET { g_ws_is_lifecycle = 0; g_ws_on_open = NULL; g_ws_on_message = NULL; g_ws_on_close = NULL; g_ws_msg_param = NULL; } LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET ws_body RBRACKET
+    | LSBRACKET WEBSOCKET { ctx->ws_is_lifecycle = 0; ctx->ws_on_open = NULL; ctx->ws_on_message = NULL; ctx->ws_on_close = NULL; ctx->ws_msg_param = NULL; } LPAREN STRING_LITERAL RPAREN RSBRACKET IDENTIFIER LPAREN parameter_list RPAREN LBRACKET ws_body RBRACKET
     {
         MethodNode *m = (MethodNode*)calloc(1, sizeof(MethodNode));
         m->name = strdup($8); m->params = $10;
         m->route_path = strdup($5); m->http_method = strdup("WS");
         m->cache_ttl = 0;
-        if (g_ws_is_lifecycle) {
+        if (ctx->ws_is_lifecycle) {
             m->ws_lifecycle = 1;
-            m->body         = g_ws_on_message;  /* per-message handler */
-            m->ws_on_open   = g_ws_on_open;
-            m->ws_on_close  = g_ws_on_close;
-            m->ws_msg_param = g_ws_msg_param;
+            m->body         = ctx->ws_on_message;  /* per-message handler */
+            m->ws_on_open   = ctx->ws_on_open;
+            m->ws_on_close  = ctx->ws_on_close;
+            m->ws_msg_param = ctx->ws_msg_param; ctx->ws_msg_param = NULL;   /* ownership -> MethodNode */
         } else {
             m->body = $13;                       /* legacy single-shot handler */
         }
@@ -317,8 +300,8 @@ endpoint_method:
  * lifecycle clauses always start with a dedicated keyword token, which can
  * never begin a statement. */
 ws_body:
-      statement_list   { g_ws_is_lifecycle = 0; $$ = $1; }
-    | ws_clauses       { g_ws_is_lifecycle = 1; $$ = NULL; }
+      statement_list   { ctx->ws_is_lifecycle = 0; $$ = $1; }
+    | ws_clauses       { ctx->ws_is_lifecycle = 1; $$ = NULL; }
     ;
 
 ws_clauses:
@@ -328,17 +311,17 @@ ws_clauses:
 
 ws_clause:
       ON_OPEN LBRACKET statement_list RBRACKET
-        { g_ws_on_open = $3; $$ = NULL; }
+        { ctx->ws_on_open = $3; $$ = NULL; }
     | ON_OPEN LPAREN RPAREN LBRACKET statement_list RBRACKET
-        { g_ws_on_open = $5; $$ = NULL; }
+        { ctx->ws_on_open = $5; $$ = NULL; }
     | ON_MESSAGE LPAREN RPAREN LBRACKET statement_list RBRACKET
-        { g_ws_on_message = $5; $$ = NULL; }
+        { ctx->ws_on_message = $5; $$ = NULL; }
     | ON_MESSAGE LPAREN IDENTIFIER RPAREN LBRACKET statement_list RBRACKET
-        { g_ws_on_message = $6; g_ws_msg_param = strdup($3); $$ = NULL; }
+        { ctx->ws_on_message = $6; ctx->ws_msg_param = strdup($3); $$ = NULL; }
     | ON_CLOSE LBRACKET statement_list RBRACKET
-        { g_ws_on_close = $3; $$ = NULL; }
+        { ctx->ws_on_close = $3; $$ = NULL; }
     | ON_CLOSE LPAREN RPAREN LBRACKET statement_list RBRACKET
-        { g_ws_on_close = $5; $$ = NULL; }
+        { ctx->ws_on_close = $5; $$ = NULL; }
     ;
 
 httpget_method_decl:
@@ -356,12 +339,12 @@ httpget_method_decl:
     ;
 
 class_decl:
-        CLASS IDENTIFIER { last_class = create_class($2); add_class(last_class); } 
+        CLASS IDENTIFIER { ctx->last_class = create_class($2); add_class(ctx->last_class); } 
         LBRACKET class_body RBRACKET { $$ = NULL; }
     |   CLASS IDENTIFIER EXTENDS IDENTIFIER {
-            last_class = create_class($2);
-            add_class(last_class);
-            inherit_from(last_class, $4);
+            ctx->last_class = create_class($2);
+            add_class(ctx->last_class);
+            inherit_from(ctx->last_class, $4);
         }
         LBRACKET class_body RBRACKET { $$ = NULL; }
 ;
@@ -458,27 +441,27 @@ member_name:
   ;
 
 attribute_decl:
-    member_name COLON INT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "int"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
-  | member_name COLON STRING SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "string"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
-  | member_name COLON FLOAT SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "float"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
-  | member_name COLON BOOLTYPE SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "bool"); } }
-  | member_name COLON DATETIMETYPE SEMICOLON { if (last_class) { add_attribute_to_class(last_class, $1, "datetime"); } }
-  | member_name COLON UUIDTYPE SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "uuid"); } }
-  | member_name COLON INT QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "int?"); } }
-  | member_name COLON STRING QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "string?"); } }
-  | member_name COLON FLOAT QMARK SEMICOLON  { if (last_class) { add_attribute_to_class(last_class, $1, "float?"); } }
-  | member_name COLON BOOLTYPE QMARK SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "bool?"); } }
-  | member_name COLON DATETIMETYPE QMARK SEMICOLON { if (last_class) { add_attribute_to_class(last_class, $1, "datetime?"); } }
-  | member_name COLON UUIDTYPE QMARK SEMICOLON     { if (last_class) { add_attribute_to_class(last_class, $1, "uuid?"); } }
+    member_name COLON INT SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "int"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
+  | member_name COLON STRING SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "string"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
+  | member_name COLON FLOAT SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "float"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
+  | member_name COLON BOOLTYPE SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "bool"); } }
+  | member_name COLON DATETIMETYPE SEMICOLON { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "datetime"); } }
+  | member_name COLON UUIDTYPE SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "uuid"); } }
+  | member_name COLON INT QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "int?"); } }
+  | member_name COLON STRING QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "string?"); } }
+  | member_name COLON FLOAT QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "float?"); } }
+  | member_name COLON BOOLTYPE QMARK SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "bool?"); } }
+  | member_name COLON DATETIMETYPE QMARK SEMICOLON { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "datetime?"); } }
+  | member_name COLON UUIDTYPE QMARK SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "uuid?"); } }
   /* C#/C-style fields: [public|private|protected] type name [= default] ; */
   | field_type IDENTIFIER SEMICOLON
-      { if (last_class) { add_attribute_to_class(last_class, $2, $1); } free($1); }
+      { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $2, $1); } free($1); }
   | field_type IDENTIFIER ASSIGN expression SEMICOLON
-      { if (last_class) { add_attribute_to_class(last_class, $2, $1); set_last_attr_default(last_class, $4); } free($1); }
+      { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $2, $1); set_last_attr_default(ctx->last_class, $4); } free($1); }
   | access_mod field_type IDENTIFIER SEMICOLON
-      { if (last_class) { add_attribute_to_class(last_class, $3, $2); set_last_attr_access(last_class, $1); } free($2); }
+      { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $3, $2); set_last_attr_access(ctx->last_class, $1); } free($2); }
   | access_mod field_type IDENTIFIER ASSIGN expression SEMICOLON
-      { if (last_class) { add_attribute_to_class(last_class, $3, $2); set_last_attr_access(last_class, $1); set_last_attr_default(last_class, $5); } free($2); }
+      { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $3, $2); set_last_attr_access(ctx->last_class, $1); set_last_attr_default(ctx->last_class, $5); } free($2); }
   ;
 
 field_type:
@@ -498,7 +481,7 @@ access_mod:
 
 
 constructor_decl:
-    CONSTRUCTOR LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET  { if (last_class) { add_constructor_to_class(last_class, $3, $6); } else { fprintf(stderr, "Error: no class defined for the constructor.\n"); } $$ = NULL; }
+    CONSTRUCTOR LPAREN parameter_list RPAREN LBRACKET statement_list RBRACKET  { if (ctx->last_class) { add_constructor_to_class(ctx->last_class, $3, $6); } else { fprintf(stderr, "Error: no class defined for the constructor.\n"); } $$ = NULL; }
   ;
 
 parameter_decl:
@@ -541,8 +524,8 @@ method_return_type:
   ;
 
 method_decl:
-    member_name LPAREN RPAREN COLON method_return_type LBRACKET statement_list RBRACKET  { if (!last_class) { fprintf(stderr, "Internal error: no active class to add method '%s'.\n", $1); } else { add_method_to_class(last_class, $1, NULL, $7, $5); } $$ = NULL; }
-  | member_name LPAREN parameter_list RPAREN COLON method_return_type LBRACKET statement_list RBRACKET  { if (!last_class) { fprintf(stderr, "Internal error: no active class to add method '%s'.\n", $1); } else { add_method_to_class(last_class, $1, $3, $8, $6); } $$ = NULL; }
+    member_name LPAREN RPAREN COLON method_return_type LBRACKET statement_list RBRACKET  { if (!ctx->last_class) { fprintf(stderr, "Internal error: no active class to add method '%s'.\n", $1); } else { add_method_to_class(ctx->last_class, $1, NULL, $7, $5); } $$ = NULL; }
+  | member_name LPAREN parameter_list RPAREN COLON method_return_type LBRACKET statement_list RBRACKET  { if (!ctx->last_class) { fprintf(stderr, "Internal error: no active class to add method '%s'.\n", $1); } else { add_method_to_class(ctx->last_class, $1, $3, $8, $6); } $$ = NULL; }
   ;
 
 expression:
@@ -588,8 +571,8 @@ expression:
   | STRING_LITERAL       { $$ = create_ast_leaf("STRING", 0, $1, NULL); }
   | STRING_INTERP        { $$ = create_ast_leaf("STRING_INTERP", 0, $1, NULL); }
   | NULLTOK       { $$ = create_ast_leaf("NULL", 0, NULL, NULL); }
-  | TRUETOK       { ASTNode *n = create_ast_leaf("BOOL", 1, NULL, NULL); n->line = yylineno; $$ = n; }
-  | FALSETOK      { ASTNode *n = create_ast_leaf("BOOL", 0, NULL, NULL); n->line = yylineno; $$ = n; }
+  | TRUETOK       { ASTNode *n = create_ast_leaf("BOOL", 1, NULL, NULL); n->line = yyget_lineno(scanner); $$ = n; }
+  | FALSETOK      { ASTNode *n = create_ast_leaf("BOOL", 0, NULL, NULL); n->line = yyget_lineno(scanner); $$ = n; }
   | CONCAT LPAREN expression_list RPAREN       { $$ = create_function_call_node("concat", $3); } /* ARREGLADO: printf eliminado */
   | expression PLUS expression       { $$ = create_ast_node("ADD", $1, $3); }
   | expression MINUS expression       { $$ = create_ast_node("SUB", $1, $3); }
@@ -720,7 +703,6 @@ func_call_expr SEMICOLON { $$ = $1; }
   | var_decl
 
    | IDENTIFIER LPAREN expression_list RPAREN SEMICOLON {           $$ = create_method_call_node_alone(NULL, $1, $3);        }
-  | STRING STRING expression SEMICOLON                          { char buffer[2048]; sprintf(buffer,"#include \"easyspark/dataframe.hpp\"\n..."); generate_code(buffer); }
   | IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$1); $$ = create_method_call_node(obj, $3, NULL); }
   | IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); $$ = create_method_call_node(obj, $3, $5); }
   | THIS DOT IDENTIFIER LPAREN RPAREN SEMICOLON                 { ASTNode *thisObj = create_ast_leaf("ID",0,NULL,"this"); $$ = create_method_call_node(thisObj, $3, NULL); }
@@ -957,50 +939,26 @@ more_args:
   ;
 %%
 
-void clean_generated_code() {    
-    FILE* out = fopen("generated.cpp", "w");
-    if (out != NULL) {
-        fprintf(out, "");
-        fclose(out);
-    }
-}
-
-void generate_code(const char* code) {
-    FILE* out = fopen("generated.cpp", "w");
-    if (out != NULL) {
-        fprintf(out, "%s\n", code);
-        fclose(out);
-    }
-}
-
-/* When set (used by the libFuzzer harness), yyerror stays silent. The fuzzer
- * feeds tens of thousands of malformed inputs per second; printing a syntax
- * error for each one floods the CI log (hundreds of MB) without adding signal.
- * ASan crash reports are unaffected — they are written by the sanitizer, not
- * through yyerror. */
-int g_quiet_parse_errors = 0;
-
-void yyerror(const char *s) {
-    extern char *yytext;
+static void yyerror(yyscan_t scanner, TeParseCtx *ctx, const char *s) {
+    (void)ctx;
     extern int g_capture_errors;
     extern void te_capture_error(int line, const char *msg, const char *near);
     extern const char *g_debug_source_file;
-    extern int g_lex_file_id;
     extern const char *te_src_file_name(int id);
-    if (g_quiet_parse_errors) {
-        return;
-    }
+    const char *text = yyget_text(scanner);
+    int line = yyget_lineno(scanner);
+    if (g_vm.quiet_parse_errors) return;
     if (g_capture_errors) {
-        te_capture_error(yylineno, s, yytext);
+        te_capture_error(line, s, text);
         return;
     }
     /* Diagnostics go to stderr in an English, editor-jumpable file:line: form. */
-    const char *src = g_lex_file_id > 0 ? te_src_file_name(g_lex_file_id)
+    const char *src = g_vm.lex_file_id > 0 ? te_src_file_name(g_vm.lex_file_id)
                       : (g_debug_source_file && g_debug_source_file[0])
                       ? g_debug_source_file : "<stdin>";
-    fprintf(stderr, "%s:%d: syntax error: %s\n", src, yylineno, s);
-    if (yytext && yytext[0]) {
-        fprintf(stderr, "%s:%d: near '%s'\n", src, yylineno, yytext);
+    fprintf(stderr, "%s:%d: syntax error: %s\n", src, line, s);
+    if (text && text[0]) {
+        fprintf(stderr, "%s:%d: near '%s'\n", src, line, text);
     }
 }
 
@@ -1026,58 +984,55 @@ void print_ast(ASTNode *node, int indent) {
     print_ast(node->right, indent + 1);
 }
 
+extern void te_lexer_ctx_cleanup(yyscan_t scanner);   /* parser.l */
+
+static void te_parse_ctx_free(TeParseCtx *ctx) {
+    if (ctx->endpoint_guard_all) free(ctx->endpoint_guard_all);
+    if (ctx->pending_guard) free(ctx->pending_guard);
+    if (ctx->ws_msg_param) free(ctx->ws_msg_param);
+}
+
+/* Reentrante: scanner + contexto NUEVOS por llamada, destruidos al salir. Un
+ * parse abortado (error de sintaxis o fatal via longjmp) no deja residuos en el
+ * siguiente: el scanner huérfano queda anotado en g_vm.parse_scanner y se libera
+ * aquí antes de empezar. */
 ASTNode* parse_file(FILE* file) {
-    //fprintf(stderr, "[PARSER] parse_file() called, file=%p\n", (void*)file);
-    
     if (!file) {
         fprintf(stderr, "[PARSER] ERROR: file is NULL\n");
         return NULL;
     }
-    
-    // Reset parser state
-    root = NULL;
-
-    /* === Bloque B: full lexer state reset between parse_file() calls ===
-     * The api server (servidor_api) calls parse_file() in a loop over apis/*.te.
-     * If a previous parse aborted mid-file (especially mid-include via "import"),
-     * flex leaves leftover buffers on the include stack and the scanner state
-     * machine in a non-INITIAL start condition. The next parse_file() then sees
-     * residual lookahead/buffers and reports bogus "syntax error in line 1" on
-     * a perfectly valid file (the cascade bug).
-     *
-     * te_lexer_full_reset() lives in parser.l where YY_CURRENT_BUFFER, BEGIN()
-     * and start conditions are visible. It pops every buffer, closes leftover
-     * include FILE*s, calls yyrestart(file) and resets to INITIAL.
-     */
-    extern void te_lexer_full_reset(FILE* file);
-    te_lexer_full_reset(file);
-    yyin = file;
-
-    // Reset lexer state
-    extern int yylineno;
-    yylineno = 1;
-    
-    // Enable debug output
-    extern int yydebug;
-    yydebug = 0;  // Disable Bison trace
-    
-   // fprintf(stderr, "[PARSER] Calling yyparse()...\n");
-    int parse_result = yyparse();
-    //fprintf(stderr, "[PARSER] yyparse() returned: %d\n", parse_result);
-    
-    if (parse_result != 0) {
-       // fprintf(stderr, "[PARSER] ERROR: yyparse() failed\n");
-        return NULL;
+    if (g_vm.parse_scanner) {                       /* parse anterior abortado por longjmp */
+        yyscan_t stale = (yyscan_t)g_vm.parse_scanner;
+        TeParseCtx *sctx = yyget_extra(stale);
+        te_lexer_ctx_cleanup(stale);
+        yylex_destroy(stale);
+        if (sctx) { te_parse_ctx_free(sctx); free(sctx); }
+        g_vm.parse_scanner = NULL;
     }
-    
-    if (!root) {
-      //  fprintf(stderr, "[PARSER] WARNING: yyparse() succeeded but root is NULL\n");
-        // If root is NULL but parsing succeeded (e.g. empty file or just comments), return a dummy node
-        // But we fixed the grammar to return nodes for declarations, so this shouldn't happen for valid code.
-        // However, let's be safe and return a dummy node if it still happens.
-     //   fprintf(stderr, "[PARSER] Returning dummy root node to avoid failure.\n");
-        root = create_ast_node("STATEMENT_LIST", NULL, NULL);
-    }
+
+    TeParseCtx *ctx = (TeParseCtx *)calloc(1, sizeof(TeParseCtx));
+    if (!ctx) return NULL;
+    yyscan_t scanner = NULL;
+    if (yylex_init_extra(ctx, &scanner) != 0) { free(ctx); return NULL; }
+    yyrestart(file, scanner);               /* crea el buffer (yyset_lineno lo exige) */
+    yyset_lineno(1, scanner);
+    g_vm.lex_line = 1;
+    g_vm.decl_stmt_line = 0;
+    g_vm.parse_scanner = scanner;
+
+    int parse_result = yyparse(scanner, ctx);
+
+    te_lexer_ctx_cleanup(scanner);
+    yylex_destroy(scanner);
+    g_vm.parse_scanner = NULL;
+    ASTNode *root = ctx->root;
+    te_parse_ctx_free(ctx);
+    free(ctx);
+
+    if (parse_result != 0) return NULL;
+
+    /* Empty file / only comments: keep the "always an AST" contract. */
+    if (!root) root = create_ast_node("STATEMENT_LIST", NULL, NULL);
 
     /* v0.0.14: Resolve deferred CSV loads now that the full AST exists.
      * Auto-detects COLUMNAR-safe usage and avoids per-row wrapper allocs

@@ -46,7 +46,6 @@ static void te_reexec(char **argv) {
 
 /* --- Prototipos de las funciones en tu "Motor" --- */
 ASTNode* parse_file(FILE* file);
-extern int g_debug_mode; // Para acceder a la variable global de parser.y
 extern void te_set_script_dir_from_path(const char *script_path);
 /* --- Fin Prototipos --- */
 
@@ -218,14 +217,13 @@ int g_capture_errors = 0;
 typedef struct { int line; int file_id; char msg[256]; char near[128]; } TeErr;
 static TeErr g_errors[64];
 static int g_error_count = 0;
-extern int g_lex_file_id;
 extern const char *te_src_file_name(int id);
 
 void te_capture_error(int line, const char *msg, const char *near) {
     if (g_error_count >= 64) return;
     TeErr *e = &g_errors[g_error_count++];
     e->line = line;
-    e->file_id = g_lex_file_id;   /* file being lexed (or set by the arity pass) */
+    e->file_id = g_vm.lex_file_id;   /* file being lexed (or set by the arity pass) */
     snprintf(e->msg, sizeof(e->msg), "%s", msg ? msg : "");
     snprintf(e->near, sizeof(e->near), "%s", near ? near : "");
 }
@@ -588,7 +586,7 @@ int main(int argc, char *argv[]) {
 
     const char* debug_env = getenv("TYPEEASY_DEBUG");
     if (debug_env != NULL && strcmp(debug_env, "1") == 0) {
-        g_debug_mode = 1;
+        g_vm.debug_mode = 1;
     }
 
     /* Flags opt-in del binder/errores SQL (declarados en db_params.h). Por
@@ -697,7 +695,7 @@ int main(int argc, char *argv[]) {
             }
             output_path = argv[++i];
         } else if (strcmp(argv[i], "--debug") == 0) {
-            g_debug_mode = 1;
+            g_vm.debug_mode = 1;
         } else if (strcmp(argv[i], "--debug-port") == 0 && i + 1 < argc) {
             debug_port = atoi(argv[++i]);
         } else if (strncmp(argv[i], "--debug-port=", 13) == 0) {
@@ -862,7 +860,7 @@ int main(int argc, char *argv[]) {
     // 8. Libera memoria y TERMINA
     free_ast(script_ast);
     
-    if (g_debug_mode) {
+    if (g_vm.debug_mode) {
         clock_t fin = clock();
         double tiempo = (double)(fin - inicio) / CLOCKS_PER_SEC;
         printf("Execution time: %.6f seconds\n", tiempo);

@@ -99,13 +99,12 @@
  * Source-file table (multi-file programs). The lexer includes imports
  * inline, so `line` alone was a cumulative counter over main.te + every
  * import (useless for the ERP: 120 files). Each file gets an id; the lexer
- * resets yylineno per file and stamps g_lex_file_id on new nodes; the
+ * resets g_vm.lex_line per file and stamps g_vm.lex_file_id on new nodes; the
  * interpreter tracks the file of the statement being executed.
  * ------------------------------------------------------------------ */
 #define TE_SRC_FILES_MAX 512
 static char *g_src_files[TE_SRC_FILES_MAX];
 static int   g_src_file_count = 0;
-int  g_lex_file_id = 0;            /* file being lexed (0 = main file) */
 
 int te_src_file_register(const char *path) {
     if (!path) return 0;
@@ -377,17 +376,14 @@ static inline long te_nprocs_online(void) {
 /* Forward decls used in helpers below */
 char* expand_interp_string(const char *raw);
 int is_string_type(struct ASTNode *node);
-extern int g_debug_mode;
 /* Debugger: lexer line counter (from flex). Used to stamp ASTNode->line at
  * creation time so the runtime debugger can match breakpoints. */
-extern int yylineno;
 
 /* Line of the leading keyword (let/var/const/type) of the variable declaration
  * currently being parsed. The scanner (parser.l) stamps it the moment it sees
  * that keyword, so create_var_decl_node() can attribute a multi-line decl to its
- * FIRST line instead of yylineno (which, at bison reduction time, points at the
+ * FIRST line instead of g_vm.lex_line (which, at bison reduction time, points at the
  * statement's LAST line). */
-int g_decl_stmt_line = 0;
 
 /* Phase H: forward declaration so get_node_string / native_json can recursively
  * evaluate nested CALL_FUNC arguments (e.g. json(concat(...)), concat(a, request_param("id"), b)). */
@@ -471,7 +467,7 @@ void append_to_stdout(const char *str) {
 }
 
 void native_json(ASTNode *arg) {
-    if (g_debug_mode) { fprintf(stderr, "[DEBUG] native_json called\n"); fflush(stderr); }
+    if (g_vm.debug_mode) { fprintf(stderr, "[DEBUG] native_json called\n"); fflush(stderr); }
 
     /* Phase H: json(call(...)) — invoke nested function, leave __ret__ as the
      * resulting string. interpret_call_func already sets __ret__ via the
@@ -715,7 +711,7 @@ void native_json(ASTNode *arg) {
     
     ASTNode *result_node = create_ast_leaf("STRING", 0, json_buffer, NULL);
     add_or_update_variable("__ret__", result_node);
-    if (g_debug_mode) { fprintf(stderr, "[DEBUG] native_json: __ret__ set to %s\n", json_buffer); fflush(stderr); }
+    if (g_vm.debug_mode) { fprintf(stderr, "[DEBUG] native_json: __ret__ set to %s\n", json_buffer); fflush(stderr); }
     free_ast(result_node);
     free(json_buffer);
 }
@@ -723,7 +719,7 @@ void native_json(ASTNode *arg) {
 // --- Hook para funciones nativas ---
 
 void native_xml(ASTNode *arg) {
-    if (g_debug_mode) { fprintf(stderr, "[DEBUG] native_xml called\n"); fflush(stderr); }
+    if (g_vm.debug_mode) { fprintf(stderr, "[DEBUG] native_xml called\n"); fflush(stderr); }
 
     /* Bug fix (v0.0.30): xml(fnCall()) — invoke nested function, same CALL_FUNC
      * pattern as native_json. Handles all return types so that
@@ -1241,7 +1237,7 @@ char* get_node_string(ASTNode* node) {
 }
 
 void native_concat(ASTNode *arg) {
-    if (g_debug_mode) { fprintf(stderr, "[DEBUG] native_concat called\n"); fflush(stderr); }
+    if (g_vm.debug_mode) { fprintf(stderr, "[DEBUG] native_concat called\n"); fflush(stderr); }
     
     // Start with a reasonable buffer size
     size_t buffer_size = 1024;
@@ -1253,7 +1249,7 @@ void native_concat(ASTNode *arg) {
     while (curr) {
         char *s_temp = get_node_string(curr);
         if (s_temp) {
-            if (g_debug_mode) fprintf(stderr, "[DEBUG] concat appending: '%s'\n", s_temp);
+            if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] concat appending: '%s'\n", s_temp);
             size_t len = strlen(s_temp);
             if (current_len + len >= buffer_size) {
                 buffer_size = (current_len + len) * 2;
@@ -2268,7 +2264,7 @@ ASTNode* create_call_node_return_xml(const char* funcName, ASTNode* args) {
 
 ASTNode* create_method_call_node_alone(ASTNode* objectNode, const char* methodName, ASTNode* args) {
     ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
-    if (node) { node->line = yylineno; node->file_id = g_lex_file_id; }
+    if (node) { node->line = g_vm.lex_line; node->file_id = g_vm.lex_file_id; }
     node->type = strdup("METHOD_CALL_ALONE");
     node->left = objectNode;
     node->right = args;
@@ -2295,7 +2291,6 @@ static void te_log_ast(const char *fmt, ...) {
 }
 
 /* Allow runtime debug mode controlled by TYPEEASY_DEBUG env var (set in main) */
-extern int g_debug_mode;
 
 /* --- ELIMINADOS: g_runtime y los prototipos del servidor --- */
 
@@ -2368,7 +2363,7 @@ int g_db_request_phase = 0;
 void runtime_save_initial_var_count() {
     g_vm.initial_var_count = g_vm.var_count;
     g_db_request_phase = 1;   /* a partir de aquí, toda conexión es request-scoped */
-    if (g_debug_mode) te_log_ast("Initial state saved. %d global variables retained.", g_vm.initial_var_count);
+    if (g_vm.debug_mode) te_log_ast("Initial state saved. %d global variables retained.", g_vm.initial_var_count);
 }
 
 void runtime_reset_vars_to_initial_state() {
@@ -4048,7 +4043,7 @@ ASTNode *create_ast_leaf(char *type, long long value, char *str_value, char *id)
     if (!node) {
         te_runtime_fatalf("Fatal error: could not allocate memory for ASTNode.");
     }
-    node->line = yylineno; node->file_id = g_lex_file_id;
+    node->line = g_vm.lex_line; node->file_id = g_vm.lex_file_id;
     node->type = strdup(type);
     node->kind = nk_from_str(type);
     node->left = NULL;
@@ -4083,7 +4078,7 @@ ASTNode *create_ast_leaf(char *type, long long value, char *str_value, char *id)
 ASTNode *create_ast_leaf_number(char *type, long long value, char *str_value, char *id) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     if (!node) return NULL;
-    node->line = yylineno; node->file_id = g_lex_file_id;
+    node->line = g_vm.lex_line; node->file_id = g_vm.lex_file_id;
     node->type = strdup(type);
     node->kind = nk_from_str(type);
     node->left = NULL;
@@ -4100,7 +4095,7 @@ ASTNode *create_ast_leaf_number(char *type, long long value, char *str_value, ch
 
 ASTNode *create_ast_node(char *type, ASTNode *left, ASTNode *right) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
-    node->line = yylineno; node->file_id = g_lex_file_id;
+    node->line = g_vm.lex_line; node->file_id = g_vm.lex_file_id;
     node->type = strdup(type);
     node->kind = nk_from_str(type);
     node->left = left;
@@ -4171,18 +4166,18 @@ ASTNode *create_var_decl_node(char *id, ASTNode *value) {
     node->right = NULL;
     node->str_value = NULL; // Fix: Initialize to NULL to avoid garbage access
     /* For a MULTI-LINE declaration (e.g. `let xs = [ ...\n... ];`) bison reduces
-     * this rule only after scanning the closing `];`, so yylineno already points
-     * at the LAST line. The scanner stamps g_decl_stmt_line with the line of the
+     * this rule only after scanning the closing `];`, so g_vm.lex_line already points
+     * at the LAST line. The scanner stamps g_vm.decl_stmt_line with the line of the
      * leading keyword (let/var/const/type), so the node is attributed to the
      * statement's FIRST line — which is where a user places a breakpoint. */
-    node->line = (g_decl_stmt_line > 0) ? g_decl_stmt_line : yylineno; node->file_id = g_lex_file_id;
+    node->line = (g_vm.decl_stmt_line > 0) ? g_vm.decl_stmt_line : g_vm.lex_line; node->file_id = g_vm.lex_file_id;
     //printf("[DEBUG] create_var_decl_node success\n"); fflush(stdout);
     return node;
 }
 
 ASTNode *create_return_node(ASTNode *expr) {
     ASTNode *node = calloc(1, sizeof(ASTNode));
-    if (node) { node->line = yylineno; node->file_id = g_lex_file_id; }
+    if (node) { node->line = g_vm.lex_line; node->file_id = g_vm.lex_file_id; }
     node->type = strdup("RETURN");
     node->id = NULL;
     node->left = expr;
@@ -4194,7 +4189,7 @@ ASTNode *create_return_node(ASTNode *expr) {
 
 ASTNode *create_function_call_node(const char *funcName, ASTNode *args) {
     ASTNode *n = calloc(1, sizeof(ASTNode));
-    if (n) { n->line = yylineno; n->file_id = g_lex_file_id; }
+    if (n) { n->line = g_vm.lex_line; n->file_id = g_vm.lex_file_id; }
     n->type = strdup("CALL_FUNC");
     n->id = strdup(funcName);
     n->left = args;
@@ -4206,7 +4201,7 @@ ASTNode *create_function_call_node(const char *funcName, ASTNode *args) {
 
 ASTNode *create_method_call_node(ASTNode *objectNode, const char *methodName, ASTNode *args) {
     ASTNode *node = calloc(1, sizeof(ASTNode));
-    if (node) { node->line = yylineno; node->file_id = g_lex_file_id; }
+    if (node) { node->line = g_vm.lex_line; node->file_id = g_vm.lex_file_id; }
     node->type = strdup("CALL_METHOD");
     node->id = strdup(methodName);
     node->left = objectNode;
@@ -4237,7 +4232,7 @@ ASTNode *create_object_with_args(ClassNode *class, ASTNode *args) {
 
 ASTNode *create_ast_node_for(char *type, ASTNode *var, ASTNode *init, ASTNode *condition, ASTNode *update, ASTNode *body) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
-    if (node) { node->line = yylineno; node->file_id = g_lex_file_id; }
+    if (node) { node->line = g_vm.lex_line; node->file_id = g_vm.lex_file_id; }
     node->type = strdup("FOR");
     node->id = var->id;
     node->left = init;
@@ -6132,7 +6127,7 @@ ASTNode* create_for_in_node(const char *var_name, ASTNode *list_expr, ASTNode *b
     node->left      = list_expr;
     node->right     = body;
     node->next      = NULL;
-    node->line      = yylineno;
+    node->line      = g_vm.lex_line;
     return node;
 }
 
@@ -6160,7 +6155,7 @@ void interpret_bridge_decl(ASTNode *node) {
     }
     char* lib_name = call_node->left->id;
     char* func_name = call_node->id;
-    if (g_debug_mode) {
+    if (g_vm.debug_mode) {
         te_log_ast("Registering Bridge (simulated): '%s'", bridge_name);
         te_log_ast(" -> Target: Library '%s', Function '%s'", lib_name, func_name);
     }
@@ -6212,7 +6207,7 @@ ASTNode *create_bridge_node(char *name, ASTNode *call_expr_node) {
 }
 
 void interpret_agent(ASTNode *agent_node) {
-    if (g_debug_mode) te_log_ast("Agent parsed: %s (ignored in script mode)", agent_node->id);
+    if (g_vm.debug_mode) te_log_ast("Agent parsed: %s (ignored in script mode)", agent_node->id);
 }
 
 ASTNode *create_access_node(ASTNode *base, ASTNode *index_expr) {
@@ -6708,7 +6703,7 @@ ASTNode *create_for_c_node(ASTNode *init, ASTNode *cond, ASTNode *update, ASTNod
     if (!node) te_oom_fatal("FOR_C");
     node->type = strdup("FOR_C");
     node->kind = NK_FOR_C;
-    node->line = yylineno; node->file_id = g_lex_file_id;
+    node->line = g_vm.lex_line; node->file_id = g_vm.lex_file_id;
     node->left = init;
     node->right = cond;
     ASTNode *fb = (ASTNode *)calloc(1, sizeof(ASTNode));
@@ -7638,16 +7633,16 @@ static int te_cm_map_builtin(ASTNode *node, ASTNode *objNode, Variable *v) {
 /* Extraído de interpret_call_method_impl (Fase 2). Devuelve 1 si manejó la llamada. */
 static int te_cm_bridge(ASTNode *node, ObjectNode *obj, Variable *v) {
     if (obj && strcmp(obj->class->name, "Bridge") == 0) {
-        if (g_debug_mode) te_log_ast("Calling native bridge: %s.%s", v->id, node->id);
+        if (g_vm.debug_mode) te_log_ast("Calling native bridge: %s.%s", v->id, node->id);
         // Aquí es donde la magia ocurre. Delegamos al manejador específico del bridge.
         if (strcmp(v->id, "Chat") == 0) {
             if (g_bridge_handlers.handle_chat_bridge) g_bridge_handlers.handle_chat_bridge(node->id, node->right);
         } else if (strcmp(v->id, "NLU") == 0) {
-            if (g_debug_mode) te_log_ast("Calling NLU bridge");
+            if (g_vm.debug_mode) te_log_ast("Calling NLU bridge");
             if (g_bridge_handlers.handle_nlu_bridge) {
                 g_bridge_handlers.handle_nlu_bridge(node->id, node->right);
                 // Diagnostic: did the bridge set __ret__? (only print when debug mode enabled)
-                if (g_debug_mode) {
+                if (g_vm.debug_mode) {
                     if (g_vm.ret_var_active) {
                         te_log_ast("[DEBUG] After NLU bridge: __ret__ active=1 type='%s'", g_vm.ret_var.type ? g_vm.ret_var.type : "(null)");
                     } else {
@@ -8535,7 +8530,7 @@ ASTNode* create_lambda_multi_node(const char *paramsCsv, ASTNode *body) {
     node->left = body;
     node->right = NULL;
     node->next = NULL;
-    node->line = yylineno; node->file_id = g_lex_file_id;
+    node->line = g_vm.lex_line; node->file_id = g_vm.lex_file_id;
     return node;
 }
 
@@ -9435,7 +9430,7 @@ static void te_arity_walk(ASTNode *n, TeArityFn *tbl, int count,
                             "TypeError: '%s' expects %d argument%s but %d %s passed.",
                             n->id, tbl[i].nparams, tbl[i].nparams == 1 ? "" : "s",
                             nargs, nargs == 1 ? "was" : "were");
-                        g_lex_file_id = n->file_id;   /* te_capture_error reads the current file */
+                        g_vm.lex_file_id = n->file_id;   /* te_capture_error reads the current file */
                         te_capture_error(n->line > 0 ? n->line : *lastLine, msg, n->id);
                     }
                     break;
@@ -9521,7 +9516,7 @@ static int te_node_is_comparison(ASTNode *n) {
            strcmp(n->type, "AND") == 0 || strcmp(n->type, "OR") == 0 || strcmp(n->type, "NOT") == 0;
 }
 static void te_sem_error(ASTNode *n, int fallbackLine, const char *msg) {
-    g_lex_file_id = n->file_id;
+    g_vm.lex_file_id = n->file_id;
     te_capture_error(n->line > 0 ? n->line : fallbackLine, msg, n->id ? n->id : "");
 }
 

@@ -53,7 +53,6 @@ void interpret_statement_list(ASTNode *node);
 
 /* te_interp_decl.c (Fase 2 cut 3). */
 extern char *throw_message;          /* mensaje del throw en vuelo (ast.c) */
-extern int   g_debug_mode;
 int  te_stderr_is_tty(void);
 #define TE_ERR_RED   (te_stderr_is_tty() ? "\033[31m" : "")
 #define TE_ERR_RESET (te_stderr_is_tty() ? "\033[0m"  : "")

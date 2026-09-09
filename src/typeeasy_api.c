@@ -19,8 +19,6 @@
 
 // Declaraciones externas de funciones del intérprete
 extern ASTNode* parse_file(FILE* file);
-extern int g_debug_mode;
-extern FILE *yyin;  // Variable global de Flex para el parser
 
 // Declaraciones externas para manejo de return values
 
@@ -179,8 +177,6 @@ int typeeasy_embedded_load_script(TypeEasyEmbeddedContext* ctx, const char* scri
     
     printf("[TYPEEASY_API] File opened successfully\n");
     
-    // Configurar yyin para el parser de Flex (aunque parse_file lo hace, es bueno asegurarse)
-    yyin = file;
     
     printf("[TYPEEASY_API] Calling parse_file()...\n");
     

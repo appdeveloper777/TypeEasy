@@ -59,7 +59,6 @@ typedef struct RuntimeHost {
 
 RuntimeHost g_runtime;
 static struct mg_connection *g_current_conn = NULL;
-extern int g_debug_mode;
 
 static void te_log(const char *fmt, ...) {
     va_list ap;
@@ -283,7 +282,7 @@ void handle_gemini_bridge(char* method_name, ASTNode* args) {
 
 void handle_api_bridge(char* method_name, ASTNode* args) {
     if (strcmp(method_name, "get") == 0) {
-        if (g_debug_mode) te_log("API.get invoked: returning simulated menu");
+        if (g_vm.debug_mode) te_log("API.get invoked: returning simulated menu");
         
         ASTNode* menu_node = create_string_node(
             "Menú del Día: Tacos (3€), Burritos (5€), Enchiladas (4€)"
@@ -306,7 +305,7 @@ ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) 
                     expr->left && expr->left->id && strcmp(expr->left->id, bridge_name) == 0 &&
                     expr->id && strcmp(expr->id, event_name) == 0) {
 
-                    if (g_debug_mode) te_log("Listener found for %s.%s", bridge_name, event_name);
+                    if (g_vm.debug_mode) te_log("Listener found for %s.%s", bridge_name, event_name);
                     return listener;
                 }
             }
@@ -342,7 +341,7 @@ static int webhook_handler(struct mg_connection *conn, void *cbdata) {
         read = mg_get_var(query, query_len, "message", post_data, sizeof(post_data) - 1);
     }
 
-    if (g_debug_mode) te_log("Incoming webhook received. Message: \"%s\"", post_data);
+    if (g_vm.debug_mode) te_log("Incoming webhook received. Message: \"%s\"", post_data);
 
     ASTNode* listener = runtime_find_listener("Chat", "onMessage");
     if (!listener) {
@@ -356,7 +355,7 @@ static int webhook_handler(struct mg_connection *conn, void *cbdata) {
     add_or_update_variable("mensaje", msg_node);
     free_ast(msg_node); 
 
-    if (g_debug_mode) te_log("Executing listener logic");
+    if (g_vm.debug_mode) te_log("Executing listener logic");
     interpret_ast(listener->right);
     te_log("Listener logic finished");
 
@@ -411,7 +410,7 @@ void runtime_init(ASTNode* ast_root) {
         }
     }
 
-    if (g_debug_mode) te_log("Registering native bridge classes");
+    if (g_vm.debug_mode) te_log("Registering native bridge classes");
     ClassNode* bridge_class = create_class("Bridge");
     add_class(bridge_class);
 
@@ -436,7 +435,7 @@ int main(int argc, char *argv[]) {
     setbuf(stdout, NULL);
     const char *debug_env = getenv("TYPEEASY_DEBUG");
     if (debug_env != NULL && strcmp(debug_env, "1") == 0) {
-        g_debug_mode = 1;
+        g_vm.debug_mode = 1;
     }
     
     if (argc < 2) {

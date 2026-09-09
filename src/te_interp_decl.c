@@ -218,13 +218,13 @@ static int te_decl_object_ctor(TeVM *vm, ASTNode *node, ASTNode *value_node, Var
                   //  fprintf(stderr, "[DEBUG] Constructor arg expr int val: %d\n", val);
                 }
                 add_or_update_variable(p->name, vn);
-                if (g_debug_mode) fprintf(stderr, "[DEBUG] Constructor param '%s' set\n", p->name);
+                if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Constructor param '%s' set\n", p->name);
                 p   = p->next;
                 arg = arg->next; /* gotcha #1: step ctor args via ->next */
             }
-            if (g_debug_mode) fprintf(stderr, "[DEBUG] Calling __constructor for class '%s'\n", var->value.object_value->class->name);
+            if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Calling __constructor for class '%s'\n", var->value.object_value->class->name);
             call_method(var->value.object_value, "__constructor");
-            if (g_debug_mode) fprintf(stderr, "[DEBUG] __constructor completed\n");
+            if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] __constructor completed\n");
         }
     }
     return 0;
@@ -620,7 +620,7 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
         strcmp(declared, "datetime") == 0 || strcmp(declared, "datetime?") == 0) {
         if (value_node->type && strcmp(value_node->type, "STRING") == 0) {
           obj->attributes[idx].value.string_value = strdup(value_node->str_value);
-          if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (STRING)\n", attr_name, value_node->str_value);
+          if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (STRING)\n", attr_name, value_node->str_value);
         }
         else if (value_node->type && (strcmp(value_node->type, "IDENTIFIER") == 0 || strcmp(value_node->type, "ID") == 0)) {
           Variable *v2 = find_variable(value_node->id ? value_node->id : value_node->str_value);
@@ -629,7 +629,7 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
             return;
           }
           obj->attributes[idx].value.string_value = strdup(v2->value.string_value);
-          if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR)\n", attr_name, v2->value.string_value);
+          if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR)\n", attr_name, v2->value.string_value);
         }
         else if (value_node->id) {
           Variable *v2 = find_variable(value_node->id);
@@ -638,7 +638,7 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
             return;
           }
           obj->attributes[idx].value.string_value = strdup(v2->value.string_value);
-          if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR ID)\n", attr_name, v2->value.string_value);
+          if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR ID)\n", attr_name, v2->value.string_value);
         }
         else if (strcmp(value_node->type, "CALL_FUNC") == 0) {
           interpret_ast(value_node);
@@ -648,7 +648,7 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
             return;
           }
           obj->attributes[idx].value.string_value = strdup(r->value.string_value);
-          if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (CALL)\n", attr_name, r->value.string_value);
+          if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (CALL)\n", attr_name, r->value.string_value);
         }
         obj->attributes[idx].vtype = VAL_STRING;
       } else {
@@ -657,11 +657,11 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
         if (decl_is_float) {
             obj->attributes[idx].value.float_value = val;
             obj->attributes[idx].vtype = VAL_FLOAT;
-            if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %f (FLOAT)\n", attr_name, val);
+            if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %f (FLOAT)\n", attr_name, val);
         } else {
             obj->attributes[idx].value.int_value = (long long)val;
             obj->attributes[idx].vtype = VAL_INT;
-            if (g_debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %d (INT)\n", attr_name, (int)val);
+            if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %d (INT)\n", attr_name, (int)val);
         }
     }
 }
