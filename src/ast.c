@@ -2385,6 +2385,11 @@ void runtime_reset_vars_to_initial_state() {
     g_vm.call_depth = 0;
     te_frames_reset();   /* same reason: te_frame_pop was skipped by the longjmp */
     te_callstack_reset();
+    /* Fase 4 (longjmp -> recovery completa): tras un fatal ningún return/throw/break
+     * puede seguir "en vuelo"; si quedara un flag en 1, el primer statement del
+     * siguiente request se saltaría (bleed silencioso entre requests). */
+    g_vm.return_flag = 0; g_vm.throw_flag = 0; g_vm.break_flag = 0; g_vm.continue_flag = 0;
+    g_vm.return_node = NULL;
 
     /* Invalidate all cached bytecode whose Instrs hold raw Variable*
      * pointers into vars[]. After this reset, slots are recycled and

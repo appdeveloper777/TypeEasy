@@ -65,3 +65,6 @@ echo "=== [asan] selftest de VMs aisladas (Fase 3) ==="
 
 echo "=== [asan] protocolo del debugger (regresion 0.1.0: \"vars\") ==="
 python3 tests/regress/run_debugger_protocol.py --bin ./src/typeeasy
+
+echo "=== [asan] recovery completa tras fatal (longjmp) en --api (Fase 4) ==="
+bash tests/regress/run_api_fatal_recovery.sh ./src/typeeasy 8089

@@ -1,0 +1,31 @@
+// Regresión Fase 4 (longjmp -> recovery completa del estado de la VM).
+// /fatal dispara un error fatal del runtime (límite de profundidad) DENTRO de un
+// try/catch y de un while con break pendiente: el longjmp salta catch/loop y deja
+// la VM a medias. El request siguiente (/ok) debe ejecutarse limpio: ningún
+// return/throw/break "en vuelo" puede saltarse su primer statement.
+let bomba = fn(n) => { return bomba(n + 1); };
+
+endpoint {
+    [HttpGet("/fatal")]
+    Fatal() {
+        var i = 0;
+        while (i < 10) {
+            try {
+                if (i == 2) { let z = bomba(0); }
+            } catch (e) {
+                i = i + 100;
+            }
+            i = i + 1;
+        }
+        return json({ "i": i });
+    }
+
+    [HttpGet("/ok")]
+    Ok() {
+        var suma = 0;
+        for (k = 1; 4; 1) { suma = suma + k; }   // 1+2+3 = 6
+        var caught = "no";
+        try { throw "boom"; } catch (e) { caught = "si"; }
+        return json({ "suma": suma, "caught": caught, "marca": "OK_LIMPIO" });
+    }
+}
