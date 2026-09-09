@@ -29,17 +29,27 @@ cd "$ROOT"
 
 BASELINE="scripts/core_debt_baseline.txt"
 MAX_FN_LINES=300
-# Módulos del intérprete auditados. Al partir ast.c (Fase 2) agregá los nuevos aquí.
-FILES=(src/ast.c src/te_print.c src/te_interp_flow.c src/te_value.c src/te_interp_decl.c src/typeeasy_api_server.c src/typeeasy_api.c src/te_stdlib.c src/te_builtins.c)
+# Se audita TODO el intérprete (src/*.c) salvo lo generado por flex/bison. Antes (0.1.0) solo
+# se vigilaban ast.c y los módulos partidos; te_linq_ops.c/te_csv.c/te_bytecode.c crecían sin guardia.
+FILES=()
+for f in src/*.c; do
+  case "$f" in src/lex.yy.c|src/parser.tab.c) continue;; esac
+  FILES+=("$f")
+done
 
 # Globales g_* definidos a nivel de archivo (columna 0, con o sin static; no extern).
 scan_globals() {
   for f in "${FILES[@]}"; do
     [ -f "$f" ] || continue
-    grep -nE '^(static[[:space:]]+)?[A-Za-z_][A-Za-z0-9_[:space:]\*]*[[:space:]\*]g_[A-Za-z0-9_]+[[:space:]]*(\[[^]]*\])*[[:space:]]*(=|;)' "$f" \
-      | grep -vE '^[0-9]+:extern' \
+    # En dos pasos para evitar backtracking exponencial (clases solapadas con [:space:]/\*
+    # colgaban grep en te_vm.c). 1) línea de declaración en columna 0; 2) token g_* seguido
+    # de `=`/`;`; 3) sin `(` antes del token (prototipos/llamadas) ni extern.
+    grep -nE '^(static[[:space:]]+)?(const[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]\*]' "$f" \
+      | grep -E '[[:space:]\*]g_[A-Za-z0-9_]+[[:space:]]*(\[[^]]*\])*[[:space:]]*(=|;)' \
+      | grep -vE '^[0-9]+:[^(]*\([^;]*[[:space:]\*]g_[A-Za-z0-9_]+[[:space:]]*(\[[^]]*\])*[[:space:]]*(=|;)' \
+      | grep -vE '^[0-9]+:(static[[:space:]]+)?extern' \
       | grep -vE '\bg_vm\b' \
-      | sed -E 's/^[0-9]+://; s/.*[[:space:]\*](g_[A-Za-z0-9_]+).*/\1/' \
+      | sed -E 's/^[0-9]+://; s/.*[[:space:]\*](g_[A-Za-z0-9_]+)[[:space:]]*(\[[^]]*\])*[[:space:]]*(=|;).*/\1/' \
       | sed "s|^|global $f |"
   done | sort -u
 }
@@ -77,31 +87,22 @@ fi
 [ -f "$BASELINE" ] || { echo "audit-core-debt: falta $BASELINE (correr --update-baseline)" >&2; exit 1; }
 
 fail=0
-# 1) globales nuevos
-while IFS= read -r line; do
-  [ -z "$line" ] && continue
-  if ! grep -qxF "$line" "$BASELINE"; then
-    echo "NUEVO GLOBAL: ${line#global }"; fail=$((fail + 1))
-  fi
-done <<< "$(echo "$current" | grep '^global' || true)"
-
-# 2) funciones largas nuevas o que crecieron
-while IFS= read -r line; do
-  [ -z "$line" ] && continue
-  set -- $line; file=$2; name=$3; len=$4
-  base="$(grep -E "^fn $file $name [0-9]+$" "$BASELINE" | awk '{print $4}' || true)"
-  if [ -z "$base" ]; then
-    echo "FUNCION NUEVA > ${MAX_FN_LINES} LINEAS: $file $name ($len)"; fail=$((fail + 1))
-  elif [ "$len" -gt "$base" ]; then
-    echo "FUNCION CRECIO: $file $name ($base -> $len lineas)"; fail=$((fail + 1))
-  fi
-done <<< "$(echo "$current" | grep '^fn' || true)"
-
-# Progreso (informativo): entradas de la baseline que ya no existen.
-gone="$(grep -E '^(global|fn) ' "$BASELINE" | while IFS= read -r b; do
-  key="$(echo "$b" | awk '{print $1, $2, $3}')"
-  echo "$current" | awk '{print $1, $2, $3}' | grep -qxF "$key" || echo "  $b"
-done)"
+# Comparación en un solo awk (sin un grep por línea: en MSYS cada fork cuesta ~50 ms y con
+# 165 globales el script tardaba casi 3 minutos).
+report="$(awk -v max="$MAX_FN_LINES" '
+  FNR==NR { if ($1=="global") base_g[$2" "$3]=1; else if ($1=="fn") base_f[$2" "$3]=$4; next }
+  $1=="global" { k=$2" "$3; cur_g[k]=1; if (!(k in base_g)) print "NUEVO GLOBAL: " k }
+  $1=="fn"     { k=$2" "$3; cur_f[k]=1
+                 if (!(k in base_f)) print "FUNCION NUEVA > " max " LINEAS: " k " (" $4 ")"
+                 else if ($4+0 > base_f[k]+0) print "FUNCION CRECIO: " k " (" base_f[k] " -> " $4 " lineas)" }
+  END {
+    for (k in base_g) if (!(k in cur_g)) gone = gone "  global " k "\n"
+    for (k in base_f) if (!(k in cur_f)) gone = gone "  fn " k " " base_f[k] "\n"
+    if (gone != "") printf "GONE\n%s", gone
+  }' "$BASELINE" <(echo "$current"))"
+fail=$(echo "$report" | grep -cE '^(NUEVO GLOBAL|FUNCION)' || true)
+echo "$report" | grep -E '^(NUEVO GLOBAL|FUNCION)' || true
+gone="$(echo "$report" | sed -n '/^GONE$/,$p' | sed '1d')"
 [ -n "$gone" ] && { echo "audit-core-debt: deuda saldada (podés regenerar la baseline):"; echo "$gone"; }
 
 n_g=$(echo "$current" | grep -c '^global' || true); n_f=$(echo "$current" | grep -c '^fn' || true)
