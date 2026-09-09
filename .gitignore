@@ -107,8 +107,13 @@ plugins/sqlite/sqlite-amalgamation-*/
 # libFuzzer harness binary (build artifact of scripts/build_fuzzer.sh)
 src/fuzz_parser
 
-# App privada (no es parte del core TypeEasy, repo aparte)
+# App privada (no es parte del core TypeEasy, repo aparte). NADA del ERP va a este repo público:
+# ni el código, ni la memoria compartida del equipo, ni informes/worktrees/deploys del cliente.
 ERP/
+ERP-*/
+MEMORIA-ERP.md
+*_ERP.md
+INFORME_*.md
 
 # Artefactos locales (pruebas, repros, submission AV) — no van al repo
 _av_submit/

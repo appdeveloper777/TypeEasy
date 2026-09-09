@@ -26,9 +26,9 @@
 // =====================================================================
 
 let conn = sqlserver_connect(
-    "172.210.9.14",        // host
+    "sqlserver.example.local",   // host
     "sa",                  // user
-    "ErpMig2026#Strong!",  // pass (server de prueba)
+    "CHANGE_ME",          // pass
     "agro",                // db
     1433,                  // port
     { "encrypt": 1, "tls_skip_verify": 1 }   // TLS, acepta cert self-signed
