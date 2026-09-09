@@ -564,7 +564,7 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
     if (value_node && value_node->type && strcmp(value_node->type, "NULL") == 0) {
         if (!decl_nullable) {
             int ln = node->line ? node->line : (access->line ? access->line : 0);
-            const char *fname = g_script_path ? g_script_path : "<script>";
+            const char *fname = g_vm.script_path ? g_vm.script_path : "<script>";
             fprintf(stderr,
                     "%s%s:%d: Error: cannot assign null to non-nullable attribute '%s' of type %s.%s\n",
                     TE_ERR_RED, fname, ln, attr_name, declared, TE_ERR_RESET);
@@ -606,7 +606,7 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
                 int ln = node->line ? node->line
                        : (value_node->line ? value_node->line
                        : (access->line ? access->line : 0));
-                const char *fname = g_script_path ? g_script_path : "<script>";
+                const char *fname = g_vm.script_path ? g_vm.script_path : "<script>";
                 fprintf(stderr,
                         "%s%s:%d: Error: cannot assign %s to attribute '%s' of type %s.%s\n",
                         TE_ERR_RED, fname, ln, val_tname, attr_name, declared, TE_ERR_RESET);

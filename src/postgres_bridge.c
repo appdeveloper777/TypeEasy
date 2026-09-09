@@ -6,13 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include "te_vm.h"
 
 #define PG_POOL_SIZE 10
 static PGconn* pg_connections[PG_POOL_SIZE] = {NULL};
 
 /* Auto-cleanup por request: ver mysql_bridge.c. Marca slots abiertos durante
  * un request para liberarlos al final si el script no llamó postgres_close(). */
-extern int g_db_request_phase;
 static int pg_req_scoped[PG_POOL_SIZE] = {0};
 
 extern ASTNode* create_ast_leaf(char *type, long long value, char *str_value, char *id);
@@ -189,7 +189,7 @@ void native_postgres_connect(ASTNode* args) {
     }
 
     pg_connections[slot] = conn;
-    pg_req_scoped[slot] = g_db_request_phase;
+    pg_req_scoped[slot] = g_vm.db_request_phase;
     printf("[Postgres] Connection successful (ID: %d)\n", slot); fflush(stdout);
     ASTNode* r = create_ast_leaf("NUMBER", slot, NULL, NULL);
     add_or_update_variable("__ret__", r); free_ast(r);
@@ -312,7 +312,7 @@ void native_postgres_query(ASTNode* args) {
         add_or_update_variable("__ret__", r); free_ast(r);
         free(eb.p);
         /* Strict mode solo aplica en --api; en CLI es no-op (ver mysql_bridge.c). */
-        { extern int g_api_mode; if (g_db_strict_errors && g_api_mode) typeeasy_http_set_status(500); }
+        { if (g_vm.db_strict_errors && g_vm.api_mode) typeeasy_http_set_status(500); }
         if (final_query) free(final_query);
         return;
     }

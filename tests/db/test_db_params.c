@@ -20,6 +20,11 @@
 #include <string.h>
 
 #include "db_params.h"   /* ASTNode, db_substitute_params */
+#include "te_vm.h"       /* db_params lee sus flags (db_envelope, ...) de la VM del hilo */
+
+/* VM mínima del test: los flags de db_params viven en TeVM (te_vm_cur es thread-local). */
+static TeVM test_vm = { TE_VM_DEFAULTS };
+__thread TeVM *te_vm_cur = &test_vm;
 
 /* ── Stubs de ast.c ──────────────────────────────────────────────────────
  * db_params.o referencia estos símbolos desde db_arg_as_map_head(), que este

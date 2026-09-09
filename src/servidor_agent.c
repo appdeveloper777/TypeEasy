@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ast.h"
+#include "te_vm.h"
 #include "civetweb.h"
 #include <stdarg.h>
 #include <curl/curl.h>
@@ -57,8 +58,14 @@ typedef struct RuntimeHost {
     ActiveBridge* bridges;
 } RuntimeHost;
 
-RuntimeHost g_runtime;
-static struct mg_connection *g_current_conn = NULL;
+static RuntimeHost *A(void) {
+    if (!g_vm.agent) {
+        g_vm.agent = (RuntimeHost *)calloc(1, sizeof(RuntimeHost));
+        if (!g_vm.agent) { fprintf(stderr, "[AGENT] out of memory\n"); exit(1); }
+    }
+    return g_vm.agent;
+}
+
 
 static void te_log(const char *fmt, ...) {
     va_list ap;
@@ -160,9 +167,9 @@ void handle_chat_bridge(char* method_name, ASTNode* args) {
         }
 
         // También devolver como respuesta HTTP
-        if (g_current_conn) {
-            mg_send_http_ok(g_current_conn, "text/plain; charset=utf-8", strlen(message_to_send));
-            mg_write(g_current_conn, message_to_send, strlen(message_to_send));
+        if (g_vm.agent_conn) {
+            mg_send_http_ok(g_vm.agent_conn, "text/plain; charset=utf-8", strlen(message_to_send));
+            mg_write(g_vm.agent_conn, message_to_send, strlen(message_to_send));
         }
         free(message_to_send);
     }
@@ -293,7 +300,7 @@ void handle_api_bridge(char* method_name, ASTNode* args) {
 }
 
 ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) {
-    ASTNode* agent = g_runtime.agents;
+    ASTNode* agent = (*A()).agents;
     while (agent) {
         if (agent->type && strcmp(agent->type, "AGENT") == 0) {
             ASTNode* listener_list = agent->left;
@@ -322,7 +329,7 @@ static int webhook_handler(struct mg_connection *conn, void *cbdata) {
     char post_data[2048] = {0};
     int read = 0;
 
-    g_current_conn = conn;
+    g_vm.agent_conn = conn;
 
     char c;
     while (read < (sizeof(post_data) - 1)) {
@@ -347,7 +354,7 @@ static int webhook_handler(struct mg_connection *conn, void *cbdata) {
     if (!listener) {
         fprintf(stderr, "TypeEasy Agent: Error: listener 'Chat.onMessage' not configured\n");
         mg_send_http_error(conn, 500, "Listener no configurado");
-        g_current_conn = NULL;
+        g_vm.agent_conn = NULL;
         return 500;
     }
 
@@ -359,7 +366,7 @@ static int webhook_handler(struct mg_connection *conn, void *cbdata) {
     interpret_ast(listener->right);
     te_log("Listener logic finished");
 
-    g_current_conn = NULL; 
+    g_vm.agent_conn = NULL; 
     
     if (mg_get_response_info(conn) == NULL) {
         mg_printf(conn, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
@@ -381,17 +388,17 @@ void runtime_start_bridges() {
         fprintf(stderr, "TypeEasy Agent: Fatal error: could not start civetweb on 8081.\n");
         exit(1);
     }
-    g_runtime.bridges = malloc(sizeof(ActiveBridge));
-    g_runtime.bridges->name = strdup("ChatServer");
-    g_runtime.bridges->context = ctx;
-    g_runtime.bridges->next = NULL;
+    (*A()).bridges = malloc(sizeof(ActiveBridge));
+    (*A()).bridges->name = strdup("ChatServer");
+    (*A()).bridges->context = ctx;
+    (*A()).bridges->next = NULL;
     mg_set_request_handler(ctx, "/whatsapp_hook", webhook_handler, NULL);
     te_log("Bridge server started: Chat listening on port 8081 (URL: /whatsapp_hook)");
 }
 
 void runtime_init(ASTNode* ast_root) {
-    g_runtime.agents = NULL;
-    g_runtime.bridges = NULL;
+    (*A()).agents = NULL;
+    (*A()).bridges = NULL;
     ASTNode* node = ast_root;
 
     while (node) {
@@ -405,8 +412,8 @@ void runtime_init(ASTNode* ast_root) {
         }
         if (current_stmt && current_stmt->type && strcmp(current_stmt->type, "AGENT") == 0) {
             te_log("Agent registered: %s", current_stmt->id);
-            current_stmt->next = g_runtime.agents;
-            g_runtime.agents = current_stmt;
+            current_stmt->next = (*A()).agents;
+            (*A()).agents = current_stmt;
         }
     }
 

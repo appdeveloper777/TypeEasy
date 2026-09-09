@@ -102,24 +102,20 @@
  * resets g_vm.lex_line per file and stamps g_vm.lex_file_id on new nodes; the
  * interpreter tracks the file of the statement being executed.
  * ------------------------------------------------------------------ */
-#define TE_SRC_FILES_MAX 512
-static char *g_src_files[TE_SRC_FILES_MAX];
-static int   g_src_file_count = 0;
 
 int te_src_file_register(const char *path) {
     if (!path) return 0;
-    for (int i = 1; i < g_src_file_count; i++)
-        if (g_src_files[i] && strcmp(g_src_files[i], path) == 0) return i;
-    if (g_src_file_count == 0) { g_src_files[0] = NULL; g_src_file_count = 1; }
-    if (g_src_file_count >= TE_SRC_FILES_MAX) return 0;
-    g_src_files[g_src_file_count] = strdup(path);
-    return g_src_file_count++;
+    for (int i = 1; i < g_vm.src_file_count; i++)
+        if (g_vm.src_files[i] && strcmp(g_vm.src_files[i], path) == 0) return i;
+    if (g_vm.src_file_count == 0) { g_vm.src_files[0] = NULL; g_vm.src_file_count = 1; }
+    if (g_vm.src_file_count >= TE_SRC_FILES_MAX) return 0;
+    g_vm.src_files[g_vm.src_file_count] = strdup(path);
+    return g_vm.src_file_count++;
 }
 
 const char *te_src_file_name(int id) {
-    extern const char *g_debug_source_file;
-    if (id > 0 && id < g_src_file_count && g_src_files[id]) return g_src_files[id];
-    return (g_debug_source_file && g_debug_source_file[0]) ? g_debug_source_file : "";
+    if (id > 0 && id < g_vm.src_file_count && g_vm.src_files[id]) return g_vm.src_files[id];
+    return (g_vm.debug_source_file && g_vm.debug_source_file[0]) ? g_vm.debug_source_file : "";
 }
 
 /* Names of the user fns currently executing (innermost last), for the
@@ -135,58 +131,51 @@ void te_callstack_reset(void) { g_vm.callstack_n = 0; }
  * Script mode: report on exit. --api: report per request that exceeds
  * TYPEEASY_PROFILE_MIN_MS (default 0 = every request) to stderr.
  * ------------------------------------------------------------------ */
-int g_profile_enabled = -1;   /* -1 = not yet read from env */
-typedef struct { const char *name; long long calls, incl_ns, self_ns; } TeProfEntry;
-#define TE_PROF_MAX 1024
-static TeProfEntry g_prof[TE_PROF_MAX];
-static int g_prof_n = 0;
-static long long g_prof_child_ns[TE_CALLSTACK_MAX];   /* time spent in callees, per active frame */
-static long long g_prof_start_ns[TE_CALLSTACK_MAX];
 
 static long long te_prof_now_ns(void) {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 int te_profile_on(void) {
-    if (g_profile_enabled < 0) { const char *e = getenv("TYPEEASY_PROF_FN"); g_profile_enabled = (e && e[0] && e[0] != '0') ? 1 : 0; }
-    return g_profile_enabled;
+    if (g_vm.profile_enabled < 0) { const char *e = getenv("TYPEEASY_PROF_FN"); g_vm.profile_enabled = (e && e[0] && e[0] != '0') ? 1 : 0; }
+    return g_vm.profile_enabled;
 }
 static TeProfEntry *te_prof_entry(const char *name) {
-    for (int i = 0; i < g_prof_n; i++) if (g_prof[i].name == name || strcmp(g_prof[i].name, name) == 0) return &g_prof[i];
-    if (g_prof_n >= TE_PROF_MAX) return NULL;
-    g_prof[g_prof_n].name = name; g_prof[g_prof_n].calls = 0; g_prof[g_prof_n].incl_ns = 0; g_prof[g_prof_n].self_ns = 0;
-    return &g_prof[g_prof_n++];
+    for (int i = 0; i < g_vm.prof_n; i++) if (g_vm.prof[i].name == name || strcmp(g_vm.prof[i].name, name) == 0) return &g_vm.prof[i];
+    if (g_vm.prof_n >= TE_PROF_MAX) return NULL;
+    g_vm.prof[g_vm.prof_n].name = name; g_vm.prof[g_vm.prof_n].calls = 0; g_vm.prof[g_vm.prof_n].incl_ns = 0; g_vm.prof[g_vm.prof_n].self_ns = 0;
+    return &g_vm.prof[g_vm.prof_n++];
 }
 void te_prof_enter(void) {
     int d = g_vm.callstack_n - 1;                     /* frame just pushed */
     if (d < 0 || d >= TE_CALLSTACK_MAX) return;
-    g_prof_start_ns[d] = te_prof_now_ns();
-    g_prof_child_ns[d] = 0;
+    g_vm.prof_start_ns[d] = te_prof_now_ns();
+    g_vm.prof_child_ns[d] = 0;
 }
 void te_prof_leave(const char *name) {
     int d = g_vm.callstack_n - 1;                     /* frame about to be popped */
     if (d < 0 || d >= TE_CALLSTACK_MAX) return;
-    long long incl = te_prof_now_ns() - g_prof_start_ns[d];
+    long long incl = te_prof_now_ns() - g_vm.prof_start_ns[d];
     TeProfEntry *e = te_prof_entry(name);
-    if (e) { e->calls++; e->incl_ns += incl; e->self_ns += incl - g_prof_child_ns[d]; }
-    if (d > 0) g_prof_child_ns[d - 1] += incl;
+    if (e) { e->calls++; e->incl_ns += incl; e->self_ns += incl - g_vm.prof_child_ns[d]; }
+    if (d > 0) g_vm.prof_child_ns[d - 1] += incl;
 }
 static int te_prof_cmp(const void *a, const void *b) {
     const TeProfEntry *x = a, *y = b;
     return (y->self_ns > x->self_ns) - (y->self_ns < x->self_ns);
 }
 void te_profile_report(const char *title) {
-    if (!te_profile_on() || g_prof_n == 0) return;
-    qsort(g_prof, (size_t)g_prof_n, sizeof(TeProfEntry), te_prof_cmp);
-    long long total_self = 0; for (int i = 0; i < g_prof_n; i++) total_self += g_prof[i].self_ns;
-    fprintf(stderr, "[profile] %s  (%d fns, %.1f ms in fn bodies)\n", title ? title : "", g_prof_n, total_self / 1e6);
+    if (!te_profile_on() || g_vm.prof_n == 0) return;
+    qsort(g_vm.prof, (size_t)g_vm.prof_n, sizeof(TeProfEntry), te_prof_cmp);
+    long long total_self = 0; for (int i = 0; i < g_vm.prof_n; i++) total_self += g_vm.prof[i].self_ns;
+    fprintf(stderr, "[profile] %s  (%d fns, %.1f ms in fn bodies)\n", title ? title : "", g_vm.prof_n, total_self / 1e6);
     fprintf(stderr, "[profile] %10s %10s %10s  %s\n", "self_ms", "incl_ms", "calls", "fn");
-    int shown = g_prof_n < 25 ? g_prof_n : 25;
+    int shown = g_vm.prof_n < 25 ? g_vm.prof_n : 25;
     for (int i = 0; i < shown; i++)
-        fprintf(stderr, "[profile] %10.2f %10.2f %10lld  %s\n", g_prof[i].self_ns / 1e6, g_prof[i].incl_ns / 1e6, g_prof[i].calls, g_prof[i].name);
+        fprintf(stderr, "[profile] %10.2f %10.2f %10lld  %s\n", g_vm.prof[i].self_ns / 1e6, g_vm.prof[i].incl_ns / 1e6, g_vm.prof[i].calls, g_vm.prof[i].name);
     fflush(stderr);
 }
-void te_profile_reset(void) { g_prof_n = 0; }
+void te_profile_reset(void) { g_vm.prof_n = 0; }
 
 /* "    at file.te:12 in fnA <- fnB" (or just "    at file.te:12"). */
 void te_runtime_location(char *buf, size_t cap) {
@@ -288,15 +277,9 @@ void te_depth_leave(void) {
 #include <stddef.h>
 #include <pthread.h>
 
-/* Phase F: globals shared with test runner (typeeasy_main.c).
- * Defined here as weak so binaries that don't link the test runner
- * still satisfy references from te_builtin_dispatch. */
-int g_test_failed __attribute__((weak)) = 0;
-int g_test_assertions __attribute__((weak)) = 0;
-
-/* Phase F.3: error capture for --syntax-check. typeeasy_main.c provides
- * strong defs; weak here so typeeasy_agent (which doesn't link main) builds. */
-int g_capture_errors __attribute__((weak)) = 0;
+/* test_failed / test_assertions / capture_errors viven en TeVM (antes weak globals
+ * compartidos con typeeasy_main.c). te_capture_error sigue weak: typeeasy_main.c
+ * provee la definición fuerte; typeeasy_agent (que no linkea main) usa esta. */
 void te_capture_error(int line, const char *msg, const char *near) __attribute__((weak));
 void te_capture_error(int line, const char *msg, const char *near) {
     (void)line; (void)msg; (void)near;
@@ -317,13 +300,9 @@ void te_capture_error(int line, const char *msg, const char *near) {
 #define TE_HAS_MMAP 0
 #define TE_HAS_PTHREAD 0
 /* Phase F/F.3 (portado a este branch): en arm64/android (__linux__ pero NO
- * __x86_64__) el branch de arriba no aplica; sin estas defs weak,
+ * __x86_64__) el branch de arriba no aplica; sin esta def weak,
  * te_capture_error queda declarado implicitamente y clang (Android NDK) lo
- * trata como ERROR duro. Mismo contrato weak que el branch x86: typeeasy_main.c
- * provee las defs STRONG; aqui son weak para que binarios sin main (agent) linken. */
-int g_test_failed __attribute__((weak)) = 0;
-int g_test_assertions __attribute__((weak)) = 0;
-int g_capture_errors __attribute__((weak)) = 0;
+ * trata como ERROR duro. typeeasy_main.c provee la def STRONG. */
 void te_capture_error(int line, const char *msg, const char *near) __attribute__((weak));
 void te_capture_error(int line, const char *msg, const char *near) {
     (void)line; (void)msg; (void)near;
@@ -420,7 +399,6 @@ void evaluate_native_args(ASTNode *arg) {
 // Global buffer for capturing println output
 
 /* Ruta del script en ejecución (para mensajes de error). La asigna main(). */
-const char *g_script_path = NULL;
 
 /* Color ANSI para mensajes de error (rojo). Git Bash / terminales VT lo
  * soportan. Se desactiva automáticamente si stderr no es una terminal para
@@ -1277,17 +1255,7 @@ void native_concat(ASTNode *arg) {
  * via typeeasy_http_reset(). Inside the interpreted body, builtins like
  * request_query("q") / response_status(404) read/write these.
  * ============================================================================ */
-typedef struct TeKV { char *k; char *v; struct TeKV *next; } TeKV;
 
-static char *g_req_method = NULL;
-static char *g_req_path   = NULL;
-static char *g_req_body   = NULL;
-static size_t g_req_body_len = 0;   /* binary-safe length; strlen() not used (body may contain NULs, e.g. xlsx upload) */
-static TeKV *g_req_query   = NULL;
-static TeKV *g_req_headers = NULL;
-static TeKV *g_req_params  = NULL;
-static int   g_resp_status = 200;
-static TeKV *g_resp_headers = NULL;
 
 /* Binary download channel. When a handler calls xlsx_download()/pdf_download()/
  * response_file(), the bytes of the file live here (binary-safe, explicit
@@ -1295,16 +1263,12 @@ static TeKV *g_resp_headers = NULL;
  * this AFTER invoking the handler and, when set, writes these raw bytes as the
  * body (via mg_write) instead of the textual __ret__ string — so .xlsx (ZIP)
  * and .pdf payloads keep embedded NUL bytes intact. Reset every request. */
-static char  *g_resp_body = NULL;
-static size_t g_resp_body_len = 0;
-static char  *g_resp_content_type = NULL;
 
 /* Response content-type intent. When a handler does `return "text"` (or any
  * bare scalar/string value rather than json()/xml()), the embedded server must
  * answer with Content-Type: text/plain instead of application/json. This flag
  * is set by interpret_return_node and read by the server. It defaults to 0
  * (structured/json) and is reset on every request via typeeasy_http_reset(). */
-int g_response_is_raw_text = 0;
 
 /* API server mode. Set once at startup (before any civetweb worker thread is
  * spawned) when the process runs `--api`. While set, the bytecode cache is
@@ -1312,7 +1276,6 @@ int g_response_is_raw_text = 0;
  * shared AST nodes and stores raw Variable* pointers into vars[], which is
  * unsafe once requests run on parallel threads with thread-local vars[].
  * Read-only after startup, so it needs no synchronization. */
-int g_api_mode = 0;
 
 static void te_kv_free_list(TeKV **head) {
     TeKV *c = *head; while (c) { TeKV *n = c->next; free(c->k); free(c->v); free(c); c = n; }
@@ -1351,41 +1314,41 @@ static const char *te_kv_find_ci(TeKV *head, const char *k) {
 }
 
 void typeeasy_http_reset(void) {
-    free(g_req_method); g_req_method = NULL;
-    free(g_req_path);   g_req_path   = NULL;
-    free(g_req_body);   g_req_body   = NULL;  g_req_body_len = 0;
-    te_kv_free_list(&g_req_query);
-    te_kv_free_list(&g_req_headers);
-    te_kv_free_list(&g_req_params);
-    te_kv_free_list(&g_resp_headers);
-    g_resp_status = 200;
-    g_response_is_raw_text = 0;
-    free(g_resp_body); g_resp_body = NULL; g_resp_body_len = 0;
-    free(g_resp_content_type); g_resp_content_type = NULL;
+    free(g_vm.req_method); g_vm.req_method = NULL;
+    free(g_vm.req_path);   g_vm.req_path   = NULL;
+    free(g_vm.req_body);   g_vm.req_body   = NULL;  g_vm.req_body_len = 0;
+    te_kv_free_list(&g_vm.req_query);
+    te_kv_free_list(&g_vm.req_headers);
+    te_kv_free_list(&g_vm.req_params);
+    te_kv_free_list(&g_vm.resp_headers);
+    g_vm.resp_status = 200;
+    g_vm.response_is_raw_text = 0;
+    free(g_vm.resp_body); g_vm.resp_body = NULL; g_vm.resp_body_len = 0;
+    free(g_vm.resp_content_type); g_vm.resp_content_type = NULL;
 }
-void typeeasy_http_set_method(const char *m) { free(g_req_method); g_req_method = m ? strdup(m) : NULL; }
-void typeeasy_http_set_path  (const char *p) { free(g_req_path);   g_req_path   = p ? strdup(p) : NULL; }
+void typeeasy_http_set_method(const char *m) { free(g_vm.req_method); g_vm.req_method = m ? strdup(m) : NULL; }
+void typeeasy_http_set_path  (const char *p) { free(g_vm.req_path);   g_vm.req_path   = p ? strdup(p) : NULL; }
 /* Binary-safe body setter: keeps explicit length so callers can store payloads
  * with embedded NUL bytes (e.g. .xlsx uploads = ZIP). The buffer is always
  * NUL-terminated past the end so string-style accessors (request_body()) still
  * work for textual bodies. */
 void typeeasy_http_set_body_n(const void *buf, size_t len) {
-    free(g_req_body); g_req_body = NULL; g_req_body_len = 0;
+    free(g_vm.req_body); g_vm.req_body = NULL; g_vm.req_body_len = 0;
     if (!buf) return;
-    g_req_body = (char*)malloc(len + 1);
-    if (!g_req_body) return;
-    if (len) memcpy(g_req_body, buf, len);
-    g_req_body[len] = '\0';
-    g_req_body_len = len;
+    g_vm.req_body = (char*)malloc(len + 1);
+    if (!g_vm.req_body) return;
+    if (len) memcpy(g_vm.req_body, buf, len);
+    g_vm.req_body[len] = '\0';
+    g_vm.req_body_len = len;
 }
 void typeeasy_http_set_body  (const char *b) { typeeasy_http_set_body_n(b, b ? strlen(b) : 0); }
-void typeeasy_http_add_query (const char *k, const char *v) { te_kv_add(&g_req_query,  k, v); }
-void typeeasy_http_add_header(const char *k, const char *v) { te_kv_add(&g_req_headers, k, v); }
-void typeeasy_http_add_param (const char *k, const char *v) { te_kv_add(&g_req_params,  k, v); }
-int  typeeasy_http_get_status(void) { return g_resp_status; }
-void typeeasy_http_set_status(int s) { g_resp_status = s; }
+void typeeasy_http_add_query (const char *k, const char *v) { te_kv_add(&g_vm.req_query,  k, v); }
+void typeeasy_http_add_header(const char *k, const char *v) { te_kv_add(&g_vm.req_headers, k, v); }
+void typeeasy_http_add_param (const char *k, const char *v) { te_kv_add(&g_vm.req_params,  k, v); }
+int  typeeasy_http_get_status(void) { return g_vm.resp_status; }
+void typeeasy_http_set_status(int s) { g_vm.resp_status = s; }
 int  typeeasy_http_iter_response_header(int idx, const char **k, const char **v) {
-    TeKV *c = g_resp_headers; int i = 0;
+    TeKV *c = g_vm.resp_headers; int i = 0;
     while (c) { if (i == idx) { if (k) *k = c->k; if (v) *v = c->v; return 1; } c = c->next; i++; }
     return 0;
 }
@@ -1394,28 +1357,28 @@ int  typeeasy_http_iter_response_header(int idx, const char **k, const char **v)
  * copies the bytes (caller keeps ownership of its buffer). Passing buf=NULL
  * clears any pending binary body. */
 void typeeasy_http_set_response_bytes(const void *buf, size_t len, const char *content_type) {
-    free(g_resp_body); g_resp_body = NULL; g_resp_body_len = 0;
-    free(g_resp_content_type); g_resp_content_type = NULL;
+    free(g_vm.resp_body); g_vm.resp_body = NULL; g_vm.resp_body_len = 0;
+    free(g_vm.resp_content_type); g_vm.resp_content_type = NULL;
     if (!buf) return;
-    g_resp_body = (char*)malloc(len ? len : 1);
-    if (!g_resp_body) return;
-    if (len) memcpy(g_resp_body, buf, len);
-    g_resp_body_len = len;
-    g_resp_content_type = content_type ? strdup(content_type) : NULL;
+    g_vm.resp_body = (char*)malloc(len ? len : 1);
+    if (!g_vm.resp_body) return;
+    if (len) memcpy(g_vm.resp_body, buf, len);
+    g_vm.resp_body_len = len;
+    g_vm.resp_content_type = content_type ? strdup(content_type) : NULL;
 }
 const char *typeeasy_http_get_response_bytes(size_t *out_len) {
-    if (out_len) *out_len = g_resp_body_len;
-    return g_resp_body;
+    if (out_len) *out_len = g_vm.resp_body_len;
+    return g_vm.resp_body;
 }
-const char *typeeasy_http_get_response_content_type(void) { return g_resp_content_type; }
+const char *typeeasy_http_get_response_content_type(void) { return g_vm.resp_content_type; }
 
 /* Debugger introspection */
-const char *typeeasy_http_get_method(void) { return g_req_method; }
-const char *typeeasy_http_get_path  (void) { return g_req_path;   }
-const char *typeeasy_http_get_body  (void) { return g_req_body;   }
+const char *typeeasy_http_get_method(void) { return g_vm.req_method; }
+const char *typeeasy_http_get_path  (void) { return g_vm.req_path;   }
+const char *typeeasy_http_get_body  (void) { return g_vm.req_body;   }
 const char *typeeasy_http_get_body_n(size_t *out_len) {
-    if (out_len) *out_len = g_req_body_len;
-    return g_req_body;
+    if (out_len) *out_len = g_vm.req_body_len;
+    return g_vm.req_body;
 }
 static int te_kv_iter(TeKV *head, int idx, const char **k, const char **v) {
     int i = 0; for (TeKV *c = head; c; c = c->next, ++i) {
@@ -1423,9 +1386,9 @@ static int te_kv_iter(TeKV *head, int idx, const char **k, const char **v) {
     }
     return 0;
 }
-int typeeasy_http_iter_param (int idx, const char **k, const char **v) { return te_kv_iter(g_req_params,  idx, k, v); }
-int typeeasy_http_iter_query (int idx, const char **k, const char **v) { return te_kv_iter(g_req_query,   idx, k, v); }
-int typeeasy_http_iter_header(int idx, const char **k, const char **v) { return te_kv_iter(g_req_headers, idx, k, v); }
+int typeeasy_http_iter_param (int idx, const char **k, const char **v) { return te_kv_iter(g_vm.req_params,  idx, k, v); }
+int typeeasy_http_iter_query (int idx, const char **k, const char **v) { return te_kv_iter(g_vm.req_query,   idx, k, v); }
+int typeeasy_http_iter_header(int idx, const char **k, const char **v) { return te_kv_iter(g_vm.req_headers, idx, k, v); }
 
 /* Helpers: extract the first STRING argument from a function-call arg AST.
  * The argument may be a single STRING node, or a chain via ->right, or wrapped
@@ -1465,12 +1428,12 @@ void te_set_ret_int(int n) {
     free_ast(r);
 }
 
-static void native_request_method(ASTNode *arg) { (void)arg; te_set_ret_string(g_req_method ? g_req_method : ""); }
-static void native_request_path  (ASTNode *arg) { (void)arg; te_set_ret_string(g_req_path   ? g_req_path   : ""); }
-static void native_request_body  (ASTNode *arg) { (void)arg; te_set_ret_string(g_req_body   ? g_req_body   : ""); }
-static void native_request_query (ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_query,   k); te_set_ret_string(v ? v : ""); }
-static void native_request_header(ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find_ci(g_req_headers, k); te_set_ret_string(v ? v : ""); }
-static void native_request_param (ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_req_params,  k); te_set_ret_string(v ? v : ""); }
+static void native_request_method(ASTNode *arg) { (void)arg; te_set_ret_string(g_vm.req_method ? g_vm.req_method : ""); }
+static void native_request_path  (ASTNode *arg) { (void)arg; te_set_ret_string(g_vm.req_path   ? g_vm.req_path   : ""); }
+static void native_request_body  (ASTNode *arg) { (void)arg; te_set_ret_string(g_vm.req_body   ? g_vm.req_body   : ""); }
+static void native_request_query (ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_vm.req_query,   k); te_set_ret_string(v ? v : ""); }
+static void native_request_header(ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find_ci(g_vm.req_headers, k); te_set_ret_string(v ? v : ""); }
+static void native_request_param (ASTNode *arg) { const char *k = te_arg_string(arg); const char *v = te_kv_find(g_vm.req_params,  k); te_set_ret_string(v ? v : ""); }
 
 /* request_cookie(name): parse the "Cookie" request header and return the value
  * of the named cookie ("" if absent). The header looks like
@@ -1479,7 +1442,7 @@ static void native_request_param (ASTNode *arg) { const char *k = te_arg_string(
  * Cross-platform (pure C stdlib, no POSIX-only calls). */
 static void native_request_cookie(ASTNode *arg) {
     const char *name = te_arg_string(arg);
-    const char *hdr  = te_kv_find_ci(g_req_headers, "Cookie");
+    const char *hdr  = te_kv_find_ci(g_vm.req_headers, "Cookie");
     if (!name || !*name || !hdr) { te_set_ret_string(""); return; }
     size_t nlen = strlen(name);
     const char *p = hdr;
@@ -1511,13 +1474,12 @@ static void native_request_cookie(ASTNode *arg) {
 /* v0.0.16: @auth decorator support. g_current_claims holds the validated JWT
  * payload (JSON) for the current request; set by the API dispatch when an
  * @auth endpoint passes verification, exposed to handlers via current_claims(). */
-static char *g_current_claims = NULL;
-const char *typeeasy_http_get_header(const char *k) { return te_kv_find_ci(g_req_headers, k); }
+const char *typeeasy_http_get_header(const char *k) { return te_kv_find_ci(g_vm.req_headers, k); }
 void typeeasy_set_current_claims(const char *json) {
-    if (g_current_claims) { free(g_current_claims); g_current_claims = NULL; }
-    if (json) g_current_claims = strdup(json);
+    if (g_vm.current_claims) { free(g_vm.current_claims); g_vm.current_claims = NULL; }
+    if (json) g_vm.current_claims = strdup(json);
 }
-static void native_current_claims(ASTNode *arg) { (void)arg; te_set_ret_string(g_current_claims ? g_current_claims : ""); }
+static void native_current_claims(ASTNode *arg) { (void)arg; te_set_ret_string(g_vm.current_claims ? g_vm.current_claims : ""); }
 
 /* v0.0.13: Debug-print que va a stderr (NO entra al pipeline de captura
  * de stdout que arma el cuerpo HTTP). Pensado para inspeccionar handlers
@@ -1568,21 +1530,21 @@ static void te_kv_to_json(TeKV *head, char *out, size_t cap) {
 
 static void native_request_headers(ASTNode *arg) {
     (void)arg;
-    char buf[8192]; te_kv_to_json(g_req_headers, buf, sizeof(buf));
+    char buf[8192]; te_kv_to_json(g_vm.req_headers, buf, sizeof(buf));
     te_set_ret_string(buf);
 }
 static void native_request_queries(ASTNode *arg) {
     (void)arg;
-    char buf[4096]; te_kv_to_json(g_req_query, buf, sizeof(buf));
+    char buf[4096]; te_kv_to_json(g_vm.req_query, buf, sizeof(buf));
     te_set_ret_string(buf);
 }
 static void native_request_params_all(ASTNode *arg) {
     (void)arg;
-    char buf[2048]; te_kv_to_json(g_req_params, buf, sizeof(buf));
+    char buf[2048]; te_kv_to_json(g_vm.req_params, buf, sizeof(buf));
     te_set_ret_string(buf);
 }
 
-static void native_response_status(ASTNode *arg) { g_resp_status = te_arg_int(arg, 200); te_set_ret_int(g_resp_status); }
+static void native_response_status(ASTNode *arg) { g_vm.resp_status = te_arg_int(arg, 200); te_set_ret_int(g_vm.resp_status); }
 static void native_response_header(ASTNode *arg) {
     const char *k = te_arg_string(arg);
     ASTNode *vnode = (arg && arg->next) ? arg->next : NULL; /* gotcha #1: 2nd arg via ->next */
@@ -1592,7 +1554,7 @@ static void native_response_header(ASTNode *arg) {
      * NULL y la cabecera salía vacía. get_node_string evalúa esos nodos. */
     char *vheap = NULL;
     if (!v && vnode) { vheap = get_node_string(vnode); v = vheap; }
-    if (k) te_kv_add(&g_resp_headers, k, v ? v : "");
+    if (k) te_kv_add(&g_vm.resp_headers, k, v ? v : "");
     if (vheap) free(vheap);
     te_set_ret_int(0);
 }
@@ -1624,7 +1586,7 @@ static void te_set_attachment_header(const char *filename) {
     }
     safe[j] = '\0';
     snprintf(hv, sizeof hv, "attachment; filename=\"%s\"", safe);
-    te_kv_add(&g_resp_headers, "Content-Disposition", hv);
+    te_kv_add(&g_vm.resp_headers, "Content-Disposition", hv);
 }
 
 static void native_xlsx_download(ASTNode *arg) {
@@ -1638,7 +1600,7 @@ static void native_xlsx_download(ASTNode *arg) {
         te_set_attachment_header((fname && *fname) ? fname : "download.xlsx");
         free(xlsx);
     } else {
-        g_resp_status = 500;
+        g_vm.resp_status = 500;
     }
     if (csv) free(csv);
     if (fname) free(fname);
@@ -1655,7 +1617,7 @@ static void native_pdf_download(ASTNode *arg) {
         te_set_attachment_header((fname && *fname) ? fname : "download.pdf");
         free(pdf);
     } else {
-        g_resp_status = 500;
+        g_vm.resp_status = 500;
     }
     if (text) free(text);
     if (fname) free(fname);
@@ -1693,16 +1655,16 @@ static const char *te_guess_mime(const char *path) {
 static void native_response_file(ASTNode *arg) {
     char *path  = arg ? get_node_string(arg) : NULL;
     char *fname = (arg && arg->next) ? get_node_string(arg->next) : NULL;
-    if (!path || !*path) { g_resp_status = 404; if (path) free(path); if (fname) free(fname); te_set_ret_string(""); return; }
+    if (!path || !*path) { g_vm.resp_status = 404; if (path) free(path); if (fname) free(fname); te_set_ret_string(""); return; }
     FILE *f = fopen(path, "rb");
-    if (!f) { g_resp_status = 404; free(path); if (fname) free(fname); te_set_ret_string(""); return; }
+    if (!f) { g_vm.resp_status = 404; free(path); if (fname) free(fname); te_set_ret_string(""); return; }
     fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
     if (sz < 0) sz = 0;
-    if (sz > (64L << 20)) { /* 64 MiB cap */ fclose(f); g_resp_status = 413; free(path); if (fname) free(fname); te_set_ret_string(""); return; }
+    if (sz > (64L << 20)) { /* 64 MiB cap */ fclose(f); g_vm.resp_status = 413; free(path); if (fname) free(fname); te_set_ret_string(""); return; }
     char *buf = (char*)malloc((size_t)sz ? (size_t)sz : 1);
     size_t rd = buf ? fread(buf, 1, (size_t)sz, f) : 0;
     fclose(f);
-    if (!buf) { g_resp_status = 500; free(path); if (fname) free(fname); te_set_ret_string(""); return; }
+    if (!buf) { g_vm.resp_status = 500; free(path); if (fname) free(fname); te_set_ret_string(""); return; }
     typeeasy_http_set_response_bytes(buf, rd, te_guess_mime(path));
     if (fname && *fname) te_set_attachment_header(fname);
     free(buf); free(path); if (fname) free(fname);
@@ -1796,9 +1758,7 @@ static int te_call_registry(const char *name, ASTNode *args) {
  * encendido, fijamos response_status(500). MySQL/Postgres/SQL Server lo hacen
  * en su bridge nativo; SQLite lo hace aqui despues de la delegacion. */
 static void te_sql_strict_check_ret(void) {
-    extern int g_api_mode;
-    extern int g_db_strict_errors;
-    if (!g_db_strict_errors || !g_api_mode) return;
+    if (!g_vm.db_strict_errors || !g_vm.api_mode) return;
     Variable *r = find_variable("__ret__");
     if (!r || r->vtype != VAL_STRING || !r->value.string_value) return;
     const char *s = r->value.string_value;
@@ -1825,8 +1785,7 @@ static void te_sql_strict_check_ret(void) {
  * int -> "conflicting types" (error duro, no solo warning como en gcc). */
 void te_invalidate_map_cache(ASTNode *root);
 static void te_sql_envelope_wrap(int force) {
-    extern int g_db_envelope;
-    int on = (force < 0) ? g_db_envelope : (force ? 1 : 0);
+    int on = (force < 0) ? g_vm.db_envelope : (force ? 1 : 0);
     if (!on) return;
     Variable *r = find_variable("__ret__");
     if (!r) return;
@@ -2034,20 +1993,17 @@ static int te_arg_is_truthy(ASTNode *a) {
     }
     return 0;
 }
-extern int g_db_empty_as_null;
-extern int g_db_strict_errors;
 static void native_sql_set_empty_as_null(ASTNode *arg) {
-    g_db_empty_as_null = te_arg_is_truthy(arg);
-    te_set_ret_int(g_db_empty_as_null);
+    g_vm.db_empty_as_null = te_arg_is_truthy(arg);
+    te_set_ret_int(g_vm.db_empty_as_null);
 }
 static void native_sql_set_strict_errors(ASTNode *arg) {
-    g_db_strict_errors = te_arg_is_truthy(arg);
-    te_set_ret_int(g_db_strict_errors);
+    g_vm.db_strict_errors = te_arg_is_truthy(arg);
+    te_set_ret_int(g_vm.db_strict_errors);
 }
 static void native_sql_set_envelope(ASTNode *arg) {
-    extern int g_db_envelope;
-    g_db_envelope = te_arg_is_truthy(arg);
-    te_set_ret_int(g_db_envelope);
+    g_vm.db_envelope = te_arg_is_truthy(arg);
+    te_set_ret_int(g_vm.db_envelope);
 }
 
 int call_native_function(const char *name, ASTNode *arg) {
@@ -2151,7 +2107,7 @@ int dbg_printf(const char *fmt, ...) {
          * explicit append_to_stdout(...) calls in interpret_print/println.
          * dbg_printf must NOT append here or every line is duplicated in
          * __ret__ when json() reads the buffer. */
-        if (g_debug_enabled) debugger_emit_output("stdout", stackbuf);
+        if (g_vm.debug_enabled) debugger_emit_output("stdout", stackbuf);
         va_end(ap2);
         return n;
     }
@@ -2161,7 +2117,7 @@ int dbg_printf(const char *fmt, ...) {
     vsnprintf(buf, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
     if (!g_vm.suppress_stdout) fputs(buf, stdout);
-    if (g_debug_enabled) debugger_emit_output("stdout", buf);
+    if (g_vm.debug_enabled) debugger_emit_output("stdout", buf);
     free(buf);
     return n;
 }
@@ -2178,7 +2134,7 @@ static int dbg_eprintf(const char *fmt, ...) {
     if (n < 0) { va_end(ap2); return n; }
     if ((size_t)n < sizeof(stackbuf)) {
         fputs(stackbuf, stderr);
-        if (g_debug_enabled) debugger_emit_output("stderr", stackbuf);
+        if (g_vm.debug_enabled) debugger_emit_output("stderr", stackbuf);
         va_end(ap2);
         return n;
     }
@@ -2187,7 +2143,7 @@ static int dbg_eprintf(const char *fmt, ...) {
     vsnprintf(buf, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
     fputs(buf, stderr);
-    if (g_debug_enabled) debugger_emit_output("stderr", buf);
+    if (g_vm.debug_enabled) debugger_emit_output("stderr", buf);
     free(buf);
     return n;
 }
@@ -2350,7 +2306,6 @@ char* expand_interp_string(const char *raw);
 static void te_sym_reset_to(int initial_count);
 
 // --- INICIO MEJORA: Punteros a los manejadores de bridges ---
-static BridgeHandlers g_bridge_handlers = {NULL, NULL, NULL};
 
 /* DB connection lifecycle. 0 mientras se carga el script global; 1 una vez que
  * el servidor empieza a despachar requests. Las conexiones abiertas con este
@@ -2358,11 +2313,10 @@ static BridgeHandlers g_bridge_handlers = {NULL, NULL, NULL};
  * request (red de seguridad si el script olvida *_close()). Las abiertas en el
  * load global persisten durante toda la vida del proceso. Leen este flag los
  * bridges (mysql/postgres/sqlserver) y el plugin sqlite vía host->db_request_phase. */
-int g_db_request_phase = 0;
 
 void runtime_save_initial_var_count() {
     g_vm.initial_var_count = g_vm.var_count;
-    g_db_request_phase = 1;   /* a partir de aquí, toda conexión es request-scoped */
+    g_vm.db_request_phase = 1;   /* a partir de aquí, toda conexión es request-scoped */
     if (g_vm.debug_mode) te_log_ast("Initial state saved. %d global variables retained.", g_vm.initial_var_count);
 }
 
@@ -2441,10 +2395,10 @@ void runtime_reset_vars_to_initial_state() {
     te_db_run_request_cleanup_hooks();
 }
 void runtime_register_bridge_handlers(BridgeHandlers handlers) {
-    g_bridge_handlers.handle_chat_bridge = handlers.handle_chat_bridge;
-    g_bridge_handlers.handle_nlu_bridge = handlers.handle_nlu_bridge;
-    g_bridge_handlers.handle_api_bridge = handlers.handle_api_bridge;
-    g_bridge_handlers.handle_gemini_bridge = handlers.handle_gemini_bridge;
+    g_vm.bridge_handlers.handle_chat_bridge = handlers.handle_chat_bridge;
+    g_vm.bridge_handlers.handle_nlu_bridge = handlers.handle_nlu_bridge;
+    g_vm.bridge_handlers.handle_api_bridge = handlers.handle_api_bridge;
+    g_vm.bridge_handlers.handle_gemini_bridge = handlers.handle_gemini_bridge;
 }
 // --- FIN MEJORA ---
 
@@ -2961,21 +2915,21 @@ void *te_reqstate_save(void) {
     s->recovery    = g_vm.runtime_recovery;
     g_vm.return_flag = 0; g_vm.throw_flag = 0; g_vm.call_depth = 0;
 
-    s->claims = g_current_claims;       /* ownership moves */
-    g_current_claims = NULL;
+    s->claims = g_vm.current_claims;       /* ownership moves */
+    g_vm.current_claims = NULL;
 
-    s->req_method = g_req_method; s->req_path = g_req_path; s->req_body = g_req_body;
-    s->req_body_len = g_req_body_len;
-    s->req_query  = g_req_query;  s->req_headers = g_req_headers;
-    s->req_params = g_req_params; s->resp_headers = g_resp_headers;
-    s->resp_status = g_resp_status; s->raw_text = g_response_is_raw_text;
-    g_req_method = g_req_path = g_req_body = NULL;
-    g_req_body_len = 0;
-    g_req_query = g_req_headers = g_req_params = g_resp_headers = NULL;
-    g_resp_status = 200; g_response_is_raw_text = 0;
-    s->resp_body = g_resp_body; s->resp_body_len = g_resp_body_len;
-    s->resp_content_type = g_resp_content_type;
-    g_resp_body = NULL; g_resp_body_len = 0; g_resp_content_type = NULL;
+    s->req_method = g_vm.req_method; s->req_path = g_vm.req_path; s->req_body = g_vm.req_body;
+    s->req_body_len = g_vm.req_body_len;
+    s->req_query  = g_vm.req_query;  s->req_headers = g_vm.req_headers;
+    s->req_params = g_vm.req_params; s->resp_headers = g_vm.resp_headers;
+    s->resp_status = g_vm.resp_status; s->raw_text = g_vm.response_is_raw_text;
+    g_vm.req_method = g_vm.req_path = g_vm.req_body = NULL;
+    g_vm.req_body_len = 0;
+    g_vm.req_query = g_vm.req_headers = g_vm.req_params = g_vm.resp_headers = NULL;
+    g_vm.resp_status = 200; g_vm.response_is_raw_text = 0;
+    s->resp_body = g_vm.resp_body; s->resp_body_len = g_vm.resp_body_len;
+    s->resp_content_type = g_vm.resp_content_type;
+    g_vm.resp_body = NULL; g_vm.resp_body_len = 0; g_vm.resp_content_type = NULL;
     return s;
 }
 
@@ -3010,20 +2964,20 @@ void te_reqstate_restore(void *st) {
     te_frames_restore(s->frames);
     g_vm.runtime_recovery = s->recovery;
 
-    if (g_current_claims) free(g_current_claims);
-    g_current_claims = s->claims;       /* ownership moves */
+    if (g_vm.current_claims) free(g_vm.current_claims);
+    g_vm.current_claims = s->claims;       /* ownership moves */
 
-    free(g_req_method); free(g_req_path); free(g_req_body);
-    te_kv_free_list(&g_req_query); te_kv_free_list(&g_req_headers);
-    te_kv_free_list(&g_req_params); te_kv_free_list(&g_resp_headers);
-    g_req_method = s->req_method; g_req_path = s->req_path; g_req_body = s->req_body;
-    g_req_body_len = s->req_body_len;
-    g_req_query  = s->req_query;  g_req_headers = s->req_headers;
-    g_req_params = s->req_params; g_resp_headers = s->resp_headers;
-    g_resp_status = s->resp_status; g_response_is_raw_text = s->raw_text;
-    free(g_resp_body); free(g_resp_content_type);
-    g_resp_body = s->resp_body; g_resp_body_len = s->resp_body_len;
-    g_resp_content_type = s->resp_content_type;
+    free(g_vm.req_method); free(g_vm.req_path); free(g_vm.req_body);
+    te_kv_free_list(&g_vm.req_query); te_kv_free_list(&g_vm.req_headers);
+    te_kv_free_list(&g_vm.req_params); te_kv_free_list(&g_vm.resp_headers);
+    g_vm.req_method = s->req_method; g_vm.req_path = s->req_path; g_vm.req_body = s->req_body;
+    g_vm.req_body_len = s->req_body_len;
+    g_vm.req_query  = s->req_query;  g_vm.req_headers = s->req_headers;
+    g_vm.req_params = s->req_params; g_vm.resp_headers = s->resp_headers;
+    g_vm.resp_status = s->resp_status; g_vm.response_is_raw_text = s->raw_text;
+    free(g_vm.resp_body); free(g_vm.resp_content_type);
+    g_vm.resp_body = s->resp_body; g_vm.resp_body_len = s->resp_body_len;
+    g_vm.resp_content_type = s->resp_content_type;
     free(s);
 }
 
@@ -3979,17 +3933,7 @@ NodeKind nk_from_str(const char *t) {
  *
  * Switch: TYPEEASY_NO_INTERN=1 disables interning.
  * ==================================================================== */
-typedef struct InternEntry {
-    char *str;
-    size_t len;
-    uint32_t hash;
-    struct InternEntry *next;
-} InternEntry;
 
-#define INTERN_BUCKETS 1024
-static InternEntry *g_intern_table[INTERN_BUCKETS];
-static int g_intern_init = 0;
-static int g_intern_enabled = 1;
 
 /* When >0 we are inside per-request handling on the long-lived API server.
  * Runtime-generated STRING leaves (request_param/header/body, concat, json,
@@ -3999,7 +3943,6 @@ static int g_intern_enabled = 1;
  * STRING leaves and marks them non-interned so free_ast() and
  * runtime_reset_vars_to_initial_state() reclaim them. Parse/init-time literals
  * (flag == 0) are still interned (bounded by program size, dedup + fast ==). */
-int g_te_request_active = 0;
 
 static inline uint32_t intern_hash(const char *s, size_t len) {
     /* FNV-1a */
@@ -4013,16 +3956,16 @@ static inline uint32_t intern_hash(const char *s, size_t len) {
 
 const char *tee_intern(const char *s) {
     if (!s) return NULL;
-    if (!g_intern_init) {
+    if (!g_vm.intern_init) {
         const char *e = getenv("TYPEEASY_NO_INTERN");
-        if (e && e[0] && e[0] != '0') g_intern_enabled = 0;
-        g_intern_init = 1;
+        if (e && e[0] && e[0] != '0') g_vm.intern_enabled = 0;
+        g_vm.intern_init = 1;
     }
-    if (!g_intern_enabled) return s; /* caller must still own the memory */
+    if (!g_vm.intern_enabled) return s; /* caller must still own the memory */
 
     size_t len = strlen(s);
     uint32_t h = intern_hash(s, len);
-    InternEntry *e = g_intern_table[h % INTERN_BUCKETS];
+    InternEntry *e = g_vm.intern_table[h % INTERN_BUCKETS];
     while (e) {
         if (e->hash == h && e->len == len && memcmp(e->str, s, len) == 0)
             return e->str;
@@ -4033,8 +3976,8 @@ const char *tee_intern(const char *s) {
     ne->str  = strdup(s);
     ne->len  = len;
     ne->hash = h;
-    ne->next = g_intern_table[h % INTERN_BUCKETS];
-    g_intern_table[h % INTERN_BUCKETS] = ne;
+    ne->next = g_vm.intern_table[h % INTERN_BUCKETS];
+    g_vm.intern_table[h % INTERN_BUCKETS] = ne;
     return ne->str;
 }
 
@@ -4054,7 +3997,7 @@ ASTNode *create_ast_leaf(char *type, long long value, char *str_value, char *id)
      * interning them leaks (immortal table grows). See g_te_request_active. */
     if (str_value) {
         if (node->kind == NK_STRING) {
-            if (g_intern_enabled && !g_te_request_active) {
+            if (g_vm.intern_enabled && !g_vm.te_request_active) {
                 node->str_value    = (char*)tee_intern(str_value);
                 node->str_interned = 1;
             } else {
@@ -5189,9 +5132,9 @@ char* expand_interp_string(const char *raw) {
 /* Non-static (declared in te_csv.h) so te_linq_ops.c can call directly. */
 ASTNode* build_object_wrapper_pooled(ASTNode *value) {
     if (!value || !value->type || strcmp(value->type, "OBJECT") != 0) return NULL;
-    if (!g_csv_wrapper_obj_type) g_csv_wrapper_obj_type = strdup("OBJECT");
+    if (!te_csv_state()->wrapper_obj_type) te_csv_state()->wrapper_obj_type = strdup("OBJECT");
     ASTNode *w = ast_pool_alloc();  /* slot is calloc'd → zero-initialised */
-    w->type = g_csv_wrapper_obj_type;
+    w->type = te_csv_state()->wrapper_obj_type;
     if (value->id_interned) {
         w->id = value->id;
         w->id_interned = 1;
@@ -5218,8 +5161,8 @@ ASTNode* build_item_from_value(ASTNode *value) {
      * strdup(value->id) dominate. Share the sentinel "OBJECT" string (free_ast
      * already skips g_csv_wrapper_obj_type) and reuse interned class-name id. */
     if (value->type && strcmp(value->type, "OBJECT") == 0) {
-        if (!g_csv_wrapper_obj_type) g_csv_wrapper_obj_type = strdup("OBJECT");
-        new_item->type = g_csv_wrapper_obj_type;
+        if (!te_csv_state()->wrapper_obj_type) te_csv_state()->wrapper_obj_type = strdup("OBJECT");
+        new_item->type = te_csv_state()->wrapper_obj_type;
         if (value->id_interned) {
             new_item->id = value->id;
             new_item->id_interned = 1;
@@ -5910,7 +5853,7 @@ double evaluate_expression(ASTNode *node) {
             if (e && e[0] && e[0] != '0') bc_enabled = 0;
             bc_init = 1;
         }
-        if (bc_enabled && !g_debug_enabled) {
+        if (bc_enabled && !g_vm.debug_enabled) {
             BCInfo *info = bc_get_or_compile(node);
             double r;
             if (info && bc_run(info, &r)) return r;
@@ -6239,7 +6182,7 @@ ASTNode *create_kv_pair_node(char *key, ASTNode *value) {
     ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
     node->type = strdup("KV_PAIR");
     /* Ola 15: intern map key for pointer-eq lookup fast-path. */
-    if (key && g_intern_enabled) {
+    if (key && g_vm.intern_enabled) {
         node->id = (char*)tee_intern(key);
         node->id_interned = 1;
     } else {
@@ -6455,7 +6398,7 @@ static void te_stmt_while(ASTNode *node) {
                 if (e && e[0] && e[0] != '0') bc4_enabled = 0;
                 bc4_init = 1;
             }
-            if (bc4_enabled && !g_debug_enabled) {
+            if (bc4_enabled && !g_vm.debug_enabled) {
                 BCInfo *info = bc_get_or_compile_stmt(node);
                 if (info && bc_run(info, NULL)) return;
             }
@@ -6502,7 +6445,7 @@ void interpret_ast(ASTNode *node) {
 
     /* Debugger hook: only stop on "stoppable" statement-level nodes.
      * Cheap when g_debug_enabled == 0 (single load+test). */
-    if (g_debug_enabled) {
+    if (g_vm.debug_enabled) {
         switch (nk_of(node)) {
             case NK_VAR_DECL:
             case NK_ASSIGN: case NK_ASSIGN_ATTR: case NK_INDEX_ASSIGN:
@@ -6825,8 +6768,7 @@ char *te_validate_body_against_class(ClassNode *cls, const char *json) {
          * TYPEEASY_SQL_EMPTY_AS_NULL) esta activo. En ese caso, ausencia y "" no
          * son error (el binder guarda NULL/default). Sin '?' ni flag, se
          * mantiene el comportamiento estricto FastAPI: declarar tipo => requerido. */
-        extern int g_db_empty_as_null;
-        int lenient = field_optional || g_db_empty_as_null;
+        int lenient = field_optional || g_vm.db_empty_as_null;
         if (!val) {
             if (lenient) continue;                   /* opcional: no requerido */
             TE_ADD_ERR(aname, "required field missing");
@@ -6924,8 +6866,7 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
             }
             /* "" en un campo opcional (o bajo el flag global) -> NULL, igual que
              * el null JSON: evita coercer "" a 0 / '' en columnas numericas. */
-            extern int g_db_empty_as_null;
-            if ((field_optional || g_db_empty_as_null) && val->type &&
+            if ((field_optional || g_vm.db_empty_as_null) && val->type &&
                 strcmp(val->type, "STRING") == 0 && (!val->str_value || !*val->str_value)) {
                 if (dst->vtype == VAL_STRING && dst->value.string_value) free(dst->value.string_value);
                 dst->vtype = VAL_OBJECT;
@@ -6993,10 +6934,10 @@ void free_object_node(ObjectNode *obj) {
 
 /* Lookup a path-param value by name (returns NULL if not bound). */
 const char *typeeasy_http_find_param(const char *k) {
-    return te_kv_find(g_req_params, k);
+    return te_kv_find(g_vm.req_params, k);
 }
 const char *typeeasy_http_find_query(const char *k) {
-    return te_kv_find(g_req_query, k);
+    return te_kv_find(g_vm.req_query, k);
 }
 
 /* ─── HTTP client moved to te_http.c (Fase 1 modularization).
@@ -7047,9 +6988,9 @@ static void interpret_call_func_impl(ASTNode *node) {
                     nargs, nargs == 1 ? "was" : "were");
             }
             te_callstack_push(node->id);
-            if (g_profile_enabled) te_prof_enter();
+            if (g_vm.profile_enabled) te_prof_enter();
             ASTNode *r = call_lambda(lambda, node->left);
-            if (g_profile_enabled) te_prof_leave(node->id);
+            if (g_vm.profile_enabled) te_prof_leave(node->id);
             te_callstack_pop();
             if (r) add_or_update_variable("__ret__", r);
             return;
@@ -7636,11 +7577,11 @@ static int te_cm_bridge(ASTNode *node, ObjectNode *obj, Variable *v) {
         if (g_vm.debug_mode) te_log_ast("Calling native bridge: %s.%s", v->id, node->id);
         // Aquí es donde la magia ocurre. Delegamos al manejador específico del bridge.
         if (strcmp(v->id, "Chat") == 0) {
-            if (g_bridge_handlers.handle_chat_bridge) g_bridge_handlers.handle_chat_bridge(node->id, node->right);
+            if (g_vm.bridge_handlers.handle_chat_bridge) g_vm.bridge_handlers.handle_chat_bridge(node->id, node->right);
         } else if (strcmp(v->id, "NLU") == 0) {
             if (g_vm.debug_mode) te_log_ast("Calling NLU bridge");
-            if (g_bridge_handlers.handle_nlu_bridge) {
-                g_bridge_handlers.handle_nlu_bridge(node->id, node->right);
+            if (g_vm.bridge_handlers.handle_nlu_bridge) {
+                g_vm.bridge_handlers.handle_nlu_bridge(node->id, node->right);
                 // Diagnostic: did the bridge set __ret__? (only print when debug mode enabled)
                 if (g_vm.debug_mode) {
                     if (g_vm.ret_var_active) {
@@ -7651,9 +7592,9 @@ static int te_cm_bridge(ASTNode *node, ObjectNode *obj, Variable *v) {
                 }
             }
         } else if (strcmp(v->id, "API") == 0) {
-            if (g_bridge_handlers.handle_api_bridge) g_bridge_handlers.handle_api_bridge(node->id, node->right);
+            if (g_vm.bridge_handlers.handle_api_bridge) g_vm.bridge_handlers.handle_api_bridge(node->id, node->right);
         } else if (strcmp(v->id, "Gemini") == 0) {
-            if (g_bridge_handlers.handle_gemini_bridge) g_bridge_handlers.handle_gemini_bridge(node->id, node->right);
+            if (g_vm.bridge_handlers.handle_gemini_bridge) g_vm.bridge_handlers.handle_gemini_bridge(node->id, node->right);
         } else {
             printf("Warning: Bridge '%s' unknown or not implemented in this executable.\n", v->id);
         }
@@ -9297,7 +9238,7 @@ void free_ast(ASTNode *node) {
              * interned, str_value NULL, left/right NULL. Vive en el pool. */
             if (n->from_pool) { n = next; continue; }
             /* CSV wrapper sin pool: type apunta al literal global compartido. */
-            if (n->type && n->type != g_csv_wrapper_obj_type) free(n->type);
+            if (n->type && n->type != te_csv_state()->wrapper_obj_type) free(n->type);
             /* Ola 3 Fase A: never free interned strings (immortal). */
             if (n->str_value && !n->str_interned) free(n->str_value);
             /* Ola 15: same for id slot. */
@@ -9833,7 +9774,7 @@ static void interpret_return_node(ASTNode *node) {
             free_ast(leaf);
             free(s);
             g_vm.return_node = ret_expr;
-            g_response_is_raw_text = 1;
+            g_vm.response_is_raw_text = 1;
             g_vm.return_flag = 1;
             return;
         }
@@ -9859,7 +9800,7 @@ static void interpret_return_node(ASTNode *node) {
             (t && strcmp(t, "CALL_FUNC") == 0 && ret_expr->id &&
              (strcmp(ret_expr->id, "json") == 0 || strcmp(ret_expr->id, "xml") == 0));
         if (is_json_xml_call) {
-            g_response_is_raw_text = 0;
+            g_vm.response_is_raw_text = 0;
         } else {
             char *raw = te_return_raw_text(ret_expr);
             if (raw) {
@@ -9867,7 +9808,7 @@ static void interpret_return_node(ASTNode *node) {
                 add_or_update_variable("__ret__", leaf);
                 free_ast(leaf);
                 free(raw);
-                g_response_is_raw_text = 1;
+                g_vm.response_is_raw_text = 1;
             }
         }
     }

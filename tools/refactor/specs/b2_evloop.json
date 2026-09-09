@@ -1,0 +1,4 @@
+{"files":["src/te_evloop.c"],"prefix":"E()->","map":{
+"g_fibers":"fibers","g_current":"current","g_loop_active":"loop_active","g_sched_fiber":"sched_fiber","g_we_converted":"we_converted",
+"g_sched_uctx":"sched_uctx","g_io_mu":"io_mu","g_io_cv":"io_cv","g_io_done_cv":"io_done_cv","g_io_q_head":"io_q_head","g_io_q_tail":"io_q_tail",
+"g_io_pending":"io_pending","g_io_pool_started":"io_pool_started"}}

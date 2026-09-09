@@ -7,8 +7,6 @@
 /* Debugger state shared with the interpreter.
  * If g_debug_enabled == 0, all debugger hooks are no-ops (zero overhead path
  * is a single load+test in the dispatch loop). */
-extern int g_debug_enabled;
-extern const char *g_debug_source_file;   /* user-visible source path (e.g. argv[1]) */
 
 /* Initialise the debugger: open a TCP listener on `port`, accept ONE client
  * (the VS Code debug adapter) and block until the client sends `start`.

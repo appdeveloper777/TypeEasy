@@ -1,5 +1,6 @@
 #include "sqlserver_bridge.h"
 #include "db_params.h"
+#include "te_vm.h"
 #include "typeeasy_http.h"   /* typeeasy_http_set_status() para strict-errors */
 #include <sybfront.h>
 #include <sybdb.h>
@@ -36,17 +37,15 @@ static DBPROCESS* mssql_connections[MSSQL_POOL_SIZE] = {NULL};
  * exacto (handshake TLS, "Login failed for user", servidor inalcanzable, etc.)
  * para reportarlo en stderr con prefijo [SQLServer] y dejarlo en la variable de
  * script __sqlserver_error__ accesible desde el .te. */
-static char g_mssql_last_err[1024] = {0};
-static char g_mssql_last_msg[1024] = {0};
 
 static int mssql_err_handler(DBPROCESS* dbproc, int severity, int dberr,
                              int oserr, char* dberrstr, char* oserrstr) {
     (void)dbproc; (void)severity; (void)dberr; (void)oserr;
     if (dberrstr) {
         if (oserrstr && *oserrstr)
-            snprintf(g_mssql_last_err, sizeof(g_mssql_last_err), "%s (os: %s)", dberrstr, oserrstr);
+            snprintf(g_vm.mssql_last_err, sizeof(g_vm.mssql_last_err), "%s (os: %s)", dberrstr, oserrstr);
         else
-            snprintf(g_mssql_last_err, sizeof(g_mssql_last_err), "%s", dberrstr);
+            snprintf(g_vm.mssql_last_err, sizeof(g_vm.mssql_last_err), "%s", dberrstr);
     }
     return INT_CANCEL;
 }
@@ -58,19 +57,19 @@ static int mssql_msg_handler(DBPROCESS* dbproc, DBINT msgno, int msgstate,
     /* Mensajes informativos del servidor (severity 0) se ignoran; los de error
      * (login failed = 18456, etc.) se capturan. */
     if (msgtext && severity > 0)
-        snprintf(g_mssql_last_msg, sizeof(g_mssql_last_msg), "%s (msg %ld)", msgtext, (long)msgno);
+        snprintf(g_vm.mssql_last_msg, sizeof(g_vm.mssql_last_msg), "%s (msg %ld)", msgtext, (long)msgno);
     return 0;
 }
 
 /* Construye un mensaje de causa combinando msg de servidor + error de db-lib. */
 static const char* mssql_failure_cause(void) {
     static char cause[2200];
-    if (g_mssql_last_msg[0] && g_mssql_last_err[0])
-        snprintf(cause, sizeof(cause), "%s | %s", g_mssql_last_msg, g_mssql_last_err);
-    else if (g_mssql_last_msg[0])
-        snprintf(cause, sizeof(cause), "%s", g_mssql_last_msg);
-    else if (g_mssql_last_err[0])
-        snprintf(cause, sizeof(cause), "%s", g_mssql_last_err);
+    if (g_vm.mssql_last_msg[0] && g_vm.mssql_last_err[0])
+        snprintf(cause, sizeof(cause), "%s | %s", g_vm.mssql_last_msg, g_vm.mssql_last_err);
+    else if (g_vm.mssql_last_msg[0])
+        snprintf(cause, sizeof(cause), "%s", g_vm.mssql_last_msg);
+    else if (g_vm.mssql_last_err[0])
+        snprintf(cause, sizeof(cause), "%s", g_vm.mssql_last_err);
     else
         snprintf(cause, sizeof(cause), "unknown (sin detalle de FreeTDS)");
     return cause;
@@ -87,7 +86,6 @@ static void mssql_report_failure(const char* where) {
 
 /* Auto-cleanup por request: ver mysql_bridge.c. Marca slots abiertos durante
  * un request para liberarlos al final si el script no llamó sqlserver_close(). */
-extern int g_db_request_phase;
 static int mssql_req_scoped[MSSQL_POOL_SIZE] = {0};
 static int mssql_initialized = 0;
 
@@ -378,8 +376,8 @@ void native_sqlserver_connect(ASTNode* args) {
     }
 
     /* Limpiar capturas de fallos previos antes de intentar conectar. */
-    g_mssql_last_err[0] = '\0';
-    g_mssql_last_msg[0] = '\0';
+    g_vm.mssql_last_err[0] = '\0';
+    g_vm.mssql_last_msg[0] = '\0';
 
     LOGINREC* login = dblogin();
     if (!login) {
@@ -431,7 +429,7 @@ void native_sqlserver_connect(ASTNode* args) {
     }
 
     mssql_connections[slot] = dbproc;
-    mssql_req_scoped[slot] = g_db_request_phase;
+    mssql_req_scoped[slot] = g_vm.db_request_phase;
     printf("[SQLServer] Connection successful (ID: %d)\n", slot); fflush(stdout);
     ASTNode* r = create_ast_leaf("NUMBER", slot, NULL, NULL);
     add_or_update_variable("__ret__", r); free_ast(r);
@@ -473,7 +471,7 @@ void native_sqlserver_query(ASTNode* args) {
         ASTNode* r = create_ast_leaf("STRING", 0, strdup("{\"error\":\"query_failed\"}"), NULL);
         add_or_update_variable("__ret__", r); free_ast(r);
         /* Strict mode solo aplica en --api; en CLI es no-op. */
-        { extern int g_api_mode; if (g_db_strict_errors && g_api_mode) typeeasy_http_set_status(500); }
+        { if (g_vm.db_strict_errors && g_vm.api_mode) typeeasy_http_set_status(500); }
         if (final_query) free(final_query);
         return;
     }

@@ -1,0 +1,8 @@
+{"files":["src/ast.c"],"prefix":"g_vm.","map":{
+"g_src_files":"src_files","g_src_file_count":"src_file_count","g_profile_enabled":"profile_enabled","g_prof":"prof","g_prof_n":"prof_n",
+"g_prof_child_ns":"prof_child_ns","g_prof_start_ns":"prof_start_ns","g_script_path":"script_path",
+"g_req_method":"req_method","g_req_path":"req_path","g_req_body":"req_body","g_req_body_len":"req_body_len",
+"g_req_query":"req_query","g_req_headers":"req_headers","g_req_params":"req_params","g_resp_status":"resp_status","g_resp_headers":"resp_headers",
+"g_resp_body":"resp_body","g_resp_body_len":"resp_body_len","g_resp_content_type":"resp_content_type","g_response_is_raw_text":"response_is_raw_text",
+"g_api_mode":"api_mode","g_current_claims":"current_claims","g_bridge_handlers":"bridge_handlers","g_db_request_phase":"db_request_phase",
+"g_intern_table":"intern_table","g_intern_init":"intern_init","g_intern_enabled":"intern_enabled","g_te_request_active":"te_request_active"}}

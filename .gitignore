@@ -1,5 +1,6 @@
 # Archivos generados por Flex/Bison
 src/lex.yy.c
+src/lex.yy.h
 src/parser.tab.c
 src/parser.tab.h
 src/parser.output

@@ -1,0 +1,1 @@
+{"files":["src/servidor_agent.c"],"prefix":"","map":{"g_runtime":"(*A())","g_current_conn":"g_vm.agent_conn"}}

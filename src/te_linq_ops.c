@@ -1,6 +1,7 @@
 /* te_linq_ops.c — LINQ-with-lambda dispatcher (Nivel B paso 2.f).
  * Extracted verbatim from ast.c L4836..L5874. See te_linq_ops.h. */
 #include "te_linq_ops.h"
+#include "te_vm.h"
 #include "te_csv.h"
 #include "te_colcache.h"
 #include "te_builtins.h"
@@ -15,25 +16,39 @@
 extern int list_length(ASTNode *list);
 extern int is_string_type(ASTNode *node);
 
-/* ---- orderBy / groupBy support (moved from ast.c L4440 in Nivel B paso 2.f).
- * qsort comparator: sort indices by precomputed key. Globals are safe because
- * TypeEasy LINQ runs on the main interpreter thread (the parallelism is in
- * CSV loading only). */
-static double *g_sort_keys_d = NULL;
-static char  **g_sort_keys_s = NULL;
-static int     g_sort_is_str = 0;
-static int     g_sort_desc   = 0;
-static int te_sort_cmp_idx(const void *pa, const void *pb) {
-    int a = *(const int*)pa, b = *(const int*)pb;
-    if (g_sort_is_str) {
-        const char *sa = g_sort_keys_s[a] ? g_sort_keys_s[a] : "";
-        const char *sb = g_sort_keys_s[b] ? g_sort_keys_s[b] : "";
-        int c = strcmp(sa, sb);
-        if (c) return g_sort_desc ? -c : c;
+/* ---- orderBy / groupBy support.
+ * Ordena un arreglo de índices con un comparador que recibe CONTEXTO (merge sort
+ * estable, O(n log n)); qsort no admite contexto y obligaba a globales. */
+typedef int (*TeIdxCmp)(int a, int b, void *ctx);
+static void te_sort_idx_r(int *idx, int n, TeIdxCmp cmp, void *ctx) {
+    if (n < 2) return;
+    int *tmp = (int *)malloc((size_t)n * sizeof(int));
+    if (!tmp) return;
+    for (int w = 1; w < n; w *= 2) {
+        for (int lo = 0; lo < n; lo += 2 * w) {
+            int mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n;
+            int i = lo, j = mid, k = lo;
+            while (i < mid && j < hi) tmp[k++] = (cmp(idx[j], idx[i], ctx) < 0) ? idx[j++] : idx[i++];
+            while (i < mid) tmp[k++] = idx[i++];
+            while (j < hi)  tmp[k++] = idx[j++];
+        }
+        memcpy(idx, tmp, (size_t)n * sizeof(int));
+    }
+    free(tmp);
+}
+
+typedef struct { double *keys_d; char **keys_s; int is_str; int desc; } SortKeyCtx;
+static int te_sort_cmp_idx(int a, int b, void *vctx) {
+    SortKeyCtx *c = (SortKeyCtx *)vctx;
+    if (c->is_str) {
+        const char *sa = c->keys_s[a] ? c->keys_s[a] : "";
+        const char *sb = c->keys_s[b] ? c->keys_s[b] : "";
+        int r = strcmp(sa, sb);
+        if (r) return c->desc ? -r : r;
         return (a > b) - (a < b);   /* stable: tiebreak by original index */
     }
-    double da = g_sort_keys_d[a], db = g_sort_keys_d[b];
-    if (da != db) { int c = (da < db) ? -1 : 1; return g_sort_desc ? -c : c; }
+    double da = c->keys_d[a], db = c->keys_d[b];
+    if (da != db) { int r = (da < db) ? -1 : 1; return c->desc ? -r : r; }
     return (a > b) - (a < b);       /* stable: tiebreak by original index */
 }
 
@@ -43,13 +58,27 @@ static int te_sort_cmp_idx(const void *pa, const void *pb) {
  * comparator (column 0 most significant), with a stable tiebreak by original
  * index. The context is aligned positionally to the produced (sorted) list and
  * validated against the next call's items via their shared ObjectNode* so a
- * thenBy only refines the immediately-preceding ordered list. */
+ * thenBy only refines the immediately-preceding ordered list. Vive en la VM
+ * (g_vm.linq_then): es estado del programa entre dos llamadas LINQ. */
 #define TE_MAX_SORT_COLS 8
 typedef struct { double *d; char **s; int is_str; int desc; } SortCol;
-static SortCol  g_then_cols[TE_MAX_SORT_COLS];
-static int      g_then_ncols = 0;
-static void   **g_then_objs  = NULL;   /* item->extra (ObjectNode*) in sorted order */
-static int      g_then_n     = 0;
+struct TeLinqThen {
+    SortCol cols[TE_MAX_SORT_COLS];
+    int     ncols;
+    void  **objs;    /* item->extra (ObjectNode*) in sorted order */
+    int     n;
+};
+static struct TeLinqThen *TH(void) {
+    if (!g_vm.linq_then) {
+        g_vm.linq_then = (struct TeLinqThen *)calloc(1, sizeof(struct TeLinqThen));
+        if (!g_vm.linq_then) { fprintf(stderr, "[LINQ] out of memory\n"); exit(1); }
+    }
+    return g_vm.linq_then;
+}
+#define g_then_cols  (TH()->cols)
+#define g_then_ncols (TH()->ncols)
+#define g_then_objs  (TH()->objs)
+#define g_then_n     (TH()->n)
 
 static void te_then_reset(void) {
     for (int c = 0; c < g_then_ncols; c++) {
@@ -65,11 +94,11 @@ static void te_then_reset(void) {
     g_then_n = 0;
 }
 
-/* Composite comparator over g_then_cols[0..g_then_ncols-1]. */
-static int te_then_cmp_idx(const void *pa, const void *pb) {
-    int a = *(const int*)pa, b = *(const int*)pb;
-    for (int c = 0; c < g_then_ncols; c++) {
-        SortCol *col = &g_then_cols[c];
+/* Composite comparator over cols[0..ncols-1]. */
+static int te_then_cmp_idx(int a, int b, void *vctx) {
+    struct TeLinqThen *t = (struct TeLinqThen *)vctx;
+    for (int c = 0; c < t->ncols; c++) {
+        SortCol *col = &t->cols[c];
         int r;
         if (col->is_str) {
             const char *x = col->s && col->s[a] ? col->s[a] : "";
@@ -1052,11 +1081,8 @@ static int te_lq_order(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fn
                 }
                 int *idx = (int*)malloc(n * sizeof(int));
                 for (int a = 0; a < n; a++) idx[a] = a;
-                g_sort_keys_d = keys;
-                g_sort_keys_s = skeys;
-                g_sort_is_str = is_str_key;
-                g_sort_desc   = descending;
-                qsort(idx, (size_t)n, sizeof(int), te_sort_cmp_idx);
+                SortKeyCtx sc = { keys, skeys, is_str_key, descending };
+                te_sort_idx_r(idx, n, te_sort_cmp_idx, &sc);
                 ASTNode *result = create_list_node(NULL);
                 /* Pool fast-path: if all items are plain OBJECTs (typical for LINQ
                  * over CSV), allocate wrappers from the bump pool — avoids n×calloc
@@ -1167,7 +1193,7 @@ static int te_lq_order(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fn
                 /* Composite re-sort. */
                 int *idx = (int*)malloc(n * sizeof(int));
                 for (int a = 0; a < n; a++) idx[a] = a;
-                qsort(idx, (size_t)n, sizeof(int), te_then_cmp_idx);
+                te_sort_idx_r(idx, n, te_then_cmp_idx, TH());
 
                 ASTNode *result = create_list_node(NULL);
                 for (int a = 0; a < n; a++) {

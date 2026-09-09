@@ -18,6 +18,17 @@
 #define TE_SYM_CAP 16384  /* MAX_VARS=4096 -> cap 16384 mantiene load < 0.25 */
 /* Slot del índice nombre->slot de vars[] (FNV-1a). key es alias del id interned. */
 typedef struct TESymSlot { uint64_t hash; const char *key; int idx; } TESymSlot;
+/* Error capturado por --syntax-check (yyerror / pases semánticos). */
+typedef struct TeErr { int line; int file_id; char msg[256]; char near_tok[128]; } TeErr;
+/* Par clave/valor de la request HTTP (query/headers/params/resp headers). */
+typedef struct TeKV { char *k; char *v; struct TeKV *next; } TeKV;
+/* Entrada del profiler por función (--profile / TYPEEASY_PROF_FN). */
+typedef struct TeProfEntry { const char *name; long long calls, incl_ns, self_ns; } TeProfEntry;
+/* Entrada de la tabla de strings interned. */
+typedef struct InternEntry { char *str; size_t len; uint32_t hash; struct InternEntry *next; } InternEntry;
+#define TE_SRC_FILES_MAX 512
+#define TE_PROF_MAX 1024
+#define INTERN_BUCKETS 1024
 struct TeFrame;
 
 typedef struct TeVM {
@@ -56,11 +67,63 @@ typedef struct TeVM {
     void *parse_scanner;       /* scanner activo (para liberar si un fatal abortó el parse) */
     int debug_mode;            /* --debug (antes g_debug_mode en parser.y) */
     int quiet_parse_errors;    /* silenciar yyerror (fuzzer) */
+    /* --- debugger (debugger.c): flag caliente + sesión con alloc perezoso --- */
+    int debug_enabled;                 /* 1 = hooks del debugger activos */
+    const char *debug_source_file;     /* ruta visible al usuario (argv[1]) */
+    struct TeDebugger *dbg;            /* estado de la sesión (NULL hasta el primer uso) */
+    struct TeServer *srv;              /* servidor --api embebido (typeeasy_api_server.c), alloc perezoso */
+    struct TeEvLoop *ev;               /* fibers + pool de IO async (te_evloop.c), alloc perezoso */
+    /* --- request en curso (typeeasy_api.c): objetos/ASTs que se liberan al terminar --- */
+    ObjectNode **req_owned_objects; int req_owned_count, req_owned_cap;
+    ASTNode **req_owned_ast; int req_owned_ast_count, req_owned_ast_cap;
+    char *param_validation_error;
+    /* --- --test / --syntax-check (typeeasy_main.c) --- */
+    int test_failed, test_assertions;
+    int capture_errors;                 /* yyerror acumula en syntax_errors[] en vez de imprimir */
+    TeErr syntax_errors[64]; int syntax_error_count;
+    /* --- flags de la capa DB (db_params.c), configurables por env --- */
+    int db_empty_as_null, db_strict_errors, db_envelope;
+    /* --- hooks de evaluación para te_json.c (los registra interpret_ast) --- */
+    void (*json_eval_call_func)(ASTNode *);
+    void (*json_eval_call_method)(ASTNode *);
+    /* --- estado menor de módulos --- */
+    int db_cleanup_count;              /* te_stdlib.c */
+    int http_last_status;              /* te_http.c */
+    char mssql_last_err[1024], mssql_last_msg[1024];   /* sqlserver_bridge.c */
+    struct TeAsyncState *async;        /* te_async.c: pool de tasks (alloc perezoso) */
+    struct TeBuiltins *builtins;       /* te_builtins.c: registro de nativas (alloc perezoso) */
+    struct TeBridgeState *bridge;      /* te_bridge.c: procesos hijos (alloc perezoso) */
+    struct RuntimeHost *agent;         /* servidor_agent.c */
+    struct mg_connection *agent_conn;
+    struct TeLinqThen *linq_then;      /* te_linq_ops.c: contexto orderBy->thenBy (alloc perezoso) */
+    struct TeCsv *csv;                 /* te_csv.c: arenas keepalive, script_dir, lazy loads (alloc perezoso) */
+    /* --- programa (ast.c): tabla de archivos fuente, profiler, intern, bridges --- */
+    char *src_files[TE_SRC_FILES_MAX]; int src_file_count;
+    const char *script_path;           /* ruta del script en ejecución (mensajes de error) */
+    int api_mode;                      /* 1 = corriendo bajo --api */
+    BridgeHandlers bridge_handlers;
+    int db_request_phase;
+    int profile_enabled;               /* -1 = aún no leído de env */
+    TeProfEntry prof[TE_PROF_MAX]; int prof_n;
+    long long prof_child_ns[TE_CALLSTACK_MAX], prof_start_ns[TE_CALLSTACK_MAX];
+    InternEntry *intern_table[INTERN_BUCKETS]; int intern_init, intern_enabled;
+    int te_request_active;             /* >0 dentro de un request del servidor */
+    /* --- request/response HTTP en curso (typeeasy_http_* setters) --- */
+    char *req_method, *req_path, *req_body; size_t req_body_len;
+    TeKV *req_query, *req_headers, *req_params;
+    int resp_status; TeKV *resp_headers;
+    char *resp_body; size_t resp_body_len; char *resp_content_type;   /* canal binario (xlsx/pdf) */
+    int response_is_raw_text;
+    char *current_claims;              /* JWT claims del request */
 } TeVM;
 
-/* VM actual. Todo el intérprete accede al estado vía `g_vm.campo`, que expande a la VM
- * apuntada por te_vm_cur (nunca NULL: arranca apuntando a la VM principal estática). */
-extern TeVM *te_vm_cur;
+/* Valores por defecto NO-cero de una VM nueva (VM principal estática y te_vm_create). */
+#define TE_VM_DEFAULTS .profile_enabled = -1, .intern_enabled = 1, .resp_status = 200
+
+/* VM actual DEL HILO. Todo el intérprete accede al estado vía `g_vm.campo`, que expande
+ * a la VM apuntada por te_vm_cur (thread-local; nunca NULL: cada hilo arranca apuntando
+ * a la VM principal estática). */
+extern __thread TeVM *te_vm_cur;
 #define g_vm (*te_vm_cur)
 
 TeVM *te_vm_create(void);                 /* VM nueva, vacía (calloc). NULL si no hay memoria */

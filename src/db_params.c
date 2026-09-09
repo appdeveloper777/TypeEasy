@@ -4,6 +4,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+#include "te_vm.h"
 
 /* === Flag opt-in: tratar el STRING vacio ("") como SQL NULL ================
  * Por default 0 = comportamiento legacy (interpola ''). Cuando se enciende
@@ -19,15 +20,12 @@
  * Ademas, hace consistente el comportamiento con la rama ACCESS_EXPR (que
  * YA tratasta el vacio como NULL via db_emit_resolved): con el flag, ambos
  * caminos coinciden. */
-int g_db_empty_as_null = 0;
 /* Flag opt-in: en modo --api, si un query falla, ademas de devolver el
  * string JSON con {"error":...} fijamos response_status(500) para que el
  * server no responda 200 OK con un 'falso exito'. */
-int g_db_strict_errors = 0;
 /* Flag opt-in: si != 0, sql_query/sql_exec (la fachada generica) envuelven su
  * resultado en { success:bool, data|error }. Se activa con sql_set_envelope()
  * o env TYPEEASY_SQL_ENVELOPE=1. OFF por defecto. */
-int g_db_envelope = 0;
 
 ASTNode* db_arg_as_map_head(ASTNode* args, int idx, int* out_owned) {
     if (out_owned) *out_owned = 0;
@@ -450,7 +448,7 @@ static int append_value(char** buf, size_t* len, size_t* cap,
             case 1:  return sink_emit(sink, buf, len, cap, DB_BIND_INT, vi, 0, NULL);
             case 2:  return sink_emit(sink, buf, len, cap, DB_BIND_DOUBLE, 0, vf, NULL);
             case 3:
-                if (g_db_empty_as_null && (!vs || !*vs)) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL);
+                if (g_vm.db_empty_as_null && (!vs || !*vs)) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL);
                 return sink_emit(sink, buf, len, cap, DB_BIND_STRING, 0, 0, vs ? vs : "");
             default: return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL);
         }
@@ -466,7 +464,7 @@ static int append_value(char** buf, size_t* len, size_t* cap,
             return 1;
         case 3: {
             /* Opt-in: STRING vacio "" -> NULL (vease g_db_empty_as_null arriba). */
-            if (g_db_empty_as_null && (!vs || !*vs)) {
+            if (g_vm.db_empty_as_null && (!vs || !*vs)) {
                 buf_append(buf, len, cap, "NULL", 4);
                 return 1;
             }

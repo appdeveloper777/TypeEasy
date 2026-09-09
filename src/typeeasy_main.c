@@ -203,29 +203,18 @@ static int run_repl(void) {
 
 /* Test runner: discover *_test.te files in dir (default ./), execute
  * each, count passed/failed. A test "passes" if interpret_ast finished
- * without uncaught throw and __test_failed remains 0. The script can
- * call assert(cond) / assert_eq(a,b) which set __test_failed=1 on fail. */
-/* Defined here (non-static) so the assert/assert_eq builtins in ast.c
- * (which declare them extern) refer to the same variables. */
-int g_test_failed = 0;
-int g_test_assertions = 0;
-
-/* Phase F.3: error capture buffer used by yyerror in --syntax-check mode.
- * yyerror checks g_capture_errors; if non-zero, it appends to g_errors[]
- * instead of printing. */
-int g_capture_errors = 0;
-typedef struct { int line; int file_id; char msg[256]; char near[128]; } TeErr;
-static TeErr g_errors[64];
-static int g_error_count = 0;
+ * without uncaught throw and g_vm.test_failed remains 0 (assert/assert_eq
+ * set it). --syntax-check: with g_vm.capture_errors, yyerror and the
+ * semantic passes append to g_vm.syntax_errors[] instead of printing. */
 extern const char *te_src_file_name(int id);
 
 void te_capture_error(int line, const char *msg, const char *near) {
-    if (g_error_count >= 64) return;
-    TeErr *e = &g_errors[g_error_count++];
+    if (g_vm.syntax_error_count >= 64) return;
+    TeErr *e = &g_vm.syntax_errors[g_vm.syntax_error_count++];
     e->line = line;
     e->file_id = g_vm.lex_file_id;   /* file being lexed (or set by the arity pass) */
     snprintf(e->msg, sizeof(e->msg), "%s", msg ? msg : "");
-    snprintf(e->near, sizeof(e->near), "%s", near ? near : "");
+    snprintf(e->near_tok, sizeof(e->near_tok), "%s", near ? near : "");
 }
 
 static void json_emit_str(FILE *fp, const char *s) {
@@ -249,8 +238,8 @@ static void json_emit_str(FILE *fp, const char *s) {
 /* Residual B (ERP): validación estática de aridad (definida en ast.c). */
 extern void te_syntax_check_arity(ASTNode *root);
 static int run_syntax_check(const char *path) {
-    g_capture_errors = 1;
-    g_error_count = 0;
+    g_vm.capture_errors = 1;
+    g_vm.syntax_error_count = 0;
     FILE *fp = fopen(path, "r");
     if (!fp) {
         printf("{\"ok\":false,\"errors\":[{\"line\":0,\"msg\":\"cannot open file\",\"near\":\"\",\"file\":");
@@ -261,19 +250,19 @@ static int run_syntax_check(const char *path) {
     ASTNode *ast = parse_file(fp);
     fclose(fp);
     /* Aridad estática: solo si el parseo no dejó errores (AST bien formado). */
-    if (g_error_count == 0) te_syntax_check_arity(ast);
+    if (g_vm.syntax_error_count == 0) te_syntax_check_arity(ast);
     /* Semántica estática (let reasignado, for con condición, for-in sobre escalar). */
     extern void te_syntax_check_semantics(ASTNode *root);
-    if (g_error_count == 0) te_syntax_check_semantics(ast);
-    printf("{\"ok\":%s,\"errors\":[", g_error_count == 0 ? "true" : "false");
-    for (int i = 0; i < g_error_count; i++) {
+    if (g_vm.syntax_error_count == 0) te_syntax_check_semantics(ast);
+    printf("{\"ok\":%s,\"errors\":[", g_vm.syntax_error_count == 0 ? "true" : "false");
+    for (int i = 0; i < g_vm.syntax_error_count; i++) {
         if (i) fputc(',', stdout);
-        printf("{\"line\":%d,\"msg\":", g_errors[i].line);
-        json_emit_str(stdout, g_errors[i].msg);
+        printf("{\"line\":%d,\"msg\":", g_vm.syntax_errors[i].line);
+        json_emit_str(stdout, g_vm.syntax_errors[i].msg);
         printf(",\"near\":");
-        json_emit_str(stdout, g_errors[i].near);
+        json_emit_str(stdout, g_vm.syntax_errors[i].near_tok);
         printf(",\"file\":");
-        json_emit_str(stdout, g_errors[i].file_id > 0 ? te_src_file_name(g_errors[i].file_id) : path);
+        json_emit_str(stdout, g_vm.syntax_errors[i].file_id > 0 ? te_src_file_name(g_vm.syntax_errors[i].file_id) : path);
         fputc('}', stdout);
     }
     printf("]}\n");
@@ -285,8 +274,8 @@ static int run_syntax_check(const char *path) {
  *          functions:[{name,params,line}], variables:[{name,type,line}]} */
 
 static int run_symbols(const char *path) {
-    g_capture_errors = 1;
-    g_error_count = 0;
+    g_vm.capture_errors = 1;
+    g_vm.syntax_error_count = 0;
     FILE *fp = fopen(path, "r");
     if (!fp) { printf("{\"ok\":false}\n"); return 1; }
     ASTNode *ast = parse_file(fp);
@@ -364,8 +353,8 @@ static void test_runner_register_globals(void) {
 static int run_test_file(const char *path) {
     FILE *fp = fopen(path, "r");
     if (!fp) { fprintf(stderr, "  ERROR: could not open %s\n", path); return 0; }
-    g_test_failed = 0;
-    g_test_assertions = 0;
+    g_vm.test_failed = 0;
+    g_vm.test_assertions = 0;
     test_runner_register_globals();
     ASTNode *ast = parse_file(fp);
     fclose(fp);
@@ -380,7 +369,7 @@ static int run_test_file(const char *path) {
     }
     Variable *tf = find_variable("__test_failed");
     if (tf && tf->vtype == VAL_INT && tf->value.int_value != 0) ok = 0;
-    if (g_test_failed) ok = 0;
+    if (g_vm.test_failed) ok = 0;
     return ok;
 }
 
@@ -407,7 +396,7 @@ static int run_test_runner(const char *dir) {
         fprintf(stdout, "  %s ... ", files[i]);
         fflush(stdout);
         int ok = run_test_file(files[i]);
-        if (ok) { fprintf(stdout, "PASS (%d asserts)\n", g_test_assertions); passed++; }
+        if (ok) { fprintf(stdout, "PASS (%d asserts)\n", g_vm.test_assertions); passed++; }
         else    { fprintf(stdout, "FAIL\n"); }
         total++;
         runtime_reset_vars_to_initial_state();
@@ -595,15 +584,12 @@ int main(int argc, char *argv[]) {
      *   TYPEEASY_SQL_STRICT_ERRORS=1  - error de query -> HTTP 500 auto
      * Tambien se pueden encender desde el script con sql_set_*().            */
     {
-        extern int g_db_empty_as_null;
-        extern int g_db_strict_errors;
-        extern int g_db_envelope;
         const char* e1 = getenv("TYPEEASY_SQL_EMPTY_AS_NULL");
-        if (e1 && (!strcmp(e1, "1") || !strcmp(e1, "true") || !strcmp(e1, "yes"))) g_db_empty_as_null = 1;
+        if (e1 && (!strcmp(e1, "1") || !strcmp(e1, "true") || !strcmp(e1, "yes"))) g_vm.db_empty_as_null = 1;
         const char* e2 = getenv("TYPEEASY_SQL_STRICT_ERRORS");
-        if (e2 && (!strcmp(e2, "1") || !strcmp(e2, "true") || !strcmp(e2, "yes"))) g_db_strict_errors = 1;
+        if (e2 && (!strcmp(e2, "1") || !strcmp(e2, "true") || !strcmp(e2, "yes"))) g_vm.db_strict_errors = 1;
         const char* e3 = getenv("TYPEEASY_SQL_ENVELOPE");
-        if (e3 && (!strcmp(e3, "1") || !strcmp(e3, "true") || !strcmp(e3, "yes"))) g_db_envelope = 1;
+        if (e3 && (!strcmp(e3, "1") || !strcmp(e3, "true") || !strcmp(e3, "yes"))) g_vm.db_envelope = 1;
     }
 
     /* --version / -v / --help / -h: respondidos antes de parsear nada mas. */
@@ -718,8 +704,7 @@ int main(int argc, char *argv[]) {
     /* Publish the API-mode flag to the runtime BEFORE any server thread is
      * spawned. Disables the bytecode cache so per-request state can later be
      * made thread-local without stale cross-thread Variable* pointers. */
-    extern int g_api_mode;
-    g_api_mode = api_mode;
+    g_vm.api_mode = api_mode;
     /* gotcha #21: when stdout is a pipe (systemd, `te.cmd`, redirected logs),
      * the C runtime block-buffers it, so the startup banner ("Listening ... N
      * route(s)") only appears after the buffer fills or the process exits —
@@ -765,11 +750,10 @@ int main(int argc, char *argv[]) {
     //     resuelva relativo al .te además del cwd. Cubre syntax-check,
     //     symbols y modo normal.
     te_set_script_dir_from_path(script_path);
-    g_script_path = script_path;
+    g_vm.script_path = script_path;
     /* Make the user-visible source path available to yyerror so syntax errors
        are reported as `path:line: syntax error: ...` (Level 1.3). */
-    extern const char *g_debug_source_file;
-    g_debug_source_file = script_path;
+    g_vm.debug_source_file = script_path;
 
     if (syntax_check_mode) return run_syntax_check(script_path);
     if (symbols_mode) return run_symbols(script_path);

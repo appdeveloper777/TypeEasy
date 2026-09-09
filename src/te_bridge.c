@@ -18,6 +18,7 @@
 #define _GNU_SOURCE
 #include "te_bridge.h"
 #include "ast.h"
+#include "te_vm.h"
 #include "te_builtins.h"
 
 #include <stdio.h>
@@ -61,17 +62,26 @@ typedef struct {
     int    eof;
 } TeProc;
 
-static TeProc g_procs[TE_PROC_MAX];
+/* Procesos hijos del programa: UNA tabla por VM (g_vm.bridge), alloc perezoso. */
+struct TeBridgeState { TeProc procs[TE_PROC_MAX]; };
+static struct TeBridgeState *B(void) {
+    if (!g_vm.bridge) {
+        g_vm.bridge = (struct TeBridgeState *)calloc(1, sizeof(struct TeBridgeState));
+        if (!g_vm.bridge) { fprintf(stderr, "[BRIDGE] out of memory\n"); exit(1); }
+    }
+    return g_vm.bridge;
+}
+
 
 static int te_proc_find_free(void) {
     for (int i = 0; i < TE_PROC_MAX; i++) {
-        if (!g_procs[i].in_use) return i;
+        if (!B()->procs[i].in_use) return i;
     }
     return -1;
 }
 
 static int te_proc_valid(int slot) {
-    return slot >= 0 && slot < TE_PROC_MAX && g_procs[slot].in_use;
+    return slot >= 0 && slot < TE_PROC_MAX && B()->procs[slot].in_use;
 }
 
 /* ============================================================
@@ -82,7 +92,7 @@ static int te_proc_spawn(const char *cmdline) {
     if (!cmdline || !*cmdline) return -1;
     int slot = te_proc_find_free();
     if (slot < 0) return -1;
-    TeProc *p = &g_procs[slot];
+    TeProc *p = &B()->procs[slot];
 
 #if defined(_WIN32)
     SECURITY_ATTRIBUTES sa;
@@ -199,7 +209,7 @@ static int te_proc_spawn(const char *cmdline) {
 /* Write `len` bytes followed by '\n'. Returns 0 on success, -1 on error. */
 static int te_proc_write_line(int slot, const char *data, size_t len) {
     if (!te_proc_valid(slot)) return -1;
-    TeProc *p = &g_procs[slot];
+    TeProc *p = &B()->procs[slot];
 #if defined(_WIN32)
     DWORD wrote = 0;
     if (len > 0 && !WriteFile(p->hStdinWr, data, (DWORD)len, &wrote, NULL)) return -1;
@@ -227,7 +237,7 @@ static int te_proc_write_line(int slot, const char *data, size_t len) {
  * string the caller must free, or NULL on EOF/error. Empty line -> "". */
 static char *te_proc_read_line(int slot) {
     if (!te_proc_valid(slot)) return NULL;
-    TeProc *p = &g_procs[slot];
+    TeProc *p = &B()->procs[slot];
     size_t cap = 256, len = 0;
     char *buf = (char*)malloc(cap);
     if (!buf) return NULL;
@@ -281,7 +291,7 @@ static char *te_proc_read_line(int slot) {
  * ============================================================ */
 static void te_proc_close(int slot) {
     if (!te_proc_valid(slot)) return;
-    TeProc *p = &g_procs[slot];
+    TeProc *p = &B()->procs[slot];
 #if defined(_WIN32)
     if (p->hStdinWr)  CloseHandle(p->hStdinWr);   /* EOF to child stdin */
     if (p->hStdoutRd) CloseHandle(p->hStdoutRd);
@@ -365,7 +375,7 @@ int te_bridge_poll_line(int slot, char **out) {
     if (!out) return -1;
     *out = NULL;
     if (!te_proc_valid(slot)) return -1;
-    TeProc *p = &g_procs[slot];
+    TeProc *p = &B()->procs[slot];
 
     /* Already have a buffered line? */
     if (te_rbuf_take_line(p, out)) return 1;
@@ -428,7 +438,7 @@ int te_bridge_wait_readable(const int *slots, int n, int timeout_ms) {
     for (int i = 0; i < n; i++) {
         int s = slots[i];
         if (!te_proc_valid(s)) continue;
-        TeProc *p = &g_procs[s];
+        TeProc *p = &B()->procs[s];
         for (size_t j = 0; j < p->rlen; j++) {
             if (p->rbuf[j] == '\n') { has_buffered = 1; break; }
         }
@@ -447,7 +457,7 @@ int te_bridge_wait_readable(const int *slots, int n, int timeout_ms) {
     for (int i = 0; i < n && valid < TE_PROC_MAX; i++) {
         int s = slots[i];
         if (!te_proc_valid(s)) continue;
-        pfds[valid].fd      = g_procs[s].out_fd;
+        pfds[valid].fd      = B()->procs[s].out_fd;
         pfds[valid].events  = POLLIN;
         pfds[valid].revents = 0;
         valid++;

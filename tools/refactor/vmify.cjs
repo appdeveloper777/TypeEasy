@@ -61,7 +61,7 @@ for (const f of files) {
     out.push(o);
   }
   lines = out;
-  if (used && /^g_vm\./.test(prefix) && !lines.some(l => /#include "te_vm\.h"/.test(l))) {
+  if (used && /^g_vm\./.test(prefix) && !f.endsWith('.h') && !lines.some(l => /#include "te_vm\.h"/.test(l))) {
     let idx = lines.findIndex(l => /^#include "ast\.h"/.test(l));
     if (idx < 0) idx = lines.map((l, i) => /^\s*#include/.test(l) ? i : -1).filter(i => i >= 0).pop() ?? -1;
     if (idx >= 0) { lines.splice(idx + 1, 0, '#include "te_vm.h"'); changed = true; } else console.log('SIN INCLUDE:', f);

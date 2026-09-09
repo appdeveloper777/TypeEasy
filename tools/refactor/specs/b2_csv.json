@@ -1,0 +1,4 @@
+{"files":["src/te_csv.c"],"prefix":"C()->","map":{
+"g_csv_arena_keepalive":"arena_keepalive","g_csv_keepalive_mu":"keepalive_mu","g_ast_pool_keepalive":"ast_pool_keepalive","g_ast_pool_keepalive_mu":"ast_pool_keepalive_mu",
+"g_te_script_dir":"script_dir","g_csv_wrapper_obj_type":"wrapper_obj_type","g_te_csv_columnar_next":"columnar_next",
+"g_lazy":"lazy","g_lazy_n":"lazy_n","g_lazy_cap":"lazy_cap"}}

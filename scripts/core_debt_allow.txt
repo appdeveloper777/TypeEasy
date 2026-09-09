@@ -1,0 +1,8 @@
+# core_debt_allow — globales de PROCESO permitidos en src/ (audit_core_debt.sh).
+# Formato: '<archivo> <nombre>  # justificación'. Todo lo demás debe vivir en TeVM
+# (thread-local via te_vm_cur) o pasarse como parámetro. Las variables `__thread`
+# no cuentan (son por hilo). Agregar una línea aquí requiere una razón real de
+# proceso, no de conveniencia.
+src/te_vm.c g_vm_main_storage             # LA VM principal: contenedor de todo el estado; te_vm_cur (TLS) apunta aquí por defecto
+src/typeeasy_api_server.c g_stop_requested   # escrito por el signal handler (SIGINT/SIGTERM): async-signal-safe, no puede tocar TLS ni la VM
+src/typeeasy_api_server.c g_reload_requested # idem: flag de hot-reload consultado por el loop del servidor tras la señal

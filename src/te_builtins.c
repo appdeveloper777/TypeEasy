@@ -7,6 +7,7 @@
  */
 #define _GNU_SOURCE
 #include "te_builtins.h"
+#include "te_vm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,8 +29,19 @@ typedef struct TEBuiltinEntry {
     struct TEBuiltinEntry *next;
 } TEBuiltinEntry;
 
-static TEBuiltinEntry *g_buckets[TE_BUILTIN_BUCKETS];
-static int g_loaded = 0;
+/* Registro de nativas: UNA tabla por VM (g_vm.builtins), alloc perezoso. Antes
+ * era una tabla de proceso con init perezoso sin lock (carrera con 2 hilos). */
+struct TeBuiltins {
+    TEBuiltinEntry *buckets[TE_BUILTIN_BUCKETS];
+    int loaded;
+};
+static struct TeBuiltins *R(void) {
+    if (!g_vm.builtins) {
+        g_vm.builtins = (struct TeBuiltins *)calloc(1, sizeof(struct TeBuiltins));
+        if (!g_vm.builtins) { fprintf(stderr, "[BUILTINS] out of memory\n"); exit(1); }
+    }
+    return g_vm.builtins;
+}
 
 /* FNV-1a 32-bit. */
 static unsigned int te_hash(const char *s) {
@@ -45,7 +57,7 @@ void te_builtin_register(const char *name, TEBuiltinFn fn) {
     if (!name || !fn) return;
     unsigned int b = te_hash(name) % TE_BUILTIN_BUCKETS;
     /* Overwrite if already present (allows plugin reload / monkey-patch). */
-    for (TEBuiltinEntry *e = g_buckets[b]; e; e = e->next) {
+    for (TEBuiltinEntry *e = R()->buckets[b]; e; e = e->next) {
         if (strcmp(e->name, name) == 0) {
             e->fn = fn;
             return;
@@ -55,15 +67,15 @@ void te_builtin_register(const char *name, TEBuiltinFn fn) {
     if (!e) return;
     e->name = strdup(name);
     e->fn = fn;
-    e->next = g_buckets[b];
-    g_buckets[b] = e;
+    e->next = R()->buckets[b];
+    R()->buckets[b] = e;
 }
 
 TEBuiltinFn te_builtin_lookup(const char *name) {
     if (!name) return NULL;
-    if (!g_loaded) te_builtins_ensure_loaded();
+    if (!R()->loaded) te_builtins_ensure_loaded();
     unsigned int b = te_hash(name) % TE_BUILTIN_BUCKETS;
-    for (TEBuiltinEntry *e = g_buckets[b]; e; e = e->next) {
+    for (TEBuiltinEntry *e = R()->buckets[b]; e; e = e->next) {
         if (strcmp(e->name, name) == 0) return e->fn;
     }
     return NULL;
@@ -84,8 +96,8 @@ extern void te_register_ast_builtins(void);
 extern void te_fill_host_api(TEHostAPI *out);
 
 void te_builtins_ensure_loaded(void) {
-    if (g_loaded) return;
-    g_loaded = 1;  /* set first to break recursion if a registrant calls lookup */
+    if (R()->loaded) return;
+    R()->loaded = 1;  /* set first to break recursion if a registrant calls lookup */
     te_register_ast_builtins();
 }
 

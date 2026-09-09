@@ -941,21 +941,19 @@ more_args:
 
 static void yyerror(yyscan_t scanner, TeParseCtx *ctx, const char *s) {
     (void)ctx;
-    extern int g_capture_errors;
     extern void te_capture_error(int line, const char *msg, const char *near);
-    extern const char *g_debug_source_file;
     extern const char *te_src_file_name(int id);
     const char *text = yyget_text(scanner);
     int line = yyget_lineno(scanner);
     if (g_vm.quiet_parse_errors) return;
-    if (g_capture_errors) {
+    if (g_vm.capture_errors) {
         te_capture_error(line, s, text);
         return;
     }
     /* Diagnostics go to stderr in an English, editor-jumpable file:line: form. */
     const char *src = g_vm.lex_file_id > 0 ? te_src_file_name(g_vm.lex_file_id)
-                      : (g_debug_source_file && g_debug_source_file[0])
-                      ? g_debug_source_file : "<stdin>";
+                      : (g_vm.debug_source_file && g_vm.debug_source_file[0])
+                      ? g_vm.debug_source_file : "<stdin>";
     fprintf(stderr, "%s:%d: syntax error: %s\n", src, line, s);
     if (text && text[0]) {
         fprintf(stderr, "%s:%d: near '%s'\n", src, line, text);

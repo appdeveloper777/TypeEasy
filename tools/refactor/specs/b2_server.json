@@ -1,0 +1,4 @@
+{"files":["src/typeeasy_api_server.c"],"prefix":"S()->","map":{
+"g_invoke_lock":"invoke_lock","g_invoke_lock_init":"invoke_lock_init","g_invoke_mtx":"invoke_mtx","g_invoke_cv":"invoke_cv",
+"g_invoke_next":"invoke_next","g_invoke_serv":"invoke_serv","g_hotreload_path":"hotreload_path","g_hotreload_mtime":"hotreload_mtime",
+"g_ready":"ready","g_inflight":"inflight","g_req_total":"req_total","g_start_time":"start_time","g_cors_origin":"cors_origin"}}

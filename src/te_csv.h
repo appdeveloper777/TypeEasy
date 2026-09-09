@@ -26,10 +26,23 @@ extern "C" {
 /* Opaque DataFrame: walker only stores pointers + dispatches methods. */
 typedef struct DataFrame DataFrame;
 
+/* Estado del cargador CSV: UNA struct por VM (g_vm.csv), alloc perezoso.
+ * Reemplaza los globales de proceso que había en te_csv.c. */
+struct CSVChunk; struct ASTNodePool; struct CsvLazyEntry;
+struct TeCsv {
+    struct CSVChunk    *arena_keepalive;      /* arenas de workers terminados (viven hasta exit) */
+    struct ASTNodePool *ast_pool_keepalive;
+    void *keepalive_mu, *ast_pool_keepalive_mu;   /* pthread_mutex_t* (NULL sin pthreads) */
+    const char *script_dir;                   /* `from "x.csv"` se resuelve relativo a este dir */
+    char *wrapper_obj_type;                   /* sentinel "OBJECT" interned: free_ast no lo libera */
+    int   columnar_next;                      /* -1 unset | 0 legacy | 1 columnar (por llamada) */
+    struct CsvLazyEntry *lazy; int lazy_n, lazy_cap;   /* cargas diferidas registradas por el parser */
+};
+struct TeCsv *te_csv_state(void);
+
 /* Shared interned "OBJECT" sentinel. free_ast skips free() for any node
  * whose `type` field equals this pointer. Lazily initialised on first
  * wrapper allocation. */
-extern char *g_csv_wrapper_obj_type;
 
 /* Bump arena allocators (per-thread; chained to a process-lifetime keepalive
  * list when worker threads finish). */
@@ -59,13 +72,11 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node);
  *    0 = force legacy (allocate wrappers)
  *    1 = force pure-columnar (skip wrappers)
  * Consumed (and reset to -1) by the next from_csv_to_list invocation. */
-extern int g_te_csv_columnar_next;
 
 /* v0.0.14 polish #8: directorio del script .te en ejecución, seteado por
  * typeeasy_main antes de parsear. Si está definido, `from "x.csv"` se
  * resuelve primero relativo a este directorio; si no existe, fallback al
  * cwd (compatibilidad). NULL = solo cwd (legacy). */
-extern const char *g_te_script_dir;
 void te_set_script_dir_from_path(const char *script_path);
 
 /* v0.0.14: Lazy CSV-load registry.

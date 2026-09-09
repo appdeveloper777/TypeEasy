@@ -168,7 +168,7 @@ void interpret_for(TeVM *vm, ASTNode *node) {
             if (e && e[0] && e[0] != '0') bc_for_enabled = 0;
             bc_for_init = 1;
         }
-        if (bc_for_enabled && !g_debug_enabled) {
+        if (bc_for_enabled && !g_vm.debug_enabled) {
             BCInfo *info = bc_get_or_compile_stmt(node);
             if (info && bc_run(info, NULL)) return;
         }

@@ -28,6 +28,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 BASELINE="scripts/core_debt_baseline.txt"
+ALLOW="scripts/core_debt_allow.txt"     # globales de PROCESO permitidos, uno por línea con justificación
 MAX_FN_LINES=300
 # Se audita TODO el intérprete (src/*.c) salvo lo generado por flex/bison. Antes (0.1.0) solo
 # se vigilaban ast.c y los módulos partidos; te_linq_ops.c/te_csv.c/te_bytecode.c crecían sin guardia.
@@ -48,6 +49,8 @@ scan_globals() {
       | grep -E '[[:space:]\*]g_[A-Za-z0-9_]+[[:space:]]*(\[[^]]*\])*[[:space:]]*(=|;)' \
       | grep -vE '^[0-9]+:[^(]*\([^;]*[[:space:]\*]g_[A-Za-z0-9_]+[[:space:]]*(\[[^]]*\])*[[:space:]]*(=|;)' \
       | grep -vE '^[0-9]+:(static[[:space:]]+)?extern' \
+      | grep -vE '^[0-9]+:[^=]*\)[[:space:]]*\{' \
+      | grep -vE '\b__thread\b' \
       | grep -vE '\bg_vm\b' \
       | sed -E 's/^[0-9]+://; s/.*[[:space:]\*](g_[A-Za-z0-9_]+)[[:space:]]*(\[[^]]*\])*[[:space:]]*(=|;).*/\1/' \
       | sed "s|^|global $f |"
@@ -107,6 +110,20 @@ gone="$(echo "$report" | sed -n '/^GONE$/,$p' | sed '1d')"
 
 n_g=$(echo "$current" | grep -c '^global' || true); n_f=$(echo "$current" | grep -c '^fn' || true)
 echo "audit-core-debt: ${n_g} globales, ${n_f} funciones > ${MAX_FN_LINES} lineas."
+# Objetivo arquitectónico (0.1.1): CERO globales de proceso no justificados. Todo estado del
+# programa vive en TeVM (thread-local); solo se permite lo listado en $ALLOW con su razón.
+if [ -f "$ALLOW" ]; then
+  unjust="$(echo "$current" | awk -v allow="$ALLOW" '
+    BEGIN { while ((getline l < allow) > 0) { if (l ~ /^#/ || l ~ /^[[:space:]]*$/) continue; split(l, a, /[[:space:]]+/); ok[a[1]" "a[2]]=1 } }
+    $1=="global" && !(($2" "$3) in ok) { print "  " $2 " " $3 }')"
+  if [ -n "$unjust" ]; then
+    echo "GLOBALES DE PROCESO NO JUSTIFICADOS (moverlos a TeVM o justificarlos en $ALLOW):" >&2
+    echo "$unjust" >&2
+    fail=$((fail + 1))
+  else
+    echo "OK: 0 globales de proceso no justificados ($(grep -cvE '^#|^[[:space:]]*$' "$ALLOW") permitidos con justificación)."
+  fi
+fi
 if [ "$fail" -gt 0 ]; then
   cat >&2 <<EOF
 

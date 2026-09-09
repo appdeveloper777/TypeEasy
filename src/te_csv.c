@@ -7,6 +7,7 @@
 
 #include "te_csv.h"
 #include "ast.h"
+#include "te_vm.h"
 #include "te_colcache.h"
 #include "te_xlsx.h"
 
@@ -65,6 +66,24 @@
 #else
 #  define TE_HAS_AVX2 0
 #endif
+
+/* Estado del módulo por VM (ver te_csv.h). */
+struct TeCsv *te_csv_state(void) {
+    if (!g_vm.csv) {
+        struct TeCsv *c = (struct TeCsv *)calloc(1, sizeof(struct TeCsv));
+        if (!c) { fprintf(stderr, "[CSV] out of memory\n"); exit(1); }
+        c->columnar_next = -1;
+#if TE_HAS_PTHREAD
+        c->keepalive_mu = calloc(1, sizeof(pthread_mutex_t));
+        c->ast_pool_keepalive_mu = calloc(1, sizeof(pthread_mutex_t));
+        pthread_mutex_init((pthread_mutex_t *)c->keepalive_mu, NULL);
+        pthread_mutex_init((pthread_mutex_t *)c->ast_pool_keepalive_mu, NULL);
+#endif
+        g_vm.csv = c;
+    }
+    return g_vm.csv;
+}
+#define C() te_csv_state()
 
 /* Portable cpu count + pread (mingw has no pread). */
 #if defined(_WIN32)
@@ -395,9 +414,7 @@ typedef struct CSVChunk {
  * After parallel workers finish, their heads are linked into g_csv_arena_keepalive
  * so allocations live until process exit (script-mode, safe to leak). */
 static __thread CSVChunk *t_csv_arena = NULL;
-static CSVChunk *g_csv_arena_keepalive = NULL;
 #if TE_HAS_PTHREAD
-static pthread_mutex_t g_csv_keepalive_mu = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
 static void csv_arena_keepalive_link(CSVChunk *head) {
@@ -406,12 +423,12 @@ static void csv_arena_keepalive_link(CSVChunk *head) {
     CSVChunk *tail = head;
     while (tail->next) tail = tail->next;
 #if TE_HAS_PTHREAD
-    pthread_mutex_lock(&g_csv_keepalive_mu);
+    pthread_mutex_lock((pthread_mutex_t *)C()->keepalive_mu);
 #endif
-    tail->next = g_csv_arena_keepalive;
-    g_csv_arena_keepalive = head;
+    tail->next = C()->arena_keepalive;
+    C()->arena_keepalive = head;
 #if TE_HAS_PTHREAD
-    pthread_mutex_unlock(&g_csv_keepalive_mu);
+    pthread_mutex_unlock((pthread_mutex_t *)C()->keepalive_mu);
 #endif
 }
 
@@ -456,9 +473,7 @@ typedef struct ASTNodePool {
 } ASTNodePool;
 
 static __thread ASTNodePool *t_ast_pool = NULL;
-static ASTNodePool *g_ast_pool_keepalive = NULL;
 #if TE_HAS_PTHREAD
-static pthread_mutex_t g_ast_pool_keepalive_mu = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
 static void ast_pool_keepalive_link(ASTNodePool *head) {
@@ -466,12 +481,12 @@ static void ast_pool_keepalive_link(ASTNodePool *head) {
     ASTNodePool *tail = head;
     while (tail->next) tail = tail->next;
 #if TE_HAS_PTHREAD
-    pthread_mutex_lock(&g_ast_pool_keepalive_mu);
+    pthread_mutex_lock((pthread_mutex_t *)C()->ast_pool_keepalive_mu);
 #endif
-    tail->next = g_ast_pool_keepalive;
-    g_ast_pool_keepalive = head;
+    tail->next = C()->ast_pool_keepalive;
+    C()->ast_pool_keepalive = head;
 #if TE_HAS_PTHREAD
-    pthread_mutex_unlock(&g_ast_pool_keepalive_mu);
+    pthread_mutex_unlock((pthread_mutex_t *)C()->ast_pool_keepalive_mu);
 #endif
 }
 
@@ -583,22 +598,21 @@ static char *csv_read_all(FILE *fp, size_t *out_len);
 
 /* v0.0.14 polish #8: resolución de paths CSV relativos al script .te.
  * Seteado por typeeasy_main.c antes de parsear. */
-const char *g_te_script_dir = NULL;
 
 void te_set_script_dir_from_path(const char *script_path) {
-    if (!script_path) { g_te_script_dir = NULL; return; }
+    if (!script_path) { C()->script_dir = NULL; return; }
     /* Encontrar último separador '/' o '\\'. */
     const char *slash = NULL;
     for (const char *p = script_path; *p; p++) {
         if (*p == '/' || *p == '\\') slash = p;
     }
-    if (!slash) { g_te_script_dir = NULL; return; }
+    if (!slash) { C()->script_dir = NULL; return; }
     size_t n = (size_t)(slash - script_path);
     char *dir = (char*)malloc(n + 1);
-    if (!dir) { g_te_script_dir = NULL; return; }
+    if (!dir) { C()->script_dir = NULL; return; }
     memcpy(dir, script_path, n);
     dir[n] = '\0';
-    g_te_script_dir = dir; /* leak-on-exit ok (script mode) */
+    C()->script_dir = dir; /* leak-on-exit ok (script mode) */
 }
 
 /* Resuelve `filename` a un path utilizable.
@@ -624,11 +638,11 @@ static char *csv_resolve_path(const char *filename) {
     if (!filename) return NULL;
     if (csv_path_exists(filename)) return strdup(filename);
     if (csv_path_is_absolute(filename)) return strdup(filename);
-    if (g_te_script_dir && *g_te_script_dir) {
-        size_t a = strlen(g_te_script_dir), b = strlen(filename);
+    if (C()->script_dir && *C()->script_dir) {
+        size_t a = strlen(C()->script_dir), b = strlen(filename);
         char *joined = (char*)malloc(a + 1 + b + 1);
         if (joined) {
-            memcpy(joined, g_te_script_dir, a);
+            memcpy(joined, C()->script_dir, a);
             joined[a] = '/';
             memcpy(joined + a + 1, filename, b + 1);
             if (csv_path_exists(joined)) return joined;
@@ -1074,7 +1088,6 @@ int csv_attr_is_nullable(const char *t) {
 
 /* Sentinel global: cuando un wrapper CSV ASTNode tiene `type` apuntando
  * a este string compartido, free_ast() lo deja vivo (evita strdup por fila). */
-char *g_csv_wrapper_obj_type = NULL;
 
 /* ---------- Fast-row primitives (export público para MySQL ORM, etc.) ----------
  * Wrappers no-static sobre las primitivas internas. Mantenemos las internas
@@ -1084,8 +1097,8 @@ char *te_orm_arena_strdup(const char *s) { return csv_arena_strdup(s); }
 char *te_orm_arena_dup(const char *s, size_t n) { return csv_arena_dup(s, n); }
 ASTNode *te_orm_pool_alloc(void) { return ast_pool_alloc(); }
 const char *te_orm_wrapper_obj_type(void) {
-    if (!g_csv_wrapper_obj_type) g_csv_wrapper_obj_type = csv_arena_strdup("OBJECT");
-    return g_csv_wrapper_obj_type;
+    if (!C()->wrapper_obj_type) C()->wrapper_obj_type = csv_arena_strdup("OBJECT");
+    return C()->wrapper_obj_type;
 }
 /* ORM kind enum (mysql_bridge.c consumer): 0=int, 1=string, 2=other, 3=float.
  * v0.0.14: la rama float se agrega para que el ORM MySQL pueda materializar
@@ -1329,60 +1342,8 @@ static void *csv_combined_col_worker(void *p) {
     return NULL;
 }
 
-/* === Global CSV Worker Pool ===
- * Threads inicializados al startup del programa (antes del primer CSV load).
- * Esto elimina el overhead de pthread_create por cada carga de CSV en Docker
- * (~3ms/thread × 11 threads = ~33ms por carga → 0ms con pool pre-iniciado).
- * Workers esperan tareas con spinwait + sched_yield (idle ≈ 0% CPU). */
-#define CSV_POOL_IDLE    0
-#define CSV_POOL_PHASE_A 1
-#define CSV_POOL_PHASE_B 2
-#define CSV_POOL_EXIT    3
-#define CSV_POOL_MAX     15  /* máximo de worker threads en pool (main es el +1) */
-
-static CSVColWorkerArgs g_csv_slots[CSV_POOL_MAX];
-static pthread_t        g_csv_pthreads[CSV_POOL_MAX];
-static volatile int     g_csv_pool_n = 0;  /* threads vivos en pool */
-static volatile int     g_csv_pool_ready_count = 0; /* threads que llegaron al idle loop */
-
-static void *csv_pool_worker_fn(void *arg) {
-    CSVColWorkerArgs *s = (CSVColWorkerArgs*)arg;
-    /* Notificar al main que este thread llegó al idle spinwait loop. */
-    __atomic_fetch_add(&g_csv_pool_ready_count, 1, __ATOMIC_RELEASE);
-    int idle_spin = 0;
-    while (1) {
-        int p = __atomic_load_n(&s->pool_phase, __ATOMIC_ACQUIRE);
-        if (p == CSV_POOL_IDLE) {
-            cpu_relax();
-            /* Evitar quemar CPU cuando no hay trabajo: yield periódicamente. */
-            if (++idle_spin > 5000) { sched_yield(); idle_spin = 0; }
-            continue;
-        }
-        idle_spin = 0;
-        if (p == CSV_POOL_EXIT) return NULL;
-        if (p == CSV_POOL_PHASE_A) {
-            /* Phase A: boundary adjustment + SIMD count */
-            size_t pos2 = s->chunk_start;
-            if (!s->is_first && pos2 > 0 && s->src[pos2 - 1] != '\n') {
-                while (pos2 < s->total_len && s->src[pos2] != '\n') pos2++;
-                if (pos2 < s->total_len) pos2++;
-            }
-            s->actual_parse_start = pos2;
-            s->row_count = (int)csv_count_newlines(s->src, pos2, s->chunk_end);
-        } else if (p == CSV_POOL_PHASE_B) {
-            /* Phase B: parsear y escribir en arrays globales */
-            csv_do_phase_b(s);
-        }
-        /* Señalar idle (done) → main lo detecta sin spinwait externo */
-        __atomic_store_n(&s->pool_phase, CSV_POOL_IDLE, __ATOMIC_RELEASE);
-    }
-}
-
-/* Inicializar pool global. Llamar desde main() antes de ejecutar el script.
- * n = número total de workers (incluyendo main); crea n-1 pool threads.
- * BLOQUEA hasta que todos los threads estén listos en el idle spinwait loop.
- * Esto mueve el overhead de pthread_create (~3ms/thread en Docker) al startup,
- * ANTES del timer de CSV, para que los loads posteriores sean instantáneos. */
+/* Pool de workers CSV pre-iniciado: ELIMINADO (estaba deshabilitado: los workers en
+ * spin starvaban al main). Los threads se crean por carga (pthread_create abajo). */
 void te_csv_pool_init(int n) {
     /* DESHABILITADO: el pool path causaba starvation del main por workers
      * spinning en cores. Mantener el stub para compat con typeeasy_main.c. */
@@ -2190,110 +2151,8 @@ static DataFrame *csv_build_dataframe(char *src, size_t len, size_t pos,
     }
 
 #if TE_HAS_PTHREAD
-    /* --- POOL PATH (DESHABILITADO): los threads spinning del pool consumen
-     *     todos los cores y starvan al main durante el trabajo serial previo
-     *     (has_quote scan, header parse). Net negativo. Mantenido el código
-     *     para experimentación futura, pero el if siempre es false. --- */
-    int pool_n = __atomic_load_n(&g_csv_pool_n, __ATOMIC_ACQUIRE);
-    if (0 && pool_n > 0 && n_workers >= 2) {
-        int nw = pool_n < n_workers - 1 ? pool_n : n_workers - 1;
-        int n_total = nw + 1;  /* nw pool workers + 1 main */
 
-        /* Rechazar chunks con data_len 0. */
-        if (data_len == 0) { free(args); return NULL; }
-
-        /* Llenar slots del pool para workers 1..nw (chunk 0 = main). */
-        for (int w = 0; w < nw; w++) {
-            size_t w_start = pos + (size_t)(w + 1) * (data_len / n_total);
-            size_t w_end   = (w + 1 == nw) ? len
-                             : pos + (size_t)(w + 2) * (data_len / n_total);
-            g_csv_slots[w].src          = src;
-            g_csv_slots[w].total_len    = len;
-            g_csv_slots[w].chunk_start  = w_start;
-            g_csv_slots[w].chunk_end    = w_end;
-            g_csv_slots[w].is_first     = 0;
-            g_csv_slots[w].nattr        = nattr;
-            g_csv_slots[w].header_n     = header_n;
-            g_csv_slots[w].attr_kind    = attr_kind;
-            g_csv_slots[w].col_to_attr  = col_to_attr;
-            g_csv_slots[w].readonly_src = readonly_src;
-            g_csv_slots[w].global_col_data = NULL;
-        }
-        size_t main_chunk_end = pos + data_len / n_total;
-
-        /* Dispatch Phase A a los pool workers (ya corriendo → latencia ~1μs). */
-        for (int w = 0; w < nw; w++)
-            __atomic_store_n(&g_csv_slots[w].pool_phase, CSV_POOL_PHASE_A, __ATOMIC_RELEASE);
-
-        /* Main: Phase A para chunk 0 (inline, is_first → no boundary adjust). */
-        int main_row_count = (int)csv_count_newlines(src, pos, main_chunk_end);
-
-        /* Spinwait para pool workers. */
-        for (int w = 0; w < nw; w++)
-            while (__atomic_load_n(&g_csv_slots[w].pool_phase, __ATOMIC_ACQUIRE) != CSV_POOL_IDLE)
-                cpu_relax();
-        if (ts_after_count_out) clock_gettime(CLOCK_MONOTONIC, ts_after_count_out);
-
-        /* Prefix-sum. */
-        int total_rows = main_row_count;
-        for (int w = 0; w < nw; w++) {
-            g_csv_slots[w].row_offset = total_rows;
-            total_rows += g_csv_slots[w].row_count;
-        }
-
-        if (total_rows <= 0) { free(args); return NULL; }
-
-        /* Alocar DataFrame con tamaño exacto. */
-        DataFrame *df = (DataFrame*)calloc(1, sizeof(DataFrame));
-        df->col_count = nattr; df->cls = cls;
-        df->col_kinds = (int*)malloc(nattr * sizeof(int));
-        df->col_data  = (void**)calloc(nattr, sizeof(void*));
-        df->col_names = (char**)malloc(nattr * sizeof(char*));
-        for (int a = 0; a < nattr; a++) {
-            df->col_kinds[a] = attr_kind[a];
-            df->col_names[a] = cls->attributes[a].id;
-            size_t slot = (attr_kind[a] == 0) ? sizeof(int64_t) : sizeof(char*);
-            df->col_data[a] = malloc((size_t)total_rows * slot);
-        }
-
-        /* Propagar global_col_data a pool workers. */
-        for (int w = 0; w < nw; w++)
-            g_csv_slots[w].global_col_data = df->col_data;
-
-        /* Dispatch Phase B a los pool workers. */
-        for (int w = 0; w < nw; w++)
-            __atomic_store_n(&g_csv_slots[w].pool_phase, CSV_POOL_PHASE_B, __ATOMIC_RELEASE);
-
-        /* Main: Phase B para chunk 0 (en paralelo con pool workers). */
-        {
-            CSVColWorkerArgs ma = {0};
-            ma.src               = src;
-            ma.total_len         = len;
-            ma.actual_parse_start = pos;  /* is_first, no boundary */
-            ma.chunk_end         = main_chunk_end;
-            ma.header_n          = header_n;
-            ma.attr_kind         = attr_kind;
-            ma.col_to_attr       = col_to_attr;
-            ma.global_col_data   = df->col_data;
-            ma.row_offset        = 0;
-            ma.readonly_src      = readonly_src;
-            csv_do_phase_b(&ma);
-            main_row_count = ma.row_count;
-        }
-
-        /* Spinwait hasta que todos los pool workers terminen Phase B. */
-        for (int w = 0; w < nw; w++)
-            while (__atomic_load_n(&g_csv_slots[w].pool_phase, __ATOMIC_ACQUIRE) != CSV_POOL_IDLE)
-                cpu_relax();
-
-        int total_actual = main_row_count;
-        for (int w = 0; w < nw; w++) total_actual += g_csv_slots[w].row_count;
-        df->row_count = total_actual;
-        free(args);
-        return df;
-    }
-
-    /* --- FALLBACK: pool no inicializado → crear threads (pthread_create). --- */
+    /* --- Paralelo: main es el worker 0, se crean n_workers-1 threads por carga. --- */
     if (n_workers >= 2) {
         /* Patrón "main-as-worker-0": solo crea (n_workers-1) threads. */
         int nw = n_workers - 1;
@@ -2860,7 +2719,7 @@ static void csv_parse_parallel(int can_parallel, ClassNode *cls, char *src, size
      * usan te_colcache_* fast-paths sin necesitar wrappers. Per-call
      * override (g_te_csv_columnar_next) wins over env. */
     int pure_columnar;
-    if (g_te_csv_columnar_next >= 0) { pure_columnar = g_te_csv_columnar_next; g_te_csv_columnar_next = -1; }
+    if (C()->columnar_next >= 0) { pure_columnar = C()->columnar_next; C()->columnar_next = -1; }
     else { const char *_ec = getenv("TE_CSV_COLUMNAR"); pure_columnar = (_ec && _ec[0]=='0') ? 0 : 1; }
     /* v0.0.14 polish #6a: parser CSV ahora soporta columnas float via
      * gcol_f (K_FLOAT=3 en el parser, kind=1 en TeColCache). */
@@ -3016,7 +2875,7 @@ static void csv_parse_sequential(ClassNode *cls, char *src, size_t len, size_t p
     const char *eco_pre = getenv("TE_COLCACHE");
     int want_colcache = (!eco_pre || eco_pre[0] != '0');
     int pure_columnar;
-    if (g_te_csv_columnar_next >= 0) { pure_columnar = g_te_csv_columnar_next; g_te_csv_columnar_next = -1; }
+    if (C()->columnar_next >= 0) { pure_columnar = C()->columnar_next; C()->columnar_next = -1; }
     else { const char *_ec = getenv("TE_CSV_COLUMNAR"); pure_columnar = (_ec && _ec[0]=='0') ? 0 : 1; }
     /* v0.0.14 polish #6a: float columns soportadas via gcol_f. */
     CSVWorkerArgs sa;
@@ -3144,10 +3003,10 @@ static void csv_build_cfg(ClassNode *cls, char **header, int header_n, const cha
     char *null_type_arena = csv_arena_strdup("NULL");
     char *shared_class_name_arena = csv_arena_strdup(cls->name);
     /* Inicializa una sola vez el literal global del type del wrapper. */
-    if (!g_csv_wrapper_obj_type) {
-        g_csv_wrapper_obj_type = csv_arena_strdup("OBJECT");
+    if (!C()->wrapper_obj_type) {
+        C()->wrapper_obj_type = csv_arena_strdup("OBJECT");
     }
-    char *shared_obj_type = g_csv_wrapper_obj_type;
+    char *shared_obj_type = C()->wrapper_obj_type;
     for (int a = 0; a < nattr; a++) {
         shared_attr_id_arena[a]   = csv_arena_strdup(cls->attributes[a].id);
         shared_attr_type_arena[a] = csv_arena_strdup(cls->attributes[a].type);
@@ -3442,7 +3301,6 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
  * etc., which still need wrappers.
  * ===================================================================== */
 
-int g_te_csv_columnar_next = -1;
 
 typedef struct CsvLazyEntry {
     ASTNode *var_decl;
@@ -3461,9 +3319,6 @@ typedef struct CsvDeferred {
     int columnar_decision; /* -1 unset, 0 legacy, 1 columnar */
 } CsvDeferred;
 
-static CsvLazyEntry *g_lazy = NULL;
-static int g_lazy_n = 0;
-static int g_lazy_cap = 0;
 
 void te_csv_lazy_register(ASTNode *var_decl, const char *filename, const char *class_name) {
     te_csv_lazy_register_df(var_decl, filename, class_name, 0);
@@ -3471,18 +3326,18 @@ void te_csv_lazy_register(ASTNode *var_decl, const char *filename, const char *c
 
 void te_csv_lazy_register_df(ASTNode *var_decl, const char *filename, const char *class_name, int is_dataframe) {
     if (!var_decl || !filename || !class_name) return;
-    if (g_lazy_n >= g_lazy_cap) {
-        int nc = g_lazy_cap ? g_lazy_cap * 2 : 8;
-        CsvLazyEntry *nb = (CsvLazyEntry*)realloc(g_lazy, (size_t)nc * sizeof(CsvLazyEntry));
+    if (C()->lazy_n >= C()->lazy_cap) {
+        int nc = C()->lazy_cap ? C()->lazy_cap * 2 : 8;
+        CsvLazyEntry *nb = (CsvLazyEntry*)realloc(C()->lazy, (size_t)nc * sizeof(CsvLazyEntry));
         if (!nb) return;
-        g_lazy = nb;
-        g_lazy_cap = nc;
+        C()->lazy = nb;
+        C()->lazy_cap = nc;
     }
-    g_lazy[g_lazy_n].var_decl = var_decl;
-    g_lazy[g_lazy_n].filename = strdup(filename);
-    g_lazy[g_lazy_n].class_name = strdup(class_name);
-    g_lazy[g_lazy_n].is_dataframe = is_dataframe;
-    g_lazy_n++;
+    C()->lazy[C()->lazy_n].var_decl = var_decl;
+    C()->lazy[C()->lazy_n].filename = strdup(filename);
+    C()->lazy[C()->lazy_n].class_name = strdup(class_name);
+    C()->lazy[C()->lazy_n].is_dataframe = is_dataframe;
+    C()->lazy_n++;
 }
 
 /* Safe LINQ methods on a CSV-loaded list that work in pure-columnar mode
@@ -3557,11 +3412,11 @@ static void csv_lazy_scan(ASTNode *node, ASTNode *parent, const char *var_name, 
 }
 
 void te_csv_lazy_resolve_all(ASTNode *root) {
-    if (g_lazy_n == 0) return;
+    if (C()->lazy_n == 0) return;
     int debug = getenv("TE_CSV_AUTO_DEBUG") ? 1 : 0;
 
-    for (int i = 0; i < g_lazy_n; i++) {
-        CsvLazyEntry *e = &g_lazy[i];
+    for (int i = 0; i < C()->lazy_n; i++) {
+        CsvLazyEntry *e = &C()->lazy[i];
         ASTNode *vd = e->var_decl;
         const char *vname = (vd && vd->id) ? vd->id : NULL;
         ClassNode *cls = find_class(e->class_name);
@@ -3617,7 +3472,7 @@ void te_csv_lazy_resolve_all(ASTNode *root) {
         free(e->filename);
         free(e->class_name);
     }
-    g_lazy_n = 0;
+    C()->lazy_n = 0;
 }
 
 /* v1.0.0: runtime trigger. Called from interpret_var_decl when it sees a
@@ -3646,7 +3501,7 @@ ASTNode *te_csv_runtime_load(ASTNode *placeholder) {
     }
 
     /* Apply per-call columnar decision; loader resets g_te_csv_columnar_next. */
-    g_te_csv_columnar_next = cd->columnar_decision;
+    C()->columnar_next = cd->columnar_decision;
 
     int is_request = te_csv_is_request_uri(cd->filename);
 
@@ -3654,7 +3509,7 @@ ASTNode *te_csv_runtime_load(ASTNode *placeholder) {
         ? from_csv_to_dataframe(cd->filename, cls)
         : from_csv_to_list(cd->filename, cls);
 
-    g_te_csv_columnar_next = -1;
+    C()->columnar_next = -1;
 
     if (is_request) {
         /* Keep descriptor attached: each handler invocation re-loads. */

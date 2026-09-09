@@ -351,19 +351,16 @@ extern void        free_object_node(ObjectNode *obj);
  * tras el reset, evitando el double-free por aliasing (un entry por objeto
  * creado, no por variable). v0.0.30: growable (antes fijo en 64 -> un request
  * con model-bind de >64 objetos perdia los extras = fuga silenciosa). */
-static ObjectNode **g_req_owned_objects = NULL;
-static int          g_req_owned_count = 0;
-static int          g_req_owned_cap = 0;
 
 static void te_req_owned_register(ObjectNode *obj) {
     if (!obj) return;
-    if (g_req_owned_count >= g_req_owned_cap) {
-        int ncap = g_req_owned_cap ? g_req_owned_cap * 2 : 64;
-        ObjectNode **n = (ObjectNode**)realloc(g_req_owned_objects, ncap * sizeof(ObjectNode*));
+    if (g_vm.req_owned_count >= g_vm.req_owned_cap) {
+        int ncap = g_vm.req_owned_cap ? g_vm.req_owned_cap * 2 : 64;
+        ObjectNode **n = (ObjectNode**)realloc(g_vm.req_owned_objects, ncap * sizeof(ObjectNode*));
         if (!n) return; /* OOM: skip (leak rather than crash) */
-        g_req_owned_objects = n; g_req_owned_cap = ncap;
+        g_vm.req_owned_objects = n; g_vm.req_owned_cap = ncap;
     }
-    g_req_owned_objects[g_req_owned_count++] = obj;
+    g_vm.req_owned_objects[g_vm.req_owned_count++] = obj;
 }
 
 /* v0.0.30 (leak fix): registro paralelo de arboles JSON heap creados por el
@@ -373,32 +370,28 @@ static void te_req_owned_register(ObjectNode *obj) {
  * vars[], via te_req_free_json_tree (deep-free de indices). Growable: un request
  * puede json_parse() en loop. Mismo perfil de ownership que el registro de
  * ObjectNode de model-binding: lo request-scoped no debe stashearse en globals. */
-static ASTNode **g_req_owned_ast = NULL;
-static int        g_req_owned_ast_count = 0;
-static int        g_req_owned_ast_cap = 0;
 
 void te_req_owned_ast_register(ASTNode *root) {
-    extern int g_te_request_active;
-    if (!root || !g_te_request_active) return;
+    if (!root || !g_vm.te_request_active) return;
     /* dedup: nunca registrar el mismo root dos veces (evita double-free si dos
      * call-sites lo registran). Lineal sobre pocas entradas por request. */
-    for (int i = 0; i < g_req_owned_ast_count; i++)
-        if (g_req_owned_ast[i] == root) return;
-    if (g_req_owned_ast_count >= g_req_owned_ast_cap) {
-        int ncap = g_req_owned_ast_cap ? g_req_owned_ast_cap * 2 : 32;
-        ASTNode **n = (ASTNode**)realloc(g_req_owned_ast, ncap * sizeof(ASTNode*));
+    for (int i = 0; i < g_vm.req_owned_ast_count; i++)
+        if (g_vm.req_owned_ast[i] == root) return;
+    if (g_vm.req_owned_ast_count >= g_vm.req_owned_ast_cap) {
+        int ncap = g_vm.req_owned_ast_cap ? g_vm.req_owned_ast_cap * 2 : 32;
+        ASTNode **n = (ASTNode**)realloc(g_vm.req_owned_ast, ncap * sizeof(ASTNode*));
         if (!n) return; /* OOM: skip (leak rather than crash) */
-        g_req_owned_ast = n; g_req_owned_ast_cap = ncap;
+        g_vm.req_owned_ast = n; g_vm.req_owned_ast_cap = ncap;
     }
-    g_req_owned_ast[g_req_owned_ast_count++] = root;
+    g_vm.req_owned_ast[g_vm.req_owned_ast_count++] = root;
 }
 
 static void te_req_owned_free_all(void) {
-    for (int i = 0; i < g_req_owned_count; i++) free_object_node(g_req_owned_objects[i]);
-    g_req_owned_count = 0;
+    for (int i = 0; i < g_vm.req_owned_count; i++) free_object_node(g_vm.req_owned_objects[i]);
+    g_vm.req_owned_count = 0;
     extern void te_req_free_json_tree(ASTNode *root);
-    for (int i = 0; i < g_req_owned_ast_count; i++) te_req_free_json_tree(g_req_owned_ast[i]);
-    g_req_owned_ast_count = 0;
+    for (int i = 0; i < g_vm.req_owned_ast_count; i++) te_req_free_json_tree(g_vm.req_owned_ast[i]);
+    g_vm.req_owned_ast_count = 0;
 }
 
 /* v0.0.30 (estabilidad): cleanup simetrico para el path de error (longjmp ->
@@ -411,8 +404,7 @@ static void te_req_owned_free_all(void) {
  * nada registrado, es no-op. */
 void te_req_abort_cleanup(void) {
     te_req_owned_free_all();
-    extern int g_te_request_active;
-    if (g_te_request_active > 0) g_te_request_active--;
+    if (g_vm.te_request_active > 0) g_vm.te_request_active--;
 }
 
 /* v0.0.16 — @auth decorator helpers. */
@@ -423,7 +415,6 @@ extern void        typeeasy_set_current_claims(const char *json);
 /* Pending validation error for the current request (NULL when valid).
  * Set by te_bind_param when a typed-class body fails validation; consumed
  * by typeeasy_embedded_invoke_method which replies HTTP 422. */
-static char *g_param_validation_error = NULL;
 
 /* Bind a single MethodNode parameter before interpret_ast.
  * Resolution order:
@@ -444,7 +435,7 @@ static void te_bind_param(ParameterNode *p) {
              * typed-class parameter's error is reported. */
             char *verr = te_validate_body_against_class(cls, body ? body : "");
             if (verr) {
-                if (!g_param_validation_error) g_param_validation_error = verr;
+                if (!g_vm.param_validation_error) g_vm.param_validation_error = verr;
                 else free(verr);
                 return;
             }
@@ -499,8 +490,7 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
      * NOT intern runtime-generated STRING leaves (they are unique per request
      * and would grow the immortal intern table without bound == memory leak).
      * Cleared at every return below. */
-    extern int g_te_request_active;
-    g_te_request_active++;
+    g_vm.te_request_active++;
 
     if (!g_vm.ret_var_active) {
         memset(&g_vm.ret_var, 0, sizeof(Variable));
@@ -532,7 +522,7 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
             typeeasy_http_set_status(401);
             runtime_reset_vars_to_initial_state();
             te_req_owned_free_all();
-            g_te_request_active--;
+            g_vm.te_request_active--;
             return strdup("{\"error\":\"unauthorized\"}");
         }
         typeeasy_set_current_claims(claims);
@@ -567,24 +557,24 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
             typeeasy_http_set_status(deny_status);
             runtime_reset_vars_to_initial_state();
             te_req_owned_free_all();
-            g_te_request_active--;
+            g_vm.te_request_active--;
             return strdup("{\"error\":\"unauthorized\"}");
         }
     }
 
     /* v0.0.13: bind declared handler parameters from HTTP request context. */
-    g_param_validation_error = NULL;
+    g_vm.param_validation_error = NULL;
     for (ParameterNode *p = m->params; p; p = p->next) te_bind_param(p);
 
     /* Typed body validation failed: short-circuit with HTTP 422 and the
      * error JSON as the response body. The handler body is never executed. */
-    if (g_param_validation_error) {
+    if (g_vm.param_validation_error) {
         typeeasy_http_set_status(422);
-        char *err = g_param_validation_error;
-        g_param_validation_error = NULL;
+        char *err = g_vm.param_validation_error;
+        g_vm.param_validation_error = NULL;
         runtime_reset_vars_to_initial_state();
         te_req_owned_free_all();
-        g_te_request_active--;
+        g_vm.te_request_active--;
         return err;
     }
 
@@ -612,7 +602,7 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
     }
     runtime_reset_vars_to_initial_state();
     te_req_owned_free_all();
-    g_te_request_active--;
+    g_vm.te_request_active--;
     if (!result) result = strdup("");
     return result;
 }

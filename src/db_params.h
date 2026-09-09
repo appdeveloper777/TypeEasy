@@ -63,7 +63,6 @@ void  db_bindlist_free(DbBindList* b);
  * sql_set_empty_as_null(true) (o env TYPEEASY_SQL_EMPTY_AS_NULL=1). Pensado
  * para eliminar la ceremonia COALESCE(NULLIF(@col,''),...) cuando un form
  * manda "" a columnas numericas/fecha bajo STRICT_TRANS_TABLES. */
-extern int g_db_empty_as_null;
 
 /* Flag opt-in: si != 0 Y el proceso corre en modo --api (g_api_mode=1), un
  * fallo de query (mysql/postgres) fija automaticamente response_status(500)
@@ -72,12 +71,10 @@ extern int g_db_empty_as_null;
  * cuando la fila no se guardo. En CLI scripts es no-op: no hay respuesta
  * HTTP que cambiar, el script sigue recibiendo el mismo string de error y
  * decide que hacer (chequearlo, ignorarlo, lanzar throw, etc.). */
-extern int g_db_strict_errors;
 
 /* Flag opt-in: si != 0, la fachada generica sql_query/sql_exec envuelve el
  * resultado en { success:bool, data|error } uniforme para todos los motores.
  * Se cambia con sql_set_envelope() (o env TYPEEASY_SQL_ENVELOPE=1). OFF por
  * defecto: no rompe el codigo existente. */
-extern int g_db_envelope;
 
 #endif /* DB_PARAMS_H */

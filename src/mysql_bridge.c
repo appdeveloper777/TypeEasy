@@ -8,6 +8,7 @@
 #include <strings.h>   /* strcasecmp */
 #include <stdint.h>    /* intptr_t */
 #include <time.h>      /* clock_gettime */
+#include "te_vm.h"
 
 /* Escape callback para db_substitute_params (estilo Dapper). */
 char* mysql_escape_cb(const char* in, void* ctx) {
@@ -29,7 +30,6 @@ static int next_conn_id = 0;
  * request, mysql_close_request_conns() libera/devuelve-al-pool los que el
  * script olvidó cerrar (return temprano, throw, error). Las conexiones
  * globales (abiertas antes del primer request) se preservan. */
-extern int g_db_request_phase;
 static int conn_req_scoped[MYSQL_POOL_SIZE] = {0};
 
 /* Accessor público para obtener la conexión por id (usado por orm_bridge
@@ -753,7 +753,7 @@ void native_mysql_connect(ASTNode* args) {
              host ? host : "", user ? user : "", db ? db : "", port);
     int reused = pool_acquire(pool_key);
     if (reused >= 0) {
-        conn_req_scoped[reused] = g_db_request_phase;
+        conn_req_scoped[reused] = g_vm.db_request_phase;
         ASTNode* ret_node = create_ast_leaf("NUMBER", reused, NULL, NULL);
         add_or_update_variable("__ret__", ret_node);
         free_ast(ret_node);
@@ -852,7 +852,7 @@ void native_mysql_connect(ASTNode* args) {
     }
     
     connections[conn_id] = conn;
-    conn_req_scoped[conn_id] = g_db_request_phase;
+    conn_req_scoped[conn_id] = g_vm.db_request_phase;
     pool_register(conn_id, pool_key);
     // next_conn_id is no longer used for allocation logic
     
@@ -1133,7 +1133,7 @@ void native_mysql_query(ASTNode* args) {
                 add_or_update_variable("__ret__", ret_node);
                 free_ast(ret_node);
                 free(out);
-                if (prc == 0) { extern int g_api_mode; if (g_db_strict_errors && g_api_mode) typeeasy_http_set_status(500); }
+                if (prc == 0) { if (g_vm.db_strict_errors && g_vm.api_mode) typeeasy_http_set_status(500); }
                 if (query_owned) free(query_owned);
                 if (params_owned) free_ast(params_head);
                 return;
@@ -1184,8 +1184,7 @@ void native_mysql_query(ASTNode* args) {
          * sobreescribir con un response_status() distinto (p.ej. 409 para
          * UNIQUE violation). En CLI (g_api_mode=0) el flag es no-op: no hay
          * respuesta HTTP que cambiar, el script ve el mismo {"error":...}. */
-        extern int g_api_mode;
-        if (g_db_strict_errors && g_api_mode) typeeasy_http_set_status(500);
+        if (g_vm.db_strict_errors && g_vm.api_mode) typeeasy_http_set_status(500);
         if (final_query) free(final_query);
         return;
     }

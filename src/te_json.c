@@ -7,6 +7,7 @@
 #include "te_json.h"
 #include "te_buf.h"
 #include "ast.h"
+#include "te_vm.h"
 #include "te_value.h"
 
 #include <ctype.h>
@@ -18,8 +19,6 @@
 /* ------------------------------------------------------------------
  * Eval hooks (registered by ast.c). NULL = embedded calls -> "null".
  * ------------------------------------------------------------------ */
-static te_json_eval_fn g_eval_call_func   = NULL;
-static te_json_eval_fn g_eval_call_method = NULL;
 
 /* Declared in ast.c (not in ast.h): tells whether an expression node
  * evaluates to a string (used to pick string vs numeric JSON emission). */
@@ -36,8 +35,8 @@ int      list_length(ASTNode *list);
 
 void te_json_set_eval_hooks(te_json_eval_fn call_func,
                             te_json_eval_fn call_method) {
-    g_eval_call_func   = call_func;
-    g_eval_call_method = call_method;
+    g_vm.json_eval_call_func   = call_func;
+    g_vm.json_eval_call_method = call_method;
 }
 
 /* ------------------------------------------------------------------
@@ -73,8 +72,8 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
      * Requires hooks; otherwise emit null. */
     if (strcmp(n->type, "CALL_FUNC") == 0 || strcmp(n->type, "CALL_METHOD") == 0) {
         te_json_eval_fn hook = (strcmp(n->type, "CALL_FUNC") == 0)
-                                ? g_eval_call_func
-                                : g_eval_call_method;
+                                ? g_vm.json_eval_call_func
+                                : g_vm.json_eval_call_method;
         if (!hook) { tebuf_puts(b, "null"); return; }
         hook(n);
         Variable *r = find_variable("__ret__");

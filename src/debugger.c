@@ -88,25 +88,10 @@ static void te_sock_startup(void) {
 }
 
 
-/* ===== globals ===== */
-int g_debug_enabled = 0;
-const char *g_debug_source_file = NULL;
+/* ===== estado de la sesión de debug: UNA struct por VM (g_vm.dbg), alloc perezoso ===== */
 
-static int g_client_fd = -1;
-
-/* Receive buffer for line-based reads. */
-#define RX_CAP 8192
-static char g_rx[RX_CAP];
-static size_t g_rx_len = 0;
-
-/* Breakpoints. Stored as (file_basename, line) pairs so multiple files can
- * coexist (attach mode hosts many .te). For standalone mode, file is "". */
-#define MAX_BPS 256
-static int  g_bp_lines[MAX_BPS];
-static char g_bp_files[MAX_BPS][96];
-static int  g_bp_count = 0;
-
-/* Frame stack (call frames). v1: just names + call-site line for stack trace. */
+#define RX_CAP 8192        /* receive buffer for line-based reads */
+#define MAX_BPS 256        /* breakpoints: (file_basename, line) pairs; "" = standalone */
 #define MAX_FRAMES 256
 typedef struct {
     const char *name;
@@ -114,24 +99,51 @@ typedef struct {
     int current_line;  /* updated by debugger_on_statement while inside */
     int depth;         /* == index */
 } DbgFrame;
-static DbgFrame g_frames[MAX_FRAMES];
-static int g_dbg_frame_top = 0;     /* number of active frames; frames[0..top-1] live */
-
-/* Step state. */
 typedef enum { RUN, STEP_OVER, STEP_IN, STEP_OUT, PAUSED_PENDING } StepMode;
-static StepMode g_step = RUN;
-static int g_step_depth = 0;     /* frame depth captured when step was issued */
-static int g_last_line = 0;      /* avoid re-stopping on same statement */
-/* Re-arm a breakpoint after a 'continue' so the same line can re-trigger
- * (e.g. inside a loop). */
-static int g_armed = 1;
-/* Per-line stop de-duplication, reset at the top of each loop iteration by
- * debugger_on_loop_iteration() so a single-line loop body re-fires every
- * iteration (file-scope so the loop hook can clear them). */
-static int g_last_stop_line = -1;
-static int g_last_stop_depth = -1;
+typedef enum {
+    REF_LIST,
+    REF_OBJECT,
+    REF_REQ_ROOT,
+    REF_REQ_HEADERS,
+    REF_REQ_QUERY,
+    REF_REQ_PARAMS,
+    REF_REQ_CLIENT
+} RefKind;
+typedef struct { RefKind kind; void *ptr; } DbgRef;
+#define MAX_REFS 1024
 
-/* Forward decls of interpreter internals we touch from here. */
+struct TeDebugger {
+    int client_fd;
+    char rx[RX_CAP];
+    size_t rx_len;
+    int  bp_lines[MAX_BPS];
+    char bp_files[MAX_BPS][96];
+    int  bp_count;
+    DbgFrame frames[MAX_FRAMES];
+    int frame_top;          /* number of active frames; frames[0..top-1] live */
+    StepMode step;
+    int step_depth;         /* frame depth captured when step was issued */
+    int last_line;          /* avoid re-stopping on same statement */
+    int armed;              /* re-arm a breakpoint after 'continue' (loops) */
+    int last_stop_line;     /* per-line stop de-dup, reset per loop iteration */
+    int last_stop_depth;
+    /* Sentinel bytes used as identity pointers for the synthetic $req refs. */
+    char req_root_sentinel, req_headers_sentinel, req_query_sentinel, req_params_sentinel, req_client_sentinel;
+    DbgRef refs[MAX_REFS];
+    int ref_count;
+    int listen_fd;          /* attach mode acceptor */
+    int port;
+};
+
+static struct TeDebugger *D(void) {
+    if (!g_vm.dbg) {
+        struct TeDebugger *d = (struct TeDebugger *)calloc(1, sizeof(struct TeDebugger));
+        if (!d) { fprintf(stderr, "[DEBUG] out of memory\n"); exit(1); }
+        d->client_fd = -1; d->armed = 1; d->last_stop_line = -1; d->last_stop_depth = -1; d->listen_fd = -1;
+        g_vm.dbg = d;
+    }
+    return g_vm.dbg;
+}
 
 /* ===== low-level IO ===== */
 
@@ -148,10 +160,10 @@ static int write_all(int fd, const char *buf, size_t n) {
 }
 
 static void send_line(const char *s) {
-    if (g_client_fd < 0) return;
+    if (D()->client_fd < 0) return;
     size_t n = strlen(s);
-    if (write_all(g_client_fd, s, n) < 0) return;
-    write_all(g_client_fd, "\n", 1);
+    if (write_all(D()->client_fd, s, n) < 0) return;
+    write_all(D()->client_fd, "\n", 1);
 }
 
 /* Append-escape a JSON string value (no surrounding quotes). */
@@ -182,30 +194,30 @@ static void json_escape_into(char *dst, size_t cap, const char *src) {
 static int recv_line(char *out, size_t cap) {
     for (;;) {
         /* serve from buffer */
-        for (size_t i = 0; i < g_rx_len; ++i) {
-            if (g_rx[i] == '\n') {
+        for (size_t i = 0; i < D()->rx_len; ++i) {
+            if (D()->rx[i] == '\n') {
                 size_t copy = i < cap - 1 ? i : cap - 1;
-                memcpy(out, g_rx, copy);
+                memcpy(out, D()->rx, copy);
                 out[copy] = '\0';
                 /* shift remainder */
-                size_t rem = g_rx_len - (i + 1);
-                memmove(g_rx, g_rx + i + 1, rem);
-                g_rx_len = rem;
+                size_t rem = D()->rx_len - (i + 1);
+                memmove(D()->rx, D()->rx + i + 1, rem);
+                D()->rx_len = rem;
                 return 0;
             }
         }
-        if (g_rx_len >= RX_CAP) {
+        if (D()->rx_len >= RX_CAP) {
             /* line too long: drop */
-            g_rx_len = 0;
+            D()->rx_len = 0;
             return -1;
         }
-        int r = te_sock_read(g_client_fd, g_rx + g_rx_len, RX_CAP - g_rx_len);
+        int r = te_sock_read(D()->client_fd, D()->rx + D()->rx_len, RX_CAP - D()->rx_len);
         if (r == 0) return -1;          /* EOF */
         if (r < 0) {
             if (TE_SOCK_ERRNO == TE_EINTR) continue;
             return -1;
         }
-        g_rx_len += (size_t)r;
+        D()->rx_len += (size_t)r;
     }
 }
 
@@ -250,7 +262,7 @@ static int parse_lines_array(const char *line) {
 
     /* In standalone mode, optionally enforce that BPs match our single source
      * (drop unrelated files to keep the array small). */
-    const char *cur = g_debug_source_file ? g_debug_source_file : "";
+    const char *cur = g_vm.debug_source_file ? g_vm.debug_source_file : "";
     const char *cur_base = strrchr(cur, '/');
     if (!cur_base) cur_base = strrchr(cur, '\\');   /* rutas Windows */
     cur_base = cur_base ? cur_base + 1 : cur;
@@ -260,17 +272,17 @@ static int parse_lines_array(const char *line) {
 
     /* Step 1: drop any existing BPs for this file (compact in place). */
     int w = 0;
-    for (int r = 0; r < g_bp_count; r++) {
-        if (strcmp(g_bp_files[r], file_in) != 0) {
+    for (int r = 0; r < D()->bp_count; r++) {
+        if (strcmp(D()->bp_files[r], file_in) != 0) {
             if (w != r) {
-                g_bp_lines[w] = g_bp_lines[r];
-                strncpy(g_bp_files[w], g_bp_files[r], sizeof(g_bp_files[w]) - 1);
-                g_bp_files[w][sizeof(g_bp_files[w]) - 1] = '\0';
+                D()->bp_lines[w] = D()->bp_lines[r];
+                strncpy(D()->bp_files[w], D()->bp_files[r], sizeof(D()->bp_files[w]) - 1);
+                D()->bp_files[w][sizeof(D()->bp_files[w]) - 1] = '\0';
             }
             w++;
         }
     }
-    g_bp_count = w;
+    D()->bp_count = w;
 
     /* Step 2: parse the new line-list and append. */
     const char *p = strstr(line, "\"lines\"");
@@ -282,11 +294,11 @@ static int parse_lines_array(const char *line) {
         while (*p == ' ' || *p == ',') p++;
         if (*p >= '0' && *p <= '9') {
             int v = atoi(p);
-            if (g_bp_count < MAX_BPS) {
-                g_bp_lines[g_bp_count] = v;
-                strncpy(g_bp_files[g_bp_count], file_in, sizeof(g_bp_files[g_bp_count]) - 1);
-                g_bp_files[g_bp_count][sizeof(g_bp_files[g_bp_count]) - 1] = '\0';
-                g_bp_count++;
+            if (D()->bp_count < MAX_BPS) {
+                D()->bp_lines[D()->bp_count] = v;
+                strncpy(D()->bp_files[D()->bp_count], file_in, sizeof(D()->bp_files[D()->bp_count]) - 1);
+                D()->bp_files[D()->bp_count][sizeof(D()->bp_files[D()->bp_count]) - 1] = '\0';
+                D()->bp_count++;
             }
             while (*p >= '0' && *p <= '9') p++;
         } else if (*p) {
@@ -297,7 +309,7 @@ static int parse_lines_array(const char *line) {
 }
 
 static int line_has_breakpoint(int line) {
-    for (int i = 0; i < g_bp_count; ++i) if (g_bp_lines[i] == line) return 1;
+    for (int i = 0; i < D()->bp_count; ++i) if (D()->bp_lines[i] == line) return 1;
     return 0;
 }
 
@@ -308,48 +320,48 @@ static int line_has_breakpoint(int line) {
  * after the first stop (e.g. between HTTP requests in --api mode) sit unread
  * and never apply. Returns immediately when no data is pending. */
 static void drain_pending_commands(void) {
-    if (g_client_fd < 0) return;
+    if (D()->client_fd < 0) return;
     for (;;) {
         /* Is a full line already buffered? */
         int have_line = 0;
-        for (size_t i = 0; i < g_rx_len; ++i) {
-            if (g_rx[i] == '\n') { have_line = 1; break; }
+        for (size_t i = 0; i < D()->rx_len; ++i) {
+            if (D()->rx[i] == '\n') { have_line = 1; break; }
         }
         if (!have_line) {
             /* Peek the socket without blocking. */
             fd_set rfds;
             FD_ZERO(&rfds);
 #ifdef _WIN32
-            FD_SET((SOCKET)g_client_fd, &rfds);
+            FD_SET((SOCKET)D()->client_fd, &rfds);
 #else
-            FD_SET(g_client_fd, &rfds);
+            FD_SET(D()->client_fd, &rfds);
 #endif
             struct timeval tv = {0, 0};
-            int sel = select(g_client_fd + 1, &rfds, NULL, NULL, &tv);
+            int sel = select(D()->client_fd + 1, &rfds, NULL, NULL, &tv);
             if (sel <= 0) return;            /* nothing pending (or error) */
-            if (g_rx_len >= RX_CAP) { g_rx_len = 0; return; }
-            int r = te_sock_read(g_client_fd, g_rx + g_rx_len, RX_CAP - g_rx_len);
+            if (D()->rx_len >= RX_CAP) { D()->rx_len = 0; return; }
+            int r = te_sock_read(D()->client_fd, D()->rx + D()->rx_len, RX_CAP - D()->rx_len);
             if (r == 0) {                    /* EOF: adapter detached */
-                te_sock_close(g_client_fd); g_client_fd = -1; g_debug_enabled = 0;
+                te_sock_close(D()->client_fd); D()->client_fd = -1; g_vm.debug_enabled = 0;
                 return;
             }
             if (r < 0) {
                 if (TE_SOCK_ERRNO == TE_EINTR) continue;
                 return;
             }
-            g_rx_len += (size_t)r;
+            D()->rx_len += (size_t)r;
             continue;                        /* re-check for a full line */
         }
         /* Extract one buffered line (mirrors recv_line's buffer handling). */
         char line[2048];
         size_t li = 0;
-        for (; li < g_rx_len; ++li) if (g_rx[li] == '\n') break;
+        for (; li < D()->rx_len; ++li) if (D()->rx[li] == '\n') break;
         size_t copy = li < sizeof(line) - 1 ? li : sizeof(line) - 1;
-        memcpy(line, g_rx, copy);
+        memcpy(line, D()->rx, copy);
         line[copy] = '\0';
-        size_t rem = g_rx_len - (li + 1);
-        memmove(g_rx, g_rx + li + 1, rem);
-        g_rx_len = rem;
+        size_t rem = D()->rx_len - (li + 1);
+        memmove(D()->rx, D()->rx + li + 1, rem);
+        D()->rx_len = rem;
 
         char cmd[64];
         if (json_str_field(line, "cmd", cmd, sizeof(cmd)) < 0) continue;
@@ -358,13 +370,13 @@ static void drain_pending_commands(void) {
             send_line("{\"resp\":\"ok\"}");
         } else if (strcmp(cmd, "pause") == 0) {
             /* Break as soon as possible: stop on the next statement. */
-            g_step = STEP_IN;
-            g_step_depth = g_dbg_frame_top;
+            D()->step = STEP_IN;
+            D()->step_depth = D()->frame_top;
             send_line("{\"resp\":\"ok\"}");
         } else if (strcmp(cmd, "disconnect") == 0) {
-            te_sock_close(g_client_fd);
-            g_client_fd = -1;
-            g_debug_enabled = 0;
+            te_sock_close(D()->client_fd);
+            D()->client_fd = -1;
+            g_vm.debug_enabled = 0;
             return;
         }
         /* Other commands (stack/vars/eval) are only meaningful while stopped
@@ -378,7 +390,7 @@ static void send_stopped(const char *reason, int line) {
     char buf[512];
     char esc_reason[64], esc_file[512];
     json_escape_into(esc_reason, sizeof(esc_reason), reason);
-    json_escape_into(esc_file, sizeof(esc_file), g_debug_source_file ? g_debug_source_file : "");
+    json_escape_into(esc_file, sizeof(esc_file), g_vm.debug_source_file ? g_vm.debug_source_file : "");
     snprintf(buf, sizeof(buf),
              "{\"event\":\"stopped\",\"reason\":\"%s\",\"line\":%d,\"file\":\"%s\"}",
              esc_reason, line, esc_file);
@@ -390,17 +402,17 @@ static void cmd_stack(void) {
     size_t o = 0;
     o += (size_t)snprintf(buf + o, sizeof(buf) - o, "{\"resp\":\"stack\",\"frames\":[");
     /* Top of stack first (innermost). */
-    for (int i = g_dbg_frame_top - 1; i >= 0; --i) {
+    for (int i = D()->frame_top - 1; i >= 0; --i) {
         char esc[256];
-        json_escape_into(esc, sizeof(esc), g_frames[i].name ? g_frames[i].name : "?");
+        json_escape_into(esc, sizeof(esc), D()->frames[i].name ? D()->frames[i].name : "?");
         char esc_file[512];
-        json_escape_into(esc_file, sizeof(esc_file), g_debug_source_file ? g_debug_source_file : "");
+        json_escape_into(esc_file, sizeof(esc_file), g_vm.debug_source_file ? g_vm.debug_source_file : "");
         o += (size_t)snprintf(buf + o, sizeof(buf) - o,
                               "%s{\"id\":%d,\"name\":\"%s\",\"line\":%d,\"file\":\"%s\"}",
-                              (i == g_dbg_frame_top - 1) ? "" : ",",
-                              g_dbg_frame_top - 1 - i,
+                              (i == D()->frame_top - 1) ? "" : ",",
+                              D()->frame_top - 1 - i,
                               esc,
-                              g_frames[i].current_line,
+                              D()->frames[i].current_line,
                               esc_file);
         if (o + 64 >= sizeof(buf)) break;
     }
@@ -419,37 +431,19 @@ static const char *vtype_name(ValueType t) {
 }
 
 /* ===== variable references for object/list expansion ===== */
-typedef enum {
-    REF_LIST,
-    REF_OBJECT,
-    REF_REQ_ROOT,
-    REF_REQ_HEADERS,
-    REF_REQ_QUERY,
-    REF_REQ_PARAMS,
-    REF_REQ_CLIENT
-} RefKind;
-/* Sentinel pointers used as identity for the synthetic $req refs. */
-static char g_req_root_sentinel;
-static char g_req_headers_sentinel;
-static char g_req_query_sentinel;
-static char g_req_params_sentinel;
-static char g_req_client_sentinel;
-typedef struct { RefKind kind; void *ptr; } DbgRef;
-#define MAX_REFS 1024
-static DbgRef g_refs[MAX_REFS];
-static int g_ref_count = 0;
+/* (RefKind / DbgRef / MAX_REFS definidos arriba, dentro de TeDebugger) */
 
-static void refs_reset(void) { g_ref_count = 0; }
+static void refs_reset(void) { D()->ref_count = 0; }
 
 static int register_ref(RefKind kind, void *ptr) {
     if (!ptr) return 0;
-    for (int i = 0; i < g_ref_count; ++i) {
-        if (g_refs[i].ptr == ptr && g_refs[i].kind == kind) return i + 1;
+    for (int i = 0; i < D()->ref_count; ++i) {
+        if (D()->refs[i].ptr == ptr && D()->refs[i].kind == kind) return i + 1;
     }
-    if (g_ref_count >= MAX_REFS) return 0;
-    g_refs[g_ref_count].kind = kind;
-    g_refs[g_ref_count].ptr = ptr;
-    return ++g_ref_count;
+    if (D()->ref_count >= MAX_REFS) return 0;
+    D()->refs[D()->ref_count].kind = kind;
+    D()->refs[D()->ref_count].ptr = ptr;
+    return ++D()->ref_count;
 }
 
 /* Count items in a LIST ASTNode chain (cur->left->next->next...). */
@@ -550,7 +544,7 @@ static void cmd_vars(void) {
             char summary[256];
             snprintf(summary, sizeof(summary), "%s %s",
                      m ? m : "?", p ? p : "?");
-            int ref = register_ref(REF_REQ_ROOT, &g_req_root_sentinel);
+            int ref = register_ref(REF_REQ_ROOT, &D()->req_root_sentinel);
             o = emit_var_entry(buf, sizeof(buf), o, first, "$req", "request", summary, ref);
             first = 0;
         }
@@ -614,8 +608,8 @@ static void cmd_get_children(const char *line) {
     size_t o = 0;
     o += (size_t)snprintf(buf + o, sizeof(buf) - o, "{\"resp\":\"children\",\"vars\":[");
     int first = 1;
-    if (ref_id >= 1 && ref_id <= g_ref_count) {
-        DbgRef *r = &g_refs[ref_id - 1];
+    if (ref_id >= 1 && ref_id <= D()->ref_count) {
+        DbgRef *r = &D()->refs[ref_id - 1];
         if (r->kind == REF_LIST) {
             ASTNode *listNode = (ASTNode *)r->ptr;
             int idx = 0;
@@ -690,7 +684,7 @@ static void cmd_get_children(const char *line) {
                 char summary[200];
                 snprintf(summary, sizeof(summary), "%s on %s%s", browser, osname,
                          mob ? " (mobile)" : "");
-                int cref = register_ref(REF_REQ_CLIENT, &g_req_client_sentinel);
+                int cref = register_ref(REF_REQ_CLIENT, &D()->req_client_sentinel);
                 o = emit_var_entry(buf, sizeof(buf), o, first, "client", "client", summary, cref);
                 first = 0;
             }
@@ -699,13 +693,13 @@ static void cmd_get_children(const char *line) {
             int pcount = 0; for (int i = 0; typeeasy_http_iter_param(i, &kk, &vvv); ++i) pcount++;
             int hcount = 0; for (int i = 0; typeeasy_http_iter_header(i, &kk, &vvv); ++i) hcount++;
             char gv[64];
-            int qref = register_ref(REF_REQ_QUERY, &g_req_query_sentinel);
+            int qref = register_ref(REF_REQ_QUERY, &D()->req_query_sentinel);
             snprintf(gv, sizeof(gv), "{%d}", qcount);
             o = emit_var_entry(buf, sizeof(buf), o, first, "query", "group", gv, qref); first = 0;
-            int pref = register_ref(REF_REQ_PARAMS, &g_req_params_sentinel);
+            int pref = register_ref(REF_REQ_PARAMS, &D()->req_params_sentinel);
             snprintf(gv, sizeof(gv), "{%d}", pcount);
             o = emit_var_entry(buf, sizeof(buf), o, first, "params", "group", gv, pref); first = 0;
-            int href = register_ref(REF_REQ_HEADERS, &g_req_headers_sentinel);
+            int href = register_ref(REF_REQ_HEADERS, &D()->req_headers_sentinel);
             snprintf(gv, sizeof(gv), "{%d}", hcount);
             o = emit_var_entry(buf, sizeof(buf), o, first, "headers", "group", gv, href); first = 0;
         } else if (r->kind == REF_REQ_HEADERS) {
@@ -893,19 +887,19 @@ static void wait_for_resume(void) {
         if (json_str_field(line, "cmd", cmd, sizeof(cmd)) < 0) continue;
 
         if (strcmp(cmd, "continue") == 0) {
-            g_step = RUN;
+            D()->step = RUN;
             return;
         } else if (strcmp(cmd, "next") == 0) {
-            g_step = STEP_OVER;
-            g_step_depth = g_dbg_frame_top;
+            D()->step = STEP_OVER;
+            D()->step_depth = D()->frame_top;
             return;
         } else if (strcmp(cmd, "step_in") == 0) {
-            g_step = STEP_IN;
-            g_step_depth = g_dbg_frame_top;
+            D()->step = STEP_IN;
+            D()->step_depth = D()->frame_top;
             return;
         } else if (strcmp(cmd, "step_out") == 0) {
-            g_step = STEP_OUT;
-            g_step_depth = g_dbg_frame_top;
+            D()->step = STEP_OUT;
+            D()->step_depth = D()->frame_top;
             return;
         } else if (strcmp(cmd, "set_breakpoints") == 0) {
             parse_lines_array(line);
@@ -923,20 +917,20 @@ static void wait_for_resume(void) {
             /* Already paused; just ack. */
             send_line("{\"resp\":\"ok\"}");
         } else if (strcmp(cmd, "disconnect") == 0) {
-            te_sock_close(g_client_fd);
-            g_client_fd = -1;
-            g_debug_enabled = 0;
+            te_sock_close(D()->client_fd);
+            D()->client_fd = -1;
+            g_vm.debug_enabled = 0;
             return;
         }
     }
     /* Connection closed: detach. */
-    g_debug_enabled = 0;
+    g_vm.debug_enabled = 0;
 }
 
 /* ===== public API ===== */
 
 void debugger_init(int port, const char *source_file) {
-    g_debug_source_file = source_file ? source_file : "";
+    g_vm.debug_source_file = source_file ? source_file : "";
 
     te_sock_startup();
 #ifndef _WIN32
@@ -973,8 +967,8 @@ void debugger_init(int port, const char *source_file) {
     te_sock_close(listen_fd);
     if (fd < 0) { perror("[debugger] accept"); return; }
 
-    g_client_fd = fd;
-    g_debug_enabled = 1;
+    D()->client_fd = fd;
+    g_vm.debug_enabled = 1;
 
     /* Push a synthetic top-level frame "<main>". */
     debugger_push_frame("<main>", NULL);
@@ -994,52 +988,52 @@ void debugger_init(int port, const char *source_file) {
         if (strcmp(cmd, "set_breakpoints") == 0) {
             int applied = parse_lines_array(line);
             if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
-                fprintf(stderr, "[typeeasy-debugger] set_breakpoints (applied=%d): %d lines [", applied, g_bp_count);
-                for (int i = 0; i < g_bp_count; i++) fprintf(stderr, "%s%d", i?",":"", g_bp_lines[i]);
+                fprintf(stderr, "[typeeasy-debugger] set_breakpoints (applied=%d): %d lines [", applied, D()->bp_count);
+                for (int i = 0; i < D()->bp_count; i++) fprintf(stderr, "%s%d", i?",":"", D()->bp_lines[i]);
                 fprintf(stderr, "]\n"); fflush(stderr);
             }
             send_line("{\"resp\":\"ok\"}");
         } else if (strcmp(cmd, "start") == 0) {
             send_line("{\"resp\":\"ok\"}");
-            g_step = RUN;
+            D()->step = RUN;
             return;
         } else if (strcmp(cmd, "disconnect") == 0) {
-            te_sock_close(g_client_fd);
-            g_client_fd = -1;
-            g_debug_enabled = 0;
+            te_sock_close(D()->client_fd);
+            D()->client_fd = -1;
+            g_vm.debug_enabled = 0;
             return;
         }
     }
-    g_debug_enabled = 0;
+    g_vm.debug_enabled = 0;
 }
 
 void debugger_push_frame(const char *name, ASTNode *call_site) {
-    if (g_dbg_frame_top >= MAX_FRAMES) return;
-    DbgFrame *f = &g_frames[g_dbg_frame_top];
+    if (D()->frame_top >= MAX_FRAMES) return;
+    DbgFrame *f = &D()->frames[D()->frame_top];
     f->name = name ? name : "?";
     f->call_line = call_site ? call_site->line : 0;
     f->current_line = f->call_line;
-    f->depth = g_dbg_frame_top;
-    g_dbg_frame_top++;
+    f->depth = D()->frame_top;
+    D()->frame_top++;
 }
 
 void debugger_pop_frame(void) {
-    if (g_dbg_frame_top > 0) g_dbg_frame_top--;
+    if (D()->frame_top > 0) D()->frame_top--;
     /* If stepping out and we just left target depth, arm a stop. */
-    if (g_debug_enabled && g_step == STEP_OUT && g_dbg_frame_top < g_step_depth) {
-        g_step = STEP_OVER;        /* will stop at next statement in caller */
-        g_step_depth = g_dbg_frame_top;
+    if (g_vm.debug_enabled && D()->step == STEP_OUT && D()->frame_top < D()->step_depth) {
+        D()->step = STEP_OVER;        /* will stop at next statement in caller */
+        D()->step_depth = D()->frame_top;
     }
 }
 
 void debugger_on_statement(ASTNode *node) {
-    if (!g_debug_enabled || !node) return;
+    if (!g_vm.debug_enabled || !node) return;
 
     /* Apply any breakpoint toggles / pause that arrived while running, so
      * adding or removing breakpoints mid-session takes effect on the very
      * next statement (e.g. between HTTP requests in --api mode). */
     drain_pending_commands();
-    if (!g_debug_enabled) return;   /* drain may have processed a disconnect */
+    if (!g_vm.debug_enabled) return;   /* drain may have processed a disconnect */
 
     int line = node->line;
     if (line <= 0) {
@@ -1056,14 +1050,14 @@ void debugger_on_statement(ASTNode *node) {
         dbg_log_once = 1;
         if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
             fprintf(stderr, "[typeeasy-debugger] FIRST hit: line=%d, g_bp_count=%d, kind=%d\n",
-                    line, g_bp_count, (int)node->kind);
+                    line, D()->bp_count, (int)node->kind);
             fflush(stderr);
         }
     }
 
     /* Update current line of innermost frame. */
-    if (g_dbg_frame_top > 0) {
-        g_frames[g_dbg_frame_top - 1].current_line = line;
+    if (D()->frame_top > 0) {
+        D()->frames[D()->frame_top - 1].current_line = line;
     }
 
     /* De-duplicate: if executor calls the hook multiple times for the same
@@ -1075,41 +1069,41 @@ void debugger_on_statement(ASTNode *node) {
 
     /* If line changes vs last stop, re-arm so the same line can hit again
      * later (e.g. loop body). */
-    if (line != g_last_stop_line) g_armed = 1;
+    if (line != D()->last_stop_line) D()->armed = 1;
 
     if (line_has_breakpoint(line)) {
-        if (g_armed) {
+        if (D()->armed) {
             should_stop = 1;
             reason = "breakpoint";
         }
-    } else if (g_step == STEP_IN) {
-        if (line != g_last_line || g_dbg_frame_top != g_step_depth) {
+    } else if (D()->step == STEP_IN) {
+        if (line != D()->last_line || D()->frame_top != D()->step_depth) {
             should_stop = 1;
         }
-    } else if (g_step == STEP_OVER) {
+    } else if (D()->step == STEP_OVER) {
         /* Stop on next statement at same-or-shallower depth. */
-        if (g_dbg_frame_top <= g_step_depth &&
-            (line != g_last_line || g_dbg_frame_top != g_step_depth)) {
+        if (D()->frame_top <= D()->step_depth &&
+            (line != D()->last_line || D()->frame_top != D()->step_depth)) {
             should_stop = 1;
         }
     }
     /* STEP_OUT is handled in pop_frame which converts to STEP_OVER. */
 
-    g_last_line = line;
+    D()->last_line = line;
 
     if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
         fprintf(stderr, "[typeeasy-debugger] hook line=%d kind=%d step=%d armed=%d has_bp=%d should_stop=%d g_client_fd=%d\n",
-                line, (int)node->kind, (int)g_step, g_armed,
-                line_has_breakpoint(line), should_stop, g_client_fd);
+                line, (int)node->kind, (int)D()->step, D()->armed,
+                line_has_breakpoint(line), should_stop, D()->client_fd);
         fflush(stderr);
     }
 
     if (!should_stop) return;
 
-    g_last_stop_line = line;
-    g_last_stop_depth = g_dbg_frame_top;
-    g_step = RUN;
-    g_armed = 0;        /* require a different line before re-firing same BP */
+    D()->last_stop_line = line;
+    D()->last_stop_depth = D()->frame_top;
+    D()->step = RUN;
+    D()->armed = 0;        /* require a different line before re-firing same BP */
     send_stopped(reason, line);
     if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
         fprintf(stderr, "[typeeasy-debugger] sent stopped, entering wait_for_resume\n");
@@ -1123,16 +1117,16 @@ void debugger_on_statement(ASTNode *node) {
 }
 
 void debugger_on_loop_iteration(void) {
-    if (!g_debug_enabled) return;
+    if (!g_vm.debug_enabled) return;
     /* Reset the per-line stop de-duplication so the SAME source line (a
      * single-line loop body) is treated as fresh on each iteration. Without
      * this, after stopping once on the body line, g_last_line / g_last_stop_line
      * still equal that line, so a step (F10/F11) or a breakpoint on it would not
      * re-fire on the next iteration and the loop appears to "skip" its rounds. */
-    g_last_line = -1;
-    g_last_stop_line = -1;
-    g_last_stop_depth = -1;
-    g_armed = 1;
+    D()->last_line = -1;
+    D()->last_stop_line = -1;
+    D()->last_stop_depth = -1;
+    D()->armed = 1;
     if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
         fprintf(stderr, "[typeeasy-debugger] loop-iteration: dedup reset\n");
         fflush(stderr);
@@ -1140,17 +1134,17 @@ void debugger_on_loop_iteration(void) {
 }
 
 void debugger_terminate(int exit_code) {
-    if (g_client_fd < 0) return;
+    if (D()->client_fd < 0) return;
     char buf[64];
     snprintf(buf, sizeof(buf), "{\"event\":\"terminated\",\"exit\":%d}", exit_code);
     send_line(buf);
-    te_sock_close(g_client_fd);
-    g_client_fd = -1;
-    g_debug_enabled = 0;
+    te_sock_close(D()->client_fd);
+    D()->client_fd = -1;
+    g_vm.debug_enabled = 0;
 }
 
 void debugger_emit_output(const char *category, const char *text) {
-    if (!g_debug_enabled || g_client_fd < 0 || !text) return;
+    if (!g_vm.debug_enabled || D()->client_fd < 0 || !text) return;
     if (!category) category = "stdout";
     /* Heap-buffer because user output can be arbitrarily large. */
     size_t tlen = strlen(text);
@@ -1175,32 +1169,30 @@ void debugger_emit_output(const char *category, const char *text) {
  *
  * When the client disconnects, the thread loops back to accept again so the
  * adapter can reconnect without restarting the server. */
-static int g_dbg_listen_fd = -1;
-static int g_dbg_port = 0;
 
 static void *dbg_acceptor_thread(void *arg) {
     (void)arg;
     while (1) {
         struct sockaddr_in cli;
         socklen_t cli_len = sizeof(cli);
-        int fd = accept(g_dbg_listen_fd, (struct sockaddr*)&cli, &cli_len);
+        int fd = accept(D()->listen_fd, (struct sockaddr*)&cli, &cli_len);
         if (fd < 0) {
             if (TE_SOCK_ERRNO == TE_EINTR) continue;
             perror("[debugger] accept (async)");
             TE_SLEEP_SEC(1);
             continue;
         }
-        g_client_fd = fd;
-        g_debug_enabled = 1;
+        D()->client_fd = fd;
+        g_vm.debug_enabled = 1;
 
         /* Reset frame stack (a fresh adapter session). */
-        g_dbg_frame_top = 0;
-        g_bp_count  = 0;
-        g_step      = RUN;
-        g_armed     = 1;
-        g_last_line = -1;
+        D()->frame_top = 0;
+        D()->bp_count  = 0;
+        D()->step      = RUN;
+        D()->armed     = 1;
+        D()->last_line = -1;
 
-        if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] (async) Adapter connected on port %d\n", g_dbg_port);
+        if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] (async) Adapter connected on port %d\n", D()->port);
         fflush(stderr);
 
         send_line("{\"event\":\"initialized\"}");
@@ -1215,21 +1207,21 @@ static void *dbg_acceptor_thread(void *arg) {
             if (strcmp(cmd, "set_breakpoints") == 0) {
             parse_lines_array(line);
             if (getenv("TYPEEASY_DEBUG_VERBOSE")) {
-                fprintf(stderr, "[typeeasy-debugger] (async) set_breakpoints: %d lines\n", g_bp_count);
-                for (int i = 0; i < g_bp_count; i++) fprintf(stderr, "  bp[%d]=%d\n", i, g_bp_lines[i]);
+                fprintf(stderr, "[typeeasy-debugger] (async) set_breakpoints: %d lines\n", D()->bp_count);
+                for (int i = 0; i < D()->bp_count; i++) fprintf(stderr, "  bp[%d]=%d\n", i, D()->bp_lines[i]);
                 fflush(stderr);
             }
             send_line("{\"resp\":\"ok\"}");
         } else if (strcmp(cmd, "start") == 0) {
             send_line("{\"resp\":\"ok\"}");
-            g_step = RUN;
-            if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] (async) start, armed with %d BPs\n", g_bp_count);
+            D()->step = RUN;
+            if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] (async) start, armed with %d BPs\n", D()->bp_count);
             fflush(stderr);
             break; /* fall through: armed, waiting for requests to hit BPs */
             } else if (strcmp(cmd, "disconnect") == 0) {
-                te_sock_close(g_client_fd);
-                g_client_fd = -1;
-                g_debug_enabled = 0;
+                te_sock_close(D()->client_fd);
+                D()->client_fd = -1;
+                g_vm.debug_enabled = 0;
                 break;
             }
         }
@@ -1238,11 +1230,11 @@ static void *dbg_acceptor_thread(void *arg) {
          * other threads via debugger_on_statement -> wait_for_resume. We
          * monitor the socket for disconnect by sleeping; the read in
          * wait_for_resume detects EOF and clears g_debug_enabled. */
-        while (g_debug_enabled && g_client_fd >= 0) {
+        while (g_vm.debug_enabled && D()->client_fd >= 0) {
             TE_SLEEP_SEC(1);
         }
-        if (g_client_fd >= 0) { te_sock_close(g_client_fd); g_client_fd = -1; }
-        g_debug_enabled = 0;
+        if (D()->client_fd >= 0) { te_sock_close(D()->client_fd); D()->client_fd = -1; }
+        g_vm.debug_enabled = 0;
         if (getenv("TYPEEASY_DEBUG_VERBOSE")) fprintf(stderr, "[typeeasy-debugger] (async) Adapter disconnected, listening again\n");
         fflush(stderr);
     }
@@ -1257,19 +1249,19 @@ static unsigned __stdcall dbg_acceptor_thread_win(void *arg) {
 #endif
 
 void debugger_listen_async(int port, const char *source_file) {
-    g_debug_source_file = source_file ? source_file : "";
-    g_dbg_port = port;
+    g_vm.debug_source_file = source_file ? source_file : "";
+    D()->port = port;
 
     te_sock_startup();
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
 #endif
 
-    g_dbg_listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (g_dbg_listen_fd < 0) { perror("[debugger] socket"); return; }
+    D()->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (D()->listen_fd < 0) { perror("[debugger] socket"); return; }
 
     int yes = 1;
-    setsockopt(g_dbg_listen_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
+    setsockopt(D()->listen_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -1277,14 +1269,14 @@ void debugger_listen_async(int port, const char *source_file) {
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons((uint16_t)port);
 
-    if (bind(g_dbg_listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    if (bind(D()->listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("[debugger] bind (async)");
-        te_sock_close(g_dbg_listen_fd); g_dbg_listen_fd = -1;
+        te_sock_close(D()->listen_fd); D()->listen_fd = -1;
         return;
     }
-    if (listen(g_dbg_listen_fd, 1) < 0) {
+    if (listen(D()->listen_fd, 1) < 0) {
         perror("[debugger] listen (async)");
-        te_sock_close(g_dbg_listen_fd); g_dbg_listen_fd = -1;
+        te_sock_close(D()->listen_fd); D()->listen_fd = -1;
         return;
     }
 

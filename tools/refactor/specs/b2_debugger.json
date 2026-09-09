@@ -1,0 +1,7 @@
+{"files":["src/debugger.c"],"prefix":"D()->","map":{
+"g_client_fd":"client_fd","g_rx":"rx","g_rx_len":"rx_len","g_bp_lines":"bp_lines","g_bp_files":"bp_files","g_bp_count":"bp_count",
+"g_frames":"frames","g_dbg_frame_top":"frame_top","g_step":"step","g_step_depth":"step_depth","g_last_line":"last_line","g_armed":"armed",
+"g_last_stop_line":"last_stop_line","g_last_stop_depth":"last_stop_depth",
+"g_req_root_sentinel":"req_root_sentinel","g_req_headers_sentinel":"req_headers_sentinel","g_req_query_sentinel":"req_query_sentinel",
+"g_req_params_sentinel":"req_params_sentinel","g_req_client_sentinel":"req_client_sentinel",
+"g_refs":"refs","g_ref_count":"ref_count","g_dbg_listen_fd":"listen_fd","g_dbg_port":"port"}}

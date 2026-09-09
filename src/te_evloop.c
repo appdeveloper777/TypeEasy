@@ -207,25 +207,47 @@ typedef struct {
 #endif
 } Fiber;
 
-static Fiber g_fibers[TE_FIBER_MAX];
-static Fiber *g_current = NULL;       /* fiber currently running, NULL = scheduler */
-static int    g_loop_active = 0;      /* re-entrancy guard for the driver */
-
+/* Estado del event loop: UNA struct por VM (g_vm.ev), alloc perezoso al primer uso
+ * async. Antes g_fibers[256] (~33 MB con CtxSnapshot) era estático en todo proceso. */
+struct TeEvLoop {
+    Fiber  fibers[TE_FIBER_MAX];
+    Fiber *current;             /* fiber currently running, NULL = scheduler */
+    int    loop_active;         /* re-entrancy guard for the driver */
 #if defined(_WIN32)
-static void *g_sched_fiber = NULL;    /* the scheduler's fiber (this drain) */
-static int   g_we_converted = 0;      /* did WE ConvertThreadToFiber this drain? */
+    void  *sched_fiber;         /* the scheduler's fiber (this drain) */
+    int    we_converted;        /* did WE ConvertThreadToFiber this drain? */
 #elif defined(TE_EVLOOP_UCTX)
-static ucontext_t g_sched_uctx;       /* scheduler resume point */
+    ucontext_t sched_uctx;      /* scheduler resume point */
 #endif
+    /* blocking-IO worker pool (jobs published under io_mu) */
+    pthread_mutex_t io_mu;
+    pthread_cond_t  io_cv;      /* job available */
+    pthread_cond_t  io_done_cv; /* job finished */
+    IoJob *io_q_head, *io_q_tail;
+    int    io_pending;          /* submitted but not yet done */
+    int    io_pool_started;
+};
+
+static struct TeEvLoop *E(void) {
+    if (!g_vm.ev) {
+        struct TeEvLoop *e = (struct TeEvLoop *)calloc(1, sizeof(struct TeEvLoop));
+        if (!e) { fprintf(stderr, "[ASYNC] out of memory\n"); exit(1); }
+        pthread_mutex_init(&e->io_mu, NULL);
+        pthread_cond_init(&e->io_cv, NULL);
+        pthread_cond_init(&e->io_done_cv, NULL);
+        g_vm.ev = e;
+    }
+    return g_vm.ev;
+}
 
 static int fiber_find_free(void) {
     for (int i = 0; i < TE_FIBER_MAX; i++)
-        if (!g_fibers[i].in_use) return i;
+        if (!E()->fibers[i].in_use) return i;
     return -1;
 }
 
 static int fiber_valid(int id) {
-    return id >= 0 && id < TE_FIBER_MAX && g_fibers[id].in_use;
+    return id >= 0 && id < TE_FIBER_MAX && E()->fibers[id].in_use;
 }
 
 /* Run the current fiber's lambda body, then return to the scheduler for good.
@@ -233,7 +255,7 @@ static int fiber_valid(int id) {
  * la tarea se corre directo en fiber_resume(). */
 #if defined(_WIN32) || defined(TE_EVLOOP_UCTX)
 static void fiber_body(void) {
-    Fiber *f = g_current;
+    Fiber *f = E()->current;
     if (f) {
         f->started = 1;
         ASTNode *r = f->lambda ? call_lambda(f->lambda, NULL) : NULL;
@@ -242,9 +264,9 @@ static void fiber_body(void) {
     }
     /* Hand control back to the scheduler; this fiber is never resumed again. */
 #if defined(_WIN32)
-    SwitchToFiber(g_sched_fiber);
+    SwitchToFiber(E()->sched_fiber);
     /* Defensive: a finished fiber must never fall off the end of its proc. */
-    for (;;) SwitchToFiber(g_sched_fiber);
+    for (;;) SwitchToFiber(E()->sched_fiber);
 #else
     /* uc_link (set at makecontext) returns us to the scheduler automatically. */
 #endif
@@ -265,13 +287,13 @@ static void fiber_trampoline(void) {
 /* Suspend the running fiber and return to the scheduler. On resume, the
  * scheduler has already restored this fiber's interpreter context. */
 static void fiber_yield(void) {
-    Fiber *f = g_current;
+    Fiber *f = E()->current;
     if (!f) return;            /* not inside a fiber: nothing to yield */
     ctx_save(&f->ctx);
 #if defined(_WIN32)
-    SwitchToFiber(g_sched_fiber);
+    SwitchToFiber(E()->sched_fiber);
 #elif defined(TE_EVLOOP_UCTX)
-    swapcontext(&f->uctx, &g_sched_uctx);
+    swapcontext(&f->uctx, &E()->sched_uctx);
 #endif
     /* resumed here later (fallback sincrono: g_current siempre es NULL, este
      * camino no se alcanza). */
@@ -282,24 +304,24 @@ static void fiber_yield(void) {
 static void fiber_resume(Fiber *f) {
     ctx_restore(&f->ctx);
 #if defined(_WIN32)
-    g_current = f;
+    E()->current = f;
     if (!f->os_fiber) {
         f->os_fiber = CreateFiber(TE_FIBER_STACK_SIZE_WIN, fiber_trampoline, f);
     }
     SwitchToFiber(f->os_fiber);
-    g_current = NULL;
+    E()->current = NULL;
 #elif defined(TE_EVLOOP_UCTX)
-    g_current = f;
+    E()->current = f;
     if (!f->started && !f->stack) {
         f->stack = (char *)malloc(TE_FIBER_STACK_SIZE);
         getcontext(&f->uctx);
         f->uctx.uc_stack.ss_sp   = f->stack;
         f->uctx.uc_stack.ss_size = TE_FIBER_STACK_SIZE;
-        f->uctx.uc_link          = &g_sched_uctx;
+        f->uctx.uc_link          = &E()->sched_uctx;
         makecontext(&f->uctx, fiber_trampoline, 0);
     }
-    swapcontext(&g_sched_uctx, &f->uctx);
-    g_current = NULL;
+    swapcontext(&E()->sched_uctx, &f->uctx);
+    E()->current = NULL;
 #else
     /* Fallback sin ucontext (Android Bionic): corre la tarea hasta completarse
      * AQUI mismo. g_current queda NULL, asi que sleep_async/read_file_async usan
@@ -320,11 +342,11 @@ static void fiber_resume(Fiber *f) {
 static void scheduler_ensure(void) {
 #if defined(_WIN32)
     if (IsThreadAFiber()) {
-        g_sched_fiber  = GetCurrentFiber();
-        g_we_converted = 0;            /* already a fiber: do not convert back */
+        E()->sched_fiber  = GetCurrentFiber();
+        E()->we_converted = 0;            /* already a fiber: do not convert back */
     } else {
-        g_sched_fiber  = ConvertThreadToFiber(NULL);
-        g_we_converted = 1;            /* we own the conversion; undo it later */
+        E()->sched_fiber  = ConvertThreadToFiber(NULL);
+        E()->we_converted = 1;            /* we own the conversion; undo it later */
     }
 #endif
 }
@@ -335,11 +357,11 @@ static void scheduler_ensure(void) {
  * thread in its original (non-fiber) state. */
 static void scheduler_release(void) {
 #if defined(_WIN32)
-    if (g_we_converted && IsThreadAFiber()) {
+    if (E()->we_converted && IsThreadAFiber()) {
         ConvertFiberToThread();
-        g_we_converted = 0;
+        E()->we_converted = 0;
     }
-    g_sched_fiber = NULL;
+    E()->sched_fiber = NULL;
 #endif
 }
 
@@ -394,7 +416,7 @@ static ASTNode *evloop_clone_value(ASTNode *r) {
 static ASTNode *fiber_take_result(int id) {
     ASTNode *r = NULL;
     if (fiber_valid(id)) {
-        Fiber *f = &g_fibers[id];
+        Fiber *f = &E()->fibers[id];
         r = f->result ? evloop_clone_value(f->result) : NULL;
 #if defined(_WIN32)
         if (f->os_fiber) { DeleteFiber(f->os_fiber); f->os_fiber = NULL; }
@@ -422,13 +444,6 @@ static ASTNode *fiber_take_result(int id) {
 
 #define TE_IO_WORKERS 4
 
-static pthread_mutex_t g_io_mu  = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  g_io_cv  = PTHREAD_COND_INITIALIZER;  /* job available */
-static pthread_cond_t  g_io_done_cv = PTHREAD_COND_INITIALIZER; /* job finished */
-static IoJob          *g_io_q_head = NULL;   /* FIFO of pending jobs */
-static IoJob          *g_io_q_tail = NULL;
-static int             g_io_pending = 0;     /* jobs submitted but not yet done */
-static int             g_io_pool_started = 0;
 
 /* Perform the actual blocking work for a job (runs on a worker thread). */
 static void io_execute(IoJob *job) {
@@ -458,31 +473,31 @@ static void io_execute(IoJob *job) {
 }
 
 static void *io_worker_main(void *arg) {
-    (void)arg;
+    struct TeEvLoop *ev = (struct TeEvLoop *)arg;   /* el pool de SU VM, no TLS */
     for (;;) {
-        pthread_mutex_lock(&g_io_mu);
-        while (g_io_q_head == NULL) pthread_cond_wait(&g_io_cv, &g_io_mu);
-        IoJob *job = g_io_q_head;
-        g_io_q_head = job->qnext;
-        if (g_io_q_head == NULL) g_io_q_tail = NULL;
-        pthread_mutex_unlock(&g_io_mu);
+        pthread_mutex_lock(&ev->io_mu);
+        while (ev->io_q_head == NULL) pthread_cond_wait(&ev->io_cv, &ev->io_mu);
+        IoJob *job = ev->io_q_head;
+        ev->io_q_head = job->qnext;
+        if (ev->io_q_head == NULL) ev->io_q_tail = NULL;
+        pthread_mutex_unlock(&ev->io_mu);
 
         io_execute(job);                 /* pure I/O, no locks held */
 
-        pthread_mutex_lock(&g_io_mu);
+        pthread_mutex_lock(&ev->io_mu);
         job->done = 1;
-        pthread_cond_signal(&g_io_done_cv);  /* wake the scheduler */
-        pthread_mutex_unlock(&g_io_mu);
+        pthread_cond_signal(&ev->io_done_cv);  /* wake the scheduler */
+        pthread_mutex_unlock(&ev->io_mu);
     }
     return NULL;
 }
 
 static void io_pool_ensure(void) {
-    if (g_io_pool_started) return;
-    g_io_pool_started = 1;
+    if (E()->io_pool_started) return;
+    E()->io_pool_started = 1;
     for (int i = 0; i < TE_IO_WORKERS; i++) {
         pthread_t th;
-        if (pthread_create(&th, NULL, io_worker_main, NULL) == 0)
+        if (pthread_create(&th, NULL, io_worker_main, E()) == 0)
             pthread_detach(th);
     }
 }
@@ -491,21 +506,21 @@ static void io_pool_ensure(void) {
  * collects the result. */
 static void io_submit(IoJob *job) {
     io_pool_ensure();
-    pthread_mutex_lock(&g_io_mu);
+    pthread_mutex_lock(&E()->io_mu);
     job->qnext = NULL;
     job->done  = 0;
-    if (g_io_q_tail) g_io_q_tail->qnext = job;
-    else             g_io_q_head = job;
-    g_io_q_tail = job;
-    g_io_pending++;
-    pthread_cond_signal(&g_io_cv);
-    pthread_mutex_unlock(&g_io_mu);
+    if (E()->io_q_tail) E()->io_q_tail->qnext = job;
+    else             E()->io_q_head = job;
+    E()->io_q_tail = job;
+    E()->io_pending++;
+    pthread_cond_signal(&E()->io_cv);
+    pthread_mutex_unlock(&E()->io_mu);
 }
 
 /* True if any in-use fiber is parked on I/O. */
 static int io_any_waiting(void) {
     for (int i = 0; i < TE_FIBER_MAX; i++)
-        if (g_fibers[i].in_use && g_fibers[i].state == FB_IO_WAIT) return 1;
+        if (E()->fibers[i].in_use && E()->fibers[i].state == FB_IO_WAIT) return 1;
     return 0;
 }
 
@@ -513,21 +528,21 @@ static int io_any_waiting(void) {
  * or `timeout_ms` elapses (timeout_ms < 0 = wait indefinitely). Then promote
  * every IO_WAIT fiber whose job finished to FB_READY. */
 static void io_wait_and_collect(int timeout_ms) {
-    pthread_mutex_lock(&g_io_mu);
+    pthread_mutex_lock(&E()->io_mu);
     /* Only block if work is outstanding AND nothing has finished yet. A worker
      * that completed before we reached pthread_cond_wait would otherwise make
      * us miss its signal and hang forever (lost wakeup). job->done is published
      * by the worker under g_io_mu, which we hold here. */
     int any_done = 0;
     for (int i = 0; i < TE_FIBER_MAX; i++) {
-        Fiber *f = &g_fibers[i];
+        Fiber *f = &E()->fibers[i];
         if (f->in_use && f->state == FB_IO_WAIT && f->io_job && f->io_job->done) {
             any_done = 1; break;
         }
     }
-    if (g_io_pending > 0 && !any_done) {
+    if (E()->io_pending > 0 && !any_done) {
         if (timeout_ms < 0) {
-            pthread_cond_wait(&g_io_done_cv, &g_io_mu);
+            pthread_cond_wait(&E()->io_done_cv, &E()->io_mu);
         } else {
             struct timespec ts;
 #if defined(_WIN32)
@@ -540,18 +555,18 @@ static void io_wait_and_collect(int timeout_ms) {
             ts.tv_sec  += timeout_ms / 1000;
             ts.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
             if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
-            pthread_cond_timedwait(&g_io_done_cv, &g_io_mu, &ts);
+            pthread_cond_timedwait(&E()->io_done_cv, &E()->io_mu, &ts);
         }
     }
     /* Promote finished jobs' fibers to READY (state mutated on main thread). */
     for (int i = 0; i < TE_FIBER_MAX; i++) {
-        Fiber *f = &g_fibers[i];
+        Fiber *f = &E()->fibers[i];
         if (f->in_use && f->state == FB_IO_WAIT && f->io_job && f->io_job->done) {
             f->state = FB_READY;
-            g_io_pending--;
+            E()->io_pending--;
         }
     }
-    pthread_mutex_unlock(&g_io_mu);
+    pthread_mutex_unlock(&E()->io_mu);
 }
 
 /* ---- the event loop ------------------------------------------------------ */
@@ -559,17 +574,17 @@ static void io_wait_and_collect(int timeout_ms) {
  * caller's interpreter context is saved on entry and restored on exit so that
  * resuming fibers (which overwrite the live scope) cannot corrupt it. */
 static void evloop_run_until(const int *ids, int n) {
-    int top = !g_loop_active;          /* outermost drain converts the thread */
+    int top = !E()->loop_active;          /* outermost drain converts the thread */
     if (top) scheduler_ensure();
     CtxSnapshot caller;
     memset(&caller, 0, sizeof(caller));  /* ctx_save frees prior contents first */
     ctx_save(&caller);
-    g_loop_active = 1;
+    E()->loop_active = 1;
 
     for (;;) {
         int all_done = 1;
         for (int k = 0; k < n; k++) {
-            if (fiber_valid(ids[k]) && g_fibers[ids[k]].state != FB_DONE) {
+            if (fiber_valid(ids[k]) && E()->fibers[ids[k]].state != FB_DONE) {
                 all_done = 0; break;
             }
         }
@@ -578,8 +593,8 @@ static void evloop_run_until(const int *ids, int n) {
         /* 1) Run every ready fiber one step (until its next yield/finish). */
         int ran = 0;
         for (int i = 0; i < TE_FIBER_MAX; i++) {
-            if (g_fibers[i].in_use && g_fibers[i].state == FB_READY) {
-                fiber_resume(&g_fibers[i]);
+            if (E()->fibers[i].in_use && E()->fibers[i].state == FB_READY) {
+                fiber_resume(&E()->fibers[i]);
                 ran = 1;
             }
         }
@@ -590,10 +605,10 @@ static void evloop_run_until(const int *ids, int n) {
         long long earliest = -1;
         int any_sleeping = 0;
         for (int i = 0; i < TE_FIBER_MAX; i++) {
-            if (g_fibers[i].in_use && g_fibers[i].state == FB_SLEEPING) {
+            if (E()->fibers[i].in_use && E()->fibers[i].state == FB_SLEEPING) {
                 any_sleeping = 1;
-                if (earliest < 0 || g_fibers[i].wake_at < earliest)
-                    earliest = g_fibers[i].wake_at;
+                if (earliest < 0 || E()->fibers[i].wake_at < earliest)
+                    earliest = E()->fibers[i].wake_at;
             }
         }
         int any_io = io_any_waiting();
@@ -615,14 +630,14 @@ static void evloop_run_until(const int *ids, int n) {
         }
         now = te_now_ms();
         for (int i = 0; i < TE_FIBER_MAX; i++) {
-            if (g_fibers[i].in_use && g_fibers[i].state == FB_SLEEPING &&
-                g_fibers[i].wake_at <= now) {
-                g_fibers[i].state = FB_READY;
+            if (E()->fibers[i].in_use && E()->fibers[i].state == FB_SLEEPING &&
+                E()->fibers[i].wake_at <= now) {
+                E()->fibers[i].state = FB_READY;
             }
         }
     }
 
-    g_loop_active = 0;
+    E()->loop_active = 0;
     ctx_restore(&caller);
     ctx_free(&caller);   /* caller's strings are now duplicated live; drop ours */
     if (top) scheduler_release();
@@ -640,7 +655,7 @@ static int adapt_go(ASTNode *node, ASTNode *args) {
             create_ast_leaf_number("INT", -1, NULL, NULL));
         return 1;
     }
-    Fiber *f = &g_fibers[id];
+    Fiber *f = &E()->fibers[id];
     memset(f, 0, sizeof(*f));
     f->in_use = 1;
     f->state  = FB_READY;
@@ -661,9 +676,9 @@ static int adapt_sleep_async(ASTNode *node, ASTNode *args) {
     (void)node;
     int ms = args ? (int)evaluate_expression(args) : 0;
     if (ms < 0) ms = 0;
-    if (g_current) {
-        g_current->wake_at = te_now_ms() + ms;
-        g_current->state   = FB_SLEEPING;
+    if (E()->current) {
+        E()->current->wake_at = te_now_ms() + ms;
+        E()->current->state   = FB_SLEEPING;
         fiber_yield();
     } else {
         te_msleep(ms);
@@ -681,21 +696,21 @@ static int adapt_read_file_async(ASTNode *node, ASTNode *args) {
     (void)node;
     char *path = args ? get_node_string(args) : NULL;
 
-    if (g_current && path) {
+    if (E()->current && path) {
         IoJob *job = (IoJob *)calloc(1, sizeof(IoJob));
         if (job) {
             job->kind     = IO_KIND_READ_FILE;
             job->in_str   = path;          /* ownership transferred to job */
-            job->fiber_id = (int)(g_current - g_fibers);
-            g_current->io_job = job;
-            g_current->state  = FB_IO_WAIT;
+            job->fiber_id = (int)(E()->current - E()->fibers);
+            E()->current->io_job = job;
+            E()->current->state  = FB_IO_WAIT;
             io_submit(job);
             fiber_yield();                 /* loop runs others until job->done */
             /* resumed: worker finished, result is published */
             const char *body = (job->ok && job->out_buf) ? job->out_buf : "";
             add_or_update_variable("__ret__",
                 create_ast_leaf("STRING", 0, (char *)body, NULL));
-            g_current->io_job = NULL;
+            E()->current->io_job = NULL;
             free(job->in_str);
             free(job->out_buf);
             free(job);

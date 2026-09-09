@@ -5,6 +5,7 @@
  * preserve behavior; only the surrounding includes/typedef were repackaged.
  */
 #include "te_http.h"
+#include "te_vm.h"
 #include "te_buf.h"
 
 #include <stdio.h>
@@ -50,8 +51,7 @@
  * the numeric HTTP status (200, 404, 500, ...). Exposed to scripts via the
  * http_last_status() builtin. The interpreter is single-threaded, so reading
  * this global right after the call is reliable. */
-static int g_http_last_status = 0;
-int te_http_last_status(void) { return g_http_last_status; }
+int te_http_last_status(void) { return g_vm.http_last_status; }
 
 /* Portable case-insensitive prefix compare (avoids depending on strncasecmp /
  * <strings.h> being available identically across MinGW and glibc). */
@@ -315,7 +315,7 @@ static char* te_http_request(const char *method, const char *url, const char *bo
      * ("HTTP/1.x NNN reason"). Stays 0 (set by te_http_do) when no response. */
     if (resp.p && resp.len > 0) {
         const char *sp = strchr(resp.p, ' ');
-        if (sp) { int st = atoi(sp + 1); if (st > 0) g_http_last_status = st; }
+        if (sp) { int st = atoi(sp + 1); if (st > 0) g_vm.http_last_status = st; }
     }
     /* Strip headers: find \r\n\r\n */
     char *sep = strstr(resp.p, "\r\n\r\n");
@@ -420,7 +420,7 @@ static char* te_http_request_curl(const char *method, const char *url,
     if (rc == CURLE_OK) {
         long http_code = 0;
         curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
-        g_http_last_status = (int)http_code; /* Feature 1: surface status code */
+        g_vm.http_last_status = (int)http_code; /* Feature 1: surface status code */
     }
     if (hdrs) curl_slist_free_all(hdrs);
     curl_easy_cleanup(c);
@@ -435,7 +435,7 @@ static char* te_http_request_curl(const char *method, const char *url,
 /* Wrapper unico que decide entre libcurl (full features) y fallback TCP. */
 char* te_http_do(const char *method, const char *url,
                  const char *body, const char *headers_str) {
-    g_http_last_status = 0; /* reset; stays 0 on network failure / no response */
+    g_vm.http_last_status = 0; /* reset; stays 0 on network failure / no response */
 #ifdef TE_HAVE_LIBCURL
     return te_http_request_curl(method, url, body, headers_str);
 #else

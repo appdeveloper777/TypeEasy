@@ -23,6 +23,7 @@
 #include "te_async.h"
 #include "te_bridge.h"
 #include "ast.h"
+#include "te_vm.h"
 #include "te_builtins.h"
 
 #include <stdio.h>
@@ -53,7 +54,18 @@ typedef struct {
     ASTNode *result;   /* DONE: result value (ownership handed to __ret__) */
 } TeTask;
 
-static TeTask g_tasks[TE_TASK_MAX];
+/* Pool de tasks: UNA struct por VM (g_vm.async), alloc perezoso. */
+struct TeAsyncState {
+    TeTask   tasks[TE_TASK_MAX];
+    unsigned owner_seq;
+};
+static struct TeAsyncState *T(void) {
+    if (!g_vm.async) {
+        g_vm.async = (struct TeAsyncState *)calloc(1, sizeof(struct TeAsyncState));
+        if (!g_vm.async) { fprintf(stderr, "[ASYNC] out of memory\n"); exit(1); }
+    }
+    return g_vm.async;
+}
 
 /* Per-request owner id. g_tasks is a process-wide pool shared by every server
  * worker thread; under cooperative interleaving (Option 1a) a parked request's
@@ -61,21 +73,20 @@ static TeTask g_tasks[TE_TASK_MAX];
  * lock. Each request thread lazily takes a unique owner id and the scheduler
  * only advances tasks tagged with the running thread's owner. The id is
  * assigned/read under the invoke lock, so the counter needs no atomics. */
-static unsigned g_owner_seq = 0;
 static __thread unsigned g_te_async_owner = 0;   /* 0 = not yet assigned */
 static unsigned te_async_self_owner(void) {
-    if (g_te_async_owner == 0) g_te_async_owner = ++g_owner_seq;
+    if (g_te_async_owner == 0) g_te_async_owner = ++T()->owner_seq;
     return g_te_async_owner;
 }
 
 static int te_task_find_free(void) {
     for (int i = 0; i < TE_TASK_MAX; i++)
-        if (!g_tasks[i].in_use) return i;
+        if (!T()->tasks[i].in_use) return i;
     return -1;
 }
 
 static int te_task_valid(int id) {
-    return id >= 0 && id < TE_TASK_MAX && g_tasks[id].in_use;
+    return id >= 0 && id < TE_TASK_MAX && T()->tasks[id].in_use;
 }
 
 /* ============================================================
@@ -87,7 +98,7 @@ static int te_async_step(void) {
     int progress = 0;
     unsigned self = te_async_self_owner();
     for (int i = 0; i < TE_TASK_MAX; i++) {
-        TeTask *t = &g_tasks[i];
+        TeTask *t = &T()->tasks[i];
         if (!t->in_use) continue;
         if (t->owner != self) continue; /* never drive another request's tasks */
 
@@ -125,7 +136,7 @@ static void te_async_run_until(const int *ids, int n) {
         int all_done = 1;
         for (int k = 0; k < n; k++) {
             int id = ids[k];
-            if (te_task_valid(id) && g_tasks[id].state != TS_DONE) {
+            if (te_task_valid(id) && T()->tasks[id].state != TS_DONE) {
                 all_done = 0;
                 break;
             }
@@ -152,9 +163,9 @@ static void te_async_run_until(const int *ids, int n) {
             int io_n = 0;
             for (int k = 0; k < n; k++) {
                 int id = ids[k];
-                if (te_task_valid(id) && g_tasks[id].state == TS_IO_WAIT &&
-                    g_tasks[id].slot >= 0)
-                    io_slots[io_n++] = g_tasks[id].slot;
+                if (te_task_valid(id) && T()->tasks[id].state == TS_IO_WAIT &&
+                    T()->tasks[id].slot >= 0)
+                    io_slots[io_n++] = T()->tasks[id].slot;
             }
             void *cs = te_coop_yield_begin();
             int waited = te_bridge_wait_readable(io_slots, io_n, 50);
@@ -169,11 +180,11 @@ static void te_async_run_until(const int *ids, int n) {
 static ASTNode *te_task_take_result(int id) {
     ASTNode *r = NULL;
     if (te_task_valid(id)) {
-        r = g_tasks[id].result;
-        g_tasks[id].in_use = 0;
-        g_tasks[id].state  = TS_FREE;
-        g_tasks[id].result = NULL;
-        g_tasks[id].lambda = NULL;
+        r = T()->tasks[id].result;
+        T()->tasks[id].in_use = 0;
+        T()->tasks[id].state  = TS_FREE;
+        T()->tasks[id].result = NULL;
+        T()->tasks[id].lambda = NULL;
     }
     if (!r) r = create_ast_leaf("STRING", 0, "", NULL);
     return r;
@@ -193,13 +204,13 @@ static int adapt_spawn(ASTNode *node, ASTNode *args) {
             create_ast_leaf_number("INT", -1, NULL, NULL));
         return 1;
     }
-    g_tasks[id].in_use = 1;
-    g_tasks[id].state  = TS_SPAWN_PENDING;
-    g_tasks[id].kind   = TK_SPAWN;
-    g_tasks[id].owner  = te_async_self_owner();
-    g_tasks[id].lambda = args; /* raw lambda node; AST outlives the task */
-    g_tasks[id].slot   = -1;
-    g_tasks[id].result = NULL;
+    T()->tasks[id].in_use = 1;
+    T()->tasks[id].state  = TS_SPAWN_PENDING;
+    T()->tasks[id].kind   = TK_SPAWN;
+    T()->tasks[id].owner  = te_async_self_owner();
+    T()->tasks[id].lambda = args; /* raw lambda node; AST outlives the task */
+    T()->tasks[id].slot   = -1;
+    T()->tasks[id].result = NULL;
     add_or_update_variable("__ret__",
         create_ast_leaf_number("INT", id, NULL, NULL));
     return 1;
@@ -224,13 +235,13 @@ static int adapt_lang_call_async(ASTNode *node, ASTNode *args) {
     te_bridge_write_line(slot, req ? req : "", req ? strlen(req) : 0);
     if (req) free(req);
 
-    g_tasks[id].in_use = 1;
-    g_tasks[id].state  = TS_IO_WAIT;
-    g_tasks[id].kind   = TK_IO;
-    g_tasks[id].owner  = te_async_self_owner();
-    g_tasks[id].slot   = slot;
-    g_tasks[id].lambda = NULL;
-    g_tasks[id].result = NULL;
+    T()->tasks[id].in_use = 1;
+    T()->tasks[id].state  = TS_IO_WAIT;
+    T()->tasks[id].kind   = TK_IO;
+    T()->tasks[id].owner  = te_async_self_owner();
+    T()->tasks[id].slot   = slot;
+    T()->tasks[id].lambda = NULL;
+    T()->tasks[id].result = NULL;
     add_or_update_variable("__ret__",
         create_ast_leaf_number("INT", id, NULL, NULL));
     return 1;

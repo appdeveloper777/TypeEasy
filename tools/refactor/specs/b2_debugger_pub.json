@@ -1,0 +1,1 @@
+{"files":["src/debugger.c"],"prefix":"g_vm.","map":{"g_debug_enabled":"debug_enabled","g_debug_source_file":"debug_source_file"}}

@@ -60,11 +60,9 @@ extern void runtime_reset_vars_to_initial_state(void);
 /* Item 2.3: runtime error location captured by te_runtime_fatal[f]() in ast.c,
  * surfaced in the HTTP 500 body when dev mode is active. */
 extern const char *te_src_file_name(int id);
-extern const char *g_debug_source_file;
 
 /* Set by interpret_return_node when a handler returns a bare scalar/string
  * (e.g. `return "text"`) rather than json()/xml(); selects text/plain. */
-extern int g_response_is_raw_text;
 
 #include "civetweb.h"
 #include "ast.h"
@@ -87,12 +85,48 @@ static int te_strcasecmp(const char *a, const char *b) {
     return (unsigned char)*a - (unsigned char)*b;
 }
 
+/* ---- Estado del servidor embebido: UNA struct por VM (g_vm.srv), alloc perezoso.
+ * El invoke lock serializa el acceso a ESA VM; hot-reload, readiness, contadores y
+ * CORS son por instancia de servidor. Solo los flags que escribe el signal handler
+ * (g_stop_requested / g_reload_requested) siguen siendo de proceso: un handler de
+ * senal no puede tocar TLS ni reservar memoria. ---- */
+struct TeServer {
 #ifdef _WIN32
-static CRITICAL_SECTION g_invoke_lock;
-static int g_invoke_lock_init = 0;
-static void invoke_lock_init(void)   { if (!g_invoke_lock_init) { InitializeCriticalSection(&g_invoke_lock); g_invoke_lock_init = 1; } }
-static void invoke_lock_acquire(void){ EnterCriticalSection(&g_invoke_lock); g_te_lock_held = 1; }
-static void invoke_lock_release(void){ g_te_lock_held = 0; LeaveCriticalSection(&g_invoke_lock); }
+    CRITICAL_SECTION invoke_lock;
+    int invoke_lock_init;
+#else
+    pthread_mutex_t invoke_mtx;
+    pthread_cond_t  invoke_cv;
+    unsigned long   invoke_next;   /* next ticket to hand out       */
+    unsigned long   invoke_serv;   /* ticket currently being served */
+#endif
+    const char *hotreload_path;
+    time_t      hotreload_mtime;
+    volatile sig_atomic_t ready;   /* readiness gate (0 until routes+interpreter loaded) */
+    volatile long inflight;        /* requests executing now */
+    volatile long req_total;       /* monotonic */
+    time_t start_time;
+    char cors_origin[1024];        /* "*" | origin | lista separada por comas */
+};
+
+static struct TeServer *S(void) {
+    if (!g_vm.srv) {
+        struct TeServer *s = (struct TeServer *)calloc(1, sizeof(struct TeServer));
+        if (!s) { fprintf(stderr, "[API] out of memory\n"); exit(1); }
+#ifndef _WIN32
+        pthread_mutex_init(&s->invoke_mtx, NULL);
+        pthread_cond_init(&s->invoke_cv, NULL);
+#endif
+        s->cors_origin[0] = '*';
+        g_vm.srv = s;
+    }
+    return g_vm.srv;
+}
+
+#ifdef _WIN32
+static void invoke_lock_init(void)   { if (!S()->invoke_lock_init) { InitializeCriticalSection(&S()->invoke_lock); S()->invoke_lock_init = 1; } }
+static void invoke_lock_acquire(void){ EnterCriticalSection(&S()->invoke_lock); g_te_lock_held = 1; }
+static void invoke_lock_release(void){ g_te_lock_held = 0; LeaveCriticalSection(&S()->invoke_lock); }
 #else
 /* Fair FIFO "ticket" lock for the global invoke lock.
  *
@@ -109,25 +143,21 @@ static void invoke_lock_release(void){ g_te_lock_held = 0; LeaveCriticalSection(
  * Single-request behaviour is byte-identical (acquire/release simply hand the
  * one ticket straight through). The lock is non-recursive, matching the prior
  * pthread_mutex contract. */
-static pthread_mutex_t g_invoke_mtx  = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  g_invoke_cv   = PTHREAD_COND_INITIALIZER;
-static unsigned long   g_invoke_next = 0;   /* next ticket to hand out       */
-static unsigned long   g_invoke_serv = 0;   /* ticket currently being served */
 static void invoke_lock_init(void)   { /* static initialisers above */ }
 static void invoke_lock_acquire(void){
-    pthread_mutex_lock(&g_invoke_mtx);
-    unsigned long my = g_invoke_next++;
-    while (my != g_invoke_serv)
-        pthread_cond_wait(&g_invoke_cv, &g_invoke_mtx);
-    pthread_mutex_unlock(&g_invoke_mtx);
+    pthread_mutex_lock(&S()->invoke_mtx);
+    unsigned long my = S()->invoke_next++;
+    while (my != S()->invoke_serv)
+        pthread_cond_wait(&S()->invoke_cv, &S()->invoke_mtx);
+    pthread_mutex_unlock(&S()->invoke_mtx);
     g_te_lock_held = 1;
 }
 static void invoke_lock_release(void){
     g_te_lock_held = 0;
-    pthread_mutex_lock(&g_invoke_mtx);
-    g_invoke_serv++;
-    pthread_cond_broadcast(&g_invoke_cv);
-    pthread_mutex_unlock(&g_invoke_mtx);
+    pthread_mutex_lock(&S()->invoke_mtx);
+    S()->invoke_serv++;
+    pthread_cond_broadcast(&S()->invoke_cv);
+    pthread_mutex_unlock(&S()->invoke_mtx);
 }
 #endif
 
@@ -142,8 +172,6 @@ static volatile sig_atomic_t g_stop_requested = 0;
  * minefield of tearing down interpreter globals in-process. */
 #define TE_RC_RELOAD 99
 static volatile sig_atomic_t g_reload_requested = 0;
-static const char *g_hotreload_path  = NULL;
-static time_t      g_hotreload_mtime = 0;
 
 static time_t te_file_mtime(const char *path) {
     struct stat st;
@@ -152,8 +180,8 @@ static time_t te_file_mtime(const char *path) {
 }
 
 void typeeasy_enable_hot_reload(const char *script_path) {
-    g_hotreload_path  = script_path;
-    g_hotreload_mtime = te_file_mtime(script_path);
+    S()->hotreload_path  = script_path;
+    S()->hotreload_mtime = te_file_mtime(script_path);
 }
 
 /* ---- Observability / operational state (items #9-12) ---------------------
@@ -163,15 +191,10 @@ void typeeasy_enable_hot_reload(const char *script_path) {
  * g_inflight   : number of requests currently executing (atomic).
  * g_req_total  : total requests handled since start (atomic, monotonic).
  * g_start_time : process start, for uptime reporting. */
-static volatile sig_atomic_t g_ready      = 0;
-static volatile long         g_inflight   = 0;
-static volatile long         g_req_total  = 0;
-static time_t                g_start_time = 0;
 
 static void on_signal(int sig) {
     (void)sig;
-    g_ready = 0;            /* stop advertising readiness immediately */
-    g_stop_requested = 1;
+    g_stop_requested = 1;      /* /readyz lo consulta: deja de anunciar readiness */
 }
 
 /* JSON-escape `src` into `dst` (size `dstsz`, always NUL-terminated). Used by
@@ -234,12 +257,11 @@ static void te_log_request(const char *method, const char *uri, int status,
  *   - a single origin                  -> that origin only
  *   - a comma-separated list of origins -> the request Origin is reflected
  *                                          if it matches one of the entries. */
-static char g_cors_origin[1024] = "*";
 
 void typeeasy_set_cors_origin(const char *origin) {
     if (origin && *origin) {
-        strncpy(g_cors_origin, origin, sizeof(g_cors_origin) - 1);
-        g_cors_origin[sizeof(g_cors_origin) - 1] = '\0';
+        strncpy(S()->cors_origin, origin, sizeof(S()->cors_origin) - 1);
+        S()->cors_origin[sizeof(S()->cors_origin) - 1] = '\0';
     }
 }
 
@@ -253,15 +275,15 @@ static void cors_resolve_origin(struct mg_connection *conn,
                                 char *out, size_t outsz) {
     if (outsz == 0) return;
     /* "*" or a single origin: emit verbatim. */
-    if (!strchr(g_cors_origin, ',')) {
-        snprintf(out, outsz, "%s", g_cors_origin);
+    if (!strchr(S()->cors_origin, ',')) {
+        snprintf(out, outsz, "%s", S()->cors_origin);
         return;
     }
     /* List: match the request Origin against the configured entries. */
     const char *req_origin = conn ? mg_get_header(conn, "Origin") : NULL;
     size_t req_len = req_origin ? strlen(req_origin) : 0;
     const char *first = NULL; size_t first_len = 0;
-    const char *p = g_cors_origin;
+    const char *p = S()->cors_origin;
     while (*p) {
         while (*p == ' ' || *p == ',') p++;
         const char *start = p;
@@ -596,16 +618,16 @@ static void te_req_profile_flush(const char *method, const char *uri, int status
 /* Cierre de la instrumentacion por request (antes macro TE_REQ_DONE dentro de request_handler). */
 static void te_req_done(const char *method, const char *uri, int st, clock_t t0) {
     double _ms = (double)(clock() - t0) * 1000.0 / CLOCKS_PER_SEC;
-    __atomic_sub_fetch(&g_inflight, 1, __ATOMIC_SEQ_CST);
+    __atomic_sub_fetch(&S()->inflight, 1, __ATOMIC_SEQ_CST);
     te_log_request(method, uri, st, _ms);
-    if (g_profile_enabled > 0) te_req_profile_flush(method, uri, st, _ms);
+    if (g_vm.profile_enabled > 0) te_req_profile_flush(method, uri, st, _ms);
 }
 
 /* /healthz y /readyz (extraido de request_handler, Fase 2). Devuelve 1 si respondio. */
 static int te_rh_probes(struct mg_connection *conn, const char *method, const char *uri) {
     if (strcmp(method, "GET") == 0 &&
         (strcmp(uri, "/healthz") == 0 || strcmp(uri, "/readyz") == 0)) {
-        long uptime = (g_start_time > 0) ? (long)(time(NULL) - g_start_time) : 0;
+        long uptime = (S()->start_time > 0) ? (long)(time(NULL) - S()->start_time) : 0;
         char body[256];
         int code; const char *reason;
         if (strcmp(uri, "/healthz") == 0) {
@@ -618,7 +640,7 @@ static int te_rh_probes(struct mg_connection *conn, const char *method, const ch
              * parsed and interpreted the script at global scope, so by
              * construction the interpreter is initialized whenever we serve. */
             int interp_ok = 1;
-            int ready = g_ready && routes_ok && interp_ok;
+            int ready = S()->ready && !g_stop_requested && routes_ok && interp_ok;
             code = ready ? 200 : 503;
             reason = ready ? "OK" : "Service Unavailable";
             snprintf(body, sizeof(body),
@@ -628,7 +650,7 @@ static int te_rh_probes(struct mg_connection *conn, const char *method, const ch
                      ready ? "true" : "false",
                      interp_ok ? "true" : "false",
                      routes_ok ? "true" : "false",
-                     g_inflight, g_req_total, uptime);
+                     S()->inflight, S()->req_total, uptime);
         }
         int blen = (int)strlen(body);
         mg_printf(conn,
@@ -746,8 +768,8 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
 
     /* Request instrumentation: count and time every routed request. */
     clock_t _req_t0 = clock();
-    __atomic_add_fetch(&g_req_total, 1, __ATOMIC_SEQ_CST);
-    __atomic_add_fetch(&g_inflight, 1, __ATOMIC_SEQ_CST);
+    __atomic_add_fetch(&S()->req_total, 1, __ATOMIC_SEQ_CST);
+    __atomic_add_fetch(&S()->inflight, 1, __ATOMIC_SEQ_CST);
 
     invoke_lock_acquire();
 
@@ -869,7 +891,7 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
     }
 
     const char *ctype;
-    if (g_response_is_raw_text) {
+    if (g_vm.response_is_raw_text) {
         ctype = "text/plain; charset=utf-8";
     } else {
         ctype = (strcmp(detect_response_type_embedded(m->body), "xml") == 0)
@@ -1073,7 +1095,7 @@ static int run_single_server(const char *host, int port, int worker_index) {
      * ast.c. This is what lets multiple requests overlap while one is waiting on
      * async I/O, without ever running two interpreters at once. */
     te_coop_register_lock(invoke_lock_acquire, invoke_lock_release);
-    g_start_time = time(NULL);
+    S()->start_time = time(NULL);
 
     /* Banner: list registered routes. */
     int route_count = 0;
@@ -1134,7 +1156,7 @@ static int run_single_server(const char *host, int port, int worker_index) {
     te_ws_register_routes(ctx);
 
     /* Routes and interpreter are wired: start advertising readiness. */
-    g_ready = 1;
+    S()->ready = 1;
 
     if (worker_index >= 0) {
         printf("[typeeasy --api] worker #%d ready (pid %ld) at http://%s:%d\n",
@@ -1159,8 +1181,8 @@ static int run_single_server(const char *host, int port, int worker_index) {
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
 
-    if (g_hotreload_path) {
-        te_log("info", "hot-reload watching %s", g_hotreload_path);
+    if (S()->hotreload_path) {
+        te_log("info", "hot-reload watching %s", S()->hotreload_path);
     }
 
     while (!g_stop_requested) {
@@ -1168,13 +1190,13 @@ static int run_single_server(const char *host, int port, int worker_index) {
         /* Dev hot-reload: detect a changed script and request a re-exec. The
          * mtime must settle (two consecutive identical reads) so we don't
          * reload mid-write while an editor is still flushing the file. */
-        if (g_hotreload_path) {
-            time_t m = te_file_mtime(g_hotreload_path);
-            if (m != 0 && m != g_hotreload_mtime) {
+        if (S()->hotreload_path) {
+            time_t m = te_file_mtime(S()->hotreload_path);
+            if (m != 0 && m != S()->hotreload_mtime) {
                 te_sleep_ms(150);
-                if (te_file_mtime(g_hotreload_path) == m) {
-                    g_hotreload_mtime = m;
-                    te_log("info", "change detected in %s, reloading", g_hotreload_path);
+                if (te_file_mtime(S()->hotreload_path) == m) {
+                    S()->hotreload_mtime = m;
+                    te_log("info", "change detected in %s, reloading", S()->hotreload_path);
                     printf("[typeeasy --dev] change detected, reloading...\n");
                     fflush(stdout);
                     g_reload_requested = 1;
@@ -1188,18 +1210,18 @@ static int run_single_server(const char *host, int port, int worker_index) {
      * in-flight requests a window to finish before tearing down civetweb.
      * The drain window is configurable via TYPEEASY_DRAIN_SECONDS (default 0,
      * i.e. stop immediately, preserving previous behavior). */
-    g_ready = 0;
-    te_log("info", "shutdown requested, draining (inflight=%ld)", g_inflight);
+    S()->ready = 0;
+    te_log("info", "shutdown requested, draining (inflight=%ld)", S()->inflight);
     {
         const char *e = getenv("TYPEEASY_DRAIN_SECONDS");
         long drain = e ? strtol(e, NULL, 10) : 0;
         if (drain < 0) drain = 0;
-        for (long i = 0; i < drain && g_inflight > 0; i++) {
+        for (long i = 0; i < drain && S()->inflight > 0; i++) {
             te_sleep_ms(1000);
         }
     }
     mg_stop(ctx);
-    te_log("info", "server stopped (req_total=%ld)", g_req_total);
+    te_log("info", "server stopped (req_total=%ld)", S()->req_total);
     mg_exit_library();
     return g_reload_requested ? TE_RC_RELOAD : 0;
 }

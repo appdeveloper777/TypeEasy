@@ -1,0 +1,11 @@
+{"files":["src/typeeasy_api.c","src/typeeasy_main.c","src/db_params.c","src/te_stdlib.c","src/te_http.c","src/sqlserver_bridge.c","src/te_json.c"],
+ "prefix":"g_vm.","map":{
+ "g_req_owned_objects":"req_owned_objects","g_req_owned_count":"req_owned_count","g_req_owned_cap":"req_owned_cap",
+ "g_req_owned_ast":"req_owned_ast","g_req_owned_ast_count":"req_owned_ast_count","g_req_owned_ast_cap":"req_owned_ast_cap",
+ "g_param_validation_error":"param_validation_error",
+ "g_test_failed":"test_failed","g_test_assertions":"test_assertions","g_capture_errors":"capture_errors",
+ "g_errors":"syntax_errors","g_error_count":"syntax_error_count",
+ "g_db_empty_as_null":"db_empty_as_null","g_db_strict_errors":"db_strict_errors","g_db_envelope":"db_envelope",
+ "g_db_cleanup_count":"db_cleanup_count","g_http_last_status":"http_last_status",
+ "g_mssql_last_err":"mssql_last_err","g_mssql_last_msg":"mssql_last_msg",
+ "g_eval_call_func":"json_eval_call_func","g_eval_call_method":"json_eval_call_method"}}

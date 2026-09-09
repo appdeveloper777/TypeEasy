@@ -312,7 +312,6 @@ const char *te_src_file_name(int id);
 void te_runtime_location(char *buf, size_t cap);
 void te_callstack_reset(void);
 /* --profile (TYPEEASY_PROFILE=1): per-fn timing, see ast.c. */
-extern int g_profile_enabled;
 int  te_profile_on(void);
 void te_profile_report(const char *title);
 void te_profile_reset(void);
@@ -382,7 +381,6 @@ ASTNode *create_train_option_node(const char *option_name, int value);
 
 
 /* Ruta del script en ejecución (para mensajes de error). La asigna main(). */
-extern const char *g_script_path;
 
 // Funciones adicionales que faltan
 double evaluate_expression(ASTNode *node);

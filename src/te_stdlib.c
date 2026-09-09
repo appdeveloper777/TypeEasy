@@ -59,8 +59,6 @@ extern void native_sqlserver_query(ASTNode *args);
 extern void native_sqlserver_close(ASTNode *args);
 
 /* ---- Runtime flags shared with ast.c ---- */
-extern int g_test_assertions;
-extern int g_test_failed;
 extern char *throw_message;
 
 /* Cross-platform UTC mktime. timegm is GNU; Windows MSVC/MinGW uses _mkgmtime. */
@@ -478,11 +476,10 @@ static int te_bi_core(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
 
     /* ---- Phase F: assert / assert_eq for test runner ---- */
     if (strcmp(fn, "assert") == 0) {
-        extern int g_test_assertions; extern int g_test_failed;
         double cond = a0 ? evaluate_expression(a0) : 0;
-        g_test_assertions++;
+        g_vm.test_assertions++;
         if (cond == 0) {
-            g_test_failed = 1;
+            g_vm.test_failed = 1;
             char *msg = a1 ? get_node_string(a1) : NULL;
             fprintf(stderr, "    ASSERT FAILED: %s (line %d)\n", msg ? msg : "condition is false", node->line);
             if (msg) free(msg);
@@ -491,8 +488,7 @@ static int te_bi_core(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
         return 1;
     }
     if (strcmp(fn, "assert_eq") == 0) {
-        extern int g_test_assertions; extern int g_test_failed;
-        g_test_assertions++;
+        g_vm.test_assertions++;
         int eq = 0;
         if (a0 && a1 && a0->type && a1->type) {
             int sa = (strcmp(a0->type,"STRING")==0) || (a0->type && (strcmp(a0->type,"IDENTIFIER")==0||strcmp(a0->type,"ID")==0) && find_variable(a0->id) && find_variable(a0->id)->vtype==VAL_STRING);
@@ -509,7 +505,7 @@ static int te_bi_core(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
                 if (!eq) fprintf(stderr, "    ASSERT_EQ FAILED: %g != %g (line %d)\n", va, vb, node->line);
             }
         }
-        if (!eq) g_test_failed = 1;
+        if (!eq) g_vm.test_failed = 1;
         add_or_update_variable("__ret__", create_ast_leaf_number("INT", eq, NULL, NULL));
         return 1;
     }
@@ -1247,26 +1243,24 @@ static void host_free_node(ASTNode *n) {
  * (en el host), invocado desde runtime_reset_vars_to_initial_state (ast.c). */
 #define TE_DB_CLEANUP_MAX 16
 static void (*g_db_cleanup_hooks[TE_DB_CLEANUP_MAX])(void);
-static int g_db_cleanup_count = 0;
 
 void te_db_register_request_cleanup(void (*fn)(void)) {
     if (!fn) return;
-    for (int i = 0; i < g_db_cleanup_count; i++)
+    for (int i = 0; i < g_vm.db_cleanup_count; i++)
         if (g_db_cleanup_hooks[i] == fn) return;   /* dedupe */
-    if (g_db_cleanup_count < TE_DB_CLEANUP_MAX)
-        g_db_cleanup_hooks[g_db_cleanup_count++] = fn;
+    if (g_vm.db_cleanup_count < TE_DB_CLEANUP_MAX)
+        g_db_cleanup_hooks[g_vm.db_cleanup_count++] = fn;
 }
 
 void te_db_run_request_cleanup_hooks(void) {
-    for (int i = 0; i < g_db_cleanup_count; i++)
+    for (int i = 0; i < g_vm.db_cleanup_count; i++)
         if (g_db_cleanup_hooks[i]) g_db_cleanup_hooks[i]();
 }
 
 static void host_register_request_cleanup(void (*fn)(void)) {
     te_db_register_request_cleanup(fn);
 }
-extern int g_db_request_phase;
-static int host_db_request_phase(void) { return g_db_request_phase; }
+static int host_db_request_phase(void) { return g_vm.db_request_phase; }
 
 void te_fill_host_api(TEHostAPI *out) {
     if (!out) return;
