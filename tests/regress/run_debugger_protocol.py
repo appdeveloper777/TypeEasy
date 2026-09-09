@@ -65,7 +65,8 @@ def main() -> int:
     try:
         c = Conn(connect(port))
         c.wait("event", "initialized")
-        c.send({"cmd": "set_breakpoints", "file": SRC, "lines": [3]})
+        # El protocolo identifica el archivo por su basename (así lo manda el adapter de VS Code).
+        c.send({"cmd": "set_breakpoints", "file": os.path.basename(SRC), "lines": [3]})
         c.wait("resp", "ok")
         c.send({"cmd": "start"})
         st = c.wait("event", "stopped")

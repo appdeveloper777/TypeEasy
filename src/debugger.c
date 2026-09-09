@@ -252,6 +252,7 @@ static int parse_lines_array(const char *line) {
      * (drop unrelated files to keep the array small). */
     const char *cur = g_debug_source_file ? g_debug_source_file : "";
     const char *cur_base = strrchr(cur, '/');
+    if (!cur_base) cur_base = strrchr(cur, '\\');   /* rutas Windows */
     cur_base = cur_base ? cur_base + 1 : cur;
     if (cur_base[0] && file_in[0] && strcmp(file_in, cur_base) != 0) {
         return 0;
