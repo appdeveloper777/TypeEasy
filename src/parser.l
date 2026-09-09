@@ -5,6 +5,7 @@
     #include <stdlib.h>
     #include <string.h>
     #include <setjmp.h>
+#include "te_vm.h"
 
     /* Recoverable flex fatal errors.
      *
@@ -22,10 +23,9 @@
      * (g_runtime_recovery, owned by ast.c): when a caller installed one it
      * longjmp's back so the host can recover; otherwise it keeps the original
      * print-and-exit behaviour, so CLI semantics are unchanged. */
-    extern jmp_buf *g_runtime_recovery;
     static void te_lexer_fatal(const char *msg) {
         fprintf(stderr, "[LEXER] fatal scanner error: %s\n", msg);
-        if (g_runtime_recovery) longjmp(*g_runtime_recovery, 1);
+        if (g_vm.runtime_recovery) longjmp(*g_vm.runtime_recovery, 1);
         exit(2);
     }
     #define YY_FATAL_ERROR(msg) te_lexer_fatal(msg)

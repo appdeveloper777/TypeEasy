@@ -42,6 +42,8 @@
   #include <winsock2.h>
   #include <ws2tcpip.h>
   #include <windows.h>
+  #include <process.h>
+  #define getpid _getpid
   #define te_sleep_ms(ms) Sleep(ms)
 #else
   #include <unistd.h>
@@ -53,15 +55,11 @@
 /* Runtime fatal-error recovery hook (defined in ast.c). When set to a valid
  * jmp_buf*, the interpreter longjmp's here instead of calling exit(1) on a
  * runtime error, letting the server answer HTTP 500 and stay alive. */
-extern jmp_buf *g_runtime_recovery;
 extern void runtime_reset_vars_to_initial_state(void);
 
 /* Item 2.3: runtime error location captured by te_runtime_fatal[f]() in ast.c,
  * surfaced in the HTTP 500 body when dev mode is active. */
-extern int  g_runtime_error_line;
-extern int  g_runtime_error_file;
 extern const char *te_src_file_name(int id);
-extern char g_runtime_error_msg[256];
 extern const char *g_debug_source_file;
 
 /* Set by interpret_return_node when a handler returns a bare scalar/string
@@ -70,6 +68,7 @@ extern int g_response_is_raw_text;
 
 #include "civetweb.h"
 #include "ast.h"
+#include "te_vm.h"
 #include "typeeasy_api.h"
 #include "typeeasy_http.h"
 #include "typeeasy_api_server.h"
@@ -648,7 +647,7 @@ static int te_rh_probes(struct mg_connection *conn, const char *method, const ch
 /* Respuesta 500 tras un longjmp de te_runtime_fatalf (extraido de request_handler, Fase 2).
  * Vive FUERA del frame que tiene el setjmp: menos locales ahi = unwind mas robusto (win64). */
 static void te_rh_respond_fatal(struct mg_connection *conn, const char *method, const char *uri, clock_t t0) {
-        g_runtime_recovery = NULL;
+        g_vm.runtime_recovery = NULL;
         runtime_reset_vars_to_initial_state();
         /* v0.0.30 (estabilidad): el longjmp se salto los returns de
          * typeeasy_embedded_invoke_method, asi que liberamos aqui el registro
@@ -670,7 +669,7 @@ static void te_rh_respond_fatal(struct mg_connection *conn, const char *method, 
             /* JSON-escape the captured message (may contain user identifiers)
              * and the file path (Windows backslashes broke the JSON). */
             char esc[256], escf[400];
-            const char *srcs[2] = { g_runtime_error_msg, te_src_file_name(g_runtime_error_file) };
+            const char *srcs[2] = { g_vm.runtime_error_msg, te_src_file_name(g_vm.runtime_error_file) };
             char *dsts[2] = { esc, escf };
             size_t caps[2] = { sizeof(esc), sizeof(escf) };
             for (int k = 0; k < 2; k++) {
@@ -687,7 +686,7 @@ static void te_rh_respond_fatal(struct mg_connection *conn, const char *method, 
             }
             snprintf(devbuf, sizeof(devbuf),
                      "{\"error\":\"internal_error\",\"message\":\"%s\",\"file\":\"%s\",\"line\":%d}",
-                     esc, escf, g_runtime_error_line);
+                     esc, escf, g_vm.runtime_error_line);
             err = devbuf;
         } else {
             err = "{\"error\":\"internal_error\"}";
@@ -848,11 +847,11 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
         te_rh_respond_fatal(conn, method, uri, _req_t0);
         return 1;
     }
-    g_runtime_recovery = &recovery;
+    g_vm.runtime_recovery = &recovery;
 
     char *result = typeeasy_embedded_invoke_method(m);
 
-    g_runtime_recovery = NULL;
+    g_vm.runtime_recovery = NULL;
 
     /* Binary download channel: if the handler staged raw file bytes (xlsx/pdf
      * via xlsx_download()/pdf_download()/response_file()), copy them into a

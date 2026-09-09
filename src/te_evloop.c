@@ -41,7 +41,6 @@
  * silently truncate the snapshot. */
 extern Variable __ret_var;
 extern int      __ret_var_active;
-extern int      g_call_depth;
 
 /* ---- platform: fibers, monotonic clock, sleep ---------------------------- */
 #if defined(_WIN32)
@@ -140,7 +139,7 @@ static void ctx_save(CtxSnapshot *s) {
     if (s->ret_active) var_dup_owned(&s->ret);
     s->return_flag = g_vm.return_flag;
     s->throw_flag  = g_vm.throw_flag;
-    s->call_depth  = g_call_depth;
+    s->call_depth  = g_vm.call_depth;
 }
 
 /* Make the live interpreter scope equal to `s` (deep-copied), freeing whatever
@@ -166,7 +165,7 @@ static void ctx_restore(const CtxSnapshot *s) {
     if (__ret_var_active) var_dup_owned(&__ret_var);
     g_vm.return_flag      = s->return_flag;
     g_vm.throw_flag       = s->throw_flag;
-    g_call_depth     = s->call_depth;
+    g_vm.call_depth     = s->call_depth;
     te_runtime_rebuild_symtab();       /* keep name->index lookups correct */
 }
 

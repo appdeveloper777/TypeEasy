@@ -115,7 +115,7 @@ typedef struct {
     int depth;         /* == index */
 } DbgFrame;
 static DbgFrame g_frames[MAX_FRAMES];
-static int g_frame_top = 0;     /* number of active frames; frames[0..top-1] live */
+static int g_dbg_frame_top = 0;     /* number of active frames; frames[0..top-1] live */
 
 /* Step state. */
 typedef enum { RUN, STEP_OVER, STEP_IN, STEP_OUT, PAUSED_PENDING } StepMode;
@@ -358,7 +358,7 @@ static void drain_pending_commands(void) {
         } else if (strcmp(cmd, "pause") == 0) {
             /* Break as soon as possible: stop on the next statement. */
             g_step = STEP_IN;
-            g_step_depth = g_frame_top;
+            g_step_depth = g_dbg_frame_top;
             send_line("{\"resp\":\"ok\"}");
         } else if (strcmp(cmd, "disconnect") == 0) {
             te_sock_close(g_client_fd);
@@ -389,15 +389,15 @@ static void cmd_stack(void) {
     size_t o = 0;
     o += (size_t)snprintf(buf + o, sizeof(buf) - o, "{\"resp\":\"stack\",\"frames\":[");
     /* Top of stack first (innermost). */
-    for (int i = g_frame_top - 1; i >= 0; --i) {
+    for (int i = g_dbg_frame_top - 1; i >= 0; --i) {
         char esc[256];
         json_escape_into(esc, sizeof(esc), g_frames[i].name ? g_frames[i].name : "?");
         char esc_file[512];
         json_escape_into(esc_file, sizeof(esc_file), g_debug_source_file ? g_debug_source_file : "");
         o += (size_t)snprintf(buf + o, sizeof(buf) - o,
                               "%s{\"id\":%d,\"name\":\"%s\",\"line\":%d,\"file\":\"%s\"}",
-                              (i == g_frame_top - 1) ? "" : ",",
-                              g_frame_top - 1 - i,
+                              (i == g_dbg_frame_top - 1) ? "" : ",",
+                              g_dbg_frame_top - 1 - i,
                               esc,
                               g_frames[i].current_line,
                               esc_file);
@@ -516,7 +516,7 @@ static size_t emit_var_entry(char *buf, size_t cap, size_t o, int first,
 static void cmd_vars(void) {
     char buf[16384];
     size_t o = 0;
-    o += (size_t)snprintf(buf + o, sizeof(buf) - o, "{\"resp\":\"g_vm.vars\",\"g_vm.vars\":[");
+    o += (size_t)snprintf(buf + o, sizeof(buf) - o, "{\"resp\":\"vars\",\"vars\":[");
     int first = 1;
     /* Dedupe by name keeping the LATEST entry. vars[] is append-only across
      * scopes (each `var x = ...` adds a new slot, the older `x` stays alive
@@ -611,7 +611,7 @@ static void cmd_get_children(const char *line) {
     json_int_field(line, "ref", &ref_id);
     char buf[16384];
     size_t o = 0;
-    o += (size_t)snprintf(buf + o, sizeof(buf) - o, "{\"resp\":\"children\",\"g_vm.vars\":[");
+    o += (size_t)snprintf(buf + o, sizeof(buf) - o, "{\"resp\":\"children\",\"vars\":[");
     int first = 1;
     if (ref_id >= 1 && ref_id <= g_ref_count) {
         DbgRef *r = &g_refs[ref_id - 1];
@@ -896,22 +896,22 @@ static void wait_for_resume(void) {
             return;
         } else if (strcmp(cmd, "next") == 0) {
             g_step = STEP_OVER;
-            g_step_depth = g_frame_top;
+            g_step_depth = g_dbg_frame_top;
             return;
         } else if (strcmp(cmd, "step_in") == 0) {
             g_step = STEP_IN;
-            g_step_depth = g_frame_top;
+            g_step_depth = g_dbg_frame_top;
             return;
         } else if (strcmp(cmd, "step_out") == 0) {
             g_step = STEP_OUT;
-            g_step_depth = g_frame_top;
+            g_step_depth = g_dbg_frame_top;
             return;
         } else if (strcmp(cmd, "set_breakpoints") == 0) {
             parse_lines_array(line);
             send_line("{\"resp\":\"ok\"}");
         } else if (strcmp(cmd, "stack") == 0) {
             cmd_stack();
-        } else if (strcmp(cmd, "g_vm.vars") == 0) {
+        } else if (strcmp(cmd, "vars") == 0) {
             refs_reset();
             cmd_vars();
         } else if (strcmp(cmd, "get_children") == 0) {
@@ -1013,21 +1013,21 @@ void debugger_init(int port, const char *source_file) {
 }
 
 void debugger_push_frame(const char *name, ASTNode *call_site) {
-    if (g_frame_top >= MAX_FRAMES) return;
-    DbgFrame *f = &g_frames[g_frame_top];
+    if (g_dbg_frame_top >= MAX_FRAMES) return;
+    DbgFrame *f = &g_frames[g_dbg_frame_top];
     f->name = name ? name : "?";
     f->call_line = call_site ? call_site->line : 0;
     f->current_line = f->call_line;
-    f->depth = g_frame_top;
-    g_frame_top++;
+    f->depth = g_dbg_frame_top;
+    g_dbg_frame_top++;
 }
 
 void debugger_pop_frame(void) {
-    if (g_frame_top > 0) g_frame_top--;
+    if (g_dbg_frame_top > 0) g_dbg_frame_top--;
     /* If stepping out and we just left target depth, arm a stop. */
-    if (g_debug_enabled && g_step == STEP_OUT && g_frame_top < g_step_depth) {
+    if (g_debug_enabled && g_step == STEP_OUT && g_dbg_frame_top < g_step_depth) {
         g_step = STEP_OVER;        /* will stop at next statement in caller */
-        g_step_depth = g_frame_top;
+        g_step_depth = g_dbg_frame_top;
     }
 }
 
@@ -1061,8 +1061,8 @@ void debugger_on_statement(ASTNode *node) {
     }
 
     /* Update current line of innermost frame. */
-    if (g_frame_top > 0) {
-        g_frames[g_frame_top - 1].current_line = line;
+    if (g_dbg_frame_top > 0) {
+        g_frames[g_dbg_frame_top - 1].current_line = line;
     }
 
     /* De-duplicate: if executor calls the hook multiple times for the same
@@ -1082,13 +1082,13 @@ void debugger_on_statement(ASTNode *node) {
             reason = "breakpoint";
         }
     } else if (g_step == STEP_IN) {
-        if (line != g_last_line || g_frame_top != g_step_depth) {
+        if (line != g_last_line || g_dbg_frame_top != g_step_depth) {
             should_stop = 1;
         }
     } else if (g_step == STEP_OVER) {
         /* Stop on next statement at same-or-shallower depth. */
-        if (g_frame_top <= g_step_depth &&
-            (line != g_last_line || g_frame_top != g_step_depth)) {
+        if (g_dbg_frame_top <= g_step_depth &&
+            (line != g_last_line || g_dbg_frame_top != g_step_depth)) {
             should_stop = 1;
         }
     }
@@ -1106,7 +1106,7 @@ void debugger_on_statement(ASTNode *node) {
     if (!should_stop) return;
 
     g_last_stop_line = line;
-    g_last_stop_depth = g_frame_top;
+    g_last_stop_depth = g_dbg_frame_top;
     g_step = RUN;
     g_armed = 0;        /* require a different line before re-firing same BP */
     send_stopped(reason, line);
@@ -1193,7 +1193,7 @@ static void *dbg_acceptor_thread(void *arg) {
         g_debug_enabled = 1;
 
         /* Reset frame stack (a fresh adapter session). */
-        g_frame_top = 0;
+        g_dbg_frame_top = 0;
         g_bp_count  = 0;
         g_step      = RUN;
         g_armed     = 1;

@@ -154,12 +154,12 @@ static int run_repl(void) {
         if (n == 0) continue;
         if (strcmp(buf, ":quit") == 0 || strcmp(buf, ":q") == 0) break;
         if (strcmp(buf, ":help") == 0) {
-            fprintf(stdout, "Commands: :quit  :help  :g_vm.vars\n"
+            fprintf(stdout, "Commands: :quit  :help  :vars\n"
                             "Anything else is evaluated as TypeEasy.\n"
                             "End expressions with `;`. To print, use println(...).\n");
             continue;
         }
-        if (strcmp(buf, ":g_vm.vars") == 0) {
+        if (strcmp(buf, ":vars") == 0) {
             for (int i = 0; i < g_vm.var_count; i++) {
                 if (g_vm.vars[i].id && g_vm.vars[i].id[0] == '_' && g_vm.vars[i].id[1] == '_') continue;
                 fprintf(stdout, "  %s : %s = ", g_vm.vars[i].id ? g_vm.vars[i].id : "?", g_vm.vars[i].type ? g_vm.vars[i].type : "?");
@@ -466,6 +466,7 @@ int main(int argc, char *argv[]) {
             printf("  --repl                 Start the interactive REPL\n");
             printf("  --test [dir]           Run *_test.te tests\n");
             printf("  --syntax-check <f>     Validate syntax (JSON output)\n");
+            printf("  --selftest-vm          Self-test: two isolated VMs in one process (JSON)\n");
             printf("  --symbols <f>          List symbols (JSON output)\n");
             printf("  --emit-wat <f> [-o]    Generate WebAssembly text\n");
             printf("  --emit-wasm <f> [-o]   Generate WebAssembly binary\n");
@@ -521,6 +522,8 @@ int main(int argc, char *argv[]) {
             if (i + 1 < argc && argv[i+1][0] != '-') test_dir = argv[++i];
         } else if (strcmp(argv[i], "--syntax-check") == 0) {
             syntax_check_mode = 1;
+        } else if (strcmp(argv[i], "--selftest-vm") == 0) {
+            return te_vm_selftest();
         } else if (strcmp(argv[i], "--symbols") == 0) {
             symbols_mode = 1;
         } else if (strcmp(argv[i], "--api") == 0) {
@@ -809,12 +812,10 @@ int main(int argc, char *argv[]) {
             if (strcmp(m->name, invoke_func) == 0) {
                 /* Suprimir stdout en vivo y limpiar el buffer de captura
                  * para que el cuerpo no se duplique con __ret__. */
-                extern int g_suppress_stdout;
-                extern char *g_stdout_buffer;
-                if (g_stdout_buffer) { free(g_stdout_buffer); g_stdout_buffer = NULL; }
-                g_suppress_stdout = 1;
+                if (g_vm.stdout_buffer) { free(g_vm.stdout_buffer); g_vm.stdout_buffer = NULL; }
+                g_vm.suppress_stdout = 1;
                 interpret_ast(m->body);
-                g_suppress_stdout = 0;
+                g_vm.suppress_stdout = 0;
 
                 // Verificar si hubo un retorno (return json(...))
                 Variable *ret_var = find_variable("__ret__");

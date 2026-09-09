@@ -1,7 +1,7 @@
 
 #include "ast.h"
 #include "te_vm.h"
-TeVM g_vm = {0};   /* única instancia del estado del intérprete (Fase 3 paso A) */
+/* g_vm -> macro sobre *te_vm_cur (te_vm.h / te_vm.c, Fase 3 paso B) */
 #include "ast_internal.h"
 #include <stdint.h>
 #include <string.h>
@@ -65,7 +65,6 @@ TeVM g_vm = {0};   /* única instancia del estado del intérprete (Fase 3 paso A
  * HTTP 500 and keep serving. Otherwise it behaves exactly like the old
  * exit(1), so CLI semantics are unchanged.
  * ============================================================ */
-jmp_buf *g_runtime_recovery = NULL;
 
 /* ------------------------------------------------------------------
  * Interpreter call-depth guard (item #7: limits).
@@ -83,8 +82,7 @@ jmp_buf *g_runtime_recovery = NULL;
  * so the recovery path can reset it to 0 after a longjmp skips the matching
  * te_depth_leave() calls.
  * ------------------------------------------------------------------ */
-int g_call_depth     = 0;
-int g_max_call_depth = 0;   /* lazily initialised from TYPEEASY_MAX_DEPTH */
+/* g_max_call_depth -> g_vm.max_call_depth (lazy desde TYPEEASY_MAX_DEPTH) */
 
 /* ------------------------------------------------------------------
  * Runtime error location capture (item 2.3).
@@ -96,9 +94,6 @@ int g_max_call_depth = 0;   /* lazily initialised from TYPEEASY_MAX_DEPTH */
  * 500 body, but ONLY when dev mode is active. In production the server
  * keeps emitting the opaque {"error":"internal_error"}.
  * ------------------------------------------------------------------ */
-int  g_current_exec_line   = 0;
-int  g_runtime_error_line  = 0;
-char g_runtime_error_msg[256] = "";
 
 /* ------------------------------------------------------------------
  * Source-file table (multi-file programs). The lexer includes imports
@@ -111,8 +106,6 @@ char g_runtime_error_msg[256] = "";
 static char *g_src_files[TE_SRC_FILES_MAX];
 static int   g_src_file_count = 0;
 int  g_lex_file_id = 0;            /* file being lexed (0 = main file) */
-int  g_current_exec_file = 0;      /* file of the statement being executed */
-int  g_runtime_error_file = 0;
 
 int te_src_file_register(const char *path) {
     if (!path) return 0;
@@ -133,12 +126,9 @@ const char *te_src_file_name(int id) {
 /* Names of the user fns currently executing (innermost last), for the
  * "in f <- g <- h" trailer of runtime errors. Fixed size; deeper frames
  * are simply not recorded. Reset together with g_call_depth. */
-#define TE_CALLSTACK_MAX 128
-static const char *g_callstack[TE_CALLSTACK_MAX];
-static int g_callstack_n = 0;
-void te_callstack_push(const char *name) { if (g_callstack_n < TE_CALLSTACK_MAX) g_callstack[g_callstack_n] = name; g_callstack_n++; }
-void te_callstack_pop(void) { if (g_callstack_n > 0) g_callstack_n--; }
-void te_callstack_reset(void) { g_callstack_n = 0; }
+void te_callstack_push(const char *name) { if (g_vm.callstack_n < TE_CALLSTACK_MAX) g_vm.callstack[g_vm.callstack_n] = name; g_vm.callstack_n++; }
+void te_callstack_pop(void) { if (g_vm.callstack_n > 0) g_vm.callstack_n--; }
+void te_callstack_reset(void) { g_vm.callstack_n = 0; }
 
 /* ------------------------------------------------------------------
  * --profile / TYPEEASY_PROFILE=1: per-named-fn wall time (inclusive and
@@ -169,13 +159,13 @@ static TeProfEntry *te_prof_entry(const char *name) {
     return &g_prof[g_prof_n++];
 }
 void te_prof_enter(void) {
-    int d = g_callstack_n - 1;                     /* frame just pushed */
+    int d = g_vm.callstack_n - 1;                     /* frame just pushed */
     if (d < 0 || d >= TE_CALLSTACK_MAX) return;
     g_prof_start_ns[d] = te_prof_now_ns();
     g_prof_child_ns[d] = 0;
 }
 void te_prof_leave(const char *name) {
-    int d = g_callstack_n - 1;                     /* frame about to be popped */
+    int d = g_vm.callstack_n - 1;                     /* frame about to be popped */
     if (d < 0 || d >= TE_CALLSTACK_MAX) return;
     long long incl = te_prof_now_ns() - g_prof_start_ns[d];
     TeProfEntry *e = te_prof_entry(name);
@@ -201,19 +191,19 @@ void te_profile_reset(void) { g_prof_n = 0; }
 
 /* "    at file.te:12 in fnA <- fnB" (or just "    at file.te:12"). */
 void te_runtime_location(char *buf, size_t cap) {
-    const char *f = te_src_file_name(g_current_exec_file);
-    size_t n = (size_t)snprintf(buf, cap, "    at %s:%d", f[0] ? f : "<main>", g_current_exec_line);
-    int top = g_callstack_n < TE_CALLSTACK_MAX ? g_callstack_n : TE_CALLSTACK_MAX;
+    const char *f = te_src_file_name(g_vm.current_exec_file);
+    size_t n = (size_t)snprintf(buf, cap, "    at %s:%d", f[0] ? f : "<main>", g_vm.current_exec_line);
+    int top = g_vm.callstack_n < TE_CALLSTACK_MAX ? g_vm.callstack_n : TE_CALLSTACK_MAX;
     for (int i = top - 1; i >= 0 && n + 4 < cap; i--) {
         n += (size_t)snprintf(buf + n, cap - n, "%s%s", i == top - 1 ? " in " : " <- ",
-                              g_callstack[i] ? g_callstack[i] : "?");
+                              g_vm.callstack[i] ? g_vm.callstack[i] : "?");
     }
 }
 
 void te_runtime_fatal(void) {
-    g_runtime_error_line = g_current_exec_line;
-    g_runtime_error_file = g_current_exec_file;
-    if (g_runtime_recovery) longjmp(*g_runtime_recovery, 1);
+    g_vm.runtime_error_line = g_vm.current_exec_line;
+    g_vm.runtime_error_file = g_vm.current_exec_file;
+    if (g_vm.runtime_recovery) longjmp(*g_vm.runtime_recovery, 1);
     exit(1);
 }
 
@@ -224,11 +214,11 @@ void te_runtime_fatal(void) {
 void te_runtime_fatalf(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(g_runtime_error_msg, sizeof(g_runtime_error_msg), fmt, ap);
+    vsnprintf(g_vm.runtime_error_msg, sizeof(g_vm.runtime_error_msg), fmt, ap);
     va_end(ap);
     char loc[512];
     te_runtime_location(loc, sizeof(loc));
-    fprintf(stderr, "%s\n%s\n", g_runtime_error_msg, loc);
+    fprintf(stderr, "%s\n%s\n", g_vm.runtime_error_msg, loc);
     te_runtime_fatal();
 }
 
@@ -253,20 +243,20 @@ void te_oom_fatal(const char *what) {
  * level consumes several large C frames (call_lambda + evaluate_expression +
  * interpret_ast). Legitimate recursion rarely exceeds a few dozen levels. */
 void te_depth_enter(void) {
-    if (g_max_call_depth == 0) {
+    if (g_vm.max_call_depth == 0) {
         const char *e = getenv("TYPEEASY_MAX_DEPTH");
         long v = e ? strtol(e, NULL, 10) : 0;
-        g_max_call_depth = (v > 0) ? (int)v : 250;
+        g_vm.max_call_depth = (v > 0) ? (int)v : 250;
     }
-    if (++g_call_depth > g_max_call_depth) {
-        --g_call_depth;
+    if (++g_vm.call_depth > g_vm.max_call_depth) {
+        --g_vm.call_depth;
         te_runtime_fatalf("Error: maximum call depth %d exceeded "
-                          "(possible infinite recursion).", g_max_call_depth);
+                          "(possible infinite recursion).", g_vm.max_call_depth);
     }
 }
 
 void te_depth_leave(void) {
-    if (g_call_depth > 0) --g_call_depth;
+    if (g_vm.call_depth > 0) --g_vm.call_depth;
 }
 
 /* Headers POSIX/sockets disponibles en todas las plataformas (MSYS2 / Linux / macOS).
@@ -432,8 +422,6 @@ void evaluate_native_args(ASTNode *arg) {
 }
 
 // Global buffer for capturing println output
-char *g_stdout_buffer = NULL;
-size_t g_stdout_size = 0;
 
 /* Ruta del script en ejecución (para mensajes de error). La asigna main(). */
 const char *g_script_path = NULL;
@@ -457,7 +445,6 @@ int te_stderr_is_tty(void) {
 /* When non-zero, dbg_printf does NOT write to real stdout — only to the
  * capture buffer (g_stdout_buffer) and the debugger sink. Set during
  * --invoke so the body output isn't duplicated alongside __ret__. */
-int g_suppress_stdout = 0;
 
 void append_to_stdout(const char *str) {
     if (!str) return;
@@ -465,20 +452,20 @@ void append_to_stdout(const char *str) {
      * (so that we don't double-emit when call sites do both dbg_printf AND
      * append_to_stdout for json() capture). */
     size_t len = strlen(str);
-    if (!g_stdout_buffer) {
-        g_stdout_size = len + 1024;
-        g_stdout_buffer = malloc(g_stdout_size);
-        if (g_stdout_buffer) {
-            strcpy(g_stdout_buffer, str);
+    if (!g_vm.stdout_buffer) {
+        g_vm.stdout_size = len + 1024;
+        g_vm.stdout_buffer = malloc(g_vm.stdout_size);
+        if (g_vm.stdout_buffer) {
+            strcpy(g_vm.stdout_buffer, str);
         }
     } else {
-        size_t current_len = strlen(g_stdout_buffer);
-        if (current_len + len + 1 > g_stdout_size) {
-            g_stdout_size = current_len + len + 1024;
-            g_stdout_buffer = realloc(g_stdout_buffer, g_stdout_size);
+        size_t current_len = strlen(g_vm.stdout_buffer);
+        if (current_len + len + 1 > g_vm.stdout_size) {
+            g_vm.stdout_size = current_len + len + 1024;
+            g_vm.stdout_buffer = realloc(g_vm.stdout_buffer, g_vm.stdout_size);
         }
-        if (g_stdout_buffer) {
-            strcat(g_stdout_buffer, str);
+        if (g_vm.stdout_buffer) {
+            strcat(g_vm.stdout_buffer, str);
         }
     }
 }
@@ -541,8 +528,8 @@ void native_json(ASTNode *arg) {
 
     // Handle empty argument (return json())
     if (!arg) {
-        if (g_stdout_buffer) {
-            ASTNode *result_node = create_ast_leaf("STRING", 0, g_stdout_buffer, NULL);
+        if (g_vm.stdout_buffer) {
+            ASTNode *result_node = create_ast_leaf("STRING", 0, g_vm.stdout_buffer, NULL);
             add_or_update_variable("__ret__", result_node);
             free_ast(result_node);
         } else {
@@ -799,8 +786,8 @@ void native_xml(ASTNode *arg) {
 
     // Handle empty argument (return xml())
     if (!arg) {
-        if (g_stdout_buffer) {
-            ASTNode *result_node = create_ast_leaf("STRING", 0, g_stdout_buffer, NULL);
+        if (g_vm.stdout_buffer) {
+            ASTNode *result_node = create_ast_leaf("STRING", 0, g_vm.stdout_buffer, NULL);
             add_or_update_variable("__ret__", result_node);
             free_ast(result_node);
         } else {
@@ -2163,7 +2150,7 @@ int dbg_printf(const char *fmt, ...) {
     va_end(ap);
     if (n < 0) { va_end(ap2); return n; }
     if ((size_t)n < sizeof(stackbuf)) {
-        if (!g_suppress_stdout) fputs(stackbuf, stdout);
+        if (!g_vm.suppress_stdout) fputs(stackbuf, stdout);
         /* NOTE: capture-buffer (g_stdout_buffer) is filled by callers via
          * explicit append_to_stdout(...) calls in interpret_print/println.
          * dbg_printf must NOT append here or every line is duplicated in
@@ -2177,7 +2164,7 @@ int dbg_printf(const char *fmt, ...) {
     if (!buf) { va_end(ap2); return -1; }
     vsnprintf(buf, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
-    if (!g_suppress_stdout) fputs(buf, stdout);
+    if (!g_vm.suppress_stdout) fputs(buf, stdout);
     if (g_debug_enabled) debugger_emit_output("stdout", buf);
     free(buf);
     return n;
@@ -2316,7 +2303,6 @@ extern int g_debug_mode;
 // ====================== CONSTANTES Y ESTRUCTURAS GLOBALES ======================
 /* MAX_VARS is defined canonically in ast.h (shared by every module that
  * touches vars[]). Do NOT redefine it here. */
-static int g_initial_var_count = 0;
 // Variables globales
 /* Variable vars[MAX_VARS];  -> ahora en g_vm (te_vm.h, Fase 3) */
 /* Registro global de clases. Antes era un array FIJO `ClassNode *classes[50]`:
@@ -2386,9 +2372,9 @@ static BridgeHandlers g_bridge_handlers = {NULL, NULL, NULL};
 int g_db_request_phase = 0;
 
 void runtime_save_initial_var_count() {
-    g_initial_var_count = g_vm.var_count;
+    g_vm.initial_var_count = g_vm.var_count;
     g_db_request_phase = 1;   /* a partir de aquí, toda conexión es request-scoped */
-    if (g_debug_mode) te_log_ast("Initial state saved. %d global variables retained.", g_initial_var_count);
+    if (g_debug_mode) te_log_ast("Initial state saved. %d global variables retained.", g_vm.initial_var_count);
 }
 
 void runtime_reset_vars_to_initial_state() {
@@ -2396,7 +2382,7 @@ void runtime_reset_vars_to_initial_state() {
      * the request recovery point, skipping the matching te_depth_leave() calls
      * in the invocation wrappers. Reset the depth counter here so the next
      * request starts from a clean slate. */
-    g_call_depth = 0;
+    g_vm.call_depth = 0;
     te_frames_reset();   /* same reason: te_frame_pop was skipped by the longjmp */
     te_callstack_reset();
 
@@ -2410,7 +2396,7 @@ void runtime_reset_vars_to_initial_state() {
 
     // Libera la memoria de todas las variables CREADAS DURANTE LA ÚLTIMA EJECUCIÓN
     // (es decir, todas las variables DESPUÉS de los bridges)
-    for (int i = g_initial_var_count; i < g_vm.var_count; i++) {
+    for (int i = g_vm.initial_var_count; i < g_vm.var_count; i++) {
         if (g_vm.vars[i].id) free(g_vm.vars[i].id);
         if (g_vm.vars[i].type) free(g_vm.vars[i].type);
         if (g_vm.vars[i].vtype == VAL_STRING && g_vm.vars[i].value.string_value) {
@@ -2429,9 +2415,9 @@ void runtime_reset_vars_to_initial_state() {
     }
 
     // Resetea el contador de variables a su estado "limpio"
-    g_vm.var_count = g_initial_var_count;
+    g_vm.var_count = g_vm.initial_var_count;
     /* Ola 16: drop hash entries beyond initial state. */
-    te_sym_reset_to(g_initial_var_count);
+    te_sym_reset_to(g_vm.initial_var_count);
 
     // También limpia la variable de retorno global
     if (__ret_var_active) {
@@ -2443,10 +2429,10 @@ void runtime_reset_vars_to_initial_state() {
     }
 
     // Limpiar buffer de stdout
-    if (g_stdout_buffer) {
-        free(g_stdout_buffer);
-        g_stdout_buffer = NULL;
-        g_stdout_size = 0;
+    if (g_vm.stdout_buffer) {
+        free(g_vm.stdout_buffer);
+        g_vm.stdout_buffer = NULL;
+        g_vm.stdout_size = 0;
     }
 
     /* Auto-cierre de conexiones DB abiertas en este request que el script no
@@ -2802,57 +2788,50 @@ static uint64_t te_str_hash(const char *s);
  *   When a string is interned, the hash slot's `key` will point to
  *   the interned copy (immortal), enabling pointer-eq fast paths.
  * ============================================================*/
-typedef struct TESymSlot {
-    uint64_t hash;
-    const char *key;  /* alias to g_vm.vars[idx].id */
-    int idx;
-} TESymSlot;
+/* TESymSlot: ahora en te_vm.h */
 
-#define TE_SYM_CAP 16384  /* MAX_VARS=4096 → cap 16384 keeps load < 0.25 */
-static TESymSlot g_sym_slots[TE_SYM_CAP];
-static int g_sym_init = 0;
 
 static inline void te_sym_clear(void) {
     for (int i = 0; i < TE_SYM_CAP; i++) {
-        g_sym_slots[i].key = NULL;
-        g_sym_slots[i].hash = 0;
-        g_sym_slots[i].idx = -1;
+        g_vm.sym_slots[i].key = NULL;
+        g_vm.sym_slots[i].hash = 0;
+        g_vm.sym_slots[i].idx = -1;
     }
-    g_sym_init = 1;
+    g_vm.sym_init = 1;
 }
 
 static inline int te_sym_lookup(const char *id) {
-    if (!g_sym_init) return -1;
+    if (!g_vm.sym_init) return -1;
     if (!id) return -1;
     uint64_t h = te_str_hash(id);
     int mask = TE_SYM_CAP - 1;
     int i = (int)(h & (uint64_t)mask);
     for (;;) {
-        const char *sk = g_sym_slots[i].key;
+        const char *sk = g_vm.sym_slots[i].key;
         if (sk == NULL) return -1;
-        if (sk == id) return g_sym_slots[i].idx;          /* ptr-eq */
-        if (g_sym_slots[i].hash == h && strcmp(sk, id) == 0) return g_sym_slots[i].idx;
+        if (sk == id) return g_vm.sym_slots[i].idx;          /* ptr-eq */
+        if (g_vm.sym_slots[i].hash == h && strcmp(sk, id) == 0) return g_vm.sym_slots[i].idx;
         i = (i + 1) & mask;
     }
 }
 
 void te_sym_insert(const char *id, int idx) {
-    if (!g_sym_init) te_sym_clear();
+    if (!g_vm.sym_init) te_sym_clear();
     if (!id) return;
     uint64_t h = te_str_hash(id);
     int mask = TE_SYM_CAP - 1;
     int i = (int)(h & (uint64_t)mask);
     for (;;) {
-        const char *sk = g_sym_slots[i].key;
+        const char *sk = g_vm.sym_slots[i].key;
         if (sk == NULL) {
-            g_sym_slots[i].key = id;
-            g_sym_slots[i].hash = h;
-            g_sym_slots[i].idx = idx;
+            g_vm.sym_slots[i].key = id;
+            g_vm.sym_slots[i].hash = h;
+            g_vm.sym_slots[i].idx = idx;
             return;
         }
-        if (sk == id || (g_sym_slots[i].hash == h && strcmp(sk, id) == 0)) {
-            g_sym_slots[i].idx = idx;  /* update */
-            g_sym_slots[i].key = id;
+        if (sk == id || (g_vm.sym_slots[i].hash == h && strcmp(sk, id) == 0)) {
+            g_vm.sym_slots[i].idx = idx;  /* update */
+            g_vm.sym_slots[i].key = id;
             return;
         }
         i = (i + 1) & mask;
@@ -2928,7 +2907,7 @@ typedef struct TeReqState {
     Variable  ret;            /* __ret_var (owned) */
     int       ret_active;
     int       return_flag, throw_flag, call_depth;
-    void     *frames;         /* g_frame_top of the yielded request */
+    void     *frames;         /* g_vm.frame_top of the yielded request */
     jmp_buf  *recovery;
     char     *claims;         /* g_current_claims (owned) */
     /* http context (ownership moved out of the globals) */
@@ -2960,7 +2939,7 @@ static void te_var_free_owned(Variable *v) {
 void *te_reqstate_save(void) {
     TeReqState *s = (TeReqState *)calloc(1, sizeof(TeReqState));
     if (!s) return NULL;
-    int base = g_initial_var_count;
+    int base = g_vm.initial_var_count;
     if (base < 0) base = 0;
     if (base > MAX_VARS) base = MAX_VARS;
     int top = g_vm.var_count;
@@ -2983,10 +2962,10 @@ void *te_reqstate_save(void) {
 
     s->return_flag = g_vm.return_flag;
     s->throw_flag  = g_vm.throw_flag;
-    s->call_depth  = g_call_depth;
+    s->call_depth  = g_vm.call_depth;
     s->frames      = te_frames_save();
-    s->recovery    = g_runtime_recovery;
-    g_vm.return_flag = 0; g_vm.throw_flag = 0; g_call_depth = 0;
+    s->recovery    = g_vm.runtime_recovery;
+    g_vm.return_flag = 0; g_vm.throw_flag = 0; g_vm.call_depth = 0;
 
     s->claims = g_current_claims;       /* ownership moves */
     g_current_claims = NULL;
@@ -3012,7 +2991,7 @@ void *te_reqstate_save(void) {
 void te_reqstate_restore(void *st) {
     TeReqState *s = (TeReqState *)st;
     if (!s) return;
-    int base = g_initial_var_count;
+    int base = g_vm.initial_var_count;
     if (base < 0) base = 0;
     if (base > MAX_VARS) base = MAX_VARS;
     int top = g_vm.var_count;
@@ -3033,9 +3012,9 @@ void te_reqstate_restore(void *st) {
 
     g_vm.return_flag = s->return_flag;
     g_vm.throw_flag  = s->throw_flag;
-    g_call_depth = s->call_depth;
+    g_vm.call_depth = s->call_depth;
     te_frames_restore(s->frames);
-    g_runtime_recovery = s->recovery;
+    g_vm.runtime_recovery = s->recovery;
 
     if (g_current_claims) free(g_current_claims);
     g_current_claims = s->claims;       /* ownership moves */
@@ -3216,13 +3195,12 @@ typedef struct TeFrame {
     int base;                 /* g_vm.var_count at call entry */
     struct TeFrame *prev;
 } TeFrame;
-static TeFrame *g_frame_top = NULL;
 
 static void te_frame_push(TeFrame *f) {
     f->sh = NULL; f->n = 0; f->cap = 0;
     f->base = g_vm.var_count;
-    f->prev = g_frame_top;
-    g_frame_top = f;
+    f->prev = g_vm.frame_top;
+    g_vm.frame_top = f;
 }
 
 static void te_frame_shadow_slot(TeFrame *f, Variable *ex) {
@@ -3261,13 +3239,13 @@ static void te_frame_pop(TeFrame *f) {
         slot->value    = f->sh[k].saved.value;
     }
     free(f->sh);
-    g_frame_top = f->prev;
+    g_vm.frame_top = f->prev;
 }
 
 /* Fatal errors longjmp past te_frame_pop; the request recovery path calls this. */
-void te_frames_reset(void) { g_frame_top = NULL; }
-void *te_frames_save(void)  { void *t = g_frame_top; g_frame_top = NULL; return t; }
-void  te_frames_restore(void *t) { g_frame_top = (TeFrame *)t; }
+void te_frames_reset(void) { g_vm.frame_top = NULL; }
+void *te_frames_save(void)  { void *t = g_vm.frame_top; g_vm.frame_top = NULL; return t; }
+void  te_frames_restore(void *t) { g_vm.frame_top = (TeFrame *)t; }
 
 /* Bug ERP 2026-08-27 ("stale return" / Bug A): slot ÚNICO por nombre al
  * re-declarar. Antes cada `let/var x` APPENDEABA un slot nuevo aunque ya
@@ -3286,11 +3264,11 @@ Variable *te_decl_slot(const char *id) {
     Variable *ex = find_variable_for((char *)id);
     if (ex && ex != &__ret_var) {
         int idx = (int)(ex - g_vm.vars);
-        if (idx >= g_initial_var_count && idx < g_vm.var_count) {
+        if (idx >= g_vm.initial_var_count && idx < g_vm.var_count) {
             /* Frames: a local (re)declared inside a fn call shadows the slot the
              * caller owned; save it once so te_frame_pop restores it. Slots
              * created inside this same call (idx >= base) are simply reused. */
-            if (g_frame_top && idx < g_frame_top->base) te_frame_shadow_slot(g_frame_top, ex);
+            if (g_vm.frame_top && idx < g_vm.frame_top->base) te_frame_shadow_slot(g_vm.frame_top, ex);
             if (ex->vtype == VAL_STRING && ex->value.string_value)
                 free(ex->value.string_value);
             if (ex->type) { free(ex->type); ex->type = NULL; }
@@ -6569,7 +6547,7 @@ void interpret_ast(ASTNode *node) {
     /* Item 2.3: track the source line of the statement currently executing
      * so a fatal runtime error can report file:line in dev mode. Cheap
      * (one branch + store), no debug gate. */
-    if (node->line > 0) { g_current_exec_line = node->line; g_current_exec_file = node->file_id; }
+    if (node->line > 0) { g_vm.current_exec_line = node->line; g_vm.current_exec_file = node->file_id; }
 
     /* Debugger hook: only stop on "stoppable" statement-level nodes.
      * Cheap when g_debug_enabled == 0 (single load+test). */
@@ -6641,8 +6619,8 @@ void interpret_ast(ASTNode *node) {
         if (node->left && node->left->id) {
             print_object_as_xml_by_id(node->left->id);
         } else {
-            if (g_stdout_buffer) {
-                ASTNode *result_node = create_ast_leaf("STRING", 0, g_stdout_buffer, NULL);
+            if (g_vm.stdout_buffer) {
+                ASTNode *result_node = create_ast_leaf("STRING", 0, g_vm.stdout_buffer, NULL);
                 add_or_update_variable("__ret__", result_node);
                 free_ast(result_node);
             } else {
@@ -8740,7 +8718,7 @@ ASTNode* call_lambda(ASTNode *lambda, ASTNode *argsList) {
 static void te_lambda_save_shadow(const char *name) {
     Variable *ex = find_variable_for((char *)name);
     if (!ex) return;                       /* fresh param: nothing to shadow */
-    te_frame_shadow_slot(g_frame_top, ex);
+    te_frame_shadow_slot(g_vm.frame_top, ex);
 }
 
 static ASTNode* call_lambda_exec_body(ASTNode *lambda);

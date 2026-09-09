@@ -59,3 +59,9 @@ python3 tools/te-test/run_tests.py tests/lang \
   --bin src/typeeasy \
   --junit tests/.report/junit-asan.xml \
   --verbose
+
+echo "=== [asan] selftest de VMs aisladas (Fase 3) ==="
+./src/typeeasy --selftest-vm
+
+echo "=== [asan] protocolo del debugger (regresion 0.1.0: \"vars\") ==="
+python3 tests/regress/run_debugger_protocol.py --bin ./src/typeeasy

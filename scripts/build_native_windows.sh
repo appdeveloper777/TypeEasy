@@ -123,7 +123,9 @@ esac
 # te_csv parser multihilo, te_linq_ops SIMD) tenga el mismo perfil que el build
 # de Docker. Sin esto el binario nativo Windows queda en modo serial y pierde
 # ~40% en cargas LINQ sobre CSV grandes.
-CFLAGS_NATIVE="-O3 -fopenmp -DTE_HAVE_OPENMP -mavx2 -mbmi -Wall -I. -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET -DTE_HAVE_OPENSSL ${MYSQL_CFLAGS} ${FREETDS_CFLAGS} ${FREETDS_DEFINE}"
+# -Werror=implicit-function-declaration: en LLP64 una función sin prototipo devuelve `int`
+# y un puntero se trunca a 32 bits (segfault fuera de gdb). Nunca compilar con implícitos.
+CFLAGS_NATIVE="-O3 -fopenmp -DTE_HAVE_OPENMP -mavx2 -mbmi -Wall -Werror=implicit-function-declaration -I. -I../api_server -DUSE_OPENSSL -DNO_SSL_DL -DOPENSSL_API_1_1 -DUSE_WEBSOCKET -DTE_HAVE_OPENSSL ${MYSQL_CFLAGS} ${FREETDS_CFLAGS} ${FREETDS_DEFINE}"
 
 # Compatibilidad con GCC 14+ (MSYS2 actual): el codigo asume C11/POSIX implicito,
 # pero GCC 14 promovio varios warnings a errores por defecto (C23). Los demotamos
@@ -157,7 +159,7 @@ flex -o lex.yy.c parser.l
 echo "=== Compilando módulos del motor ==="
 gcc $CFLAGS_NATIVE -fno-semantic-interposition -c \
     ast.c bytecode.c mysql_bridge.c orm_bridge.c typeeasy_api.c typeeasy_api_server.c \
-    wasm_backend.c debugger.c db_params.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c te_xlsx.c te_colcache.c te_stdlib.c te_bridge.c te_async.c te_evloop.c te_linq.c te_linq_ops.c te_math.c te_string.c te_list.c te_map.c te_print.c te_interp_flow.c te_value.c te_interp_decl.c db_stubs_win.c ${SQLSERVER_SRC}
+    wasm_backend.c debugger.c db_params.c te_builtins.c te_http.c te_json.c te_bytecode.c te_csv.c te_xlsx.c te_colcache.c te_stdlib.c te_bridge.c te_async.c te_evloop.c te_linq.c te_linq_ops.c te_math.c te_string.c te_list.c te_map.c te_print.c te_interp_flow.c te_value.c te_vm.c te_interp_decl.c db_stubs_win.c ${SQLSERVER_SRC}
 gcc $CFLAGS_NATIVE -c parser.tab.c lex.yy.c strvars.c typeeasy_main.c
 gcc $CFLAGS_NATIVE -c ../api_server/civetweb.c -o civetweb.o
 gcc $CFLAGS_NATIVE -c ../api_server/te_websocket.c -o te_websocket.o
@@ -166,7 +168,7 @@ echo "=== Linkando typeeasy.exe ==="
 gcc -O3 -fopenmp -o typeeasy.exe \
     typeeasy_main.o parser.tab.o lex.yy.o \
     ast.o bytecode.o mysql_bridge.o orm_bridge.o typeeasy_api.o typeeasy_api_server.o wasm_backend.o debugger.o \
-    db_params.o te_builtins.o te_http.o te_json.o te_bytecode.o te_csv.o te_xlsx.o te_colcache.o te_stdlib.o te_bridge.o te_async.o te_evloop.o te_linq.o te_linq_ops.o te_math.o te_string.o te_list.o te_map.o te_print.o te_interp_flow.o te_value.o te_interp_decl.o db_stubs_win.o ${SQLSERVER_OBJ} \
+    db_params.o te_builtins.o te_http.o te_json.o te_bytecode.o te_csv.o te_xlsx.o te_colcache.o te_stdlib.o te_bridge.o te_async.o te_evloop.o te_linq.o te_linq_ops.o te_math.o te_string.o te_list.o te_map.o te_print.o te_interp_flow.o te_value.o te_vm.o te_interp_decl.o db_stubs_win.o ${SQLSERVER_OBJ} \
     civetweb.o te_websocket.o \
     strvars.o \
     ${MYSQL_LIB} ${FREETDS_LIB} -lm -lws2_32 -lpthread -lssl -lcrypto -lgomp -lz
