@@ -46,7 +46,7 @@ extern ASTNode *parse_file(FILE *file);
 /* Global class registry owned by ast.c. parse_file() registers `class X {...}`
  * declarations into it; resetting between runs keeps each input independent and
  * bounds memory growth across millions of iterations. */
-extern int class_count;
+/* Fase 3C: el registro de clases vive en la VM (g_vm.class_count, te_vm.h ya incluido). */
 
 /* Silence the parser's per-input syntax-error chatter. The fuzzer drives tens
  * of thousands of malformed inputs per second; yyerror would otherwise flood
@@ -107,7 +107,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
      * the next input starts from a clean interpreter state. detect_leaks is
      * disabled for the fuzzer (the interpreter is short-lived by design and does
      * not free every global at exit); we hunt crashes, not leaks. */
-    class_count = 0;
+    g_vm.class_count = 0;
     runtime_reset_vars_to_initial_state();
     te_runtime_reset_flags();
 
