@@ -165,6 +165,3 @@ global src/typeeasy_main.c g_error_count
 global src/typeeasy_main.c g_errors
 global src/typeeasy_main.c g_test_assertions
 global src/typeeasy_main.c g_test_failed
-fn src/code_generation.c main_reg_allocation 312
-fn src/mysql_bridge.c native_mysql_connect 317
-fn src/typeeasy_main.c main 431

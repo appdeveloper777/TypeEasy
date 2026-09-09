@@ -534,6 +534,199 @@ static int get_arg_int(ASTNode* args, int index) {
 
 // native_mysql_connect(host, user, password, database, [port])
 // Retorna connection_id en __ret__
+/* Opciones TLS del 6º argumento de mysql_connect ({ tls, tls_version, tls_fp, tls_ca, tls_insecure }). */
+typedef struct { int tls; const char *tls_version; const char *tls_fp; const char *tls_ca; int tls_insecure; } MysqlTlsOpts;
+
+/* Lee el map de opciones (extraído de native_mysql_connect, Fase 2). */
+static void mysql_parse_opts(ASTNode *opts_head, MysqlTlsOpts *o) {
+for (ASTNode* p = opts_head; p; p = p->right) {
+    if (!p->id || !p->left) continue;
+    const char *k = p->id;
+    ASTNode *v = p->left;
+    const char *vt = v->type ? v->type : "";
+    /* Resolver el valor: puede ser un literal (NUMBER/STRING) o una
+     * referencia a variable (IDENTIFIER -> p.ej. tls_fp: DB_FP). Sin esto,
+     * los valores por variable se ignoraban y opciones como tls_fp/tls_ca
+     * quedaban sin efecto (se caia al modo verify por defecto). */
+    const char *v_str = (strcmp(vt, "STRING") == 0) ? v->str_value : NULL;
+    long v_num = v->value;
+    int v_is_str = (strcmp(vt, "STRING") == 0 && v->str_value);
+    int v_is_num = (strcmp(vt, "NUMBER") == 0 || strcmp(vt, "INT") == 0);
+    if ((strcmp(vt, "IDENTIFIER") == 0 || strcmp(vt, "ID") == 0) && v->id) {
+        Variable* rv = find_variable(v->id);
+        if (rv) {
+            if (rv->vtype == VAL_STRING) {
+                v_str = rv->value.string_value; v_is_str = (v_str != NULL); v_is_num = 0;
+            } else if (rv->vtype == VAL_INT) {
+                v_num = rv->value.int_value; v_is_num = 1; v_is_str = 0;
+            } else if (rv->vtype == VAL_FLOAT) {
+                v_num = (long)rv->value.float_value; v_is_num = 1; v_is_str = 0;
+            }
+        }
+    }
+    if (strcmp(k, "tls") == 0 || strcmp(k, "ssl") == 0) {
+        if (v_is_num) {
+            o->tls = (v_num != 0) ? 1 : 0;
+        } else if (v_is_str && v_str) {
+            o->tls = (strcmp(v_str, "true") == 0 ||
+                       strcmp(v_str, "1") == 0 ||
+                       strcmp(v_str, "require") == 0 ||
+                       strcmp(v_str, "on") == 0) ? 1 : 0;
+        }
+    } else if (strcmp(k, "tls_version") == 0 || strcmp(k, "ssl_version") == 0) {
+        if (v_is_str && v_str) {
+            o->tls_version = v_str;
+        }
+    } else if (strcmp(k, "tls_fp") == 0 || strcmp(k, "tls_peer_fp") == 0 ||
+               strcmp(k, "fingerprint") == 0) {
+        /* Fijar el SHA1 del cert del server. Permite conectar por TLS a
+         * servidores con cert self-signed / root no confiable (p.ej.
+         * MySQL 8 con caching_sha2_password que fuerza TLS) sin tener que
+         * confiar en la CA: Schannel/OpenSSL validan contra esta huella. */
+        if (v_is_str && v_str) {
+            o->tls_fp = v_str;
+        }
+    } else if (strcmp(k, "tls_ca") == 0 || strcmp(k, "ssl_ca") == 0 ||
+               strcmp(k, "ca") == 0) {
+        /* Ruta a un PEM con la CA (o la cadena) del server. Permite que
+         * Schannel (Windows) y OpenSSL (Linux) confien en un cert
+         * self-signed SOLO para esta conexion, sin tocar el trust store
+         * del sistema ni la base de datos. Funciona igual en .exe y Linux. */
+        if (v_is_str && v_str) {
+            o->tls_ca = v_str;
+        }
+    } else if (strcmp(k, "tls_insecure") == 0 || strcmp(k, "tls_no_verify") == 0 ||
+               strcmp(k, "insecure") == 0 || strcmp(k, "tls_skip_verify") == 0) {
+        /* Desactiva TODA verificacion TLS (cadena + hostname). Con el
+         * backend OpenSSL (libmariadb del instalador 0.0.15) equivale a
+         * SSL_VERIFY_NONE: se cifra el canal pero se acepta cualquier cert.
+         * Necesario para MySQL 8 con cert auto-generado self-signed cuyo CN
+         * no coincide con la IP. NO usar en produccion contra hosts no
+         * confiables (vulnerable a MITM); para eso usar tls_ca con la CA real. */
+        if (v_is_num) {
+            o->tls_insecure = (v_num != 0) ? 1 : 0;
+        } else if (v_is_str && v_str) {
+            o->tls_insecure = (strcmp(v_str, "true") == 0 ||
+                                strcmp(v_str, "1") == 0 ||
+                                strcmp(v_str, "on") == 0) ? 1 : 0;
+        }
+    }
+}
+}
+
+/* Aplica las opciones TLS al handle antes de mysql_real_connect (extraído de native_mysql_connect, Fase 2). */
+static void mysql_apply_tls(MYSQL *conn, const MysqlTlsOpts *o, unsigned long *client_flags) {
+int tls_enabled = 0;
+if (o->tls >= 0) {
+    tls_enabled = o->tls;
+} else {
+    const char *ssl_mode_env = getenv("TYPEEASY_MYSQL_SSL");
+    if (ssl_mode_env && strcmp(ssl_mode_env, "require") == 0) tls_enabled = 1;
+    /* default: sin TLS */
+}
+/* Una huella fijada implica TLS (validacion por fingerprint). */
+if (o->tls_fp && *o->tls_fp) tls_enabled = 1;
+/* Una CA provista implica TLS (validacion contra esa CA). */
+if (o->tls_ca && *o->tls_ca) tls_enabled = 1;
+/* tls_insecure implica TLS (canal cifrado, sin verificacion). */
+if (o->tls_insecure) tls_enabled = 1;
+
+
+/* Auth caching_sha2_password (MySQL 8 por defecto) en conexion PLANA:
+ * pedir al servidor su clave publica RSA para cifrar el password e
+ * intercambiarlo sobre TCP sin TLS (igual que hace PHP mysqlnd / pymysql).
+ * Sin esto, libmariadb intenta negociar TLS solo para enviar el password,
+ * y en Windows (Schannel) eso falla con errno 2026 contra certs
+ * self-signed. Con esto, el .exe de Windows y el binario Linux conectan
+ * sin TLS y sin tocar la base de datos. */
+if (!tls_enabled) {
+#ifdef MYSQL_OPT_GET_SERVER_PUBLIC_KEY
+    {
+        unsigned char get_pubkey = 1;
+        mysql_options(conn, MYSQL_OPT_GET_SERVER_PUBLIC_KEY, &get_pubkey);
+    }
+#endif
+}
+
+/* IMPORTANTE (MariaDB Connector/C): fijar CUALQUIER opcion SSL —incluso
+ * MYSQL_OPT_SSL_VERIFY_SERVER_CERT=0— marca la conexion para negociar TLS.
+ * Por eso, cuando el script pide tls=0 NO debemos tocar ninguna opcion SSL:
+ * asi la conexion queda en texto plano (como hace pymysql) y no falla con
+ * errno 2026 contra servidores con cert self-signed/untrusted-root. */
+if (tls_enabled) {
+    /* NOTA CRITICA: MYSQL_OPT_SSL_ENFORCE, MYSQL_OPT_TLS_VERSION,
+     * MYSQL_OPT_SSL_CA, MYSQL_OPT_SSL_VERIFY_SERVER_CERT y
+     * MARIADB_OPT_TLS_PEER_FP son VALORES DE ENUM, no macros #define.
+     * Por eso NO se pueden guardar con #ifdef (siempre seria falso y el
+     * codigo se compilaria fuera, dejando la conexion sin ninguna opcion
+     * TLS aplicada: el bug que hacia fallar los certs self-signed con
+     * tls_fp/tls_ca). libmariadb (>=3.x) define estos enums siempre. */
+    {
+        unsigned char ssl_on = 1;
+        mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &ssl_on);
+    }
+    /* En Windows libmariadb.dll de MSYS2 usa Schannel; su TLS 1.3 falla
+     * contra los NLB de AWS (TiDB, PlanetScale, Aiven) con
+     * SEC_E_DECRYPT_FAILURE (0x80090330). TLS 1.2 funciona universal. */
+    {
+        const char *tls_ver = o->tls_version;
+        if (!tls_ver) tls_ver = getenv("TYPEEASY_MYSQL_TLS_VERSION");
+        if (!tls_ver || !*tls_ver) tls_ver = "TLSv1.2";
+        mysql_options(conn, MYSQL_OPT_TLS_VERSION, tls_ver);
+    }
+
+    /* Modos de verificacion del cert del server, mutuamente excluyentes:
+     *
+     *  (1) tls_fp -> pin por huella SHA1 (MARIADB_OPT_TLS_PEER_FP). Es EL
+     *      mecanismo de MariaDB Connector/C para certs self-signed: compara
+     *      la huella del cert presentado y omite cadena + hostname. SEGURO.
+     *  (2) tls_ca -> CA explicita (PEM). Valida la cadena contra esa CA;
+     *      verify=0 ademas omite el chequeo de hostname (necesario porque el
+     *      cert auto-generado de MySQL tiene un CN generico, no la IP). SEGURO.
+     *  (3) tls_insecure -> verify=0 sin CA: acepta cualquier cert (canal
+     *      cifrado pero vulnerable a MITM). Solo para dev/diagnostico.
+     *  (4) por defecto -> verify=1 (CA publica del sistema, como TiDB). */
+    int handled = 0;
+    if (o->tls_fp && *o->tls_fp) {
+        mysql_optionsv(conn, MARIADB_OPT_TLS_PEER_FP, o->tls_fp);
+        mysql_ssl_set(conn, NULL, NULL, NULL, NULL, NULL);
+        /* La huella SHA1 ES el gate de seguridad: pinea el cert EXACTO del
+         * server. Hay que apagar la verificacion de cadena+hostname; si no,
+         * el backend (OpenSSL o Schannel) rechaza el cert self-signed por
+         * cadena no confiable o CN que no coincide, ANTES de comparar la
+         * huella. Con verify=0 + PEER_FP la huella es el unico gate: seguro,
+         * porque un MITM tendria que presentar un cert con la misma huella
+         * SHA1 (computacionalmente inviable). */
+        {
+            unsigned char verify_off = 0;
+            mysql_options(conn, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify_off);
+        }
+        handled = 1;
+    }
+    if (!handled) {
+        int want_verify_off = 0;
+        if (o->tls_ca && *o->tls_ca) {
+            mysql_options(conn, MYSQL_OPT_SSL_CA, o->tls_ca);
+            /* CA self-signed de MySQL: el CN del cert es generico (no la IP),
+             * asi que hay que omitir el chequeo de hostname. La cadena se
+             * valida igual contra la CA provista. */
+            want_verify_off = 1;
+        }
+        if (o->tls_insecure) want_verify_off = 1;  /* acepta cualquier cert */
+        mysql_ssl_set(conn, NULL, NULL,
+                      (o->tls_ca && *o->tls_ca) ? o->tls_ca : NULL,
+                      NULL, NULL);
+        unsigned char verify_val = want_verify_off ? 0 : 1;
+        /* Default { tls: 1 } -> verify=1: valida la cadena contra el trust
+         * store del sistema (acepta CA publica como TiDB/PlanetScale/RDS y
+         * rechaza self-signed). Es la conducta historica segura. Para certs
+         * self-signed usar tls_fp (recomendado) o tls_ca. */
+        mysql_options(conn, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify_val);
+    }
+    (*client_flags) |= CLIENT_SSL;
+}
+}
+
 void native_mysql_connect(ASTNode* args) {
         // Imprimir todos los argumentos recibidos
         ASTNode* curr = args;
@@ -626,86 +819,10 @@ void native_mysql_connect(ASTNode* args) {
     /* 6to parametro opcional: map de opciones { "tls": 1, "tls_version": "TLSv1.3" }.
      * Default: tls=0 (sin SSL, funciona contra MySQL/MariaDB local de XAMPP).
      * Para servicios cloud (TiDB, PlanetScale, Aiven) pasar tls=1. */
-    int opt_tls = -1;            /* -1 = no especificado por el script */
-    const char *opt_tls_version = NULL;
-    const char *opt_tls_fp = NULL;   /* SHA1 fingerprint del cert del server */
-    const char *opt_tls_ca = NULL;   /* Ruta a PEM con la CA del server */
-    int opt_tls_insecure = 0;        /* 1 = TLS sin verificar cadena ni hostname */
+    MysqlTlsOpts o = { -1, NULL, NULL, NULL, 0 };   /* tls=-1: no especificado por el script */
     int opts_owned = 0;
     ASTNode* opts_head = db_arg_as_map_head(args, 5, &opts_owned);
-    for (ASTNode* p = opts_head; p; p = p->right) {
-        if (!p->id || !p->left) continue;
-        const char *k = p->id;
-        ASTNode *v = p->left;
-        const char *vt = v->type ? v->type : "";
-        /* Resolver el valor: puede ser un literal (NUMBER/STRING) o una
-         * referencia a variable (IDENTIFIER -> p.ej. tls_fp: DB_FP). Sin esto,
-         * los valores por variable se ignoraban y opciones como tls_fp/tls_ca
-         * quedaban sin efecto (se caia al modo verify por defecto). */
-        const char *v_str = (strcmp(vt, "STRING") == 0) ? v->str_value : NULL;
-        long v_num = v->value;
-        int v_is_str = (strcmp(vt, "STRING") == 0 && v->str_value);
-        int v_is_num = (strcmp(vt, "NUMBER") == 0 || strcmp(vt, "INT") == 0);
-        if ((strcmp(vt, "IDENTIFIER") == 0 || strcmp(vt, "ID") == 0) && v->id) {
-            Variable* rv = find_variable(v->id);
-            if (rv) {
-                if (rv->vtype == VAL_STRING) {
-                    v_str = rv->value.string_value; v_is_str = (v_str != NULL); v_is_num = 0;
-                } else if (rv->vtype == VAL_INT) {
-                    v_num = rv->value.int_value; v_is_num = 1; v_is_str = 0;
-                } else if (rv->vtype == VAL_FLOAT) {
-                    v_num = (long)rv->value.float_value; v_is_num = 1; v_is_str = 0;
-                }
-            }
-        }
-        if (strcmp(k, "tls") == 0 || strcmp(k, "ssl") == 0) {
-            if (v_is_num) {
-                opt_tls = (v_num != 0) ? 1 : 0;
-            } else if (v_is_str && v_str) {
-                opt_tls = (strcmp(v_str, "true") == 0 ||
-                           strcmp(v_str, "1") == 0 ||
-                           strcmp(v_str, "require") == 0 ||
-                           strcmp(v_str, "on") == 0) ? 1 : 0;
-            }
-        } else if (strcmp(k, "tls_version") == 0 || strcmp(k, "ssl_version") == 0) {
-            if (v_is_str && v_str) {
-                opt_tls_version = v_str;
-            }
-        } else if (strcmp(k, "tls_fp") == 0 || strcmp(k, "tls_peer_fp") == 0 ||
-                   strcmp(k, "fingerprint") == 0) {
-            /* Fijar el SHA1 del cert del server. Permite conectar por TLS a
-             * servidores con cert self-signed / root no confiable (p.ej.
-             * MySQL 8 con caching_sha2_password que fuerza TLS) sin tener que
-             * confiar en la CA: Schannel/OpenSSL validan contra esta huella. */
-            if (v_is_str && v_str) {
-                opt_tls_fp = v_str;
-            }
-        } else if (strcmp(k, "tls_ca") == 0 || strcmp(k, "ssl_ca") == 0 ||
-                   strcmp(k, "ca") == 0) {
-            /* Ruta a un PEM con la CA (o la cadena) del server. Permite que
-             * Schannel (Windows) y OpenSSL (Linux) confien en un cert
-             * self-signed SOLO para esta conexion, sin tocar el trust store
-             * del sistema ni la base de datos. Funciona igual en .exe y Linux. */
-            if (v_is_str && v_str) {
-                opt_tls_ca = v_str;
-            }
-        } else if (strcmp(k, "tls_insecure") == 0 || strcmp(k, "tls_no_verify") == 0 ||
-                   strcmp(k, "insecure") == 0 || strcmp(k, "tls_skip_verify") == 0) {
-            /* Desactiva TODA verificacion TLS (cadena + hostname). Con el
-             * backend OpenSSL (libmariadb del instalador 0.0.15) equivale a
-             * SSL_VERIFY_NONE: se cifra el canal pero se acepta cualquier cert.
-             * Necesario para MySQL 8 con cert auto-generado self-signed cuyo CN
-             * no coincide con la IP. NO usar en produccion contra hosts no
-             * confiables (vulnerable a MITM); para eso usar tls_ca con la CA real. */
-            if (v_is_num) {
-                opt_tls_insecure = (v_num != 0) ? 1 : 0;
-            } else if (v_is_str && v_str) {
-                opt_tls_insecure = (strcmp(v_str, "true") == 0 ||
-                                    strcmp(v_str, "1") == 0 ||
-                                    strcmp(v_str, "on") == 0) ? 1 : 0;
-            }
-        }
-    }
+    mysql_parse_opts(opts_head, &o);
 
     /* TLS: el script controla via opciones { "tls": 1, "tls_version": "..." }.
      * Default: tls=0 (sin SSL) -> funciona contra MySQL/MariaDB local sin TLS
@@ -717,116 +834,8 @@ void native_mysql_connect(ASTNode* args) {
      * Backwards-compat por env var (sin documentar):
      *   TYPEEASY_MYSQL_SSL=require  -> forzar TLS
      *   TYPEEASY_MYSQL_TLS_VERSION  -> override version (default "TLSv1.2") */
-    int tls_enabled = 0;
-    if (opt_tls >= 0) {
-        tls_enabled = opt_tls;
-    } else {
-        const char *ssl_mode_env = getenv("TYPEEASY_MYSQL_SSL");
-        if (ssl_mode_env && strcmp(ssl_mode_env, "require") == 0) tls_enabled = 1;
-        /* default: sin TLS */
-    }
-    /* Una huella fijada implica TLS (validacion por fingerprint). */
-    if (opt_tls_fp && *opt_tls_fp) tls_enabled = 1;
-    /* Una CA provista implica TLS (validacion contra esa CA). */
-    if (opt_tls_ca && *opt_tls_ca) tls_enabled = 1;
-    /* tls_insecure implica TLS (canal cifrado, sin verificacion). */
-    if (opt_tls_insecure) tls_enabled = 1;
-
     unsigned long client_flags = 0;
-
-    /* Auth caching_sha2_password (MySQL 8 por defecto) en conexion PLANA:
-     * pedir al servidor su clave publica RSA para cifrar el password e
-     * intercambiarlo sobre TCP sin TLS (igual que hace PHP mysqlnd / pymysql).
-     * Sin esto, libmariadb intenta negociar TLS solo para enviar el password,
-     * y en Windows (Schannel) eso falla con errno 2026 contra certs
-     * self-signed. Con esto, el .exe de Windows y el binario Linux conectan
-     * sin TLS y sin tocar la base de datos. */
-    if (!tls_enabled) {
-#ifdef MYSQL_OPT_GET_SERVER_PUBLIC_KEY
-        {
-            unsigned char get_pubkey = 1;
-            mysql_options(conn, MYSQL_OPT_GET_SERVER_PUBLIC_KEY, &get_pubkey);
-        }
-#endif
-    }
-
-    /* IMPORTANTE (MariaDB Connector/C): fijar CUALQUIER opcion SSL —incluso
-     * MYSQL_OPT_SSL_VERIFY_SERVER_CERT=0— marca la conexion para negociar TLS.
-     * Por eso, cuando el script pide tls=0 NO debemos tocar ninguna opcion SSL:
-     * asi la conexion queda en texto plano (como hace pymysql) y no falla con
-     * errno 2026 contra servidores con cert self-signed/untrusted-root. */
-    if (tls_enabled) {
-        /* NOTA CRITICA: MYSQL_OPT_SSL_ENFORCE, MYSQL_OPT_TLS_VERSION,
-         * MYSQL_OPT_SSL_CA, MYSQL_OPT_SSL_VERIFY_SERVER_CERT y
-         * MARIADB_OPT_TLS_PEER_FP son VALORES DE ENUM, no macros #define.
-         * Por eso NO se pueden guardar con #ifdef (siempre seria falso y el
-         * codigo se compilaria fuera, dejando la conexion sin ninguna opcion
-         * TLS aplicada: el bug que hacia fallar los certs self-signed con
-         * tls_fp/tls_ca). libmariadb (>=3.x) define estos enums siempre. */
-        {
-            unsigned char ssl_on = 1;
-            mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &ssl_on);
-        }
-        /* En Windows libmariadb.dll de MSYS2 usa Schannel; su TLS 1.3 falla
-         * contra los NLB de AWS (TiDB, PlanetScale, Aiven) con
-         * SEC_E_DECRYPT_FAILURE (0x80090330). TLS 1.2 funciona universal. */
-        {
-            const char *tls_ver = opt_tls_version;
-            if (!tls_ver) tls_ver = getenv("TYPEEASY_MYSQL_TLS_VERSION");
-            if (!tls_ver || !*tls_ver) tls_ver = "TLSv1.2";
-            mysql_options(conn, MYSQL_OPT_TLS_VERSION, tls_ver);
-        }
-
-        /* Modos de verificacion del cert del server, mutuamente excluyentes:
-         *
-         *  (1) tls_fp -> pin por huella SHA1 (MARIADB_OPT_TLS_PEER_FP). Es EL
-         *      mecanismo de MariaDB Connector/C para certs self-signed: compara
-         *      la huella del cert presentado y omite cadena + hostname. SEGURO.
-         *  (2) tls_ca -> CA explicita (PEM). Valida la cadena contra esa CA;
-         *      verify=0 ademas omite el chequeo de hostname (necesario porque el
-         *      cert auto-generado de MySQL tiene un CN generico, no la IP). SEGURO.
-         *  (3) tls_insecure -> verify=0 sin CA: acepta cualquier cert (canal
-         *      cifrado pero vulnerable a MITM). Solo para dev/diagnostico.
-         *  (4) por defecto -> verify=1 (CA publica del sistema, como TiDB). */
-        int handled = 0;
-        if (opt_tls_fp && *opt_tls_fp) {
-            mysql_optionsv(conn, MARIADB_OPT_TLS_PEER_FP, opt_tls_fp);
-            mysql_ssl_set(conn, NULL, NULL, NULL, NULL, NULL);
-            /* La huella SHA1 ES el gate de seguridad: pinea el cert EXACTO del
-             * server. Hay que apagar la verificacion de cadena+hostname; si no,
-             * el backend (OpenSSL o Schannel) rechaza el cert self-signed por
-             * cadena no confiable o CN que no coincide, ANTES de comparar la
-             * huella. Con verify=0 + PEER_FP la huella es el unico gate: seguro,
-             * porque un MITM tendria que presentar un cert con la misma huella
-             * SHA1 (computacionalmente inviable). */
-            {
-                unsigned char verify_off = 0;
-                mysql_options(conn, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify_off);
-            }
-            handled = 1;
-        }
-        if (!handled) {
-            int want_verify_off = 0;
-            if (opt_tls_ca && *opt_tls_ca) {
-                mysql_options(conn, MYSQL_OPT_SSL_CA, opt_tls_ca);
-                /* CA self-signed de MySQL: el CN del cert es generico (no la IP),
-                 * asi que hay que omitir el chequeo de hostname. La cadena se
-                 * valida igual contra la CA provista. */
-                want_verify_off = 1;
-            }
-            if (opt_tls_insecure) want_verify_off = 1;  /* acepta cualquier cert */
-            mysql_ssl_set(conn, NULL, NULL,
-                          (opt_tls_ca && *opt_tls_ca) ? opt_tls_ca : NULL,
-                          NULL, NULL);
-            unsigned char verify_val = want_verify_off ? 0 : 1;
-            /* Default { tls: 1 } -> verify=1: valida la cadena contra el trust
-             * store del sistema (acepta CA publica como TiDB/PlanetScale/RDS y
-             * rechaza self-signed). Es la conducta historica segura. Para certs
-             * self-signed usar tls_fp (recomendado) o tls_ca. */
-            mysql_options(conn, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify_val);
-        }
-        client_flags |= CLIENT_SSL;
-    }
+    mysql_apply_tls(conn, &o, &client_flags);
 
     if (opts_owned && opts_head) free_ast(opts_head);
 

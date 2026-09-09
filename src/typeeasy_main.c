@@ -421,6 +421,171 @@ static int run_test_runner(const char *dir) {
     return (passed == total) ? 0 : 1;
 }
 
+/* --version / --help (extraído de main, Fase 2). Devuelve 0 si atendió el flag, -1 si no. */
+static int te_main_version_help(int argc, char **argv, const char *TE_VERSION_STR) {
+for (int vi = 1; vi < argc; vi++) {
+    if (strcmp(argv[vi], "--version") == 0 || strcmp(argv[vi], "-v") == 0 || strcmp(argv[vi], "-V") == 0) {
+        printf("TypeEasy %s\n", TE_VERSION_STR);
+        return 0;
+    }
+    if (strcmp(argv[vi], "--help") == 0 || strcmp(argv[vi], "-h") == 0) {
+        printf("TypeEasy %s\n", TE_VERSION_STR);
+        printf("Usage: %s <file.te> [options]\n", argv[0]);
+        printf("Options:\n");
+        printf("  --version, -v          Show the version and exit\n");
+        printf("  --help, -h             Show this help\n");
+        printf("  --repl                 Start the interactive REPL\n");
+        printf("  --test [dir]           Run *_test.te tests\n");
+        printf("  --syntax-check <f>     Validate syntax (JSON output)\n");
+        printf("  --selftest-vm          Self-test: two isolated VMs in one process (JSON)\n");
+        printf("  --symbols <f>          List symbols (JSON output)\n");
+        printf("  --emit-wat <f> [-o]    Generate WebAssembly text\n");
+        printf("  --emit-wasm <f> [-o]   Generate WebAssembly binary\n");
+        printf("  --debug                Enable debug logs\n");
+        printf("  --debug-port <p>       Start DAP debug server on port p\n");
+        printf("  --api [-p PORT]        Start HTTP server with the .te endpoints\n");
+        printf("  --dev                  Dev mode: hot-reload + 500 errors with file:line\n");
+        printf("  --port <p>             Port for --api (default 8080)\n");
+        printf("  --host <h>             Bind host for --api (default 0.0.0.0)\n");
+        printf("  --workers <n>          Prefork n worker processes for --api (default 1)\n");
+        printf("  --cors-origin <url>    Allowed CORS origin (default *)\n");
+        printf("  --profile              Per-fn timings (self/incl ms, calls); per request in --api\n");
+        return 0;
+    }
+}
+    return -1;
+}
+
+/* --emit-wat / --emit-wasm (extraído de main, Fase 2). */
+static int te_main_emit(ASTNode *script_ast, int emit_wat_mode, int emit_wasm_mode, const char *output_path) {
+    char temp_wat_path[512];
+    const char *wat_path = output_path;
+
+    if (emit_wasm_mode) {
+        int written = snprintf(temp_wat_path, sizeof(temp_wat_path), "%s.wat.tmp", output_path);
+        if (written < 0 || written >= (int)sizeof(temp_wat_path)) {
+            fprintf(stderr, "[WASM] Error: temporary path too long.\n");
+            free_ast(script_ast);
+            return 1;
+        }
+        wat_path = temp_wat_path;
+    }
+
+    int ok = wasm_emit_wat(script_ast, wat_path);
+    free_ast(script_ast);
+    if (!ok) return 1;
+
+    if (emit_wasm_mode) {
+        ok = convert_wat_to_wasm(wat_path, output_path);
+        remove(wat_path);
+        if (!ok) return 1;
+        printf("[WASM] Wasm generado: %s\n", output_path);
+    } else {
+        printf("[WASM] WAT generado: %s\n", output_path);
+    }
+    return 0;
+}
+
+/* --discover: lista rutas del .te como JSON (extraído de main, Fase 2). */
+static int te_main_discover(ASTNode *script_ast) {
+    printf("[");
+    MethodNode *m = global_methods;
+    int first = 1;
+    while (m) {
+        if (m->route_path) {
+            if (!first) printf(",");
+            const char *response_type = detect_response_type(m->body);
+            printf("{\"route\": \"%s\", \"method\": \"%s\", \"function\": \"%s\", \"response_type\": \"%s\"}", 
+                   m->route_path, m->http_method ? m->http_method : "GET", m->name, response_type);
+            first = 0;
+        }
+        m = m->next;
+    }
+    printf("]\n");
+    // Liberar memoria y salir
+    free_ast(script_ast);
+    return 0;
+}
+
+/* --api: levanta el servidor HTTP (extraído de main, Fase 2). */
+static int te_main_api(char **argv, ASTNode *script_ast, const char *script_path, int api_port, const char *api_host,
+                       int api_workers, int api_worker_index, const char *api_cors_origin, int dev_mode) {
+    if (api_workers < 1) api_workers = 1;
+    /* Dev mode (--dev): single in-process worker, runtime error file:line in
+     * HTTP 500 bodies (via TYPEEASY_DEV) and hot-reload that re-exec's the
+     * process when the script changes on disk. */
+    if (dev_mode) {
+        api_workers = 1;
+#ifdef _WIN32
+        _putenv("TYPEEASY_DEV=1");
+#else
+        setenv("TYPEEASY_DEV", "1", 1);
+#endif
+        typeeasy_enable_hot_reload(script_path);
+        printf("[typeeasy --dev] dev mode: hot-reload + verbose 500 errors enabled\n");
+        fflush(stdout);
+    }
+    /* CORS origin: el flag --cors-origin tiene prioridad; si no se pasa,
+     * se usa la variable de entorno TYPEEASY_CORS_ORIGIN (config sin
+     * archivo, ideal para Docker / .env). Default "*" si no hay ninguno. */
+    if (!api_cors_origin) api_cors_origin = getenv("TYPEEASY_CORS_ORIGIN");
+    if (api_cors_origin && *api_cors_origin) typeeasy_set_cors_origin(api_cors_origin);
+    int rc;
+    if (dev_mode) {
+        /* Single in-process server so the watcher loop can re-exec. */
+        rc = typeeasy_run_api_server(api_host, api_port);
+        if (rc == 99) {
+            /* Hot-reload: replace this process image with a fresh one that
+             * re-parses the changed script. argv is NUL-terminated per the
+             * C standard, so it can be passed straight to execv. */
+            free_ast(script_ast);
+            te_reexec(argv);
+            /* If exec fails, fall through and report it. */
+            perror("[typeeasy --dev] hot-reload re-exec failed");
+            return 1;
+        }
+    } else if (api_worker_index >= 0) {
+        /* Spawned by the Windows load-balancer master: run as a single
+         * worker bound to the internal port with a short banner. */
+        rc = typeeasy_run_api_server_worker(api_host, api_port, api_worker_index);
+    } else {
+        rc = typeeasy_run_api_server_pool(api_host, api_port, api_workers, script_path);
+    }
+    free_ast(script_ast);
+    return rc;
+}
+
+/* --invoke <fn>: ejecuta una función y vuelca __ret__ (extraído de main, Fase 2). 0 ok, 1 no encontrada. */
+static int te_main_invoke(const char *invoke_func) {
+    MethodNode *m = global_methods;
+    int found = 0;
+    while (m) {
+        if (strcmp(m->name, invoke_func) == 0) {
+            /* Suprimir stdout en vivo y limpiar el buffer de captura
+             * para que el cuerpo no se duplique con __ret__. */
+            if (g_vm.stdout_buffer) { free(g_vm.stdout_buffer); g_vm.stdout_buffer = NULL; }
+            g_vm.suppress_stdout = 1;
+            interpret_ast(m->body);
+            g_vm.suppress_stdout = 0;
+
+            // Verificar si hubo un retorno (return json(...))
+            Variable *ret_var = find_variable("__ret__");
+            if (ret_var && ret_var->vtype == VAL_STRING) {
+                // Imprimir el resultado (JSON/XML) a stdout
+                printf("%s", ret_var->value.string_value);
+            }
+            found = 1;
+            break;
+        }
+        m = m->next;
+    }
+    if (!found) {
+        fprintf(stderr, "Error: Function '%s' not found.\n", invoke_func);
+        return 1;
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
 
     const char* debug_env = getenv("TYPEEASY_DEBUG");
@@ -452,36 +617,7 @@ int main(int argc, char *argv[]) {
 #define TE_XSTR_(x) #x
 #define TE_XSTR(x) TE_XSTR_(x)
     const char *TE_VERSION_STR = TE_XSTR(TYPEEASY_VERSION);
-    for (int vi = 1; vi < argc; vi++) {
-        if (strcmp(argv[vi], "--version") == 0 || strcmp(argv[vi], "-v") == 0 || strcmp(argv[vi], "-V") == 0) {
-            printf("TypeEasy %s\n", TE_VERSION_STR);
-            return 0;
-        }
-        if (strcmp(argv[vi], "--help") == 0 || strcmp(argv[vi], "-h") == 0) {
-            printf("TypeEasy %s\n", TE_VERSION_STR);
-            printf("Usage: %s <file.te> [options]\n", argv[0]);
-            printf("Options:\n");
-            printf("  --version, -v          Show the version and exit\n");
-            printf("  --help, -h             Show this help\n");
-            printf("  --repl                 Start the interactive REPL\n");
-            printf("  --test [dir]           Run *_test.te tests\n");
-            printf("  --syntax-check <f>     Validate syntax (JSON output)\n");
-            printf("  --selftest-vm          Self-test: two isolated VMs in one process (JSON)\n");
-            printf("  --symbols <f>          List symbols (JSON output)\n");
-            printf("  --emit-wat <f> [-o]    Generate WebAssembly text\n");
-            printf("  --emit-wasm <f> [-o]   Generate WebAssembly binary\n");
-            printf("  --debug                Enable debug logs\n");
-            printf("  --debug-port <p>       Start DAP debug server on port p\n");
-            printf("  --api [-p PORT]        Start HTTP server with the .te endpoints\n");
-            printf("  --dev                  Dev mode: hot-reload + 500 errors with file:line\n");
-            printf("  --port <p>             Port for --api (default 8080)\n");
-            printf("  --host <h>             Bind host for --api (default 0.0.0.0)\n");
-            printf("  --workers <n>          Prefork n worker processes for --api (default 1)\n");
-            printf("  --cors-origin <url>    Allowed CORS origin (default *)\n");
-            printf("  --profile              Per-fn timings (self/incl ms, calls); per request in --api\n");
-            return 0;
-        }
-    }
+    if (te_main_version_help(argc, argv, TE_VERSION_STR) == 0) return 0;
 
     clock_t inicio = clock();
     
@@ -657,34 +793,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (emit_wat_mode || emit_wasm_mode) {
-        char temp_wat_path[512];
-        const char *wat_path = output_path;
-
-        if (emit_wasm_mode) {
-            int written = snprintf(temp_wat_path, sizeof(temp_wat_path), "%s.wat.tmp", output_path);
-            if (written < 0 || written >= (int)sizeof(temp_wat_path)) {
-                fprintf(stderr, "[WASM] Error: temporary path too long.\n");
-                free_ast(script_ast);
-                return 1;
-            }
-            wat_path = temp_wat_path;
-        }
-
-        int ok = wasm_emit_wat(script_ast, wat_path);
-        free_ast(script_ast);
-        if (!ok) return 1;
-
-        if (emit_wasm_mode) {
-            ok = convert_wat_to_wasm(wat_path, output_path);
-            remove(wat_path);
-            if (!ok) return 1;
-            printf("[WASM] Wasm generado: %s\n", output_path);
-        } else {
-            printf("[WASM] WAT generado: %s\n", output_path);
-        }
-        return 0;
-    }
+    if (emit_wat_mode || emit_wasm_mode) return te_main_emit(script_ast, emit_wat_mode, emit_wasm_mode, output_path);
 
     // 2. Verificar flags
     int discover_mode = 0;
@@ -707,25 +816,7 @@ int main(int argc, char *argv[]) {
     }
 
     // 3. Modo Descubrimiento
-    if (discover_mode) {
-        printf("[");
-        MethodNode *m = global_methods;
-        int first = 1;
-        while (m) {
-            if (m->route_path) {
-                if (!first) printf(",");
-                const char *response_type = detect_response_type(m->body);
-                printf("{\"route\": \"%s\", \"method\": \"%s\", \"function\": \"%s\", \"response_type\": \"%s\"}", 
-                       m->route_path, m->http_method ? m->http_method : "GET", m->name, response_type);
-                first = 0;
-            }
-            m = m->next;
-        }
-        printf("]\n");
-        // Liberar memoria y salir
-        free_ast(script_ast);
-        return 0;
-    }
+    if (discover_mode) return te_main_discover(script_ast);
 
     // 4. Iniciar el debugger ANTES de ejecutar el script (bloquea hasta que
     // el adapter se conecte y envíe `start`).
@@ -758,81 +849,10 @@ int main(int argc, char *argv[]) {
     }
 
     // 5b. Modo --api: levantar servidor HTTP con los endpoints del .te.
-    if (api_mode) {
-        if (api_workers < 1) api_workers = 1;
-        /* Dev mode (--dev): single in-process worker, runtime error file:line in
-         * HTTP 500 bodies (via TYPEEASY_DEV) and hot-reload that re-exec's the
-         * process when the script changes on disk. */
-        if (dev_mode) {
-            api_workers = 1;
-#ifdef _WIN32
-            _putenv("TYPEEASY_DEV=1");
-#else
-            setenv("TYPEEASY_DEV", "1", 1);
-#endif
-            typeeasy_enable_hot_reload(script_path);
-            printf("[typeeasy --dev] dev mode: hot-reload + verbose 500 errors enabled\n");
-            fflush(stdout);
-        }
-        /* CORS origin: el flag --cors-origin tiene prioridad; si no se pasa,
-         * se usa la variable de entorno TYPEEASY_CORS_ORIGIN (config sin
-         * archivo, ideal para Docker / .env). Default "*" si no hay ninguno. */
-        if (!api_cors_origin) api_cors_origin = getenv("TYPEEASY_CORS_ORIGIN");
-        if (api_cors_origin && *api_cors_origin) typeeasy_set_cors_origin(api_cors_origin);
-        int rc;
-        if (dev_mode) {
-            /* Single in-process server so the watcher loop can re-exec. */
-            rc = typeeasy_run_api_server(api_host, api_port);
-            if (rc == 99) {
-                /* Hot-reload: replace this process image with a fresh one that
-                 * re-parses the changed script. argv is NUL-terminated per the
-                 * C standard, so it can be passed straight to execv. */
-                free_ast(script_ast);
-                te_reexec(argv);
-                /* If exec fails, fall through and report it. */
-                perror("[typeeasy --dev] hot-reload re-exec failed");
-                return 1;
-            }
-        } else if (api_worker_index >= 0) {
-            /* Spawned by the Windows load-balancer master: run as a single
-             * worker bound to the internal port with a short banner. */
-            rc = typeeasy_run_api_server_worker(api_host, api_port, api_worker_index);
-        } else {
-            rc = typeeasy_run_api_server_pool(api_host, api_port, api_workers, script_path);
-        }
-        free_ast(script_ast);
-        return rc;
-    }
+    if (api_mode) return te_main_api(argv, script_ast, script_path, api_port, api_host, api_workers, api_worker_index, api_cors_origin, dev_mode);
 
     // 6. Modo Invocación
-    if (invoke_func) {
-        MethodNode *m = global_methods;
-        int found = 0;
-        while (m) {
-            if (strcmp(m->name, invoke_func) == 0) {
-                /* Suprimir stdout en vivo y limpiar el buffer de captura
-                 * para que el cuerpo no se duplique con __ret__. */
-                if (g_vm.stdout_buffer) { free(g_vm.stdout_buffer); g_vm.stdout_buffer = NULL; }
-                g_vm.suppress_stdout = 1;
-                interpret_ast(m->body);
-                g_vm.suppress_stdout = 0;
-
-                // Verificar si hubo un retorno (return json(...))
-                Variable *ret_var = find_variable("__ret__");
-                if (ret_var && ret_var->vtype == VAL_STRING) {
-                    // Imprimir el resultado (JSON/XML) a stdout
-                    printf("%s", ret_var->value.string_value);
-                }
-                found = 1;
-                break;
-            }
-            m = m->next;
-        }
-        if (!found) {
-            fprintf(stderr, "Error: Function '%s' not found.\n", invoke_func);
-            return 1;
-        }
-    }
+    if (invoke_func && te_main_invoke(invoke_func) != 0) return 1;
 
     // 7. Modo Interpretación (Legacy/Default)
     // Si no es discover ni invoke, ya se ejecutó interpret_ast(script_ast) arriba.
