@@ -97,71 +97,8 @@ static void te_col_reorder(SortCol *col, int *idx, int n) {
     }
 }
 
-int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
-        /* ---- Fase B: higher-order methods sobre LIST ----
-         * .map(fn), .filter(fn), .reduce(fn, init), .forEach(fn),
-         * .find(fn), .any(fn)/.every(fn). El argumento puede ser un lambda
-         * inline (NK_LAMBDA / type=="LAMBDA") o una variable de tipo LAMBDA. */
-        if (list && node->id && (
-                strcmp(node->id, "map") == 0 ||
-                strcmp(node->id, "filter") == 0 ||
-                strcmp(node->id, "reduce") == 0 ||
-                strcmp(node->id, "forEach") == 0 ||
-                strcmp(node->id, "find") == 0 ||
-                strcmp(node->id, "any") == 0 ||
-                strcmp(node->id, "every") == 0 ||
-                /* v0.0.11 LINQ-style operators (lambda required) */
-                strcmp(node->id, "where") == 0 ||
-                strcmp(node->id, "select") == 0 ||
-                strcmp(node->id, "all") == 0 ||
-                strcmp(node->id, "none") == 0 ||
-                strcmp(node->id, "firstWhere") == 0 ||
-                strcmp(node->id, "lastWhere") == 0 ||
-                strcmp(node->id, "countWhere") == 0 ||
-                strcmp(node->id, "sumBy") == 0 ||
-                strcmp(node->id, "avgBy") == 0 ||
-                strcmp(node->id, "minBy") == 0 ||
-                strcmp(node->id, "maxBy") == 0 ||
-                strcmp(node->id, "takeWhile") == 0 ||
-                strcmp(node->id, "skipWhile") == 0 ||
-                strcmp(node->id, "flatMap") == 0 ||
-                strcmp(node->id, "selectMany") == 0 ||
-                strcmp(node->id, "groupBy") == 0 ||
-                strcmp(node->id, "orderBy") == 0 ||
-                strcmp(node->id, "orderByDescending") == 0 ||
-                strcmp(node->id, "thenBy") == 0 ||
-                strcmp(node->id, "thenByDescending") == 0 ||
-                strcmp(node->id, "distinctBy") == 0 ||
-                strcmp(node->id, "aggregate") == 0 ||
-                strcmp(node->id, "fold") == 0 ||
-                strcmp(node->id, "toMap") == 0 ||
-                strcmp(node->id, "toDictionary") == 0)) {
-            ASTNode *arg = node->right;
-            ASTNode *fn = NULL;
-            if (arg && arg->type && strcmp(arg->type, "LAMBDA") == 0) {
-                fn = arg;
-            } else if (arg && arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
-                Variable *fv = find_variable(arg->id);
-                if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0) {
-                    fn = (ASTNode*)(intptr_t)fv->value.object_value;
-                }
-            }
-            if (!fn) {
-                printf("Error: %s() requires a lambda or function value.\n", node->id);
-                add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
-                return 1;
-            }
-            /* v0.0.11: normalize aliases so we can reuse existing branches */
-            const char *fname = node->id;
-            if (strcmp(fname, "where") == 0) fname = "filter";
-            else if (strcmp(fname, "select") == 0) fname = "map";
-            else if (strcmp(fname, "all") == 0) fname = "every";
-            else if (strcmp(fname, "firstWhere") == 0) fname = "find";
-            else if (strcmp(fname, "aggregate") == 0) fname = "reduce";
-            else if (strcmp(fname, "fold") == 0) fname = "reduce";
-            else if (strcmp(fname, "toDictionary") == 0) fname = "toMap";
-            /* Phase 2 fast-path: pre-analyse the lambda body once. */
-            FastLambda fl; fast_lambda_analyze(fn, &fl);
+/* Extraído de te_linq_ops_method_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_lq_map(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fname, ASTNode *arg, FastLambda fl) {
             if (strcmp(fname, "map") == 0) {
                 ASTNode *result = create_list_node(NULL);
                 ASTNode *item = list->left;
@@ -245,6 +182,11 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
+    return 0;
+}
+
+/* Extraído de te_linq_ops_method_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_lq_filter(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fname, ASTNode *arg, FastLambda fl) {
             if (strcmp(fname, "filter") == 0) {
                 ASTNode *result = create_list_node(NULL);
                 ASTNode *item = list->left;
@@ -362,6 +304,11 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
+    return 0;
+}
+
+/* Extraído de te_linq_ops_method_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fname, ASTNode *arg, FastLambda fl) {
             if (strcmp(fname, "reduce") == 0) {
                 /* arg list: (fn, init). arg->next es init. */
                 ASTNode *initArg = arg->next; /* gotcha #1: 2nd arg via ->next */
@@ -611,6 +558,11 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 add_or_update_variable("__ret__", create_ast_leaf_number("INT", cnt, NULL, NULL));
                 return 1;
             }
+    return 0;
+}
+
+/* Extraído de te_linq_ops_method_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fname, ASTNode *arg, FastLambda fl) {
             if (strcmp(fname, "sumBy") == 0) {
                 ASTNode *item = list->left;
                 /* v0.0.13 (perf) COLUMNAR FAST PATH: sumBy(fn(p)=>p.attr) over
@@ -827,6 +779,11 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
                 return 1;
             }
+    return 0;
+}
+
+/* Extraído de te_linq_ops_method_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_lq_take_skip_flat_group(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fname, ASTNode *arg, FastLambda fl) {
             if (strcmp(fname, "takeWhile") == 0) {
                 ASTNode *result = create_list_node(NULL);
                 ASTNode *item = list->left;
@@ -1042,6 +999,11 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
+    return 0;
+}
+
+/* Extraído de te_linq_ops_method_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_lq_order(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fname, ASTNode *arg, FastLambda fl) {
             if (strcmp(fname, "orderBy") == 0 || strcmp(fname, "orderByDescending") == 0) {
                 int descending = (strcmp(fname, "orderByDescending") == 0);
                 /* Materialize items + their keys into parallel arrays, sort, rebuild list.
@@ -1224,6 +1186,11 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
+    return 0;
+}
+
+/* Extraído de te_linq_ops_method_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
+static int te_lq_distinct_tomap(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fname, ASTNode *arg, FastLambda fl) {
             if (strcmp(fname, "distinctBy") == 0) {
                 /* Like distinct but keys come from a lambda. int64 fast-path via
                  * fast_eval (open-addressing hash); else string-keyed hash. */
@@ -1377,6 +1344,81 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
                 return 1;
             }
+    return 0;
+}
+
+int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
+        /* ---- Fase B: higher-order methods sobre LIST ----
+         * .map(fn), .filter(fn), .reduce(fn, init), .forEach(fn),
+         * .find(fn), .any(fn)/.every(fn). El argumento puede ser un lambda
+         * inline (NK_LAMBDA / type=="LAMBDA") o una variable de tipo LAMBDA. */
+        if (list && node->id && (
+                strcmp(node->id, "map") == 0 ||
+                strcmp(node->id, "filter") == 0 ||
+                strcmp(node->id, "reduce") == 0 ||
+                strcmp(node->id, "forEach") == 0 ||
+                strcmp(node->id, "find") == 0 ||
+                strcmp(node->id, "any") == 0 ||
+                strcmp(node->id, "every") == 0 ||
+                /* v0.0.11 LINQ-style operators (lambda required) */
+                strcmp(node->id, "where") == 0 ||
+                strcmp(node->id, "select") == 0 ||
+                strcmp(node->id, "all") == 0 ||
+                strcmp(node->id, "none") == 0 ||
+                strcmp(node->id, "firstWhere") == 0 ||
+                strcmp(node->id, "lastWhere") == 0 ||
+                strcmp(node->id, "countWhere") == 0 ||
+                strcmp(node->id, "sumBy") == 0 ||
+                strcmp(node->id, "avgBy") == 0 ||
+                strcmp(node->id, "minBy") == 0 ||
+                strcmp(node->id, "maxBy") == 0 ||
+                strcmp(node->id, "takeWhile") == 0 ||
+                strcmp(node->id, "skipWhile") == 0 ||
+                strcmp(node->id, "flatMap") == 0 ||
+                strcmp(node->id, "selectMany") == 0 ||
+                strcmp(node->id, "groupBy") == 0 ||
+                strcmp(node->id, "orderBy") == 0 ||
+                strcmp(node->id, "orderByDescending") == 0 ||
+                strcmp(node->id, "thenBy") == 0 ||
+                strcmp(node->id, "thenByDescending") == 0 ||
+                strcmp(node->id, "distinctBy") == 0 ||
+                strcmp(node->id, "aggregate") == 0 ||
+                strcmp(node->id, "fold") == 0 ||
+                strcmp(node->id, "toMap") == 0 ||
+                strcmp(node->id, "toDictionary") == 0)) {
+            ASTNode *arg = node->right;
+            ASTNode *fn = NULL;
+            if (arg && arg->type && strcmp(arg->type, "LAMBDA") == 0) {
+                fn = arg;
+            } else if (arg && arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+                Variable *fv = find_variable(arg->id);
+                if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0) {
+                    fn = (ASTNode*)(intptr_t)fv->value.object_value;
+                }
+            }
+            if (!fn) {
+                printf("Error: %s() requires a lambda or function value.\n", node->id);
+                add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                return 1;
+            }
+            /* v0.0.11: normalize aliases so we can reuse existing branches */
+            const char *fname = node->id;
+            if (strcmp(fname, "where") == 0) fname = "filter";
+            else if (strcmp(fname, "select") == 0) fname = "map";
+            else if (strcmp(fname, "all") == 0) fname = "every";
+            else if (strcmp(fname, "firstWhere") == 0) fname = "find";
+            else if (strcmp(fname, "aggregate") == 0) fname = "reduce";
+            else if (strcmp(fname, "fold") == 0) fname = "reduce";
+            else if (strcmp(fname, "toDictionary") == 0) fname = "toMap";
+            /* Phase 2 fast-path: pre-analyse the lambda body once. */
+            FastLambda fl; fast_lambda_analyze(fn, &fl);
+    if (te_lq_map(node, list, fn, fname, arg, fl)) return 1;
+    if (te_lq_filter(node, list, fn, fname, arg, fl)) return 1;
+    if (te_lq_reduce_find_pred(node, list, fn, fname, arg, fl)) return 1;
+    if (te_lq_aggregates(node, list, fn, fname, arg, fl)) return 1;
+    if (te_lq_take_skip_flat_group(node, list, fn, fname, arg, fl)) return 1;
+    if (te_lq_order(node, list, fn, fname, arg, fl)) return 1;
+    if (te_lq_distinct_tomap(node, list, fn, fname, arg, fl)) return 1;
         }
 
     return 0;

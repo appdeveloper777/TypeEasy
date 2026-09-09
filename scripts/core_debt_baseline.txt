@@ -171,5 +171,4 @@ fn src/te_bytecode.c bc_compile 447
 fn src/te_bytecode.c jit_compile_trace 387
 fn src/te_csv.c from_csv_to_list 565
 fn src/te_linq.c te_linq_list_method_dispatch 353
-fn src/te_linq_ops.c te_linq_ops_method_dispatch 1283
 fn src/typeeasy_main.c main 431
