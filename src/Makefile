@@ -41,6 +41,7 @@ MOTOR_OBJS = $(MOTOR_C_FILES:.c=.o)
 BISON_C = parser.tab.c
 BISON_H = parser.tab.h
 FLEX_C = lex.yy.c
+FLEX_H = lex.yy.h
 BISON_OBJ = parser.tab.o
 FLEX_OBJ = lex.yy.o
 
@@ -121,7 +122,8 @@ all: $(EXEC_SCRIPT) $(EXEC_AGENT)
 # --- REGLAS DE BISON/FLEX ---
 $(BISON_C) $(BISON_H): $(BISON_FILE)
 	bison -d -o $(BISON_C) $(BISON_FILE) --warnings=none
-$(FLEX_C): $(FLEX_FILE)
+# parser.l lleva %option header-file=lex.yy.h (lexer reentrante); parser.y lo incluye.
+$(FLEX_C) $(FLEX_H): $(FLEX_FILE)
 	flex -o $(FLEX_C) $(FLEX_FILE)
 
 # --- REGLAS DE OBJETOS ---
@@ -129,7 +131,7 @@ $(FLEX_C): $(FLEX_FILE)
 $(MOTOR_OBJS): %.o: %.c
 	$(CC) $(CFLAGS) -fno-semantic-interposition -c $< -o $@
 
-$(BISON_OBJ): $(BISON_C) $(BISON_H)
+$(BISON_OBJ): $(BISON_C) $(BISON_H) $(FLEX_H)
 	$(CC) $(CFLAGS) -c $(BISON_C) -o $(BISON_OBJ)
 $(FLEX_OBJ): $(FLEX_C)
 	$(CC) $(CFLAGS) -c $(FLEX_C) -o $(FLEX_OBJ)
@@ -164,4 +166,4 @@ $(SPARK_OBJ): $(SPARK_DIR)/dataframe.cpp $(SPARK_DIR)/dataframe.hpp
 
 # --- REGLAS DE LIMPIEZA ---
 clean:
-	rm -f $(EXEC_SCRIPT) $(EXEC_AGENT) *.o $(BISON_C) $(BISON_H) $(FLEX_C) $(SPARK_OBJ)
+	rm -f $(EXEC_SCRIPT) $(EXEC_AGENT) *.o $(BISON_C) $(BISON_H) $(FLEX_C) $(FLEX_H) $(SPARK_OBJ)
