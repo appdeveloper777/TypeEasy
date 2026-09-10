@@ -7,6 +7,7 @@
 #include "ast.h"
 #include "te_vm.h"
 #include "ast_internal.h"
+#include "te_csv.h"
 
 void interpret_for_in(TeVM *vm, ASTNode *node) {
     if (!node->right) {
@@ -74,6 +75,7 @@ void interpret_for_in(TeVM *vm, ASTNode *node) {
         printf("Error: node is not a valid list.\n");
         return;
     }
+    te_df_materialize_inplace(listNode);   /* DataFrame (TE_CSV_DATAFRAME=1): iterar exige filas reales */
     ASTNode *items = listNode->left;   
     /* Block scope: snapshot the variable count so each iteration's body-local
      * `let`s are reclaimed before the next pass (see te_scope_unwind_to). The

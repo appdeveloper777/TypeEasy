@@ -66,6 +66,7 @@ ASTNode *build_object_wrapper_pooled(ASTNode *value);
 /* DataFrame analytics fast-path consumed by interpret_call_method. */
 DataFrame *te_list_df(ASTNode *list);
 int te_df_dispatch_method(DataFrame *df, ASTNode *node);
+int te_df_materialize_inplace(ASTNode *wrapper);   /* 0.1.2: DataFrame -> LIST real en sitio (fallback sin silencio) */
 
 /* v0.0.14: Per-call override for columnar mode in from_csv_to_list.
  *   -1 = unset (fall through to env TE_CSV_COLUMNAR)

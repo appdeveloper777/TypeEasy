@@ -4160,6 +4160,7 @@ static TEMapHash* te_map_get_hash(ASTNode *map) {
 ASTNode* list_get_item(ASTNode *list, int idx) {
     if (!list || !list->type || strcmp(list->type, TE_T_LIST) != 0) return NULL;
     if (idx < 0) return NULL;
+    te_df_materialize_inplace(list);   /* DataFrame (TE_CSV_DATAFRAME=1): indexar exige filas reales */
     /* Ola 14: O(1) via side-cache index. */
     TEListIdx *ix = te_list_get_idx(list);
     if (ix) {
@@ -7286,7 +7287,8 @@ static void interpret_call_method_impl(ASTNode *node) {
         DataFrame *df_recv = te_list_df(recv_list);
         if (df_recv) {
             if (te_df_dispatch_method(df_recv, node)) return;
-            /* fallthrough si el método no es analítico */
+            /* sin fast-path columnar: materializar filas reales (antes: lista vacía -> 0 silencioso) */
+            te_df_materialize_inplace(recv_list);
         }
     }
 

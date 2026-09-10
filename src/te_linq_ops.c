@@ -240,6 +240,14 @@ static int te_lq_filter(ASTNode *node, ASTNode *list, ASTNode *fn, const char *f
                             result->value = 1;
                             te_colcache_attach_lazy(cc, mask, result, new_n);
                             /* mask ownership pasó a la vista — NO free. */
+                            /* 0.1.2: la vista necesita FILAS reales además de la máscara: `caros[0].x`,
+                             * `for (p in caros)`, `caros.select(...)`, `.first()` veían una lista vacía
+                             * (los aggregates siguen usando parent+mask). O(n) punteros, O(matches) wrappers. */
+                            {
+                                int k = 0;
+                                for (ASTNode *it = list->left; it && k < n; it = it->next, k++)
+                                    if (mask[k]) te_list_append(result, build_item_from_value(it));
+                            }
                             te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                             return 1;
                         }

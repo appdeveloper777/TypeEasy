@@ -1,0 +1,30 @@
+// env: TE_CSV_DATAFRAME=1
+// env: TE_CSV_THREADS=2
+// expect: n=8|sum=112|gt12=3|lt10=3|eqDulce=4|neDulce=4|anyGt=1|allGt=0|none99=1|where=3|first=Paneton|sel=25
+// Modo DataFrame (columnar): antes de 0.1.2 SOLO sumBy/avgBy/minBy/maxBy tenían fast-path; todo lo
+// demás (countWhere, any, all, none, where, first, select...) caía al dispatcher genérico sobre una
+// lista SIN filas y devolvía 0 en silencio. Ahora: predicados columnares nativos + materialización
+// en sitio para el resto. La salida debe ser IDÉNTICA a la del modo por defecto.
+
+class Producto {
+    nombre    : string;
+    precio    : int;
+    categoria : string;
+}
+
+let productos = from "productos.csv", Producto;
+var out = "n=" + productos.length;
+out = out + "|sum=" + productos.sumBy(fn(p) => p.precio);
+out = out + "|gt12=" + productos.countWhere(fn(p) => p.precio > 12);
+out = out + "|lt10=" + productos.countWhere(fn(p) => p.precio < 10);
+out = out + "|eqDulce=" + productos.countWhere(fn(p) => p.categoria == "dulce");
+out = out + "|neDulce=" + productos.countWhere(fn(p) => p.categoria != "dulce");
+out = out + "|anyGt=" + productos.any(fn(p) => p.precio > 20);
+out = out + "|allGt=" + productos.all(fn(p) => p.precio > 20);
+out = out + "|none99=" + productos.none(fn(p) => p.precio == 99);
+let caros = productos.where(fn(p) => p.precio > 12);
+out = out + "|where=" + caros.length;
+out = out + "|first=" + caros[0].nombre;
+let precios = caros.select(fn(p) => p.precio);
+out = out + "|sel=" + precios[0];
+println(out);

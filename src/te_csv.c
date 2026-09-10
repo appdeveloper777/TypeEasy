@@ -1195,6 +1195,7 @@ typedef struct CSVColWorkerArgs {
     /* Flag: si 1, el buffer src es mmap'd (read-only seguro) →
      * usar csv_next_record_readonly (sin writes, sin COW page faults). */
     int         readonly_src;
+    struct CSVChunk *arena_head;   /* arena thread-local del worker (strings NUL-terminadas del path readonly) */
     /* Pool: fase actual (0=idle, 1=phase_a, 2=phase_b, 3=exit).
      * Cache-line aligned para evitar false sharing entre slots. */
     volatile int pool_phase __attribute__((aligned(64)));
@@ -1260,9 +1261,10 @@ static void csv_do_phase_b(CSVColWorkerArgs *a) {
                     if (neg) v = -v;
                     ((int64_t*)gcols[aa])[global_row] = (int64_t)v;
                 } else {
-                    /* String: guardamos el puntero sin null-terminar.
-                     * Válido en el buffer mmap'd (lifetime de proceso). */
-                    ((const char**)gcols[aa])[global_row] = raw;
+                    /* String: copia NUL-terminada en la arena del thread. Antes se guardaba el puntero
+                     * crudo al mmap SIN terminador: strcmp/printf/strdup leían hasta el fin del archivo
+                     * (countWhere por string = 0, show/toList con basura, materializar 200k filas = 3 GB). */
+                    ((const char**)gcols[aa])[global_row] = csv_arena_dup(raw, (size_t)rawlen);
                 }
             }
             row_idx++;
@@ -1311,6 +1313,22 @@ static void csv_do_phase_b(CSVColWorkerArgs *a) {
     a->row_count = row_idx;
 }
 
+/* Filas que Phase B va a ESCRIBIR para el chunk [pos, chunk_end): la fila que cruza chunk_end
+ * pertenece a este worker (el siguiente arranca tras el próximo '\n'), y la última fila del archivo
+ * cuenta aunque no termine en '\n'. Antes se contaban solo los '\n' en [pos, chunk_end): con N
+ * threads se perdía 1 fila por frontera (sumas distintas según TE_CSV_THREADS) y un archivo sin
+ * '\n' final escribía una fila más de las reservadas (heap overflow -> "malloc(): invalid size"). */
+static int csv_df_count_rows(const char *src, size_t total_len, size_t pos, size_t chunk_end) {
+    size_t hi = chunk_end;
+    if (hi < total_len && hi > 0 && src[hi - 1] != '\n') {
+        while (hi < total_len && src[hi] != '\n') hi++;
+        if (hi < total_len) hi++;
+    }
+    int n = (int)csv_count_newlines(src, pos, hi);
+    if (hi == total_len && total_len > pos && src[total_len - 1] != '\n') n++;
+    return n;
+}
+
 static void *csv_combined_col_worker(void *p) {
     CSVColWorkerArgs *a = (CSVColWorkerArgs*)p;
 
@@ -1324,7 +1342,7 @@ static void *csv_combined_col_worker(void *p) {
             if (pos < total_len) pos++;
         }
         a->actual_parse_start = pos;
-        a->row_count = (int)csv_count_newlines(src, pos, a->chunk_end);
+        a->row_count = csv_df_count_rows(src, total_len, pos, a->chunk_end);
     }
 
     /* Señalar Phase A completa (release → main la ve sin lag). */
@@ -1338,7 +1356,9 @@ static void *csv_combined_col_worker(void *p) {
     if (!a->global_col_data) return NULL;
 
     /* === Phase B: parsear y escribir directo al DataFrame global === */
+    t_csv_arena = NULL;
     csv_do_phase_b(a);
+    a->arena_head = t_csv_arena;   /* main lo linkea a keepalive tras el join */
     return NULL;
 }
 
@@ -1849,6 +1869,114 @@ static DataFrame *df_group_sum(const DataFrame *src, int kc, int vc) {
 
 /* Despacha métodos sobre wrappers DataFrame: count/sum/min/max/group_sum/print.
  * Devuelve 1 si manejó la llamada (resultado en __ret__), 0 si no. */
+/* Materializa el DataFrame columnar en una LIST real de ObjectNodes (O(N), una pasada). */
+static ASTNode *df_materialize(DataFrame *df) {
+
+        /* Materialize the columnar DataFrame into a real LIST of ObjectNodes.
+         * O(N) single-pass: build attrs from cols, chain via ->next, populate
+         * TEListIdx in one go (avoids O(N^2) of repeated append_to_list). */
+        ClassNode *cls = df->cls;
+        if (!cls) return NULL;
+        int nattr = cls->attr_count;
+        int N = df->row_count;
+        long long t0 = 0;
+        if (getenv("TE_CSV_TIMING")) {
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            t0 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        }
+        /* Resolve attr_idx -> col_idx mapping by name. -1 if no match. */
+        int *attr_to_col = (int*)malloc((size_t)nattr * sizeof(int));
+        if (!attr_to_col) return NULL;
+        for (int a = 0; a < nattr; a++) {
+            attr_to_col[a] = -1;
+            const char *aname = cls->attributes[a].id;
+            if (!aname) continue;
+            for (int c = 0; c < df->col_count; c++) {
+                if (df->col_names[c] && strcmp(df->col_names[c], aname) == 0) {
+                    attr_to_col[a] = c; break;
+                }
+            }
+        }
+        /* Build LIST root + TEListIdx in one pass. */
+        ASTNode *list = (ASTNode*)calloc(1, sizeof(ASTNode));
+        list->type = strdup(TE_T_LIST);
+        TEListIdx *ix = (TEListIdx*)calloc(1, sizeof(TEListIdx));
+        int cap = N < 8 ? 8 : N;
+        ix->items = (ASTNode**)calloc((size_t)cap, sizeof(ASTNode*));
+        ix->cap = cap;
+        ix->len = N;
+        list->extra = (struct ASTNode*)ix;
+        ASTNode *prev = NULL;
+        /* Bulk-allocate N ObjectNodes from arena (single mega-alloc instead
+         * of 5+ mallocs per row). ASTNode wrappers come from ast_pool_alloc
+         * (block allocator). Per-row mallocs drop from ~9 to ~2 (strdup
+         * "OBJECT" + strdup string value). */
+        ObjectNode *objs = create_objects_bulk(cls, N);
+        for (int i = 0; i < N; i++) {
+            ObjectNode *obj = &objs[i];
+            for (int a = 0; a < nattr; a++) {
+                int ci = attr_to_col[a];
+                if (ci < 0) continue;
+                Variable *v = &obj->attributes[a];
+                if (df->col_kinds[ci] == 0) {
+                    int64_t iv = ((int64_t*)df->col_data[ci])[i];
+                    if (v->vtype == VAL_INT) {
+                        v->value.int_value = (long long)iv;
+                    } else if (v->vtype == VAL_FLOAT) {
+                        v->value.float_value = (double)iv;
+                    } else { /* string fallback */
+                        char buf[32]; snprintf(buf, sizeof(buf), "%lld", (long long)iv);
+                        /* v->value.string_value is NULL from bulk alloc, no free needed. */
+                        v->value.string_value = strdup(buf);
+                    }
+                } else {
+                    const char *s = ((const char**)df->col_data[ci])[i];
+                    if (v->vtype == VAL_STRING) {
+                        /* v->value.string_value is NULL from bulk alloc, no free needed. */
+                        v->value.string_value = strdup(s ? s : "");
+                    }
+                }
+            }
+            /* ASTNode wrapper from pool (no malloc); type still strdup'd
+             * (arena unsafe per ast_pool_alloc comment). */
+            ASTNode *on = ast_pool_alloc();
+            /* pool node: type sentinel compartido + from_pool (free_ast NO debe hacer free()). Antes
+             * strdup(TE_T_OBJECT) sin from_pool: si la lista llegaba a una variable, el teardown
+             * liberaba memoria del pool -> SIGSEGV al salir (te_df_materialize_inplace lo exponía). */
+            if (!te_csv_state()->wrapper_obj_type) te_csv_state()->wrapper_obj_type = strdup(TE_T_OBJECT);
+            on->type = te_csv_state()->wrapper_obj_type;
+            on->from_pool = 1;
+            on->value = (int)(intptr_t)obj;
+            on->extra = (struct ASTNode*)obj;
+            ix->items[i] = on;
+            if (prev) prev->next = on; else list->left = on;
+            prev = on;
+        }
+        free(attr_to_col);
+        if (getenv("TE_CSV_TIMING")) {
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            long long t1 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            fprintf(stderr, "[DF-OP] toList %lldus n=%d\n", (t1 - t0) / 1000, N);
+        }
+        return list;
+}
+
+/* Fase F (0.1.2): un LIST-wrapper de DataFrame que recibe un método sin fast-path columnar se
+ * convierte EN SITIO en una lista normal para que el dispatcher genérico opere sobre filas reales.
+ * Antes el fallback veía una lista vacía y devolvía 0 en silencio (countWhere/any/where... = 0). */
+int te_df_materialize_inplace(ASTNode *wrapper) {
+    DataFrame *df = te_list_df(wrapper);
+    if (!df) return 0;
+    ASTNode *list = df_materialize(df);
+    if (!list) return 0;
+    free(wrapper->extra);            /* TEListIdx sentinel */
+    wrapper->left  = list->left;
+    wrapper->extra = list->extra;
+    /* value=1 se conserva: marca "lista CSV ya materializada" (no re-instanciar como literal) */
+    free(list->type); free(list);
+    return 1;
+}
+
 int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
     if (!df || !node || !node->id) return 0;
     const char *m = node->id;
@@ -1977,6 +2105,76 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
         }
         return 0; /* lambda no simple → fallback (probable 0, conocido) */
     }
+    /* Fase F (0.1.2): predicados sobre columnas — countWhere / any / all / every / none.
+     * Antes NO había fast-path y el fallback genérico (lista sin filas) devolvía 0 SIEMPRE. */
+    if (arg1 && arg1->type && strcmp(arg1->type, TE_T_LAMBDA) == 0 &&
+        (strcmp(m, "countWhere") == 0 || strcmp(m, "any") == 0 || strcmp(m, "all") == 0 ||
+         strcmp(m, "every") == 0 || strcmp(m, "none") == 0)) {
+        FastLambda fl;
+        LambdaSpec sp = fast_lambda_analyze(arg1, &fl);
+        int is_num = (sp == SPEC_CMP_GT || sp == SPEC_CMP_LT || sp == SPEC_CMP_GE ||
+                      sp == SPEC_CMP_LE || sp == SPEC_CMP_EQ || sp == SPEC_CMP_NE);
+        int is_str = (sp == SPEC_CMP_EQ_STR || sp == SPEC_CMP_NE_STR);
+        if ((is_num || is_str) && fl.attr_name) {
+            int ci = df_col_index(df, fl.attr_name);
+            if (ci < 0) return 0;
+            int kind = df->col_kinds[ci];
+            size_t n = (size_t)df->row_count;
+            long long cnt = 0;
+            if (is_num && kind == 0) {
+                const int64_t *col = (const int64_t*)df->col_data[ci];
+                if (fl.k_is_float) {
+                    double k = fl.k_d;
+                    for (size_t i = 0; i < n; i++) {
+                        double v = (double)col[i];
+                        int b = (sp == SPEC_CMP_GT) ? v > k : (sp == SPEC_CMP_LT) ? v < k :
+                                (sp == SPEC_CMP_GE) ? v >= k : (sp == SPEC_CMP_LE) ? v <= k :
+                                (sp == SPEC_CMP_EQ) ? v == k : v != k;
+                        cnt += b;
+                    }
+                } else {
+                    int64_t k = (int64_t)fl.k;
+                    switch (sp) {
+                    case SPEC_CMP_GT: for (size_t i = 0; i < n; i++) cnt += (col[i] >  k); break;
+                    case SPEC_CMP_LT: for (size_t i = 0; i < n; i++) cnt += (col[i] <  k); break;
+                    case SPEC_CMP_GE: for (size_t i = 0; i < n; i++) cnt += (col[i] >= k); break;
+                    case SPEC_CMP_LE: for (size_t i = 0; i < n; i++) cnt += (col[i] <= k); break;
+                    case SPEC_CMP_EQ: for (size_t i = 0; i < n; i++) cnt += (col[i] == k); break;
+                    default:          for (size_t i = 0; i < n; i++) cnt += (col[i] != k); break;
+                    }
+                }
+            } else if (is_num && kind == 3) {
+                const double *col = (const double*)df->col_data[ci];
+                double k = fl.k_is_float ? fl.k_d : (double)fl.k;
+                for (size_t i = 0; i < n; i++) {
+                    double v = col[i];
+                    int b = (sp == SPEC_CMP_GT) ? v > k : (sp == SPEC_CMP_LT) ? v < k :
+                            (sp == SPEC_CMP_GE) ? v >= k : (sp == SPEC_CMP_LE) ? v <= k :
+                            (sp == SPEC_CMP_EQ) ? v == k : v != k;
+                    cnt += b;
+                }
+            } else if (is_str && kind == 1) {
+                const char **col = (const char**)df->col_data[ci];
+                const char *k = fl.k_str ? fl.k_str : "";
+                int want_eq = (sp == SPEC_CMP_EQ_STR);
+                for (size_t i = 0; i < n; i++) {
+                    int eq = (col[i] && strcmp(col[i], k) == 0);
+                    cnt += want_eq ? eq : !eq;
+                }
+            } else {
+                return 0;   /* tipo de columna no cubierto: materializar */
+            }
+            long long r;
+            if (strcmp(m, "countWhere") == 0) r = cnt;
+            else if (strcmp(m, "any") == 0)   r = (cnt > 0);
+            else if (strcmp(m, "none") == 0)  r = (cnt == 0);
+            else                              r = ((size_t)cnt == n);   /* all / every */
+            add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(
+                strcmp(m, "countWhere") == 0 ? TE_T_INT : TE_T_BOOL, r, NULL, NULL));
+            return 1;
+        }
+        return 0;   /* predicado complejo: materializar y dejar al dispatcher genérico */
+    }
     if (strcmp(m, "group_sum") == 0 && s1 && s2) {
         int kc = df_col_index(df, s1);
         int vc = df_col_index(df, s2);
@@ -2023,87 +2221,8 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
         return 1;
     }
     if ((strcmp(m, "toList") == 0 || strcmp(m, "toArray") == 0) && !arg1) {
-        /* Materialize the columnar DataFrame into a real LIST of ObjectNodes.
-         * O(N) single-pass: build attrs from cols, chain via ->next, populate
-         * TEListIdx in one go (avoids O(N^2) of repeated append_to_list). */
-        ClassNode *cls = df->cls;
-        if (!cls) return 0;
-        int nattr = cls->attr_count;
-        int N = df->row_count;
-        long long t0 = 0;
-        if (getenv("TE_CSV_TIMING")) {
-            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-            t0 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-        }
-        /* Resolve attr_idx -> col_idx mapping by name. -1 if no match. */
-        int *attr_to_col = (int*)malloc((size_t)nattr * sizeof(int));
-        if (!attr_to_col) return 0;
-        for (int a = 0; a < nattr; a++) {
-            attr_to_col[a] = -1;
-            const char *aname = cls->attributes[a].id;
-            if (!aname) continue;
-            for (int c = 0; c < df->col_count; c++) {
-                if (df->col_names[c] && strcmp(df->col_names[c], aname) == 0) {
-                    attr_to_col[a] = c; break;
-                }
-            }
-        }
-        /* Build LIST root + TEListIdx in one pass. */
-        ASTNode *list = (ASTNode*)calloc(1, sizeof(ASTNode));
-        list->type = strdup(TE_T_LIST);
-        TEListIdx *ix = (TEListIdx*)calloc(1, sizeof(TEListIdx));
-        int cap = N < 8 ? 8 : N;
-        ix->items = (ASTNode**)calloc((size_t)cap, sizeof(ASTNode*));
-        ix->cap = cap;
-        ix->len = N;
-        list->extra = (struct ASTNode*)ix;
-        ASTNode *prev = NULL;
-        /* Bulk-allocate N ObjectNodes from arena (single mega-alloc instead
-         * of 5+ mallocs per row). ASTNode wrappers come from ast_pool_alloc
-         * (block allocator). Per-row mallocs drop from ~9 to ~2 (strdup
-         * "OBJECT" + strdup string value). */
-        ObjectNode *objs = create_objects_bulk(cls, N);
-        for (int i = 0; i < N; i++) {
-            ObjectNode *obj = &objs[i];
-            for (int a = 0; a < nattr; a++) {
-                int ci = attr_to_col[a];
-                if (ci < 0) continue;
-                Variable *v = &obj->attributes[a];
-                if (df->col_kinds[ci] == 0) {
-                    int64_t iv = ((int64_t*)df->col_data[ci])[i];
-                    if (v->vtype == VAL_INT) {
-                        v->value.int_value = (long long)iv;
-                    } else if (v->vtype == VAL_FLOAT) {
-                        v->value.float_value = (double)iv;
-                    } else { /* string fallback */
-                        char buf[32]; snprintf(buf, sizeof(buf), "%lld", (long long)iv);
-                        /* v->value.string_value is NULL from bulk alloc, no free needed. */
-                        v->value.string_value = strdup(buf);
-                    }
-                } else {
-                    const char *s = ((const char**)df->col_data[ci])[i];
-                    if (v->vtype == VAL_STRING) {
-                        /* v->value.string_value is NULL from bulk alloc, no free needed. */
-                        v->value.string_value = strdup(s ? s : "");
-                    }
-                }
-            }
-            /* ASTNode wrapper from pool (no malloc); type still strdup'd
-             * (arena unsafe per ast_pool_alloc comment). */
-            ASTNode *on = ast_pool_alloc();
-            on->type = strdup(TE_T_OBJECT);
-            on->value = (int)(intptr_t)obj;
-            on->extra = (struct ASTNode*)obj;
-            ix->items[i] = on;
-            if (prev) prev->next = on; else list->left = on;
-            prev = on;
-        }
-        free(attr_to_col);
-        if (getenv("TE_CSV_TIMING")) {
-            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-            long long t1 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-            fprintf(stderr, "[DF-OP] toList %lldus n=%d\n", (t1 - t0) / 1000, N);
-        }
+        ASTNode *list = df_materialize(df);
+        if (!list) return 0;
         add_or_update_variable(TE_SYM_RET, list);
         return 1;
     }
@@ -2164,7 +2283,7 @@ static DataFrame *csv_build_dataframe(char *src, size_t len, size_t pos,
         {
             size_t p2 = args[0].chunk_start;
             args[0].actual_parse_start = p2;
-            args[0].row_count = (int)csv_count_newlines(src, p2, args[0].chunk_end);
+            args[0].row_count = csv_df_count_rows(src, len, p2, args[0].chunk_end);
         }
 
         for (int w = 1; w < n_workers; w++)
@@ -2189,7 +2308,7 @@ static DataFrame *csv_build_dataframe(char *src, size_t len, size_t pos,
                 df->col_kinds[a] = attr_kind[a];
                 df->col_names[a] = cls->attributes[a].id;
                 size_t slot = (attr_kind[a] == 0) ? sizeof(int64_t) : sizeof(char*);
-                df->col_data[a] = malloc((size_t)total_rows * slot);
+                df->col_data[a] = calloc((size_t)total_rows, slot);   /* líneas en blanco saltadas -> slot en 0, no basura */
             }
             for (int w = 0; w < n_workers; w++)
                 args[w].global_col_data = df->col_data;
@@ -2203,6 +2322,7 @@ static DataFrame *csv_build_dataframe(char *src, size_t len, size_t pos,
 
         for (int w = 0; w < nw; w++) pthread_join(tids[w], NULL);
         free(tids);
+        for (int w = 0; w < n_workers; w++) csv_arena_keepalive_link(args[w].arena_head);
 
         if (!df) { free(args); return NULL; }
 
@@ -2222,7 +2342,7 @@ static DataFrame *csv_build_dataframe(char *src, size_t len, size_t pos,
             if (p2 < len) p2++;
         }
         args[0].actual_parse_start = p2;
-        args[0].row_count = (int)csv_count_newlines(src, p2, args[0].chunk_end);
+        args[0].row_count = csv_df_count_rows(src, len, p2, args[0].chunk_end);
         if (ts_after_count_out) clock_gettime(CLOCK_MONOTONIC, ts_after_count_out);
 
         int total_rows = args[0].row_count;
@@ -2237,12 +2357,13 @@ static DataFrame *csv_build_dataframe(char *src, size_t len, size_t pos,
             df->col_kinds[a] = attr_kind[a];
             df->col_names[a] = cls->attributes[a].id;
             size_t slot = (attr_kind[a] == 0) ? sizeof(int64_t) : sizeof(char*);
-            df->col_data[a] = malloc((size_t)total_rows * slot);
+            df->col_data[a] = calloc((size_t)total_rows, slot);   /* líneas en blanco saltadas -> slot en 0, no basura */
         }
         args[0].row_offset = 0;
         args[0].global_col_data = df->col_data;
         args[0].go_phase_b = 1;   /* auto-señal para serial */
         csv_combined_col_worker(&args[0]); /* Phase B serial */
+        csv_arena_keepalive_link(args[0].arena_head);
         df->row_count = args[0].row_count;
         free(args);
         return df;
