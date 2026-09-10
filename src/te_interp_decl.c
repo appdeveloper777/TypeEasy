@@ -14,7 +14,7 @@
 /* Extraído de interpret_var_decl (Fase 2). Devuelve 1 si manejó la llamada. */
 static int te_decl_from_access_expr(TeVM *vm, ASTNode *node, ASTNode *value_node, int is_const_flag, Variable *evaluated_value_var) {
     if (evaluated_value_var == NULL && value_node && value_node->type &&
-        strcmp(value_node->type, "ACCESS_EXPR") == 0) {
+        strcmp(value_node->type, TE_T_ACCESS_EXPR) == 0) {
         /* Bug fix: `let v = m["key"]` cuando m es un MAP (p.ej. de json_parse).
          * Sin esto, declare_variable caía al final-else y trataba v como INT 0,
          * perdiendo los valores STRING/OBJECT del mapa. */
@@ -22,9 +22,9 @@ static int te_decl_from_access_expr(TeVM *vm, ASTNode *node, ASTNode *value_node
         if (map) {
             const char *key = NULL;
             if (value_node->right && value_node->right->type) {
-                if (strcmp(value_node->right->type, "STRING") == 0) key = value_node->right->str_value;
-                else if (strcmp(value_node->right->type, "IDENTIFIER") == 0 ||
-                         strcmp(value_node->right->type, "ID") == 0) {
+                if (strcmp(value_node->right->type, TE_T_STRING) == 0) key = value_node->right->str_value;
+                else if (strcmp(value_node->right->type, TE_T_IDENTIFIER) == 0 ||
+                         strcmp(value_node->right->type, TE_T_ID) == 0) {
                     Variable *kv = find_variable(value_node->right->id);
                     if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
                 }
@@ -35,27 +35,27 @@ static int te_decl_from_access_expr(TeVM *vm, ASTNode *node, ASTNode *value_node
                 Variable *var = te_decl_slot(node->id);
                 if (!var) return 1;
                 var->is_const = is_const_flag;
-                if (strcmp(val->type, "STRING") == 0) {
-                    var->vtype = VAL_STRING; var->type = strdup("STRING");
+                if (strcmp(val->type, TE_T_STRING) == 0) {
+                    var->vtype = VAL_STRING; var->type = strdup(TE_T_STRING);
                     var->value.string_value = strdup(val->str_value ? val->str_value : "");
-                } else if (strcmp(val->type, "NUMBER") == 0 || strcmp(val->type, "INT") == 0) {
-                    var->vtype = VAL_INT; var->type = strdup("INT");
+                } else if (strcmp(val->type, TE_T_NUMBER) == 0 || strcmp(val->type, TE_T_INT) == 0) {
+                    var->vtype = VAL_INT; var->type = strdup(TE_T_INT);
                     var->value.int_value = val->value;
-                } else if (strcmp(val->type, "FLOAT") == 0) {
-                    var->vtype = VAL_FLOAT; var->type = strdup("FLOAT");
+                } else if (strcmp(val->type, TE_T_FLOAT) == 0) {
+                    var->vtype = VAL_FLOAT; var->type = strdup(TE_T_FLOAT);
                     var->value.float_value = val->str_value ? atof(val->str_value) : 0.0;
-                } else if (strcmp(val->type, "OBJECT_LITERAL") == 0 || strcmp(val->type, "MAP") == 0) {
-                    var->vtype = VAL_OBJECT; var->type = strdup("MAP");
+                } else if (strcmp(val->type, TE_T_OBJECT_LITERAL) == 0 || strcmp(val->type, TE_T_MAP) == 0) {
+                    var->vtype = VAL_OBJECT; var->type = strdup(TE_T_MAP);
                     var->value.object_value = (void *)(intptr_t)val;
-                } else if (strcmp(val->type, "LIST") == 0) {
-                    var->vtype = VAL_OBJECT; var->type = strdup("LIST");
+                } else if (strcmp(val->type, TE_T_LIST) == 0) {
+                    var->vtype = VAL_OBJECT; var->type = strdup(TE_T_LIST);
                     var->value.object_value = (void *)(intptr_t)val;
-                } else if (strcmp(val->type, "OBJECT") == 0) {
-                    var->vtype = VAL_OBJECT; var->type = strdup("OBJECT");
+                } else if (strcmp(val->type, TE_T_OBJECT) == 0) {
+                    var->vtype = VAL_OBJECT; var->type = strdup(TE_T_OBJECT);
                     var->value.object_value = val->extra ? (void*)val->extra
                                                          : (void *)(intptr_t)val->value;
                 } else {
-                    var->vtype = VAL_STRING; var->type = strdup("STRING");
+                    var->vtype = VAL_STRING; var->type = strdup(TE_T_STRING);
                     var->value.string_value = strdup("");
                 }
                 return 1;
@@ -64,7 +64,7 @@ static int te_decl_from_access_expr(TeVM *vm, ASTNode *node, ASTNode *value_node
             Variable *var = te_decl_slot(node->id);
             if (!var) return 1;
             var->is_const = is_const_flag;
-            var->vtype = VAL_STRING; var->type = strdup("STRING");
+            var->vtype = VAL_STRING; var->type = strdup(TE_T_STRING);
             var->value.string_value = strdup("");
             return 1;
         }
@@ -80,14 +80,14 @@ static int te_decl_from_access_expr(TeVM *vm, ASTNode *node, ASTNode *value_node
                 if (!var) return 1;
                 var->is_const = is_const_flag;
                 var->vtype = VAL_OBJECT;
-                var->type = strdup("NULL");
+                var->type = strdup(TE_T_NULL);
                 var->value.object_value = NULL;
                 return 1;
             }
             {
                 ASTNode *item = list_get_item(list, idx);
                 if (item && item->type) {
-                    if (strcmp(item->type, "OBJECT") == 0) {
+                    if (strcmp(item->type, TE_T_OBJECT) == 0) {
                         ObjectNode *obj = item->extra
                             ? (ObjectNode*)item->extra
                             : (ObjectNode*)(intptr_t)item->value;
@@ -96,68 +96,68 @@ static int te_decl_from_access_expr(TeVM *vm, ASTNode *node, ASTNode *value_node
                             if (!var) return 1;
                             var->is_const = is_const_flag;
                             var->vtype = VAL_OBJECT;
-                            var->type = strdup("OBJECT");
+                            var->type = strdup(TE_T_OBJECT);
                             var->value.object_value = obj;
                             return 1;
                         }
-                    } else if (strcmp(item->type, "OBJECT_LITERAL") == 0 ||
-                               strcmp(item->type, "MAP") == 0) {
+                    } else if (strcmp(item->type, TE_T_OBJECT_LITERAL) == 0 ||
+                               strcmp(item->type, TE_T_MAP) == 0) {
                         /* item de json_parse("[{...}]")[i] -> un MAP. */
                         Variable *var = te_decl_slot(node->id);
                         if (!var) return 1;
                         var->is_const = is_const_flag;
                         var->vtype = VAL_OBJECT;
-                        var->type = strdup("MAP");
+                        var->type = strdup(TE_T_MAP);
                         var->value.object_value = (void *)(intptr_t)item;
                         return 1;
-                    } else if (strcmp(item->type, "STRING") == 0) {
+                    } else if (strcmp(item->type, TE_T_STRING) == 0) {
                         Variable *var = te_decl_slot(node->id);
                         if (!var) return 1;
                         var->is_const = is_const_flag;
                         var->vtype = VAL_STRING;
-                        var->type = strdup("STRING");
+                        var->type = strdup(TE_T_STRING);
                         var->value.string_value = strdup(item->str_value ? item->str_value : "");
                         return 1;
-                    } else if (strcmp(item->type, "NUMBER") == 0 || strcmp(item->type, "INT") == 0) {
+                    } else if (strcmp(item->type, TE_T_NUMBER) == 0 || strcmp(item->type, TE_T_INT) == 0) {
                         Variable *var = te_decl_slot(node->id);
                         if (!var) return 1;
                         var->is_const = is_const_flag;
                         var->vtype = VAL_INT;
-                        var->type = strdup("INT");
+                        var->type = strdup(TE_T_INT);
                         var->value.int_value = item->value;
                         return 1;
-                    } else if (strcmp(item->type, "FLOAT") == 0) {
+                    } else if (strcmp(item->type, TE_T_FLOAT) == 0) {
                         Variable *var = te_decl_slot(node->id);
                         if (!var) return 1;
                         var->is_const = is_const_flag;
                         var->vtype = VAL_FLOAT;
-                        var->type = strdup("FLOAT");
+                        var->type = strdup(TE_T_FLOAT);
                         var->value.float_value = item->str_value ? atof(item->str_value) : 0.0;
                         return 1;
-                    } else if (strcmp(item->type, "LIST") == 0) {
+                    } else if (strcmp(item->type, TE_T_LIST) == 0) {
                         /* B5: nested list item (`let fila = matriz[i]`) fell to the
                          * legacy path -> "object 'fila' is not defined". Alias it. */
                         Variable *var = te_decl_slot(node->id);
                         if (!var) return 1;
                         var->is_const = is_const_flag;
                         var->vtype = VAL_OBJECT;
-                        var->type = strdup("LIST");
+                        var->type = strdup(TE_T_LIST);
                         var->value.object_value = (void *)(intptr_t)item;
                         return 1;
-                    } else if (strcmp(item->type, "BOOL") == 0) {
+                    } else if (strcmp(item->type, TE_T_BOOL) == 0) {
                         Variable *var = te_decl_slot(node->id);
                         if (!var) return 1;
                         var->is_const = is_const_flag;
                         var->vtype = VAL_INT;
-                        var->type = strdup("BOOL");
+                        var->type = strdup(TE_T_BOOL);
                         var->value.int_value = item->value;
                         return 1;
-                    } else if (strcmp(item->type, "NULL") == 0) {
+                    } else if (strcmp(item->type, TE_T_NULL) == 0) {
                         Variable *var = te_decl_slot(node->id);
                         if (!var) return 1;
                         var->is_const = is_const_flag;
                         var->vtype = VAL_OBJECT;
-                        var->type = strdup("NULL");
+                        var->type = strdup(TE_T_NULL);
                         var->value.object_value = NULL;
                         return 1;
                     }
@@ -170,7 +170,7 @@ static int te_decl_from_access_expr(TeVM *vm, ASTNode *node, ASTNode *value_node
 
 /* Extraído de interpret_var_decl (Fase 2). Devuelve 1 si manejó la llamada. */
 static int te_decl_object_ctor(TeVM *vm, ASTNode *node, ASTNode *value_node, Variable *evaluated_value_var, ASTNode *value_to_assign_node) {
-    if (node->left && strcmp(node->left->type, "OBJECT")==0) {
+    if (node->left && strcmp(node->left->type, TE_T_OBJECT)==0) {
         Variable *var = find_variable(node->id);
         if (!var || var->vtype!=VAL_OBJECT) return 1;
         
@@ -184,7 +184,7 @@ static int te_decl_object_ctor(TeVM *vm, ASTNode *node, ASTNode *value_node, Var
         }
 
         MethodNode *m = var->value.object_value->class->methods;
-        while (m && strcmp(m->name,"__constructor")!=0) m=m->next;
+        while (m && strcmp(m->name,TE_SYM_CTOR)!=0) m=m->next;
         if (m) {
             ParameterNode *p = m->params;
             ASTNode      *arg = object_node_for_constructor->left; // Usar el nodo correcto
@@ -192,31 +192,31 @@ static int te_decl_object_ctor(TeVM *vm, ASTNode *node, ASTNode *value_node, Var
                 ASTNode *vn = te_dec_arg_leaf(arg);
                // fprintf(stderr, "[DEBUG] Constructor arg: param=%s, arg->type=%s\n", p->name, arg->type ? arg->type : "NULL");
                 if (vn) {
-                } else if (arg->type && (strcmp(arg->type, "STRING") == 0 || strcmp(arg->type, "STRING_LITERAL") == 0)) {
-                    vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
+                } else if (arg->type && (strcmp(arg->type, TE_T_STRING) == 0 || strcmp(arg->type, TE_T_STRING_LITERAL) == 0)) {
+                    vn = create_ast_leaf(TE_T_STRING, 0, arg->str_value, NULL);
                     //fprintf(stderr, "[DEBUG] Constructor arg string val: %s\n", arg->str_value);
-                } else if (arg->type && strcmp(arg->type, "FLOAT") == 0) {
-                    vn = create_ast_leaf("FLOAT", 0, arg->str_value, NULL);
-                } else if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+                } else if (arg->type && strcmp(arg->type, TE_T_FLOAT) == 0) {
+                    vn = create_ast_leaf(TE_T_FLOAT, 0, arg->str_value, NULL);
+                } else if (arg->type && (strcmp(arg->type, TE_T_ID) == 0 || strcmp(arg->type, TE_T_IDENTIFIER) == 0)) {
                     Variable *v = find_variable(arg->id);
                     if (!v) {
                         fprintf(stderr, "Error: variable '%s' not found.\n", arg->id);
                         return 1;
                     }
                     if (v->vtype == VAL_STRING) {
-                        vn = create_ast_leaf("STRING", 0, strdup(v->value.string_value), NULL);
+                        vn = create_ast_leaf(TE_T_STRING, 0, strdup(v->value.string_value), NULL);
                       //  fprintf(stderr, "[DEBUG] Constructor arg var string val: %s\n", v->value.string_value);
                     } else if (v->vtype == VAL_FLOAT) {
                         char fbuf[64];
                         te_fmt_double(fbuf, sizeof(fbuf), v->value.float_value);
-                        vn = create_ast_leaf("FLOAT", 0, fbuf, NULL);
+                        vn = create_ast_leaf(TE_T_FLOAT, 0, fbuf, NULL);
                     } else {
-                        vn = create_ast_leaf_number("INT", v->value.int_value, NULL, NULL);
+                        vn = create_ast_leaf_number(TE_T_INT, v->value.int_value, NULL, NULL);
                       //  fprintf(stderr, "[DEBUG] Constructor arg var int val: %d\n", v->value.int_value);
                     }
                 } else {
                     int val = evaluate_expression(arg);
-                    vn = create_ast_leaf_number("INT", val, NULL, NULL);
+                    vn = create_ast_leaf_number(TE_T_INT, val, NULL, NULL);
                   //  fprintf(stderr, "[DEBUG] Constructor arg expr int val: %d\n", val);
                 }
                 add_or_update_variable(p->name, vn);
@@ -225,7 +225,7 @@ static int te_decl_object_ctor(TeVM *vm, ASTNode *node, ASTNode *value_node, Var
                 arg = arg->next; /* gotcha #1: step ctor args via ->next */
             }
             if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Calling __constructor for class '%s'\n", var->value.object_value->class->name);
-            call_method(var->value.object_value, "__constructor");
+            call_method(var->value.object_value, TE_SYM_CTOR);
             if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] __constructor completed\n");
         }
     }
@@ -250,7 +250,7 @@ void interpret_var_decl(TeVM *vm, ASTNode *node) {
      * handler invocation re-loads from the current request body. In that
      * case we MUST NOT replace value_node — the placeholder needs to live
      * for the next invocation. */
-    if (value_node && value_node->type && strcmp(value_node->type, "CSV_LOAD") == 0) {
+    if (value_node && value_node->type && strcmp(value_node->type, TE_T_CSV_LOAD) == 0) {
         ASTNode *loaded = te_csv_runtime_load(value_node);
         if (loaded) {
             if (value_node->extra == NULL) {
@@ -265,7 +265,7 @@ void interpret_var_decl(TeVM *vm, ASTNode *node) {
     }
 
     /* Fase 7: NULL_COALESCE — pick the right side at decl time */
-    if (value_node && value_node->type && strcmp(value_node->type, "NULL_COALESCE") == 0) {
+    if (value_node && value_node->type && strcmp(value_node->type, TE_T_NULL_COALESCE) == 0) {
         ASTNode *l = value_node->left;
         value_node = te_expr_is_null(l) ? value_node->right : l;
         node->left = value_node;
@@ -275,17 +275,17 @@ void interpret_var_decl(TeVM *vm, ASTNode *node) {
      * mutate node->left, so loops/functions re-evaluate the condition). Loop
      * to resolve nested ternaries (`a ? x : b ? y : z`, right-assoc). The
      * chosen branch is processed by the existing per-type logic below. */
-    while (value_node && value_node->type && strcmp(value_node->type, "TERNARY") == 0) {
+    while (value_node && value_node->type && strcmp(value_node->type, TE_T_TERNARY) == 0) {
         int cond = (evaluate_expression(value_node->left) != 0.0);
         value_node = cond ? value_node->right : value_node->extra;
     }
 
     // 1. Si el valor es una llamada a función, ejecútala primero
-if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0 || strcmp(value_node->type, "FILTER_CALL") == 0 || strcmp(value_node->type, "CALL_FUNC") == 0 || strcmp(value_node->type, "CALL_EXPR") == 0)) {        
+if (value_node && (strcmp(value_node->type, TE_T_CALL_METHOD) == 0 || strcmp(value_node->type, TE_T_PREDICT) == 0 || strcmp(value_node->type, TE_T_FILTER_CALL) == 0 || strcmp(value_node->type, TE_T_CALL_FUNC) == 0 || strcmp(value_node->type, TE_T_CALL_EXPR) == 0)) {        
         //printf("[DEBUG] interpret_var_decl: executing function call\n"); fflush(stdout);
         interpret_ast(value_node);
         //printf("[DEBUG] interpret_var_decl: function call returned\n"); fflush(stdout);
-        evaluated_value_var = find_variable("__ret__");
+        evaluated_value_var = find_variable(TE_SYM_RET);
         //printf("[DEBUG] interpret_var_decl: find_variable returned %p\n", (void*)evaluated_value_var); fflush(stdout);
         if (!evaluated_value_var) {
             te_runtime_fatalf("Error: no return value captured from expression '%s'. __ret_var_active=%d", value_node->type ? value_node->type : "unknown", g_vm.ret_var_active);
@@ -305,32 +305,32 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         //printf("[DEBUG] interpret_var_decl: effective_value_type_str from var: %s\n", effective_value_type_str ? effective_value_type_str : "NULL"); fflush(stdout);
     } else if (value_node != NULL) {
         //printf("[DEBUG] interpret_var_decl: effective_value_type_str from node\n"); fflush(stdout);
-        if (strcmp(value_node->type, "NUMBER") == 0) {
-            effective_value_type_str = "INT";
-        } else if (strcmp(value_node->type, "STRING_LITERAL") == 0 || strcmp(value_node->type, "STRING") == 0) {
-            effective_value_type_str = "STRING";
-        } else if (strcmp(value_node->type, "STRING_INTERP") == 0) {
-            effective_value_type_str = "STRING";
-        } else if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0 || strcmp(value_node->type, "MOD") == 0 || strcmp(value_node->type, "NEG") == 0 || strcmp(value_node->type, "BIT_AND") == 0 || strcmp(value_node->type, "BIT_OR") == 0 || strcmp(value_node->type, "BIT_XOR") == 0 || strcmp(value_node->type, "BIT_NOT") == 0 || strcmp(value_node->type, "SHL") == 0 || strcmp(value_node->type, "SHR") == 0 || strcmp(value_node->type, "IN") == 0) {
-            if (strcmp(value_node->type, "ADD") == 0 && is_string_type(value_node)) {
-                effective_value_type_str = "STRING";
+        if (strcmp(value_node->type, TE_T_NUMBER) == 0) {
+            effective_value_type_str = TE_T_INT;
+        } else if (strcmp(value_node->type, TE_T_STRING_LITERAL) == 0 || strcmp(value_node->type, TE_T_STRING) == 0) {
+            effective_value_type_str = TE_T_STRING;
+        } else if (strcmp(value_node->type, TE_T_STRING_INTERP) == 0) {
+            effective_value_type_str = TE_T_STRING;
+        } else if (strcmp(value_node->type, TE_T_ADD) == 0 || strcmp(value_node->type, TE_T_SUB) == 0 || strcmp(value_node->type, TE_T_MUL) == 0 || strcmp(value_node->type, TE_T_DIV) == 0 || strcmp(value_node->type, TE_T_MOD) == 0 || strcmp(value_node->type, TE_T_NEG) == 0 || strcmp(value_node->type, TE_T_BIT_AND) == 0 || strcmp(value_node->type, TE_T_BIT_OR) == 0 || strcmp(value_node->type, TE_T_BIT_XOR) == 0 || strcmp(value_node->type, TE_T_BIT_NOT) == 0 || strcmp(value_node->type, TE_T_SHL) == 0 || strcmp(value_node->type, TE_T_SHR) == 0 || strcmp(value_node->type, TE_T_IN) == 0) {
+            if (strcmp(value_node->type, TE_T_ADD) == 0 && is_string_type(value_node)) {
+                effective_value_type_str = TE_T_STRING;
             } else if (te_dec_expr_has_decimal(value_node)) {
-                effective_value_type_str = "DECIMAL";
+                effective_value_type_str = TE_T_DECIMAL;
             } else {
                 double result = evaluate_expression(value_node);
                 if (result == (int)result) {
-                    effective_value_type_str = "INT";
+                    effective_value_type_str = TE_T_INT;
                 } else {
-                    effective_value_type_str = "FLOAT";
+                    effective_value_type_str = TE_T_FLOAT;
                 }
             }
-        } else if (strcmp(value_node->type, "GT") == 0 || strcmp(value_node->type, "LT") == 0 ||
-                   strcmp(value_node->type, "EQ") == 0 || strcmp(value_node->type, "GT_EQ") == 0 ||
-                   strcmp(value_node->type, "LT_EQ") == 0 || strcmp(value_node->type, "DIFF") == 0 ||
-                   strcmp(value_node->type, "AND") == 0 || strcmp(value_node->type, "OR") == 0 ||
-                   strcmp(value_node->type, "NOT") == 0) {
+        } else if (strcmp(value_node->type, TE_T_GT) == 0 || strcmp(value_node->type, TE_T_LT) == 0 ||
+                   strcmp(value_node->type, TE_T_EQ) == 0 || strcmp(value_node->type, TE_T_GT_EQ) == 0 ||
+                   strcmp(value_node->type, TE_T_LT_EQ) == 0 || strcmp(value_node->type, TE_T_DIFF) == 0 ||
+                   strcmp(value_node->type, TE_T_AND) == 0 || strcmp(value_node->type, TE_T_OR) == 0 ||
+                   strcmp(value_node->type, TE_T_NOT) == 0) {
             /* Comparison / logical operators produce a boolean. */
-            effective_value_type_str = "BOOL";
+            effective_value_type_str = TE_T_BOOL;
         } else {
             effective_value_type_str = value_node->type;
         }
@@ -342,11 +342,11 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
      * el tipo concreto cuando se asigna efectivamente. */
     if (declared_type != NULL && effective_value_type_str != NULL) {
         int is_runtime_only =
-            strcmp(effective_value_type_str, "ACCESS_ATTR") == 0 ||
-            strcmp(effective_value_type_str, "ACCESS_INDEX") == 0 ||
-            strcmp(effective_value_type_str, "NEG") == 0 ||
-            strcmp(effective_value_type_str, "MOD") == 0 ||
-            strcmp(effective_value_type_str, "IDENTIFIER") == 0;
+            strcmp(effective_value_type_str, TE_T_ACCESS_ATTR) == 0 ||
+            strcmp(effective_value_type_str, TE_T_ACCESS_INDEX) == 0 ||
+            strcmp(effective_value_type_str, TE_T_NEG) == 0 ||
+            strcmp(effective_value_type_str, TE_T_MOD) == 0 ||
+            strcmp(effective_value_type_str, TE_T_IDENTIFIER) == 0;
         if (is_runtime_only) {
             effective_value_type_str = NULL; /* skip static check */
         }
@@ -354,16 +354,16 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
 
     if (declared_type != NULL && effective_value_type_str != NULL) {
         if (strcmp(declared_type, effective_value_type_str) != 0) {
-            int allow_int_to_float = (strcmp(declared_type, "FLOAT") == 0 && strcmp(effective_value_type_str, "INT") == 0);
+            int allow_int_to_float = (strcmp(declared_type, TE_T_FLOAT) == 0 && strcmp(effective_value_type_str, TE_T_INT) == 0);
             /* v1.0.0: DATETIME and UUID are storage-aliased to STRING. */
-            int allow_string_alias = (strcmp(effective_value_type_str, "STRING") == 0 &&
-                                       (strcmp(declared_type, "DATETIME") == 0 ||
-                                        strcmp(declared_type, "UUID") == 0));
+            int allow_string_alias = (strcmp(effective_value_type_str, TE_T_STRING) == 0 &&
+                                       (strcmp(declared_type, TE_T_DATETIME) == 0 ||
+                                        strcmp(declared_type, TE_T_UUID) == 0));
             /* BOOL accepts BOOL literals, INT 0/1, and other BOOL exprs. */
-            int allow_bool_alias = (strcmp(declared_type, "BOOL") == 0 &&
-                                     (strcmp(effective_value_type_str, "INT") == 0 ||
-                                      strcmp(effective_value_type_str, "BOOL") == 0 ||
-                                      strcmp(effective_value_type_str, "NUMBER") == 0));
+            int allow_bool_alias = (strcmp(declared_type, TE_T_BOOL) == 0 &&
+                                     (strcmp(effective_value_type_str, TE_T_INT) == 0 ||
+                                      strcmp(effective_value_type_str, TE_T_BOOL) == 0 ||
+                                      strcmp(effective_value_type_str, TE_T_NUMBER) == 0));
             if (!allow_int_to_float && !allow_string_alias && !allow_bool_alias) {
                 /* Fase 2: lanzar como excepción capturable en lugar de abortar */
                 char buf[256];
@@ -398,30 +398,30 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
             /* create_ast_leaf copia el string -> pasar el puntero directo.
              * El strdup() previo quedaba huerfano (fuga por cada `let x=func()`
              * que devuelve string: request_param, concat, jwt_sign, etc.). */
-            value_to_assign_node = create_ast_leaf("STRING", 0, evaluated_value_var->value.string_value, NULL);
+            value_to_assign_node = create_ast_leaf(TE_T_STRING, 0, evaluated_value_var->value.string_value, NULL);
         } else if (evaluated_value_var->vtype == VAL_INT) {
             //printf("[DEBUG] interpret_var_decl: creating INT node\n"); fflush(stdout);
             /* gotcha #6: preservar el tag BOOL cuando la función devuelve un
              * booleano (uuid_valid, any/all/none, etc.). Sin esto el resultado
              * se reetiquetaba "INT" y println mostraba 1/0 en vez de true/false. */
             const char *ntag = (evaluated_value_var->type &&
-                                strcmp(evaluated_value_var->type, "BOOL") == 0)
-                               ? "BOOL" : "INT";
+                                strcmp(evaluated_value_var->type, TE_T_BOOL) == 0)
+                               ? TE_T_BOOL : TE_T_INT;
             value_to_assign_node = create_ast_leaf_number(ntag, evaluated_value_var->value.int_value, NULL, NULL);
             //printf("[DEBUG] interpret_var_decl: created INT node\n"); fflush(stdout);
         } else if (evaluated_value_var->vtype == VAL_FLOAT) {
             /* double_to_string() devuelve malloc; create_ast_leaf copia -> liberar. */
             char *fs = double_to_string(evaluated_value_var->value.float_value);
-            value_to_assign_node = create_ast_leaf("FLOAT", 0, fs, NULL);
+            value_to_assign_node = create_ast_leaf(TE_T_FLOAT, 0, fs, NULL);
             free(fs);
         } else if (evaluated_value_var->vtype == VAL_OBJECT) {
             // Si es LIST, asignar como VAL_OBJECT y type LIST, y value.object_value apunta al nodo LIST
-            if (strcmp(evaluated_value_var->type, "LIST") == 0) {
+            if (strcmp(evaluated_value_var->type, TE_T_LIST) == 0) {
                 Variable *var = te_decl_slot(node->id);
                 if (!var) return;
                 var->is_const = is_const_flag;
                 var->vtype = VAL_OBJECT;
-                var->type = strdup("LIST");
+                var->type = strdup(TE_T_LIST);
                 var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value; // Apunta al nodo LIST
                // printf("[DEBUG] interpret_var_decl: declared LIST variable\n"); fflush(stdout);
                 // Limpia la variable de retorno
@@ -435,13 +435,13 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 vm->return_flag = 0;
                 vm->return_node = NULL;
                 return;
-            } else if (strcmp(evaluated_value_var->type, "MAP") == 0) {
+            } else if (strcmp(evaluated_value_var->type, TE_T_MAP) == 0) {
                 /* Phase D: fast-path for MAP returned from a builtin (e.g. json_parse). */
                 Variable *var = te_decl_slot(node->id);
                 if (!var) return;
                 var->is_const = is_const_flag;
                 var->vtype = VAL_OBJECT;
-                var->type = strdup("MAP");
+                var->type = strdup(TE_T_MAP);
                 var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value;
                 if (g_vm.ret_var_active) {
                     if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) free(g_vm.ret_var.value.string_value);
@@ -452,7 +452,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 vm->return_flag = 0;
                 vm->return_node = NULL;
                 return;
-            } else if (strcmp(evaluated_value_var->type, "LAMBDA") == 0) {
+            } else if (strcmp(evaluated_value_var->type, TE_T_LAMBDA) == 0) {
                 /* gotcha closure-return: una función/lambda devolvió un lambda
                  * (currying). Lo almacenamos como first-class value, igual que
                  * LIST/MAP: object_value apunta al nodo LAMBDA (ya capturado por
@@ -461,7 +461,7 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
                 if (!var) return;
                 var->is_const = is_const_flag;
                 var->vtype = VAL_OBJECT;
-                var->type = strdup("LAMBDA");
+                var->type = strdup(TE_T_LAMBDA);
                 var->value.object_value = (ObjectNode *)evaluated_value_var->value.object_value;
                 if (g_vm.ret_var_active) {
                     if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) free(g_vm.ret_var.value.string_value);
@@ -535,7 +535,7 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
     if (!var || var->vtype!=VAL_OBJECT) {
         printf("Error: object '%s' is not defined or is not an object.\n", access->left->id); return;
     }
-    if (!var->type || strcmp(var->type, "OBJECT") != 0) {
+    if (!var->type || strcmp(var->type, TE_T_OBJECT) != 0) {
         printf("Error: object '%s' is not defined or is not an object.\n", access->left->id); return;
     }
     ObjectNode *obj = var->value.object_value;
@@ -567,7 +567,7 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
         size_t dl = strlen(declared);
         if (dl > 0 && declared[dl - 1] == '?') decl_nullable = 1;
     }
-    if (value_node && value_node->type && strcmp(value_node->type, "NULL") == 0) {
+    if (value_node && value_node->type && strcmp(value_node->type, TE_T_NULL) == 0) {
         if (!decl_nullable) {
             int ln = node->line ? node->line : (access->line ? access->line : 0);
             const char *fname = g_vm.script_path ? g_vm.script_path : "<script>";
@@ -582,7 +582,7 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
     }
 
     /* decimal: evaluación exacta (literal, variable, atributo, expresión o llamada). */
-    if (strcmp(declared, "decimal") == 0 || strcmp(declared, "decimal?") == 0) {
+    if (strcmp(declared, TE_DT_DECIMAL) == 0 || strcmp(declared, TE_DT_DECIMAL_OPT) == 0) {
         char dec[TE_DEC_TEXT_MAX];
         if (!te_dec_eval(value_node, dec, sizeof(dec))) {
             char *s = get_node_string(value_node);
@@ -606,20 +606,20 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
      * Se determina si el atributo declarado es de texto (string) o numérico,
      * y si el valor asignado es de texto o numérico. Un desajuste aborta. */
     {
-        int decl_is_str = (strcmp(declared, "string") == 0 || strcmp(declared, "string?") == 0 ||
-                           strcmp(declared, "uuid") == 0 || strcmp(declared, "uuid?") == 0 ||
-                           strcmp(declared, "datetime") == 0 || strcmp(declared, "datetime?") == 0);
+        int decl_is_str = (strcmp(declared, TE_DT_STRING) == 0 || strcmp(declared, TE_DT_STRING_OPT) == 0 ||
+                           strcmp(declared, TE_DT_UUID) == 0 || strcmp(declared, TE_DT_UUID_OPT) == 0 ||
+                           strcmp(declared, TE_DT_DATETIME) == 0 || strcmp(declared, TE_DT_DATETIME_OPT) == 0);
         /* val_kind: 0 = desconocido, 1 = string, 2 = numérico */
         int val_kind = 0;
         if (value_node->type) {
-            if (strcmp(value_node->type, "STRING") == 0) {
+            if (strcmp(value_node->type, TE_T_STRING) == 0) {
                 val_kind = 1;
-            } else if (strcmp(value_node->type, "NUMBER") == 0 ||
-                       strcmp(value_node->type, "INT") == 0 ||
-                       strcmp(value_node->type, "FLOAT") == 0) {
+            } else if (strcmp(value_node->type, TE_T_NUMBER) == 0 ||
+                       strcmp(value_node->type, TE_T_INT) == 0 ||
+                       strcmp(value_node->type, TE_T_FLOAT) == 0) {
                 val_kind = 2;
-            } else if (strcmp(value_node->type, "IDENTIFIER") == 0 ||
-                       strcmp(value_node->type, "ID") == 0) {
+            } else if (strcmp(value_node->type, TE_T_IDENTIFIER) == 0 ||
+                       strcmp(value_node->type, TE_T_ID) == 0) {
                 Variable *vv = find_variable(value_node->id ? value_node->id : value_node->str_value);
                 if (vv) {
                     if (vv->vtype == VAL_STRING) val_kind = 1;
@@ -628,7 +628,7 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
             }
         }
         if (val_kind != 0) {
-            const char *val_tname = (val_kind == 1) ? "string" : "int";
+            const char *val_tname = (val_kind == 1) ? TE_DT_STRING : TE_DT_INT;
             if ((decl_is_str && val_kind == 2) || (!decl_is_str && val_kind == 1)) {
                 int ln = node->line ? node->line
                        : (value_node->line ? value_node->line
@@ -642,14 +642,14 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
         }
     }
 
-    if (strcmp(declared, "string") == 0 || strcmp(declared, "string?") == 0 ||
-        strcmp(declared, "uuid") == 0 || strcmp(declared, "uuid?") == 0 ||
-        strcmp(declared, "datetime") == 0 || strcmp(declared, "datetime?") == 0) {
-        if (value_node->type && strcmp(value_node->type, "STRING") == 0) {
+    if (strcmp(declared, TE_DT_STRING) == 0 || strcmp(declared, TE_DT_STRING_OPT) == 0 ||
+        strcmp(declared, TE_DT_UUID) == 0 || strcmp(declared, TE_DT_UUID_OPT) == 0 ||
+        strcmp(declared, TE_DT_DATETIME) == 0 || strcmp(declared, TE_DT_DATETIME_OPT) == 0) {
+        if (value_node->type && strcmp(value_node->type, TE_T_STRING) == 0) {
           obj->attributes[idx].value.string_value = strdup(value_node->str_value);
           if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (STRING)\n", attr_name, value_node->str_value);
         }
-        else if (value_node->type && (strcmp(value_node->type, "IDENTIFIER") == 0 || strcmp(value_node->type, "ID") == 0)) {
+        else if (value_node->type && (strcmp(value_node->type, TE_T_IDENTIFIER) == 0 || strcmp(value_node->type, TE_T_ID) == 0)) {
           Variable *v2 = find_variable(value_node->id ? value_node->id : value_node->str_value);
           if (!v2 || v2->vtype != VAL_STRING) {
             fprintf(stderr, "Error: expression is not a valid string or variable not found.\n");
@@ -667,9 +667,9 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
           obj->attributes[idx].value.string_value = strdup(v2->value.string_value);
           if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR ID)\n", attr_name, v2->value.string_value);
         }
-        else if (strcmp(value_node->type, "CALL_FUNC") == 0) {
+        else if (strcmp(value_node->type, TE_T_CALL_FUNC) == 0) {
           interpret_ast(value_node);
-          Variable *r = find_variable("__ret__");
+          Variable *r = find_variable(TE_SYM_RET);
           if (!r || r->vtype != VAL_STRING) {
             fprintf(stderr, "Error: function result is not a string.\n");
             return;
@@ -680,7 +680,7 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
         obj->attributes[idx].vtype = VAL_STRING;
       } else {
         double val = evaluate_expression(value_node);
-        int decl_is_float = (strcmp(declared, "float") == 0 || strcmp(declared, "float?") == 0);
+        int decl_is_float = (strcmp(declared, TE_DT_FLOAT) == 0 || strcmp(declared, TE_DT_FLOAT_OPT) == 0);
         if (decl_is_float) {
             obj->attributes[idx].value.float_value = val;
             obj->attributes[idx].vtype = VAL_FLOAT;
@@ -742,7 +742,7 @@ static void te_assign_from_call(TeVM *vm, ASTNode *node, ASTNode *var_node, ASTN
         }
 
         // 2. Obtener el resultado de __ret_var
-        Variable *ret_val = find_variable("__ret__");
+        Variable *ret_val = find_variable(TE_SYM_RET);
         if (!ret_val) {
             printf("Error: function in assignment returned nothing.\n");
             return;
@@ -755,13 +755,13 @@ static void te_assign_from_call(TeVM *vm, ASTNode *node, ASTNode *var_node, ASTN
         } else if (ret_val->vtype == VAL_STRING) {
             /* create_ast_leaf interna/copia el string: pasar el puntero directo.
              * El strdup() previo quedaba huerfano (fuga por cada `var x=func()`). */
-            temp_node = create_ast_leaf("STRING", 0, ret_val->value.string_value, NULL);
+            temp_node = create_ast_leaf(TE_T_STRING, 0, ret_val->value.string_value, NULL);
         } else if (ret_val->vtype == VAL_INT) {
-            temp_node = create_ast_leaf_number("INT", ret_val->value.int_value, NULL, NULL);
+            temp_node = create_ast_leaf_number(TE_T_INT, ret_val->value.int_value, NULL, NULL);
         } else if (ret_val->vtype == VAL_FLOAT) {
             /* double_to_string() devuelve malloc; create_ast_leaf copia -> liberar. */
             char *fs = double_to_string(ret_val->value.float_value);
-            temp_node = create_ast_leaf("FLOAT", 0, fs, NULL);
+            temp_node = create_ast_leaf(TE_T_FLOAT, 0, fs, NULL);
             free(fs);
         } else if (ret_val->vtype == VAL_OBJECT) {
             /* Fix var-reassign-a-nativo (UAF/lectura vacia): un objeto NATIVO
@@ -791,13 +791,13 @@ static void te_assign_from_call(TeVM *vm, ASTNode *node, ASTNode *var_node, ASTN
                 if (dv->vtype == VAL_STRING && dv->value.string_value) free(dv->value.string_value);
                 free(dv->type);
                 dv->vtype = VAL_OBJECT;
-                dv->type = strdup(ret_val->type ? ret_val->type : "OBJECT");
+                dv->type = strdup(ret_val->type ? ret_val->type : TE_T_OBJECT);
                 dv->value.object_value = ret_val->value.object_value;
             } else if (vm->var_count < MAX_VARS) {
                 vm->vars[vm->var_count].id = strdup(var_node->id);
                 vm->vars[vm->var_count].is_const = 0;
                 vm->vars[vm->var_count].vtype = VAL_OBJECT;
-                vm->vars[vm->var_count].type = strdup(ret_val->type ? ret_val->type : "OBJECT");
+                vm->vars[vm->var_count].type = strdup(ret_val->type ? ret_val->type : TE_T_OBJECT);
                 vm->vars[vm->var_count].value.object_value = ret_val->value.object_value;
                 te_sym_insert(vm->vars[vm->var_count].id, vm->var_count);
                 vm->var_count++;
@@ -838,7 +838,7 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
      * condición). Loop para ternarios anidados (right-assoc). Espejo de
      * interpret_var_decl; sin esto el nodo TERNARY caía al catch-all de
      * te_value_to_variable y se guardaba 0 SIEMPRE. */
-    while (value_node && value_node->type && strcmp(value_node->type, "TERNARY") == 0) {
+    while (value_node && value_node->type && strcmp(value_node->type, TE_T_TERNARY) == 0) {
         int cond = (evaluate_expression(value_node->left) != 0.0);
         value_node = cond ? value_node->right : value_node->extra;
     }
@@ -877,11 +877,11 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
     // --- INICIO DE LA CORRECCIÓN ---
 
     // ¿Es una llamada a función (como concat)?
-    if (strcmp(value_node->type, "CALL_FUNC") == 0 || strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_node->type, "PREDICT") == 0) {
+    if (strcmp(value_node->type, TE_T_CALL_FUNC) == 0 || strcmp(value_node->type, TE_T_CALL_METHOD) == 0 || strcmp(value_node->type, TE_T_PREDICT) == 0) {
         te_assign_from_call(vm, node, var_node, value_node);
     }
     // ¿Es un acceso a atributo (como intencion.item)?
-    else if (strcmp(value_node->type, "ACCESS_ATTR") == 0) {
+    else if (strcmp(value_node->type, TE_T_ACCESS_ATTR) == 0) {
         // Esta lógica ya la escribimos para declare_variable, la usamos aquí
         ASTNode *o = value_node->left, *a = value_node->right;
         Variable *v = find_variable(o->id);
@@ -897,11 +897,11 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
                 // Encontramos el atributo. Creamos un nodo temporal y lo asignamos.
                 ASTNode* temp_node = NULL;
                 if (obj->attributes[i].vtype == VAL_STRING) {
-                    temp_node = create_ast_leaf("STRING", 0, strdup(obj->attributes[i].value.string_value), NULL);
+                    temp_node = create_ast_leaf(TE_T_STRING, 0, strdup(obj->attributes[i].value.string_value), NULL);
                 } else if (obj->attributes[i].vtype == VAL_INT) {
-                    temp_node = create_ast_leaf_number("INT", obj->attributes[i].value.int_value, NULL, NULL);
+                    temp_node = create_ast_leaf_number(TE_T_INT, obj->attributes[i].value.int_value, NULL, NULL);
                 } else if (obj->attributes[i].vtype == VAL_FLOAT) {
-                    temp_node = create_ast_leaf("FLOAT", 0, double_to_string(obj->attributes[i].value.float_value), NULL);
+                    temp_node = create_ast_leaf(TE_T_FLOAT, 0, double_to_string(obj->attributes[i].value.float_value), NULL);
                 }
                 
                 if(temp_node) {
@@ -915,10 +915,10 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
         return;
     }
     // ¿Es una expresión matemática?
-    else if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0 || strcmp(value_node->type, "MOD") == 0 || strcmp(value_node->type, "NEG") == 0 || strcmp(value_node->type, "BIT_AND") == 0 || strcmp(value_node->type, "BIT_OR") == 0 || strcmp(value_node->type, "BIT_XOR") == 0 || strcmp(value_node->type, "BIT_NOT") == 0 || strcmp(value_node->type, "SHL") == 0 || strcmp(value_node->type, "SHR") == 0 || strcmp(value_node->type, "IN") == 0) {
-        if (strcmp(value_node->type, "ADD") == 0 && is_string_type(value_node)) {
+    else if (strcmp(value_node->type, TE_T_ADD) == 0 || strcmp(value_node->type, TE_T_SUB) == 0 || strcmp(value_node->type, TE_T_MUL) == 0 || strcmp(value_node->type, TE_T_DIV) == 0 || strcmp(value_node->type, TE_T_MOD) == 0 || strcmp(value_node->type, TE_T_NEG) == 0 || strcmp(value_node->type, TE_T_BIT_AND) == 0 || strcmp(value_node->type, TE_T_BIT_OR) == 0 || strcmp(value_node->type, TE_T_BIT_XOR) == 0 || strcmp(value_node->type, TE_T_BIT_NOT) == 0 || strcmp(value_node->type, TE_T_SHL) == 0 || strcmp(value_node->type, TE_T_SHR) == 0 || strcmp(value_node->type, TE_T_IN) == 0) {
+        if (strcmp(value_node->type, TE_T_ADD) == 0 && is_string_type(value_node)) {
             char *s = get_node_string(value_node);
-            ASTNode* temp_node = create_ast_leaf("STRING", 0, s, NULL);
+            ASTNode* temp_node = create_ast_leaf(TE_T_STRING, 0, s, NULL);
             add_or_update_variable(var_node->id, temp_node);
             free_ast(temp_node);
             return;
@@ -929,10 +929,10 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
         if (te_dec_expr_has_decimal(value_node) && te_dec_eval(value_node, dec, sizeof(dec))) {   /* decimal exacto */
             temp_node = te_dec_leaf(dec);
         } else if (te_eval_num(value_node, &i64v, &result)) {   /* Fase 1b */
-            temp_node = create_ast_leaf_number("INT", i64v, NULL, NULL);
+            temp_node = create_ast_leaf_number(TE_T_INT, i64v, NULL, NULL);
         } else {
             char* str_res = double_to_string(result);
-            temp_node = create_ast_leaf("FLOAT", 0, str_res, NULL);
+            temp_node = create_ast_leaf(TE_T_FLOAT, 0, str_res, NULL);
             free(str_res);
         }
         add_or_update_variable(var_node->id, temp_node);
@@ -945,13 +945,13 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
      * te_value_to_variable, cuyo catch-all almacena value->value (0), perdiendo
      * SIEMPRE el resultado real (p.ej. `coincide = (clave == esperada)` daba
      * false aun con strings iguales). */
-    else if (strcmp(value_node->type, "GT") == 0 || strcmp(value_node->type, "LT") == 0 ||
-             strcmp(value_node->type, "EQ") == 0 || strcmp(value_node->type, "GT_EQ") == 0 ||
-             strcmp(value_node->type, "LT_EQ") == 0 || strcmp(value_node->type, "DIFF") == 0 ||
-             strcmp(value_node->type, "AND") == 0 || strcmp(value_node->type, "OR") == 0 ||
-             strcmp(value_node->type, "NOT") == 0) {
+    else if (strcmp(value_node->type, TE_T_GT) == 0 || strcmp(value_node->type, TE_T_LT) == 0 ||
+             strcmp(value_node->type, TE_T_EQ) == 0 || strcmp(value_node->type, TE_T_GT_EQ) == 0 ||
+             strcmp(value_node->type, TE_T_LT_EQ) == 0 || strcmp(value_node->type, TE_T_DIFF) == 0 ||
+             strcmp(value_node->type, TE_T_AND) == 0 || strcmp(value_node->type, TE_T_OR) == 0 ||
+             strcmp(value_node->type, TE_T_NOT) == 0) {
         int b = evaluate_expression(value_node) != 0 ? 1 : 0;
-        ASTNode *temp_node = create_ast_leaf_number("BOOL", b, NULL, NULL);
+        ASTNode *temp_node = create_ast_leaf_number(TE_T_BOOL, b, NULL, NULL);
         add_or_update_variable(var_node->id, temp_node);
         free_ast(temp_node);
     }
@@ -960,12 +960,12 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
      * BOOL/OBJECT/LIST/MAP); add_or_update_variable lo copia (escalares) o
      * aliasa (contenedores) vía te_value_to_variable. Sin esta rama el
      * ACCESS_EXPR caía al catch-all y se guardaba 0 (p.ej. `y = arr[1]` -> 0). */
-    else if (strcmp(value_node->type, "ACCESS_EXPR") == 0) {
+    else if (strcmp(value_node->type, TE_T_ACCESS_EXPR) == 0) {
         ASTNode *item = resolve_access_item(value_node);
         if (item) {
             add_or_update_variable(var_node->id, item);
         } else {
-            ASTNode *nn = create_ast_leaf("NULL", 0, NULL, NULL);
+            ASTNode *nn = create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
             add_or_update_variable(var_node->id, nn);
             free_ast(nn);
         }
@@ -978,7 +978,7 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
      * de copia-por-identificador de declare_variable: escalares vía nodo
      * temporal; LIST/MAP/OBJECT/LAMBDA/NULL se aliasan por referencia (sin
      * deep-copy, igual que el resto del intérprete). */
-    else if (strcmp(value_node->type, "IDENTIFIER") == 0 || strcmp(value_node->type, "ID") == 0) {
+    else if (strcmp(value_node->type, TE_T_IDENTIFIER) == 0 || strcmp(value_node->type, TE_T_ID) == 0) {
         Variable *src = find_variable(value_node->id);
         if (!src) {
             fprintf(stderr, "Error: variable '%s' not found.\n",
@@ -986,17 +986,17 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
             return;
         }
         if (src->vtype == VAL_STRING) {
-            ASTNode *tn = create_ast_leaf("STRING", 0,
+            ASTNode *tn = create_ast_leaf(TE_T_STRING, 0,
                 src->value.string_value ? src->value.string_value : "", NULL);
             add_or_update_variable(var_node->id, tn);
             free_ast(tn);
         } else if (src->vtype == VAL_INT) {
-            ASTNode *tn = create_ast_leaf_number("INT", src->value.int_value, NULL, NULL);
+            ASTNode *tn = create_ast_leaf_number(TE_T_INT, src->value.int_value, NULL, NULL);
             add_or_update_variable(var_node->id, tn);
             free_ast(tn);
         } else if (src->vtype == VAL_FLOAT) {
             char *fs = double_to_string(src->value.float_value);
-            ASTNode *tn = create_ast_leaf("FLOAT", 0, fs, NULL);
+            ASTNode *tn = create_ast_leaf(TE_T_FLOAT, 0, fs, NULL);
             free(fs);
             add_or_update_variable(var_node->id, tn);
             free_ast(tn);
@@ -1007,7 +1007,7 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
              * exactamente como declare_variable. */
             Variable *dst = find_variable_for(var_node->id);
             if (!dst) {
-                ASTNode *nn = create_ast_leaf("NULL", 0, NULL, NULL);
+                ASTNode *nn = create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
                 add_or_update_variable(var_node->id, nn);
                 free_ast(nn);
                 dst = find_variable_for(var_node->id);
@@ -1020,7 +1020,7 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
                 if (dst->vtype == VAL_STRING && dst->value.string_value) free(dst->value.string_value);
                 free(dst->type);
                 dst->vtype = src->vtype;
-                dst->type = strdup(src->type ? src->type : "NULL");
+                dst->type = strdup(src->type ? src->type : TE_T_NULL);
                 dst->value.object_value = src->value.object_value; /* alias */
             }
         }
@@ -1028,7 +1028,7 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
     // Es un valor simple (literal, variable)
     else {
         /* Gotcha 30c: `arr = []` must bind a fresh instance, like declare_variable. */
-        if (strcmp(value_node->type, "LIST") == 0 && value_node->value != 1)
+        if (strcmp(value_node->type, TE_T_LIST) == 0 && value_node->value != 1)
             add_or_update_variable(var_node->id, te_list_literal_instance(value_node));
         else
             add_or_update_variable(var_node->id, value_node);

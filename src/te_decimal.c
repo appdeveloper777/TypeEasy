@@ -149,11 +149,11 @@ double te_dec_to_double(const TeDec *d) {
 int te_var_is_decimal(const Variable *v) {
     /* variables: tag "DECIMAL"; atributos de clase: tipo declarado "decimal"/"decimal?" */
     return v && v->vtype == VAL_STRING && v->type &&
-           (strcmp(v->type, "DECIMAL") == 0 || strcmp(v->type, "decimal") == 0 || strcmp(v->type, "decimal?") == 0);
+           (strcmp(v->type, TE_T_DECIMAL) == 0 || strcmp(v->type, TE_DT_DECIMAL) == 0 || strcmp(v->type, TE_DT_DECIMAL_OPT) == 0);
 }
 
 ASTNode *te_dec_leaf(const char *text) {
-    return create_ast_leaf("DECIMAL", 0, (char *)(text ? text : "0"), NULL);
+    return create_ast_leaf(TE_T_DECIMAL, 0, (char *)(text ? text : "0"), NULL);
 }
 
 static Variable *dec_var_of(ASTNode *n) {
@@ -170,12 +170,12 @@ static Variable *dec_attr_of(ASTNode *n) {
     ASTNode *o = n->left;
     ObjectNode *obj = NULL;
     if (o->id) {
-        if (strcmp(o->id, "this") == 0) {
-            Variable *tv = find_variable("this");
+        if (strcmp(o->id, TE_SYM_THIS) == 0) {
+            Variable *tv = find_variable(TE_SYM_THIS);
             if (tv && tv->vtype == VAL_OBJECT) obj = tv->value.object_value;
         } else {
             Variable *v = find_variable(o->id);
-            if (v && v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "OBJECT") == 0) obj = v->value.object_value;
+            if (v && v->vtype == VAL_OBJECT && v->type && strcmp(v->type, TE_T_OBJECT) == 0) obj = v->value.object_value;
         }
     }
     if (!obj || !obj->class) return NULL;
@@ -185,7 +185,7 @@ static Variable *dec_attr_of(ASTNode *n) {
 }
 
 static int is_decimal_call(ASTNode *n) {
-    return n && n->type && strcmp(n->type, "CALL_FUNC") == 0 && n->id && strcmp(n->id, "decimal") == 0;
+    return n && n->type && strcmp(n->type, TE_T_CALL_FUNC) == 0 && n->id && strcmp(n->id, TE_DT_DECIMAL) == 0;
 }
 
 int te_dec_expr_has_decimal(ASTNode *n) {
@@ -198,7 +198,7 @@ int te_dec_expr_has_decimal(ASTNode *n) {
         return te_dec_expr_has_decimal(n->left) || te_dec_expr_has_decimal(n->right);
     case NK_NEG: return te_dec_expr_has_decimal(n->left);
     default:
-        if (n->type && strcmp(n->type, "DECIMAL") == 0) return 1;
+        if (n->type && strcmp(n->type, TE_T_DECIMAL) == 0) return 1;
         return is_decimal_call(n);
     }
 }
@@ -207,7 +207,7 @@ int te_dec_expr_has_decimal(ASTNode *n) {
  * string numérico, llamada decimal(...), o subexpresión exacta. */
 static int dec_operand(ASTNode *n, TeDec *out) {
     if (!n) return 0;
-    if (n->type && strcmp(n->type, "DECIMAL") == 0) return te_dec_parse(n->str_value, out);
+    if (n->type && strcmp(n->type, TE_T_DECIMAL) == 0) return te_dec_parse(n->str_value, out);
     NodeKind k = nk_of(n);
     switch (k) {
     case NK_NUMBER: case NK_INT: out->m = n->value; out->scale = 0; return 1;
@@ -237,10 +237,10 @@ static int dec_operand(ASTNode *n, TeDec *out) {
         return te_dec_binop(k, &a, &b, out);
     }
     default:
-        if (is_decimal_call(n) || (n->type && strcmp(n->type, "CALL_FUNC") == 0) || (n->type && strcmp(n->type, "CALL_METHOD") == 0)) {
+        if (is_decimal_call(n) || (n->type && strcmp(n->type, TE_T_CALL_FUNC) == 0) || (n->type && strcmp(n->type, TE_T_CALL_METHOD) == 0)) {
             /* evaluar la llamada y leer __ret__ */
             interpret_ast(n);
-            Variable *r = find_variable("__ret__");
+            Variable *r = find_variable(TE_SYM_RET);
             if (!r) return 0;
             if (te_var_is_decimal(r) || r->vtype == VAL_STRING) return te_dec_parse(r->value.string_value, out);
             if (r->vtype == VAL_INT) { out->m = r->value.int_value; out->scale = 0; return 1; }
@@ -275,13 +275,13 @@ ASTNode *te_dec_arg_leaf(ASTNode *arg) {
 static void dec_set_ret(const TeDec *d) {
     char buf[TE_DEC_TEXT_MAX]; te_dec_format(d, buf, sizeof(buf));
     ASTNode *r = te_dec_leaf(buf);
-    add_or_update_variable("__ret__", r);
+    add_or_update_variable(TE_SYM_RET, r);
     free_ast(r);
 }
 
 /* decimal(x): desde decimal/int/float/string. */
 int te_dec_builtin(const char *fn, ASTNode *args) {
-    if (!fn || strcmp(fn, "decimal") != 0) return 0;
+    if (!fn || strcmp(fn, TE_DT_DECIMAL) != 0) return 0;
     TeDec d = { 0, 0 };
     if (args) {
         if (!dec_operand(args, &d)) {
@@ -312,7 +312,7 @@ int te_dec_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
     }
     if (strcmp(m, "to_float") == 0) {
         char b[64]; te_fmt_double(b, sizeof(b), te_dec_to_double(&d));
-        ASTNode *r = create_ast_leaf("FLOAT", 0, b, NULL); add_or_update_variable("__ret__", r); free_ast(r); return 1;
+        ASTNode *r = create_ast_leaf(TE_T_FLOAT, 0, b, NULL); add_or_update_variable(TE_SYM_RET, r); free_ast(r); return 1;
     }
     if (strcmp(m, "to_string") == 0) { char b[TE_DEC_TEXT_MAX]; te_dec_format(&d, b, sizeof(b)); te_set_ret_string(b); return 1; }
     if (strcmp(m, "scale") == 0) { te_set_ret_int(d.scale); return 1; }

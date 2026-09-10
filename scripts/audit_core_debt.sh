@@ -124,6 +124,24 @@ if [ -f "$ALLOW" ]; then
     echo "OK: 0 globales de proceso no justificados ($(grep -cvE '^#|^[[:space:]]*$' "$ALLOW") permitidos con justificación)."
   fi
 fi
+# Objetivo arquitectónico (0.1.1): CERO magic strings de tipo. Los tags ("STRING", "INT", "int", ...)
+# se nombran una sola vez en src/te_types.h; el código usa TE_T_* / TE_DT_*. Mismo escaneo que
+# tools/refactor/detag.cjs --check (fuera de comentarios; solo literales que son exactamente un tag).
+NODE="${NODE:-node}"
+if [ -f tools/refactor/detag.cjs ] && command -v "$NODE" >/dev/null 2>&1; then
+  if ! magic="$("$NODE" tools/refactor/detag.cjs --check 2>&1)"; then
+    echo "MAGIC STRINGS DE TIPO (usar las constantes de src/te_types.h; 'node tools/refactor/detag.cjs' las reemplaza):" >&2
+    echo "$magic" | sed 's/^/  /' >&2
+    fail=$((fail + 1))
+  else
+    echo "OK: 0 magic strings de tipo (tags centralizados en src/te_types.h)."
+  fi
+elif [ -n "${CI:-}" ]; then
+  echo "FAIL: falta node para el chequeo de magic strings (tools/refactor/detag.cjs --check)." >&2
+  fail=$((fail + 1))
+else
+  echo "SKIP: node no disponible; chequeo de magic strings omitido (NODE=/ruta/node para forzarlo)."
+fi
 if [ "$fail" -gt 0 ]; then
   cat >&2 <<EOF
 
@@ -132,6 +150,8 @@ FAIL: ${fail} incremento(s) de deuda en el núcleo.
   pasalo como parámetro; no en g_*.
 - Función > ${MAX_FN_LINES} líneas: extraé la lógica nueva a una función propia (static)
   en vez de agregar ramas a la existente.
+- Magic string de tipo: usá TE_T_X / TE_DT_x de src/te_types.h (o corré
+  node tools/refactor/detag.cjs para reemplazarlos).
 Si de verdad bajó la deuda (partiste una función, borraste un global), regenerá con
   bash scripts/audit_core_debt.sh --update-baseline
 EOF

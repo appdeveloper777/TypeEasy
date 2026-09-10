@@ -188,7 +188,7 @@ int typeeasy_embedded_load_script(TypeEasyEmbeddedContext* ctx, const char* scri
         fprintf(stderr, "[TYPEEASY_API] ERROR: parse_file() returned NULL for: %s\n", script_path);
         fprintf(stderr, "[TYPEEASY_API] The file contains syntax errors and will not be loaded.\n");
         // Create a dummy AST to avoid later crashes
-        ast = create_ast_node("STATEMENT_LIST", NULL, NULL);
+        ast = create_ast_node(TE_T_STATEMENT_LIST, NULL, NULL);
         if (!ast) {
             fprintf(stderr, "[TYPEEASY_API] CRITICAL: could not create dummy AST\n");
             return 0;
@@ -245,8 +245,8 @@ const char* detect_response_type_embedded(ASTNode *body) {
     if (!body) return "json";
     
     if (body->type) {
-        if (strcmp(body->type, "RETURN_XML") == 0) return "xml";
-        if (strcmp(body->type, "RETURN_JSON") == 0) return "json";
+        if (strcmp(body->type, TE_T_RETURN_XML) == 0) return "xml";
+        if (strcmp(body->type, TE_T_RETURN_JSON) == 0) return "json";
     }
     
     if (body->left) {
@@ -443,7 +443,7 @@ static void te_bind_param(ParameterNode *p) {
             if (obj) {
                 te_req_owned_register(obj);
                 ASTNode *wrap = (ASTNode*)calloc(1, sizeof(ASTNode));
-                wrap->type  = strdup("OBJECT");
+                wrap->type  = strdup(TE_T_OBJECT);
                 wrap->id    = strdup(cls->name);
                 wrap->extra = (struct ASTNode*)obj;
                 add_or_update_variable(p->name, wrap);
@@ -460,16 +460,16 @@ static void te_bind_param(ParameterNode *p) {
     if (!sval) sval = typeeasy_http_find_query(p->name);
     if (!sval) return;
 
-    if (ptype && strcmp(ptype, "int") == 0) {
-        ASTNode *n = create_ast_leaf_number((char*)"INT", atoi(sval), NULL, NULL);
+    if (ptype && strcmp(ptype, TE_DT_INT) == 0) {
+        ASTNode *n = create_ast_leaf_number((char*)TE_T_INT, atoi(sval), NULL, NULL);
         add_or_update_variable(p->name, n);
         free_ast(n);
-    } else if (ptype && strcmp(ptype, "float") == 0) {
-        ASTNode *n = create_ast_leaf((char*)"FLOAT", 0, (char*)sval, NULL);
+    } else if (ptype && strcmp(ptype, TE_DT_FLOAT) == 0) {
+        ASTNode *n = create_ast_leaf((char*)TE_T_FLOAT, 0, (char*)sval, NULL);
         add_or_update_variable(p->name, n);
         free_ast(n);
     } else {
-        ASTNode *n = create_ast_leaf((char*)"STRING", 0, (char*)sval, NULL);
+        ASTNode *n = create_ast_leaf((char*)TE_T_STRING, 0, (char*)sval, NULL);
         add_or_update_variable(p->name, n);
         free_ast(n);
     }
@@ -583,7 +583,7 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
     debugger_pop_frame();
 
     char* result = NULL;
-    Variable* ret_var = find_variable("__ret__");
+    Variable* ret_var = find_variable(TE_SYM_RET);
     if (ret_var && ret_var->vtype == VAL_STRING && ret_var->value.string_value) {
         result = strdup(ret_var->value.string_value);
     }
@@ -591,9 +591,9 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
      * where fn returns { ... }) — auto-serialize to JSON so the body is not
      * empty. Same te_json_emit_node path as native_json's IDENTIFIER branch. */
     else if (ret_var && ret_var->vtype == VAL_OBJECT && ret_var->type
-             && (strcmp(ret_var->type, "MAP") == 0
-              || strcmp(ret_var->type, "OBJECT_LITERAL") == 0
-              || strcmp(ret_var->type, "LIST") == 0)) {
+             && (strcmp(ret_var->type, TE_T_MAP) == 0
+              || strcmp(ret_var->type, TE_T_OBJECT_LITERAL) == 0
+              || strcmp(ret_var->type, TE_T_LIST) == 0)) {
         ASTNode *obj_node = (ASTNode *)(intptr_t)ret_var->value.object_value;
         TeBuf b; tebuf_init(&b);
         te_json_emit_node(&b, obj_node);
@@ -639,7 +639,7 @@ char *typeeasy_ws_invoke_message(MethodNode *m) {
      * frame text was placed into the request body by the caller. */
     if (m->ws_msg_param) {
         const char *frame = typeeasy_http_get_body();
-        ASTNode *n = create_ast_leaf((char*)"STRING", 0, (char*)(frame ? frame : ""), NULL);
+        ASTNode *n = create_ast_leaf((char*)TE_T_STRING, 0, (char*)(frame ? frame : ""), NULL);
         add_or_update_variable(m->ws_msg_param, n);
         free_ast(n);
     }

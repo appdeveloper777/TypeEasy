@@ -422,9 +422,9 @@ static void cmd_stack(void) {
 
 static const char *vtype_name(ValueType t) {
     switch (t) {
-        case VAL_INT:    return "int";
-        case VAL_FLOAT:  return "float";
-        case VAL_STRING: return "string";
+        case VAL_INT:    return TE_DT_INT;
+        case VAL_FLOAT:  return TE_DT_FLOAT;
+        case VAL_STRING: return TE_DT_STRING;
         case VAL_OBJECT: return "object";
         default:         return "unknown";
     }
@@ -471,7 +471,7 @@ static int render_variable_value(const Variable *v, char *val, size_t valcap, co
             break;
         }
         case VAL_OBJECT:
-            if (v->type && strcmp(v->type, "LIST") == 0) {
+            if (v->type && strcmp(v->type, TE_T_LIST) == 0) {
                 ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
                 int n = list_count(listNode);
                 snprintf(val, valcap, "[%d items]", n);
@@ -619,7 +619,7 @@ static void cmd_get_children(const char *line) {
                 char val[256] = "";
                 const char *type = "unknown";
                 int child_ref = 0;
-                if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
+                if (cur->type && strcmp(cur->type, TE_T_OBJECT) == 0) {
                     ObjectNode *obj = NULL;
                     if (cur->extra) obj = (ObjectNode *)cur->extra;
                     else obj = (ObjectNode *)(intptr_t)cur->value;
@@ -631,15 +631,15 @@ static void cmd_get_children(const char *line) {
                         type = "object";
                     }
                     child_ref = register_ref(REF_OBJECT, obj);
-                } else if (cur->type && strcmp(cur->type, "STRING") == 0) {
+                } else if (cur->type && strcmp(cur->type, TE_T_STRING) == 0) {
                     snprintf(val, sizeof(val), "%.200s", cur->str_value ? cur->str_value : "");
-                    type = "string";
-                } else if (cur->type && strcmp(cur->type, "FLOAT") == 0) {
+                    type = TE_DT_STRING;
+                } else if (cur->type && strcmp(cur->type, TE_T_FLOAT) == 0) {
                     snprintf(val, sizeof(val), "%s", cur->str_value ? cur->str_value : "0");
-                    type = "float";
+                    type = TE_DT_FLOAT;
                 } else {
                     snprintf(val, sizeof(val), "%lld", (long long)cur->value);
-                    type = "int";
+                    type = TE_DT_INT;
                 }
                 o = emit_var_entry(buf, sizeof(buf), o, first, name, type, val, child_ref);
                 first = 0;
@@ -662,11 +662,11 @@ static void cmd_get_children(const char *line) {
             const char *m = typeeasy_http_get_method();
             const char *p = typeeasy_http_get_path();
             const char *b = typeeasy_http_get_body();
-            if (m) { o = emit_var_entry(buf, sizeof(buf), o, first, "method", "string", m, 0); first = 0; }
-            if (p) { o = emit_var_entry(buf, sizeof(buf), o, first, "path",   "string", p, 0); first = 0; }
+            if (m) { o = emit_var_entry(buf, sizeof(buf), o, first, "method", TE_DT_STRING, m, 0); first = 0; }
+            if (p) { o = emit_var_entry(buf, sizeof(buf), o, first, "path",   TE_DT_STRING, p, 0); first = 0; }
             if (b && *b) {
                 char trunc[256]; snprintf(trunc, sizeof(trunc), "%.250s", b);
-                o = emit_var_entry(buf, sizeof(buf), o, first, "body", "string", trunc, 0); first = 0;
+                o = emit_var_entry(buf, sizeof(buf), o, first, "body", TE_DT_STRING, trunc, 0); first = 0;
             }
             /* client summary (always present if there is a UA) */
             const char *kk, *vvv;
@@ -706,21 +706,21 @@ static void cmd_get_children(const char *line) {
             const char *kk, *vvv;
             for (int i = 0; typeeasy_http_iter_header(i, &kk, &vvv) && o + 512 < sizeof(buf); ++i) {
                 o = emit_var_entry(buf, sizeof(buf), o, first,
-                                   kk ? kk : "?", "string", vvv ? vvv : "", 0);
+                                   kk ? kk : "?", TE_DT_STRING, vvv ? vvv : "", 0);
                 first = 0;
             }
         } else if (r->kind == REF_REQ_QUERY) {
             const char *kk, *vvv;
             for (int i = 0; typeeasy_http_iter_query(i, &kk, &vvv) && o + 512 < sizeof(buf); ++i) {
                 o = emit_var_entry(buf, sizeof(buf), o, first,
-                                   kk ? kk : "?", "string", vvv ? vvv : "", 0);
+                                   kk ? kk : "?", TE_DT_STRING, vvv ? vvv : "", 0);
                 first = 0;
             }
         } else if (r->kind == REF_REQ_PARAMS) {
             const char *kk, *vvv;
             for (int i = 0; typeeasy_http_iter_param(i, &kk, &vvv) && o + 512 < sizeof(buf); ++i) {
                 o = emit_var_entry(buf, sizeof(buf), o, first,
-                                   kk ? kk : "?", "string", vvv ? vvv : "", 0);
+                                   kk ? kk : "?", TE_DT_STRING, vvv ? vvv : "", 0);
                 first = 0;
             }
         } else if (r->kind == REF_REQ_CLIENT) {
@@ -736,16 +736,16 @@ static void cmd_get_children(const char *line) {
             char browser[96] = "Unknown", osname[96] = "Unknown"; int mob = 0;
             parse_user_agent(ua, sec_pf, sec_mob, browser, sizeof(browser),
                              osname, sizeof(osname), &mob);
-            o = emit_var_entry(buf, sizeof(buf), o, first, "browser", "string", browser, 0); first = 0;
-            o = emit_var_entry(buf, sizeof(buf), o, first, "os",      "string", osname,  0); first = 0;
-            o = emit_var_entry(buf, sizeof(buf), o, first, "mobile",  "bool",   mob?"true":"false", 0); first = 0;
+            o = emit_var_entry(buf, sizeof(buf), o, first, "browser", TE_DT_STRING, browser, 0); first = 0;
+            o = emit_var_entry(buf, sizeof(buf), o, first, "os",      TE_DT_STRING, osname,  0); first = 0;
+            o = emit_var_entry(buf, sizeof(buf), o, first, "mobile",  TE_DT_BOOL,   mob?"true":"false", 0); first = 0;
             if (sec_ua && *sec_ua) {
                 char trunc[200]; snprintf(trunc, sizeof(trunc), "%.196s", sec_ua);
-                o = emit_var_entry(buf, sizeof(buf), o, first, "brands", "string", trunc, 0); first = 0;
+                o = emit_var_entry(buf, sizeof(buf), o, first, "brands", TE_DT_STRING, trunc, 0); first = 0;
             }
             if (ua && *ua) {
                 char trunc[256]; snprintf(trunc, sizeof(trunc), "%.250s", ua);
-                o = emit_var_entry(buf, sizeof(buf), o, first, "userAgent", "string", trunc, 0); first = 0;
+                o = emit_var_entry(buf, sizeof(buf), o, first, "userAgent", TE_DT_STRING, trunc, 0); first = 0;
             }
         }
     }
@@ -805,12 +805,12 @@ static void cmd_eval(const char *line) {
         } else if (*sep == '.') {
             /* name.attr  o  name.length / .size */
             const char *attr_name = sep + 1;
-            if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
+            if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, TE_T_LIST) == 0) {
                 if (strcmp(attr_name, "length") == 0 || strcmp(attr_name, "size") == 0) {
                     ASTNode *listNode = (ASTNode*)(intptr_t)v->value.object_value;
                     int n = list_count(listNode);
                     snprintf(val, sizeof(val), "%d", n);
-                    snprintf(type, sizeof(type), "int");
+                    snprintf(type, sizeof(type), TE_DT_INT);
                 } else {
                     snprintf(val, sizeof(val), "<list has no attr '%s'>", attr_name);
                 }
@@ -836,7 +836,7 @@ static void cmd_eval(const char *line) {
         } else if (*sep == '[') {
             /* name[idx]  — solo índices numéricos literales */
             int idx = atoi(sep + 1);
-            if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
+            if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, TE_T_LIST) == 0) {
                 ASTNode *listNode = (ASTNode*)(intptr_t)v->value.object_value;
                 int n = list_count(listNode);
                 if (idx < 0 || idx >= n) {
@@ -844,7 +844,7 @@ static void cmd_eval(const char *line) {
                 } else {
                     ASTNode *cur = listNode->left;
                     for (int i = 0; i < idx && cur; i++) cur = cur->next;
-                    if (cur && cur->type && strcmp(cur->type, "OBJECT") == 0) {
+                    if (cur && cur->type && strcmp(cur->type, TE_T_OBJECT) == 0) {
                         ObjectNode *obj = cur->extra ? (ObjectNode*)cur->extra
                                                      : (ObjectNode*)(intptr_t)cur->value;
                         if (obj && obj->class && obj->class->name) {
@@ -854,12 +854,12 @@ static void cmd_eval(const char *line) {
                         } else {
                             snprintf(val, sizeof(val), "<object>");
                         }
-                    } else if (cur && cur->type && strcmp(cur->type, "STRING") == 0) {
+                    } else if (cur && cur->type && strcmp(cur->type, TE_T_STRING) == 0) {
                         snprintf(val, sizeof(val), "%.200s", cur->str_value ? cur->str_value : "");
-                        snprintf(type, sizeof(type), "string");
+                        snprintf(type, sizeof(type), TE_DT_STRING);
                     } else if (cur) {
                         snprintf(val, sizeof(val), "%lld", (long long)cur->value);
-                        snprintf(type, sizeof(type), "int");
+                        snprintf(type, sizeof(type), TE_DT_INT);
                     }
                 }
             } else {

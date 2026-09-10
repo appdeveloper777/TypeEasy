@@ -80,7 +80,7 @@ static const char* mssql_failure_cause(void) {
 static void mssql_report_failure(const char* where) {
     const char* cause = mssql_failure_cause();
     fprintf(stderr, "[SQLServer] %s: %s\n", where, cause);
-    ASTNode* e = create_ast_leaf("STRING", 0, strdup(cause), NULL);
+    ASTNode* e = create_ast_leaf(TE_T_STRING, 0, strdup(cause), NULL);
     add_or_update_variable("__sqlserver_error__", e); free_ast(e);
 }
 
@@ -118,11 +118,11 @@ static const char* ms_arg_str(ASTNode* args, int index) {
     for (int i = 0; i < index && current; i++)
         current = current->next ? current->next : current->right;
     if (!current) return NULL;
-    if (current->type && strcmp(current->type, "STRING") == 0 && current->str_value) return current->str_value;
+    if (current->type && strcmp(current->type, TE_T_STRING) == 0 && current->str_value) return current->str_value;
     if (current->left && current->left->type &&
-        strcmp(current->left->type, "STRING_LITERAL") == 0 && current->left->str_value)
+        strcmp(current->left->type, TE_T_STRING_LITERAL) == 0 && current->left->str_value)
         return current->left->str_value;
-    if (current->type && strcmp(current->type, "IDENTIFIER") == 0 && current->id) {
+    if (current->type && strcmp(current->type, TE_T_IDENTIFIER) == 0 && current->id) {
         Variable* v = find_variable((char*)current->id);
         if (v && v->vtype == VAL_STRING) return v->value.string_value;
     }
@@ -134,17 +134,17 @@ static int ms_arg_int(ASTNode* args, int index) {
     for (int i = 0; i < index && current; i++)
         current = current->next ? current->next : current->right;
     if (!current) return -1;
-    if (current->type && strcmp(current->type, "NUMBER") == 0) return current->value;
-    if (current->type && strcmp(current->type, "STRING") == 0 && current->str_value) {
+    if (current->type && strcmp(current->type, TE_T_NUMBER) == 0) return current->value;
+    if (current->type && strcmp(current->type, TE_T_STRING) == 0 && current->str_value) {
         char* endptr = NULL;
         long val = strtol(current->str_value, &endptr, 10);
         if (endptr && *endptr == '\0') return (int)val;
         Variable* v = find_variable((char*)current->str_value);
         if (v && v->vtype == VAL_INT) return v->value.int_value;
     }
-    if (current->left && current->left->type && strcmp(current->left->type, "NUMBER") == 0)
+    if (current->left && current->left->type && strcmp(current->left->type, TE_T_NUMBER) == 0)
         return current->left->value;
-    if (current->type && strcmp(current->type, "IDENTIFIER") == 0 && current->id) {
+    if (current->type && strcmp(current->type, TE_T_IDENTIFIER) == 0 && current->id) {
         Variable* v = find_variable(current->id);
         if (v && v->vtype == VAL_INT) return v->value.int_value;
     }
@@ -301,11 +301,11 @@ void native_sqlserver_connect(ASTNode* args) {
         const char* k = p->id;
         ASTNode* v = p->left;
         const char* vt = v->type ? v->type : "";
-        const char* v_str = (strcmp(vt, "STRING") == 0) ? v->str_value : NULL;
+        const char* v_str = (strcmp(vt, TE_T_STRING) == 0) ? v->str_value : NULL;
         long v_num = v->value;
-        int v_is_str = (strcmp(vt, "STRING") == 0 && v->str_value);
-        int v_is_num = (strcmp(vt, "NUMBER") == 0 || strcmp(vt, "INT") == 0);
-        if ((strcmp(vt, "IDENTIFIER") == 0 || strcmp(vt, "ID") == 0) && v->id) {
+        int v_is_str = (strcmp(vt, TE_T_STRING) == 0 && v->str_value);
+        int v_is_num = (strcmp(vt, TE_T_NUMBER) == 0 || strcmp(vt, TE_T_INT) == 0);
+        if ((strcmp(vt, TE_T_IDENTIFIER) == 0 || strcmp(vt, TE_T_ID) == 0) && v->id) {
             Variable* rv = find_variable(v->id);
             if (rv) {
                 if (rv->vtype == VAL_STRING) { v_str = rv->value.string_value; v_is_str = (v_str != NULL); v_is_num = 0; }
@@ -348,16 +348,16 @@ void native_sqlserver_connect(ASTNode* args) {
     const char* ca_path = (opt_ca && *opt_ca) ? opt_ca : NULL;
 
     if (!host || !user || !db) {
-        ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         return;
     }
 
     if (!mssql_initialized) {
         if (dbinit() == FAIL) {
             fprintf(stderr, "[SQLServer] dbinit() failed\n");
-            ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
-            add_or_update_variable("__ret__", r); free_ast(r);
+            ASTNode* r = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+            add_or_update_variable(TE_SYM_RET, r); free_ast(r);
             return;
         }
         /* Handlers para capturar el motivo real del fallo (TLS / login). */
@@ -370,8 +370,8 @@ void native_sqlserver_connect(ASTNode* args) {
     for (int i = 0; i < MSSQL_POOL_SIZE; i++) if (!mssql_connections[i]) { slot = i; break; }
     if (slot < 0) {
         fprintf(stderr, "[SQLServer] Pool lleno\n");
-        ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         return;
     }
 
@@ -381,8 +381,8 @@ void native_sqlserver_connect(ASTNode* args) {
 
     LOGINREC* login = dblogin();
     if (!login) {
-        ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         return;
     }
     DBSETLUSER(login, user);
@@ -399,8 +399,8 @@ void native_sqlserver_connect(ASTNode* args) {
         if (!mssql_apply_tls_conf(host, port, encrypt_mode, ca_path, slot, server, sizeof(server))) {
             dbloginfree(login);
             mssql_report_failure("conf TLS");
-            ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
-            add_or_update_variable("__ret__", r); free_ast(r);
+            ASTNode* r = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+            add_or_update_variable(TE_SYM_RET, r); free_ast(r);
             return;
         }
     } else {
@@ -414,8 +414,8 @@ void native_sqlserver_connect(ASTNode* args) {
         snprintf(where, sizeof(where), "dbopen() failed (host=%s:%d, encrypt=%s)",
                  host, port, encrypt_mode == 0 ? "off" : (encrypt_mode == 2 ? "require" : "request"));
         mssql_report_failure(where);
-        ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         return;
     }
     if (dbuse(dbproc, (char*)db) == FAIL) {
@@ -423,16 +423,16 @@ void native_sqlserver_connect(ASTNode* args) {
         snprintf(where, sizeof(where), "dbuse(%s) failed", db);
         mssql_report_failure(where);
         dbclose(dbproc);
-        ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         return;
     }
 
     mssql_connections[slot] = dbproc;
     mssql_req_scoped[slot] = g_vm.db_request_phase;
     printf("[SQLServer] Connection successful (ID: %d)\n", slot); fflush(stdout);
-    ASTNode* r = create_ast_leaf("NUMBER", slot, NULL, NULL);
-    add_or_update_variable("__ret__", r); free_ast(r);
+    ASTNode* r = create_ast_leaf(TE_T_NUMBER, slot, NULL, NULL);
+    add_or_update_variable(TE_SYM_RET, r); free_ast(r);
 }
 
 /* native_sqlserver_query(conn_id, query, [params_map], [format=json|xml]) → string */
@@ -446,14 +446,14 @@ void native_sqlserver_query(ASTNode* args) {
     int is_xml = (strcmp(format, "xml") == 0);
 
     if (conn_id < 0 || conn_id >= MSSQL_POOL_SIZE || !mssql_connections[conn_id]) {
-        ASTNode* r = create_ast_leaf("STRING", 0, strdup("{\"error\":\"invalid_connection\"}"), NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_STRING, 0, strdup("{\"error\":\"invalid_connection\"}"), NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         if (params_owned && params_head) free_ast(params_head);
         return;
     }
     if (!query) {
-        ASTNode* r = create_ast_leaf("STRING", 0, strdup("{\"error\":\"invalid_query\"}"), NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_STRING, 0, strdup("{\"error\":\"invalid_query\"}"), NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         if (params_owned && params_head) free_ast(params_head);
         return;
     }
@@ -468,8 +468,8 @@ void native_sqlserver_query(ASTNode* args) {
     }
 
     if (dbcmd(db, (char*)query) == FAIL || dbsqlexec(db) == FAIL) {
-        ASTNode* r = create_ast_leaf("STRING", 0, strdup("{\"error\":\"query_failed\"}"), NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_STRING, 0, strdup("{\"error\":\"query_failed\"}"), NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         /* Strict mode solo aplica en --api; en CLI es no-op. */
         { if (g_vm.db_strict_errors && g_vm.api_mode) typeeasy_http_set_status(500); }
         if (final_query) free(final_query);
@@ -554,8 +554,8 @@ void native_sqlserver_query(ASTNode* args) {
 
     if (sb.oom) {
         free(sb.p);
-        ASTNode* r = create_ast_leaf("STRING", 0, strdup("{\"error\":\"memory_allocation_failed\"}"), NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_STRING, 0, strdup("{\"error\":\"memory_allocation_failed\"}"), NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         if (final_query) free(final_query);
         return;
     }
@@ -565,15 +565,15 @@ void native_sqlserver_query(ASTNode* args) {
         free(sb.p);
         char abuf[64];
         snprintf(abuf, sizeof(abuf), "{\"affected_rows\":%lld}", affected_total);
-        ASTNode* ret = create_ast_leaf("STRING", 0, strdup(abuf), NULL);
-        add_or_update_variable("__ret__", ret); free_ast(ret);
+        ASTNode* ret = create_ast_leaf(TE_T_STRING, 0, strdup(abuf), NULL);
+        add_or_update_variable(TE_SYM_RET, ret); free_ast(ret);
         if (final_query) free(final_query);
         return;
     }
 
     sb.p[sb.len] = '\0';
-    ASTNode* ret = create_ast_leaf("STRING", 0, sb.p, NULL);
-    add_or_update_variable("__ret__", ret); free_ast(ret);
+    ASTNode* ret = create_ast_leaf(TE_T_STRING, 0, sb.p, NULL);
+    add_or_update_variable(TE_SYM_RET, ret); free_ast(ret);
     free(sb.p);
     if (final_query) free(final_query);
 }

@@ -86,7 +86,7 @@ static inline int fl_attr_idx(FastLambda *fl, ObjectNode *obj) {
 
 static inline int fl_read_attr(FastLambda *fl, ASTNode *item, double *out_d, int *out_is_int) {
     if (!item || !item->type) return 0;
-    if (strcmp(item->type, "OBJECT") != 0 || !item->extra) return 0;
+    if (strcmp(item->type, TE_T_OBJECT) != 0 || !item->extra) return 0;
     ObjectNode *obj = (ObjectNode*)item->extra;
     int idx = fl_attr_idx(fl, obj);
     if (idx < 0) return 0;
@@ -107,7 +107,7 @@ static inline int fl_read_attr(FastLambda *fl, ASTNode *item, double *out_d, int
 
 static inline const char* fl_read_attr_str(FastLambda *fl, ASTNode *item) {
     if (!item || !item->type) return NULL;
-    if (strcmp(item->type, "OBJECT") != 0 || !item->extra) return NULL;
+    if (strcmp(item->type, TE_T_OBJECT) != 0 || !item->extra) return NULL;
     ObjectNode *obj = (ObjectNode*)item->extra;
     int idx = fl_attr_idx(fl, obj);
     if (idx < 0) return NULL;
@@ -134,7 +134,7 @@ static inline int fl_attr_idx2(FastLambda *fl, ObjectNode *obj) {
 
 static inline int fl_read_attr2(FastLambda *fl, ASTNode *item, double *out_d, int *out_is_int) {
     if (!item || !item->type) return 0;
-    if (strcmp(item->type, "OBJECT") != 0 || !item->extra) return 0;
+    if (strcmp(item->type, TE_T_OBJECT) != 0 || !item->extra) return 0;
     ObjectNode *obj = (ObjectNode*)item->extra;
     int idx = fl_attr_idx2(fl, obj);
     if (idx < 0) return 0;
@@ -157,10 +157,10 @@ static inline int fast_eval(FastLambda *fl, ASTNode *item, double *out_d, int *o
     if (fl->spec == SPEC_NONE) return 0;
     if (fl->spec == SPEC_IDENT) {
         if (!item || !item->type) return 0;
-        if (strcmp(item->type, "NUMBER") == 0 || strcmp(item->type, "INT") == 0) {
+        if (strcmp(item->type, TE_T_NUMBER) == 0 || strcmp(item->type, TE_T_INT) == 0) {
             *out_d = (double)item->value; *out_is_int = 1; return 1;
         }
-        if (strcmp(item->type, "FLOAT") == 0 && item->str_value) {
+        if (strcmp(item->type, TE_T_FLOAT) == 0 && item->str_value) {
             *out_d = atof(item->str_value); *out_is_int = 0; return 1;
         }
         return 0;

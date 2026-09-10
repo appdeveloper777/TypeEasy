@@ -33,14 +33,14 @@ static void te_db_unavailable(const char *engine, const char *fn) {
 }
 /* Deja un -1 en __ret__ para que `if (conn < 0)` funcione igual que en Linux. */
 static void te_db_ret_fail_int(void) {
-    ASTNode *r = create_ast_leaf("NUMBER", -1, NULL, NULL);
-    add_or_update_variable("__ret__", r); free_ast(r);
+    ASTNode *r = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+    add_or_update_variable(TE_SYM_RET, r); free_ast(r);
 }
 static void te_db_ret_fail_str(const char *engine) {
     char buf[96];
     snprintf(buf, sizeof(buf), "{\"error\":\"%s_unavailable_sqlite_only_build\"}", engine);
-    ASTNode *r = create_ast_leaf("STRING", 0, strdup(buf), NULL);
-    add_or_update_variable("__ret__", r); free_ast(r);
+    ASTNode *r = create_ast_leaf(TE_T_STRING, 0, strdup(buf), NULL);
+    add_or_update_variable(TE_SYM_RET, r); free_ast(r);
 }
 #endif
 

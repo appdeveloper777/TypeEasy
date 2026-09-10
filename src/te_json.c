@@ -71,41 +71,41 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
     /* v1.0.0: evaluate embedded CALL_FUNC/CALL_METHOD (e.g. map literal
      * values like `{"id": uuid_v4()}` stored raw in KV_PAIR->left).
      * Requires hooks; otherwise emit null. */
-    if (strcmp(n->type, "CALL_FUNC") == 0 || strcmp(n->type, "CALL_METHOD") == 0) {
-        te_json_eval_fn hook = (strcmp(n->type, "CALL_FUNC") == 0)
+    if (strcmp(n->type, TE_T_CALL_FUNC) == 0 || strcmp(n->type, TE_T_CALL_METHOD) == 0) {
+        te_json_eval_fn hook = (strcmp(n->type, TE_T_CALL_FUNC) == 0)
                                 ? g_vm.json_eval_call_func
                                 : g_vm.json_eval_call_method;
         if (!hook) { tebuf_puts(b, "null"); return; }
         hook(n);
-        Variable *r = find_variable("__ret__");
+        Variable *r = find_variable(TE_SYM_RET);
         if (!r) { tebuf_puts(b, "null"); return; }
         if (te_var_is_decimal(r)) { tebuf_puts(b, r->value.string_value ? r->value.string_value : "0"); return; }
         if (r->vtype == VAL_STRING) { te_json_emit_str(b, r->value.string_value ? r->value.string_value : ""); return; }
         if (r->vtype == VAL_INT) {
-            if (r->type && strcmp(r->type, "BOOL") == 0) { tebuf_puts(b, r->value.int_value ? "true" : "false"); return; }
+            if (r->type && strcmp(r->type, TE_T_BOOL) == 0) { tebuf_puts(b, r->value.int_value ? "true" : "false"); return; }
             char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)r->value.int_value); tebuf_puts(b, tmp); return;
         }
         if (r->vtype == VAL_FLOAT) { char tmp[64]; te_fmt_double(tmp, sizeof(tmp), r->value.float_value); tebuf_puts(b, tmp); return; }
         tebuf_puts(b, "null"); return;
     }
-    if (strcmp(n->type, "BOOL") == 0) {
+    if (strcmp(n->type, TE_T_BOOL) == 0) {
         tebuf_puts(b, n->value ? "true" : "false");
         return;
     }
-    if (strcmp(n->type, "STRING") == 0) {
+    if (strcmp(n->type, TE_T_STRING) == 0) {
         te_json_emit_str(b, n->str_value ? n->str_value : "");
         return;
     }
-    if (strcmp(n->type, "INT") == 0 || strcmp(n->type, "NUMBER") == 0) {
+    if (strcmp(n->type, TE_T_INT) == 0 || strcmp(n->type, TE_T_NUMBER) == 0) {
         char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)n->value); tebuf_puts(b, tmp);
         return;
     }
-    if (strcmp(n->type, "FLOAT") == 0 || strcmp(n->type, "DECIMAL") == 0) {
+    if (strcmp(n->type, TE_T_FLOAT) == 0 || strcmp(n->type, TE_T_DECIMAL) == 0) {
         const char *s = n->str_value ? n->str_value : "0";
         tebuf_puts(b, s);
         return;
     }
-    if (strcmp(n->type, "LIST") == 0) {
+    if (strcmp(n->type, TE_T_LIST) == 0) {
         tebuf_putc(b, '[');
         ASTNode *cur = n->left;
         int first = 1;
@@ -118,7 +118,7 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
         tebuf_putc(b, ']');
         return;
     }
-    if (strcmp(n->type, "MAP") == 0 || strcmp(n->type, "OBJECT_LITERAL") == 0) {
+    if (strcmp(n->type, TE_T_MAP) == 0 || strcmp(n->type, TE_T_OBJECT_LITERAL) == 0) {
         tebuf_putc(b, '{');
         ASTNode *cur = n->left;
         int first = 1;
@@ -133,19 +133,19 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
         tebuf_putc(b, '}');
         return;
     }
-    if (strcmp(n->type, "IDENTIFIER") == 0 && n->id) {
+    if (strcmp(n->type, TE_T_IDENTIFIER) == 0 && n->id) {
         Variable *v = find_variable(n->id);
         if (v) {
-            if (v->type && strcmp(v->type, "BOOL") == 0) {
+            if (v->type && strcmp(v->type, TE_T_BOOL) == 0) {
                 tebuf_puts(b, v->value.int_value ? "true" : "false");
                 return;
             }
-            if (v->type && strcmp(v->type, "NULL") == 0) { tebuf_puts(b, "null"); return; }
+            if (v->type && strcmp(v->type, TE_T_NULL) == 0) { tebuf_puts(b, "null"); return; }
             if (te_var_is_decimal(v)) { tebuf_puts(b, v->value.string_value ? v->value.string_value : "0"); return; }
             if (v->vtype == VAL_STRING) { te_json_emit_str(b, v->value.string_value ? v->value.string_value : ""); return; }
             if (v->vtype == VAL_INT)    { char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)v->value.int_value); tebuf_puts(b, tmp); return; }
             if (v->vtype == VAL_FLOAT)  { char tmp[64]; te_fmt_double(tmp, sizeof(tmp), v->value.float_value); tebuf_puts(b, tmp); return; }
-            if (v->type && (strcmp(v->type,"LIST")==0 || strcmp(v->type,"MAP")==0)) {
+            if (v->type && (strcmp(v->type,TE_T_LIST)==0 || strcmp(v->type,TE_T_MAP)==0)) {
                 te_json_emit_node(b, (ASTNode*)(intptr_t)v->value.object_value);
                 return;
             }
@@ -155,11 +155,11 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
      * e.g. { mensaje: "Hola " + nombre } (ADD string concat) or an
      * interpolated string { mensaje: $"Hola {nombre}" }. Strings go through
      * get_node_string(); numeric arithmetic through evaluate_expression(). */
-    if (strcmp(n->type, "ADD") == 0 || strcmp(n->type, "SUB") == 0 ||
-        strcmp(n->type, "MUL") == 0 || strcmp(n->type, "DIV") == 0 ||
-        strcmp(n->type, "MOD") == 0 || strcmp(n->type, "NEG") == 0 ||
-        strcmp(n->type, "STRING_INTERP") == 0) {
-        if (strcmp(n->type, "STRING_INTERP") == 0 || is_string_type(n)) {
+    if (strcmp(n->type, TE_T_ADD) == 0 || strcmp(n->type, TE_T_SUB) == 0 ||
+        strcmp(n->type, TE_T_MUL) == 0 || strcmp(n->type, TE_T_DIV) == 0 ||
+        strcmp(n->type, TE_T_MOD) == 0 || strcmp(n->type, TE_T_NEG) == 0 ||
+        strcmp(n->type, TE_T_STRING_INTERP) == 0) {
+        if (strcmp(n->type, TE_T_STRING_INTERP) == 0 || is_string_type(n)) {
             char *s = get_node_string(n);
             te_json_emit_str(b, s ? s : "");
             if (s) free(s);
@@ -186,7 +186,7 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
      * DB binder do: string attributes via get_node_string(), numeric ones via
      * evaluate_expression(), so the serialized JSON value preserves its type
      * (consistent with the 0.0.29 fix for objects-as-arguments). */
-    if (strcmp(n->type, "ACCESS_ATTR") == 0) {
+    if (strcmp(n->type, TE_T_ACCESS_ATTR) == 0) {
         if (is_string_type(n)) {
             char *s = get_node_string(n);
             te_json_emit_str(b, s ? s : "");
@@ -211,15 +211,15 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
      * — { x: datos["k"] } / { y: items[0] }. Resolvemos el ACCESS_EXPR a su
      * nodo-valor subyacente y lo re-emitimos para preservar su tipo
      * (string / número / bool / mapa anidado). Antes caía al "null" final. */
-    if (strcmp(n->type, "ACCESS_EXPR") == 0) {
+    if (strcmp(n->type, TE_T_ACCESS_EXPR) == 0) {
         ASTNode *val = NULL;
         ASTNode *map = resolve_to_map(n->left);
         if (map) {
             const char *key = NULL;
             if (n->right && n->right->type) {
-                if (strcmp(n->right->type, "STRING") == 0) key = n->right->str_value;
-                else if (strcmp(n->right->type, "IDENTIFIER") == 0 ||
-                         strcmp(n->right->type, "ID") == 0) {
+                if (strcmp(n->right->type, TE_T_STRING) == 0) key = n->right->str_value;
+                else if (strcmp(n->right->type, TE_T_IDENTIFIER) == 0 ||
+                         strcmp(n->right->type, TE_T_ID) == 0) {
                     Variable *kv = find_variable(n->right->id);
                     if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
                 }
@@ -295,17 +295,17 @@ ASTNode *te_json_parse_value(const char **p) {
     char c = **p;
     /* Empty / whitespace-only input is not JSON: yield null (was NUMBER 0,
      * which then failed for-in with a misleading "it is a number"). */
-    if (c == '\0') return create_ast_leaf("NULL", 0, NULL, NULL);
+    if (c == '\0') return create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
     if (c == '"') {
         char *s = te_json_parse_string(p);
-        ASTNode *r = create_ast_leaf("STRING", 0, s ? s : "", NULL);
+        ASTNode *r = create_ast_leaf(TE_T_STRING, 0, s ? s : "", NULL);
         if (s) free(s);
         return r;
     }
     if (c == '{') {
         (*p)++;
         ASTNode *map = (ASTNode*)calloc(1, sizeof(ASTNode));
-        map->type = strdup("OBJECT_LITERAL");
+        map->type = strdup(TE_T_OBJECT_LITERAL);
         ASTNode *tail = NULL;
         te_json_skip_ws(p);
         if (**p == '}') { (*p)++; return map; }
@@ -344,15 +344,15 @@ ASTNode *te_json_parse_value(const char **p) {
         }
         return list;
     }
-    if (c == 't' && strncmp(*p, "true", 4) == 0) { *p += 4; return create_ast_leaf_number("INT", 1, NULL, NULL); }
-    if (c == 'f' && strncmp(*p, "false", 5) == 0) { *p += 5; return create_ast_leaf_number("INT", 0, NULL, NULL); }
+    if (c == 't' && strncmp(*p, "true", 4) == 0) { *p += 4; return create_ast_leaf_number(TE_T_INT, 1, NULL, NULL); }
+    if (c == 'f' && strncmp(*p, "false", 5) == 0) { *p += 5; return create_ast_leaf_number(TE_T_INT, 0, NULL, NULL); }
     /* JSON null → nodo NULL propio (no INT 0). Antes se colapsaba a INT 0, lo
      * que era indistinguible de un 0 real: el model-binding de un body tipado
      * lo convertía en el string "0" y el binder de @params lo interpolaba como
      * '0' (rompía columnas DATE/DATETIME/ENUM bajo STRICT_TRANS_TABLES). Con un
      * nodo NULL, te_object_from_json lo enlaza como SQL NULL y los emisores
      * (te_json_emit_node, get_node_string) lo serializan como "null"/"". */
-    if (c == 'n' && strncmp(*p, "null", 4) == 0) { *p += 4; return create_ast_leaf("NULL", 0, NULL, NULL); }
+    if (c == 'n' && strncmp(*p, "null", 4) == 0) { *p += 4; return create_ast_leaf(TE_T_NULL, 0, NULL, NULL); }
     /* number */
     const char *start = *p;
     if (**p == '-' || **p == '+') (*p)++;
@@ -371,6 +371,6 @@ ASTNode *te_json_parse_value(const char **p) {
     if (L == 0 && **p) (*p)++;
     if (L >= sizeof(tmp)) L = sizeof(tmp) - 1;
     memcpy(tmp, start, L); tmp[L] = 0;
-    if (is_float) return create_ast_leaf("FLOAT", 0, tmp, NULL);
-    return create_ast_leaf_number("INT", strtoll(tmp, NULL, 10), NULL, NULL);
+    if (is_float) return create_ast_leaf(TE_T_FLOAT, 0, tmp, NULL);
+    return create_ast_leaf_number(TE_T_INT, strtoll(tmp, NULL, 10), NULL, NULL);
 }

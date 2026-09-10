@@ -20,7 +20,7 @@ void orm_run_mapped_query(int conn_id, const char* query, ClassNode* cls) {
     extern ASTNode* mysql_query_to_objects_fast(int conn_id, const char* query, ClassNode* cls);
     ASTNode* list_node = mysql_query_to_objects_fast(conn_id, query, cls);
     if (!list_node) return;
-    add_or_update_variable("__ret__", list_node);
+    add_or_update_variable(TE_SYM_RET, list_node);
 }
 
 void native_orm_query(ASTNode* args) {
@@ -39,9 +39,9 @@ void native_orm_query(ASTNode* args) {
     
     // conn_id
     if (curr) {
-        if (curr->type && strcmp(curr->type, "NUMBER") == 0) {
+        if (curr->type && strcmp(curr->type, TE_T_NUMBER) == 0) {
             conn_id = curr->value;
-        } else if (curr->type && strcmp(curr->type, "IDENTIFIER") == 0) {
+        } else if (curr->type && strcmp(curr->type, TE_T_IDENTIFIER) == 0) {
             Variable* v = find_variable(curr->id);
             if (v && v->vtype == VAL_INT) conn_id = v->value.int_value;
         }
@@ -51,9 +51,9 @@ void native_orm_query(ASTNode* args) {
     
     // query
     if (curr) {
-        if (curr->type && strcmp(curr->type, "STRING") == 0) {
+        if (curr->type && strcmp(curr->type, TE_T_STRING) == 0) {
             query = curr->str_value;
-        } else if (curr->type && strcmp(curr->type, "IDENTIFIER") == 0) {
+        } else if (curr->type && strcmp(curr->type, TE_T_IDENTIFIER) == 0) {
             Variable* v = find_variable(curr->id);
             if (v && v->vtype == VAL_STRING) query = v->value.string_value;
         }
@@ -63,7 +63,7 @@ void native_orm_query(ASTNode* args) {
     
     // class
     if (curr) {
-        if (curr->type && (strcmp(curr->type, "IDENTIFIER") == 0 || strcmp(curr->type, "ID") == 0)) {
+        if (curr->type && (strcmp(curr->type, TE_T_IDENTIFIER) == 0 || strcmp(curr->type, TE_T_ID) == 0)) {
             class_name = curr->id ? curr->id : curr->str_value;
         }
     }
@@ -79,7 +79,7 @@ void native_orm_query(ASTNode* args) {
         if (params_owned) { free_ast(params_head); params_head = NULL; }
     }
     
-    printf("[ORM] Argumentos finales: conn_id=%d, query=%s, class_name=%s\n", conn_id, query ? query : "NULL", class_name ? class_name : "NULL");
+    printf("[ORM] Argumentos finales: conn_id=%d, query=%s, class_name=%s\n", conn_id, query ? query : "(null)", class_name ? class_name : "(null)");
     fflush(stdout);
     
     // Buscar clase destino
@@ -89,7 +89,7 @@ void native_orm_query(ASTNode* args) {
         cls = find_class((char*)class_name);
     }
     if (!cls) {
-        fprintf(stderr, "[ORM] target class '%s' not found\n", class_name ? class_name : "NULL");
+        fprintf(stderr, "[ORM] target class '%s' not found\n", class_name ? class_name : "(null)");
         if (final_query) free(final_query);
         return;
     }

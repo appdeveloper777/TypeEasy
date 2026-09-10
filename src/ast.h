@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "te_types.h"   /* TE_T_* / TE_DT_*: tags de tipo (única fuente de verdad) */
 
 /* Canonical interpreter variable-slot capacity.
  * SINGLE source of truth — every module that touches the global `vars[]`

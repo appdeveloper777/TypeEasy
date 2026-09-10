@@ -49,20 +49,20 @@ void native_sqlserver_connect(ASTNode* args) {
     (void)args;
     mssql_unavailable("sqlserver_connect");
     /* Exponer la causa en la variable de script, igual que el bridge real. */
-    ASTNode* e = create_ast_leaf("STRING", 0,
+    ASTNode* e = create_ast_leaf(TE_T_STRING, 0,
         strdup("sqlserver no disponible en esta build de Windows (FreeTDS no enlazado); "
                "usa la build Linux o recompila con mingw-w64-x86_64-freetds"), NULL);
     add_or_update_variable("__sqlserver_error__", e); free_ast(e);
     /* Devolver -1 (no conectado) para que `if (conn < 0)` funcione como en Linux. */
-    ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
-    add_or_update_variable("__ret__", r); free_ast(r);
+    ASTNode* r = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+    add_or_update_variable(TE_SYM_RET, r); free_ast(r);
 }
 void native_sqlserver_query  (ASTNode* args) {
     (void)args;
     mssql_unavailable("sqlserver_query");
-    ASTNode* r = create_ast_leaf("STRING", 0,
+    ASTNode* r = create_ast_leaf(TE_T_STRING, 0,
         strdup("{\"error\":\"sqlserver_unavailable_windows_build\"}"), NULL);
-    add_or_update_variable("__ret__", r); free_ast(r);
+    add_or_update_variable(TE_SYM_RET, r); free_ast(r);
 }
 void native_sqlserver_close  (ASTNode* args) { (void)args; mssql_unavailable("sqlserver_close"); }
 #endif

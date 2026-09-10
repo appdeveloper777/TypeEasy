@@ -120,15 +120,15 @@
 %%
 
 program:
-     program statement       { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; ctx->root = $$; }  
+     program statement       { $$ = $1 ? create_ast_node(TE_T_STATEMENT_LIST, $1, $2) : $2; ctx->root = $$; }  
     | program class_decl      { $$ = $1; ctx->root = $$; }
-    | program agent_decl      { $$ = $1 ? create_ast_node("AGENT_LIST", $1, $2) : $2; ctx->root = $$; }
-    | program bridge_decl     { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; ctx->root = $$; }
-    | program endpoint_decl   { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; ctx->root = $$; }
+    | program agent_decl      { $$ = $1 ? create_ast_node(TE_T_AGENT_LIST, $1, $2) : $2; ctx->root = $$; }
+    | program bridge_decl     { $$ = $1 ? create_ast_node(TE_T_STATEMENT_LIST, $1, $2) : $2; ctx->root = $$; }
+    | program endpoint_decl   { $$ = $1 ? create_ast_node(TE_T_STATEMENT_LIST, $1, $2) : $2; ctx->root = $$; }
     | endpoint_decl           { $$ = $1; ctx->root = $$; }
-    | program auth_endpoint_decl { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; ctx->root = $$; }
+    | program auth_endpoint_decl { $$ = $1 ? create_ast_node(TE_T_STATEMENT_LIST, $1, $2) : $2; ctx->root = $$; }
     | auth_endpoint_decl      { $$ = $1; ctx->root = $$; }
-    | program guard_endpoint_decl { $$ = $1 ? create_ast_node("STATEMENT_LIST", $1, $2) : $2; ctx->root = $$; }
+    | program guard_endpoint_decl { $$ = $1 ? create_ast_node(TE_T_STATEMENT_LIST, $1, $2) : $2; ctx->root = $$; }
     | guard_endpoint_decl     { $$ = $1; ctx->root = $$; }
     | cache_decorator endpoint_decl { if ($2 && $2->extra) ((MethodNode*)$2->extra)->cache_ttl = $1; $$ = $2; ctx->root = $$; }
     | httpget_method_decl     { $$ = $1; ctx->root = $$; }
@@ -145,14 +145,14 @@ cache_decorator:
 
 endpoint_decl:
     ENDPOINT LBRACKET endpoint_methods RBRACKET
-        { $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
+        { $$ = create_ast_node(TE_T_ENDPOINT_DECL, NULL, NULL); }
     ;
 
 /* @auth endpoint { ... } : exige autenticacion en TODOS los metodos del bloque.
  * El mid-rule action arma el flag ANTES de parsear los metodos. */
 auth_endpoint_decl:
     AUTH ENDPOINT LBRACKET { ctx->endpoint_auth_all = 1; } endpoint_methods RBRACKET
-        { ctx->endpoint_auth_all = 0; $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
+        { ctx->endpoint_auth_all = 0; $$ = create_ast_node(TE_T_ENDPOINT_DECL, NULL, NULL); }
     ;
 
 /* v0.0.24 — user-defined guard applied to ALL methods of the block. Two
@@ -161,9 +161,9 @@ auth_endpoint_decl:
  * present) overrides the block-level guard for that method. */
 guard_endpoint_decl:
       DECORATOR ENDPOINT LBRACKET { ctx->endpoint_guard_all = $1; } endpoint_methods RBRACKET
-        { if (ctx->endpoint_guard_all) free(ctx->endpoint_guard_all); ctx->endpoint_guard_all = NULL; $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
+        { if (ctx->endpoint_guard_all) free(ctx->endpoint_guard_all); ctx->endpoint_guard_all = NULL; $$ = create_ast_node(TE_T_ENDPOINT_DECL, NULL, NULL); }
     | ENDPOINT DECORATOR LBRACKET { ctx->endpoint_guard_all = $2; } endpoint_methods RBRACKET
-        { if (ctx->endpoint_guard_all) free(ctx->endpoint_guard_all); ctx->endpoint_guard_all = NULL; $$ = create_ast_node("ENDPOINT_DECL", NULL, NULL); }
+        { if (ctx->endpoint_guard_all) free(ctx->endpoint_guard_all); ctx->endpoint_guard_all = NULL; $$ = create_ast_node(TE_T_ENDPOINT_DECL, NULL, NULL); }
     ;
 
 endpoint_methods:
@@ -360,7 +360,7 @@ agent_body:
     | listener_decl
         { $$ = $1; }
     | agent_body listener_decl
-        { $$ = create_ast_node("LISTENER_LIST", $1, $2); }
+        { $$ = create_ast_node(TE_T_LISTENER_LIST, $1, $2); }
     ;
 
 listener_decl:
@@ -441,20 +441,20 @@ member_name:
   ;
 
 attribute_decl:
-    member_name COLON INT SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "int"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
-  | member_name COLON STRING SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "string"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
-  | member_name COLON FLOAT SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "float"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
-  | member_name COLON BOOLTYPE SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "bool"); } }
-  | member_name COLON DECIMALTYPE SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "decimal"); } }
-  | member_name COLON DATETIMETYPE SEMICOLON { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "datetime"); } }
-  | member_name COLON UUIDTYPE SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "uuid"); } }
-  | member_name COLON INT QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "int?"); } }
-  | member_name COLON STRING QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "string?"); } }
-  | member_name COLON FLOAT QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "float?"); } }
-  | member_name COLON BOOLTYPE QMARK SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "bool?"); } }
-  | member_name COLON DECIMALTYPE QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "decimal?"); } }
-  | member_name COLON DATETIMETYPE QMARK SEMICOLON { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "datetime?"); } }
-  | member_name COLON UUIDTYPE QMARK SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "uuid?"); } }
+    member_name COLON INT SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_INT); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
+  | member_name COLON STRING SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_STRING); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
+  | member_name COLON FLOAT SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_FLOAT); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
+  | member_name COLON BOOLTYPE SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_BOOL); } }
+  | member_name COLON DECIMALTYPE SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_DECIMAL); } }
+  | member_name COLON DATETIMETYPE SEMICOLON { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_DATETIME); } }
+  | member_name COLON UUIDTYPE SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_UUID); } }
+  | member_name COLON INT QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_INT_OPT); } }
+  | member_name COLON STRING QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_STRING_OPT); } }
+  | member_name COLON FLOAT QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_FLOAT_OPT); } }
+  | member_name COLON BOOLTYPE QMARK SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_BOOL_OPT); } }
+  | member_name COLON DECIMALTYPE QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_DECIMAL_OPT); } }
+  | member_name COLON DATETIMETYPE QMARK SEMICOLON { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_DATETIME_OPT); } }
+  | member_name COLON UUIDTYPE QMARK SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_UUID_OPT); } }
   /* C#/C-style fields: [public|private|protected] type name [= default] ; */
   | field_type IDENTIFIER SEMICOLON
       { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $2, $1); } free($1); }
@@ -510,23 +510,23 @@ parameter_list:
   ;
 
 method_return_type:
-    INT      { $$ = strdup("int"); }
-  | STRING   { $$ = strdup("string"); }
-  | FLOAT    { $$ = strdup("float"); }
-  | VOID     { $$ = strdup("void"); }
-  | DYNAMIC  { $$ = strdup("dynamic"); }
-  | BOOLTYPE     { $$ = strdup("bool"); }
-  | DECIMALTYPE  { $$ = strdup("decimal"); }
-  | DATETIMETYPE { $$ = strdup("datetime"); }
-  | UUIDTYPE     { $$ = strdup("uuid"); }
-  | INT QMARK      { $$ = strdup("int?"); }
-  | STRING QMARK   { $$ = strdup("string?"); }
-  | FLOAT QMARK    { $$ = strdup("float?"); }
+    INT      { $$ = strdup(TE_DT_INT); }
+  | STRING   { $$ = strdup(TE_DT_STRING); }
+  | FLOAT    { $$ = strdup(TE_DT_FLOAT); }
+  | VOID     { $$ = strdup(TE_DT_VOID); }
+  | DYNAMIC  { $$ = strdup(TE_DT_DYNAMIC); }
+  | BOOLTYPE     { $$ = strdup(TE_DT_BOOL); }
+  | DECIMALTYPE  { $$ = strdup(TE_DT_DECIMAL); }
+  | DATETIMETYPE { $$ = strdup(TE_DT_DATETIME); }
+  | UUIDTYPE     { $$ = strdup(TE_DT_UUID); }
+  | INT QMARK      { $$ = strdup(TE_DT_INT_OPT); }
+  | STRING QMARK   { $$ = strdup(TE_DT_STRING_OPT); }
+  | FLOAT QMARK    { $$ = strdup(TE_DT_FLOAT_OPT); }
   | DYNAMIC QMARK  { $$ = strdup("dynamic?"); }
-  | BOOLTYPE QMARK     { $$ = strdup("bool?"); }
-  | DECIMALTYPE QMARK  { $$ = strdup("decimal?"); }
-  | DATETIMETYPE QMARK { $$ = strdup("datetime?"); }
-  | UUIDTYPE QMARK     { $$ = strdup("uuid?"); }
+  | BOOLTYPE QMARK     { $$ = strdup(TE_DT_BOOL_OPT); }
+  | DECIMALTYPE QMARK  { $$ = strdup(TE_DT_DECIMAL_OPT); }
+  | DATETIMETYPE QMARK { $$ = strdup(TE_DT_DATETIME_OPT); }
+  | UUIDTYPE QMARK     { $$ = strdup(TE_DT_UUID_OPT); }
   | IDENTIFIER QMARK { char *t = malloc(strlen($1)+2); sprintf(t,"%s?",$1); free($1); $$ = t; }
   ;
 
@@ -541,21 +541,21 @@ expression:
  | lambda_value
  | AWAIT expression    { $$ = create_function_call_node("await_async", $2); }
  | ASYNC lambda_value  { $$ = create_call_node("go", $2); }
-|expression GT expression    { $$ = create_ast_node("GT", $1, $3); }
-  | expression LT expression      { $$ = create_ast_node("LT", $1, $3); }
-  | expression EQ expression      { $$ = create_ast_node("EQ", $1, $3); }
-  | expression GT_EQ expression   { $$ = create_ast_node("GT_EQ", $1, $3); }
-  | expression LT_EQ expression   { $$ = create_ast_node("LT_EQ", $1, $3); }
-  | expression DIFF expression   { $$ = create_ast_node("DIFF", $1, $3); }
-  | expression AND expression    { $$ = create_ast_node("AND", $1, $3); }
-  | expression OR expression     { $$ = create_ast_node("OR", $1, $3); }
-  | NOT expression               { $$ = create_ast_node("NOT", $2, NULL); }
-  | expression QQ expression     { $$ = create_ast_node("NULL_COALESCE", $1, $3); }
+|expression GT expression    { $$ = create_ast_node(TE_T_GT, $1, $3); }
+  | expression LT expression      { $$ = create_ast_node(TE_T_LT, $1, $3); }
+  | expression EQ expression      { $$ = create_ast_node(TE_T_EQ, $1, $3); }
+  | expression GT_EQ expression   { $$ = create_ast_node(TE_T_GT_EQ, $1, $3); }
+  | expression LT_EQ expression   { $$ = create_ast_node(TE_T_LT_EQ, $1, $3); }
+  | expression DIFF expression   { $$ = create_ast_node(TE_T_DIFF, $1, $3); }
+  | expression AND expression    { $$ = create_ast_node(TE_T_AND, $1, $3); }
+  | expression OR expression     { $$ = create_ast_node(TE_T_OR, $1, $3); }
+  | NOT expression               { $$ = create_ast_node(TE_T_NOT, $2, NULL); }
+  | expression QQ expression     { $$ = create_ast_node(TE_T_NULL_COALESCE, $1, $3); }
   | expression QMARK expression COLON expression %prec QMARK
-      { ASTNode *t = create_ast_node("TERNARY", $1, $3); t->extra = $5; $$ = t; }
+      { ASTNode *t = create_ast_node(TE_T_TERNARY, $1, $3); t->extra = $5; $$ = t; }
   | expression QDOT IDENTIFIER LPAREN RPAREN              { ASTNode *call = create_method_call_node($1, $3, NULL); call->value = 1; /* null-safe flag */ $$ = call; }
   | expression QDOT IDENTIFIER LPAREN expression_list RPAREN { ASTNode *call = create_method_call_node($1, $3, $5); call->value = 1; $$ = call; }
-  | expression QDOT IDENTIFIER   { ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3); ASTNode *n = create_ast_node("ACCESS_ATTR", $1, attr); n->value = 1; $$ = n; }
+  | expression QDOT IDENTIFIER   { ASTNode *attr = create_ast_leaf(TE_T_ID, 0, NULL, $3); ASTNode *n = create_ast_node(TE_T_ACCESS_ATTR, $1, attr); n->value = 1; $$ = n; }
   | expression LSBRACKET expression RSBRACKET       { $$ = create_access_node($1, $3); }
   | object_literal      { $$ = $1; }
   | expression DOT IDENTIFIER LPAREN RPAREN     {         $$ = create_method_call_node($1, $3, NULL); }
@@ -568,33 +568,33 @@ expression:
          else { $$ = create_method_call_node($1, $3, $5); }
          free($3); }
   | expression DOT IDENTIFIER
-      { ASTNode *attr = create_ast_leaf("ID", 0, NULL, $3); 
-        $$ = create_ast_node("ACCESS_ATTR", $1, attr); }
-  | THIS DOT IDENTIFIER       { $$ = create_ast_node("ACCESS_ATTR", create_ast_leaf("ID", 0, NULL, "this"), create_ast_leaf("ID", 0, NULL, $3)); }
-  | THIS DOT IDENTIFIER LPAREN RPAREN       { $$ = create_method_call_node(create_ast_leaf("ID", 0, NULL, "this"), $3, NULL); }
-  | IDENTIFIER       { $$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1); }
-  | NUMBER       { $$ = create_ast_leaf("NUMBER", $1, NULL, NULL); }
-  | FLOAT_LITERAL       { $$ = create_ast_leaf("FLOAT", 0, $1, NULL); }
-  | DECIMAL_LITERAL     { $$ = create_ast_leaf("DECIMAL", 0, $1, NULL); }
-  | STRING_LITERAL       { $$ = create_ast_leaf("STRING", 0, $1, NULL); }
-  | STRING_INTERP        { $$ = create_ast_leaf("STRING_INTERP", 0, $1, NULL); }
-  | NULLTOK       { $$ = create_ast_leaf("NULL", 0, NULL, NULL); }
-  | TRUETOK       { ASTNode *n = create_ast_leaf("BOOL", 1, NULL, NULL); n->line = yyget_lineno(scanner); $$ = n; }
-  | FALSETOK      { ASTNode *n = create_ast_leaf("BOOL", 0, NULL, NULL); n->line = yyget_lineno(scanner); $$ = n; }
+      { ASTNode *attr = create_ast_leaf(TE_T_ID, 0, NULL, $3); 
+        $$ = create_ast_node(TE_T_ACCESS_ATTR, $1, attr); }
+  | THIS DOT IDENTIFIER       { $$ = create_ast_node(TE_T_ACCESS_ATTR, create_ast_leaf(TE_T_ID, 0, NULL, TE_SYM_THIS), create_ast_leaf(TE_T_ID, 0, NULL, $3)); }
+  | THIS DOT IDENTIFIER LPAREN RPAREN       { $$ = create_method_call_node(create_ast_leaf(TE_T_ID, 0, NULL, TE_SYM_THIS), $3, NULL); }
+  | IDENTIFIER       { $$ = create_ast_leaf(TE_T_IDENTIFIER, 0, NULL, $1); }
+  | NUMBER       { $$ = create_ast_leaf(TE_T_NUMBER, $1, NULL, NULL); }
+  | FLOAT_LITERAL       { $$ = create_ast_leaf(TE_T_FLOAT, 0, $1, NULL); }
+  | DECIMAL_LITERAL     { $$ = create_ast_leaf(TE_T_DECIMAL, 0, $1, NULL); }
+  | STRING_LITERAL       { $$ = create_ast_leaf(TE_T_STRING, 0, $1, NULL); }
+  | STRING_INTERP        { $$ = create_ast_leaf(TE_T_STRING_INTERP, 0, $1, NULL); }
+  | NULLTOK       { $$ = create_ast_leaf(TE_T_NULL, 0, NULL, NULL); }
+  | TRUETOK       { ASTNode *n = create_ast_leaf(TE_T_BOOL, 1, NULL, NULL); n->line = yyget_lineno(scanner); $$ = n; }
+  | FALSETOK      { ASTNode *n = create_ast_leaf(TE_T_BOOL, 0, NULL, NULL); n->line = yyget_lineno(scanner); $$ = n; }
   | CONCAT LPAREN expression_list RPAREN       { $$ = create_function_call_node("concat", $3); } /* ARREGLADO: printf eliminado */
-  | expression PLUS expression       { $$ = create_ast_node("ADD", $1, $3); }
-  | expression MINUS expression       { $$ = create_ast_node("SUB", $1, $3); }
-  | expression MULTIPLY expression       { $$ = create_ast_node("MUL", $1, $3); }
-  | expression DIVIDE expression       { $$ = create_ast_node("DIV", $1, $3); }
-  | expression PERCENT expression      { $$ = create_ast_node("MOD", $1, $3); }
-  | expression BIT_AND expression      { $$ = create_ast_node("BIT_AND", $1, $3); }
-  | expression BIT_OR  expression      { $$ = create_ast_node("BIT_OR",  $1, $3); }
-  | expression BIT_XOR expression      { $$ = create_ast_node("BIT_XOR", $1, $3); }
-  | expression SHL     expression      { $$ = create_ast_node("SHL", $1, $3); }
-  | expression SHR     expression      { $$ = create_ast_node("SHR", $1, $3); }
-  | expression IN      expression      { $$ = create_ast_node("IN",  $1, $3); }
-  | MINUS expression %prec UMINUS      { $$ = create_ast_node("NEG", $2, NULL); }
-  | BIT_NOT expression                 { $$ = create_ast_node("BIT_NOT", $2, NULL); }
+  | expression PLUS expression       { $$ = create_ast_node(TE_T_ADD, $1, $3); }
+  | expression MINUS expression       { $$ = create_ast_node(TE_T_SUB, $1, $3); }
+  | expression MULTIPLY expression       { $$ = create_ast_node(TE_T_MUL, $1, $3); }
+  | expression DIVIDE expression       { $$ = create_ast_node(TE_T_DIV, $1, $3); }
+  | expression PERCENT expression      { $$ = create_ast_node(TE_T_MOD, $1, $3); }
+  | expression BIT_AND expression      { $$ = create_ast_node(TE_T_BIT_AND, $1, $3); }
+  | expression BIT_OR  expression      { $$ = create_ast_node(TE_T_BIT_OR,  $1, $3); }
+  | expression BIT_XOR expression      { $$ = create_ast_node(TE_T_BIT_XOR, $1, $3); }
+  | expression SHL     expression      { $$ = create_ast_node(TE_T_SHL, $1, $3); }
+  | expression SHR     expression      { $$ = create_ast_node(TE_T_SHR, $1, $3); }
+  | expression IN      expression      { $$ = create_ast_node(TE_T_IN,  $1, $3); }
+  | MINUS expression %prec UMINUS      { $$ = create_ast_node(TE_T_NEG, $2, NULL); }
+  | BIT_NOT expression                 { $$ = create_ast_node(TE_T_BIT_NOT, $2, NULL); }
   | LPAREN expression RPAREN       { $$ = $2; }
   | NEW IDENTIFIER LPAREN RPAREN 
       { /* Fase 2: NEW Foo() — class instantiation, or builtin call if no class. */
@@ -609,10 +609,10 @@ expression:
         ClassNode *cls = find_class($2);
         if (cls) { $$ = create_object_with_args(cls, $4); free($2); }
         else     { $$ = create_call_node($2, $4); } }
- | JSON LPAREN IDENTIFIER RPAREN  {       $$ = create_call_node("json", create_ast_leaf("IDENTIFIER", 0, NULL, $3)); }
+ | JSON LPAREN IDENTIFIER RPAREN  {       $$ = create_call_node("json", create_ast_leaf(TE_T_IDENTIFIER, 0, NULL, $3)); }
  | JSON LPAREN object_literal RPAREN  {   $$ = create_call_node("json", $3); }
  | JSON LPAREN list_literal RPAREN    {   $$ = create_call_node("json", $3); }
-| XML LPAREN IDENTIFIER RPAREN  {      $$ = create_call_node("xml", create_ast_leaf("IDENTIFIER", 0, NULL, $3)); }
+| XML LPAREN IDENTIFIER RPAREN  {      $$ = create_call_node("xml", create_ast_leaf(TE_T_IDENTIFIER, 0, NULL, $3)); }
  | XML LPAREN object_literal RPAREN   {   $$ = create_call_node("xml", $3); }
  | XML LPAREN list_literal RPAREN     {   $$ = create_call_node("xml", $3); }
 ;
@@ -621,7 +621,7 @@ var_decl:
     LET IDENTIFIER ASSIGN IDENTIFIER LPAREN expression_list RPAREN SEMICOLON
       { ASTNode *args = $6; ASTNode *first = args; ASTNode *second = args ? args->next : NULL; ASTNode *third = second ? second->next : NULL; /* gotcha #1: args via ->next */
         ASTNode *call;
-        if (second && !third && second->type && strcmp(second->type, "LAMBDA") == 0 && (strcmp($4, "filter") == 0 || strcmp($4, "map") == 0)) {
+        if (second && !third && second->type && strcmp(second->type, TE_T_LAMBDA) == 0 && (strcmp($4, "filter") == 0 || strcmp($4, "map") == 0)) {
           args->next = NULL;
           call = create_list_function_call_node(first, $4, second);
         } else {
@@ -631,7 +631,7 @@ var_decl:
   | VAR IDENTIFIER ASSIGN IDENTIFIER LPAREN expression_list RPAREN SEMICOLON
       { ASTNode *args = $6; ASTNode *first = args; ASTNode *second = args ? args->next : NULL; ASTNode *third = second ? second->next : NULL; /* gotcha #1: args via ->next */
         ASTNode *call;
-        if (second && !third && second->type && strcmp(second->type, "LAMBDA") == 0 && (strcmp($4, "filter") == 0 || strcmp($4, "map") == 0)) {
+        if (second && !third && second->type && strcmp(second->type, TE_T_LAMBDA) == 0 && (strcmp($4, "filter") == 0 || strcmp($4, "map") == 0)) {
           args->next = NULL;
           call = create_list_function_call_node(first, $4, second);
         } else {
@@ -645,17 +645,17 @@ var_decl:
   | LET IDENTIFIER COLON type_name ASSIGN expression SEMICOLON  { ASTNode* d = create_var_decl_node($2, $6); d->value = 1; if ($4) d->str_value = $4; $$ = d; }
   | VAR IDENTIFIER COLON type_name ASSIGN expression SEMICOLON  { ASTNode* d = create_var_decl_node($2, $6); if ($4) d->str_value = $4; $$ = d; }
   | CONST IDENTIFIER COLON type_name ASSIGN expression SEMICOLON  { ASTNode* d = create_var_decl_node($2, $6); d->value = 1; if ($4) d->str_value = $4; $$ = d; }
-  | STRING IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("STRING"); $$ = decl; }
-  | BOOLTYPE IDENTIFIER ASSIGN expression SEMICOLON     { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("BOOL"); $$ = decl; }
-  | DECIMALTYPE IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("DECIMAL"); $$ = decl; }
-  | DATETIMETYPE IDENTIFIER ASSIGN expression SEMICOLON { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("DATETIME"); $$ = decl; }
-  | UUIDTYPE IDENTIFIER ASSIGN expression SEMICOLON     { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("UUID"); $$ = decl; }
+  | STRING IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup(TE_T_STRING); $$ = decl; }
+  | BOOLTYPE IDENTIFIER ASSIGN expression SEMICOLON     { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup(TE_T_BOOL); $$ = decl; }
+  | DECIMALTYPE IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup(TE_T_DECIMAL); $$ = decl; }
+  | DATETIMETYPE IDENTIFIER ASSIGN expression SEMICOLON { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup(TE_T_DATETIME); $$ = decl; }
+  | UUIDTYPE IDENTIFIER ASSIGN expression SEMICOLON     { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup(TE_T_UUID); $$ = decl; }
   | VAR IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
-  | CONST INT IDENTIFIER ASSIGN expression SEMICOLON { ASTNode* decl = create_var_decl_node($3, $5); decl->value = 1; /* Marcar como const */ decl->str_value = strdup("INT"); $$ = decl; }
+  | CONST INT IDENTIFIER ASSIGN expression SEMICOLON { ASTNode* decl = create_var_decl_node($3, $5); decl->value = 1; /* Marcar como const */ decl->str_value = strdup(TE_T_INT); $$ = decl; }
   | CONST IDENTIFIER ASSIGN expression SEMICOLON { ASTNode* decl = create_var_decl_node($2, $4); decl->value = 1; /* Marcar como const */ $$ = decl; }
-  | INT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("INT"); $$ = decl; }
-  | IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
-  | THIS DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,"this"); ASTNode *attr = create_ast_leaf("ID",0,NULL,$3); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("ASSIGN_ATTR", access, $5); }
+  | INT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup(TE_T_INT); $$ = decl; }
+  | IDENTIFIER DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf(TE_T_ID,0,NULL,$1); ASTNode *attr = create_ast_leaf(TE_T_ID,0,NULL,$3); ASTNode *access = create_ast_node(TE_T_ACCESS_ATTR, obj, attr); $$ = create_ast_node(TE_T_ASSIGN_ATTR, access, $5); }
+  | THIS DOT IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode *obj = create_ast_leaf(TE_T_ID,0,NULL,TE_SYM_THIS); ASTNode *attr = create_ast_leaf(TE_T_ID,0,NULL,$3); ASTNode *access = create_ast_node(TE_T_ACCESS_ATTR, obj, attr); $$ = create_ast_node(TE_T_ASSIGN_ATTR, access, $5); }
   /* gotcha chaining: las reglas especiales `LET/VAR/CONST IDENTIFIER ASSIGN
    * IDENTIFIER DOT IDENTIFIER SEMICOLON` (acceso a atributo) se ELIMINARON. Forzaban
    * un shift sobre DOT que comprometía al parser a una ruta terminada en ';' tras un
@@ -665,13 +665,13 @@ var_decl:
 ;
 
 type_name:
-    INT          { $$ = strdup("INT"); }
-  | FLOAT        { $$ = strdup("FLOAT"); }
-  | STRING       { $$ = strdup("STRING"); }
-  | BOOLTYPE     { $$ = strdup("BOOL"); }
-  | DECIMALTYPE  { $$ = strdup("DECIMAL"); }
-  | DATETIMETYPE { $$ = strdup("DATETIME"); }
-  | UUIDTYPE     { $$ = strdup("UUID"); }
+    INT          { $$ = strdup(TE_T_INT); }
+  | FLOAT        { $$ = strdup(TE_T_FLOAT); }
+  | STRING       { $$ = strdup(TE_T_STRING); }
+  | BOOLTYPE     { $$ = strdup(TE_T_BOOL); }
+  | DECIMALTYPE  { $$ = strdup(TE_T_DECIMAL); }
+  | DATETIMETYPE { $$ = strdup(TE_T_DATETIME); }
+  | UUIDTYPE     { $$ = strdup(TE_T_UUID); }
   | IDENTIFIER   { $$ = NULL; /* custom/unknown type: keep dynamic */ }
 ;
 
@@ -683,9 +683,9 @@ func_call_expr SEMICOLON { $$ = $1; }
         FOR LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { ASTNode *n = create_for_in_node($4, $6, $9); if ($6 && $6->line > 0) n->line = $6->line; $$ = n; }
     | FOREACH LPAREN LET IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { ASTNode *n = create_for_in_node($4, $6, $9); if ($6 && $6->line > 0) n->line = $6->line; $$ = n; }
     | FOREACH LPAREN VAR IDENTIFIER IN expression RPAREN LBRACKET statement_list RBRACKET  { ASTNode *n = create_for_in_node($4, $6, $9); if ($6 && $6->line > 0) n->line = $6->line; $$ = n; }
-    | WHILE LPAREN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_ast_node("WHILE", $3, $6); }
-    | BREAK SEMICOLON     { $$ = create_ast_leaf("BREAK", 0, NULL, NULL); }
-    | CONTINUE SEMICOLON  { $$ = create_ast_leaf("CONTINUE", 0, NULL, NULL); }
+    | WHILE LPAREN expression RPAREN LBRACKET statement_list RBRACKET  { $$ = create_ast_node(TE_T_WHILE, $3, $6); }
+    | BREAK SEMICOLON     { $$ = create_ast_leaf(TE_T_BREAK, 0, NULL, NULL); }
+    | CONTINUE SEMICOLON  { $$ = create_ast_leaf(TE_T_CONTINUE, 0, NULL, NULL); }
     /* gotcha chaining: las reglas especializadas `LET/VAR IDENTIFIER ASSIGN
      * IDENTIFIER DOT IDENTIFIER LPAREN ... RPAREN SEMICOLON` se ELIMINARON porque
      * solo admitían UNA llamada antes del ';' (rompían `xs.orderBy(..).take(2)`).
@@ -693,13 +693,13 @@ func_call_expr SEMICOLON { $$ = $1; }
      * `expression DOT IDENTIFIER LPAREN expression_list RPAREN` soporta encadenamiento. */
     | RETURN func_call_expr SEMICOLON { $$ = create_return_node($2); }
     | RETURN expression SEMICOLON  { $$ = create_return_node($2); }
-    | THROW expression SEMICOLON   { $$ = create_ast_node("THROW", $2, NULL); }
+    | THROW expression SEMICOLON   { $$ = create_ast_node(TE_T_THROW, $2, NULL); }
     | TRY LBRACKET statement_list RBRACKET CATCH LPAREN IDENTIFIER RPAREN LBRACKET statement_list RBRACKET
-        { ASTNode *n = create_ast_node("TRY_CATCH", $3, $10); n->id = strdup($7); $$ = n; }
+        { ASTNode *n = create_ast_node(TE_T_TRY_CATCH, $3, $10); n->id = strdup($7); $$ = n; }
     | TRY LBRACKET statement_list RBRACKET CATCH LPAREN IDENTIFIER RPAREN LBRACKET statement_list RBRACKET FINALLY LBRACKET statement_list RBRACKET
-        { ASTNode *n = create_ast_node("TRY_CATCH", $3, $10); n->id = strdup($7); n->extra = $14; $$ = n; }
+        { ASTNode *n = create_ast_node(TE_T_TRY_CATCH, $3, $10); n->id = strdup($7); n->extra = $14; $$ = n; }
     | TRY LBRACKET statement_list RBRACKET FINALLY LBRACKET statement_list RBRACKET
-        { ASTNode *n = create_ast_node("TRY_CATCH", $3, NULL); n->extra = $7; $$ = n; }
+        { ASTNode *n = create_ast_node(TE_T_TRY_CATCH, $3, NULL); n->extra = $7; $$ = n; }
 
 
    |RETURN XML LPAREN expression RPAREN SEMICOLON { $$ = create_return_node(create_call_node("xml", $4)); }
@@ -713,40 +713,40 @@ func_call_expr SEMICOLON { $$ = $1; }
   | var_decl
 
    | IDENTIFIER LPAREN expression_list RPAREN SEMICOLON {           $$ = create_method_call_node_alone(NULL, $1, $3);        }
-  | IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("IDENTIFIER",0,NULL,$1); $$ = create_method_call_node(obj, $3, NULL); }
-  | IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf("ID",0,NULL,$1); $$ = create_method_call_node(obj, $3, $5); }
-  | THIS DOT IDENTIFIER LPAREN RPAREN SEMICOLON                 { ASTNode *thisObj = create_ast_leaf("ID",0,NULL,"this"); $$ = create_method_call_node(thisObj, $3, NULL); }
+  | IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); $$ = create_method_call_node(obj, $3, NULL); }
+  | IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf(TE_T_ID,0,NULL,$1); $$ = create_method_call_node(obj, $3, $5); }
+  | THIS DOT IDENTIFIER LPAREN RPAREN SEMICOLON                 { ASTNode *thisObj = create_ast_leaf(TE_T_ID,0,NULL,TE_SYM_THIS); $$ = create_method_call_node(thisObj, $3, NULL); }
   | STRING IDENTIFIER ASSIGN STRING_LITERAL SEMICOLON           { $$ = create_var_decl_node($2, create_string_node($4)); }
   | INT IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_var_decl_node($2, create_int_node($4->value)); }
-  | FLOAT IDENTIFIER ASSIGN expression SEMICOLON                { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("FLOAT"); $$ = decl; }
-  | VAR IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_ast_node("DECLARE", create_ast_leaf("IDENTIFIER", 0, NULL, $2), $4); }
+  | FLOAT IDENTIFIER ASSIGN expression SEMICOLON                { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup(TE_T_FLOAT); $$ = decl; }
+  | VAR IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_ast_node(TE_T_DECLARE, create_ast_leaf(TE_T_IDENTIFIER, 0, NULL, $2), $4); }
   | if_statement
   | match_statement
-  | IDENTIFIER ASSIGN expression SEMICOLON           { $$ = create_ast_node("ASSIGN", create_ast_leaf("IDENTIFIER",0,NULL,$1), $3); }
-  | IDENTIFIER PLUS_ASSIGN expression SEMICOLON      { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("ADD", id2, $3)); }
-  | IDENTIFIER MINUS_ASSIGN expression SEMICOLON     { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("SUB", id2, $3)); }
-  | IDENTIFIER STAR_ASSIGN expression SEMICOLON      { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("MUL", id2, $3)); }
-  | IDENTIFIER SLASH_ASSIGN expression SEMICOLON     { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("DIV", id2, $3)); }
-  | IDENTIFIER INCREMENT SEMICOLON                   { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); ASTNode *one = create_ast_leaf_number("NUMBER",1,NULL,NULL); $$ = create_ast_node("ASSIGN", id1, create_ast_node("ADD", id2, one)); }
-  | IDENTIFIER DECREMENT SEMICOLON                   { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); ASTNode *one = create_ast_leaf_number("NUMBER",1,NULL,NULL); $$ = create_ast_node("ASSIGN", id1, create_ast_node("SUB", id2, one)); }
+  | IDENTIFIER ASSIGN expression SEMICOLON           { $$ = create_ast_node(TE_T_ASSIGN, create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1), $3); }
+  | IDENTIFIER PLUS_ASSIGN expression SEMICOLON      { ASTNode *id1 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); ASTNode *id2 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,strdup($1)); $$ = create_ast_node(TE_T_ASSIGN, id1, create_ast_node(TE_T_ADD, id2, $3)); }
+  | IDENTIFIER MINUS_ASSIGN expression SEMICOLON     { ASTNode *id1 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); ASTNode *id2 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,strdup($1)); $$ = create_ast_node(TE_T_ASSIGN, id1, create_ast_node(TE_T_SUB, id2, $3)); }
+  | IDENTIFIER STAR_ASSIGN expression SEMICOLON      { ASTNode *id1 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); ASTNode *id2 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,strdup($1)); $$ = create_ast_node(TE_T_ASSIGN, id1, create_ast_node(TE_T_MUL, id2, $3)); }
+  | IDENTIFIER SLASH_ASSIGN expression SEMICOLON     { ASTNode *id1 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); ASTNode *id2 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,strdup($1)); $$ = create_ast_node(TE_T_ASSIGN, id1, create_ast_node(TE_T_DIV, id2, $3)); }
+  | IDENTIFIER INCREMENT SEMICOLON                   { ASTNode *id1 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); ASTNode *id2 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,strdup($1)); ASTNode *one = create_ast_leaf_number(TE_T_NUMBER,1,NULL,NULL); $$ = create_ast_node(TE_T_ASSIGN, id1, create_ast_node(TE_T_ADD, id2, one)); }
+  | IDENTIFIER DECREMENT SEMICOLON                   { ASTNode *id1 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); ASTNode *id2 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,strdup($1)); ASTNode *one = create_ast_leaf_number(TE_T_NUMBER,1,NULL,NULL); $$ = create_ast_node(TE_T_ASSIGN, id1, create_ast_node(TE_T_SUB, id2, one)); }
   | IDENTIFIER LSBRACKET expression RSBRACKET ASSIGN expression SEMICOLON
       { /* Fase 1b: arr[i] = x */
-        ASTNode *base = create_ast_leaf("IDENTIFIER", 0, NULL, $1);
+        ASTNode *base = create_ast_leaf(TE_T_IDENTIFIER, 0, NULL, $1);
         ASTNode *access = create_access_node(base, $3);
-        ASTNode *node = create_ast_node("INDEX_ASSIGN", access, $6);
+        ASTNode *node = create_ast_node(TE_T_INDEX_ASSIGN, access, $6);
         $$ = node; }
-  | PRINTLN LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node("PRINTLN", $3, NULL); }
-  | PRINT LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node("PRINT", $3, NULL); }
-  | PRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("PRINT", access, NULL); }
+  | PRINTLN LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node(TE_T_PRINTLN, $3, NULL); }
+  | PRINT LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node(TE_T_PRINT, $3, NULL); }
+  | PRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf(TE_T_ID,0,NULL,$3); ASTNode *attr = create_ast_leaf(TE_T_ID,0,NULL,$5); ASTNode *access = create_ast_node(TE_T_ACCESS_ATTR, obj, attr); $$ = create_ast_node(TE_T_PRINT, access, NULL); }
   
-  | FPRINTLN LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node("FPRINTLN", $3, NULL); }
-  | FPRINT LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node("FPRINT", $3, NULL); }
-  | FPRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf("ID",0,NULL,$3); ASTNode *attr = create_ast_leaf("ID",0,NULL,$5); ASTNode *access = create_ast_node("ACCESS_ATTR", obj, attr); $$ = create_ast_node("FPRINT", access, NULL); }
+  | FPRINTLN LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node(TE_T_FPRINTLN, $3, NULL); }
+  | FPRINT LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node(TE_T_FPRINT, $3, NULL); }
+  | FPRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf(TE_T_ID,0,NULL,$3); ASTNode *attr = create_ast_leaf(TE_T_ID,0,NULL,$5); ASTNode *access = create_ast_node(TE_T_ACCESS_ATTR, obj, attr); $$ = create_ast_node(TE_T_FPRINT, access, NULL); }
   
-  | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET    { $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf("NUMBER",$5,NULL,NULL), $7, $9, $12); }
+  | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET    { $$ = create_ast_node_for(TE_T_FOR, create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$3), create_ast_leaf(TE_T_NUMBER,$5,NULL,NULL), $7, $9, $12); }
   /* Same prefix as the classic form but the 3rd field is an UPDATE statement
    * (i++ / i += 1 / i = i + 1) -> Java/C semantics (2nd field is a CONDITION). */
-  | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET { ASTNode *init = create_ast_node("ASSIGN", create_ast_leaf("IDENTIFIER",0,NULL,$3), create_ast_leaf_number("NUMBER",$5,NULL,NULL)); $$ = create_for_c_node(init, $7, $9, $12); }
+  | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON for_c_update RPAREN LBRACKET statement_list RBRACKET { ASTNode *init = create_ast_node(TE_T_ASSIGN, create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$3), create_ast_leaf_number(TE_T_NUMBER,$5,NULL,NULL)); $$ = create_for_c_node(init, $7, $9, $12); }
   /* Java/C-style: for (var i = 0; i < n; i++) { ... }. The UPDATE field is an
    * assignment statement (++ -- += -= *= /= =), which cannot start an expression,
    * so it never collides with the classic for(init; LIMIT; STEP) forms above/below. */
@@ -758,16 +758,16 @@ func_call_expr SEMICOLON { $$ = $1; }
    * START/STOP/STEP pueden ser literales o expresiones; STOP es límite exclusivo.
    * Se sintetiza un nombre de contador oculto ("__for$N", imposible de tipear por
    * el usuario porque '$' no es un carácter de identificador válido). */
-  | FOR LPAREN expression SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET    { static int __fc_semi=0; char __nm[40]; snprintf(__nm,sizeof(__nm),"__for$%d",__fc_semi++); $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,__nm), $3, $5, $7, $10); }
+  | FOR LPAREN expression SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET    { static int __fc_semi=0; char __nm[40]; snprintf(__nm,sizeof(__nm),"__for$%d",__fc_semi++); $$ = create_ast_node_for(TE_T_FOR, create_ast_leaf(TE_T_IDENTIFIER,0,NULL,__nm), $3, $5, $7, $10); }
   /* for(START, STOP, STEP) — variante con comas (range() de Python con coma). */
-  | FOR LPAREN expression COMMA expression COMMA expression RPAREN LBRACKET statement_list RBRACKET            { static int __fc_comma=0; char __nm[40]; snprintf(__nm,sizeof(__nm),"__for$%d",__fc_comma++); $$ = create_ast_node_for("FOR", create_ast_leaf("IDENTIFIER",0,NULL,__nm), $3, $5, $7, $10); }
+  | FOR LPAREN expression COMMA expression COMMA expression RPAREN LBRACKET statement_list RBRACKET            { static int __fc_comma=0; char __nm[40]; snprintf(__nm,sizeof(__nm),"__for$%d",__fc_comma++); $$ = create_ast_node_for(TE_T_FOR, create_ast_leaf(TE_T_IDENTIFIER,0,NULL,__nm), $3, $5, $7, $10); }
   | NEW IDENTIFIER LPAREN RPAREN SEMICOLON    { /* Fase 2: class or builtin */ ClassNode *cls = find_class($2); if (cls) $$ = (ASTNode *)create_object_with_args(cls, NULL); else $$ = create_call_node($2, NULL); }
   | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN RPAREN SEMICOLON    { /* Fase 2: class or builtin */ ClassNode *cls = find_class($5); ASTNode *rhs = cls ? create_object_with_args(cls, NULL) : create_call_node($5, NULL); ASTNode* d = create_var_decl_node($2, rhs); d->value = 1; $$ = d; }
   | LET IDENTIFIER ASSIGN NEW IDENTIFIER LPAREN expression_list RPAREN SEMICOLON    { /* Fase 2: class or builtin (let r = new sqlserver_query(...)). */ ClassNode *cls = find_class($5); ASTNode *rhs = cls ? create_object_with_args(cls, $7) : create_call_node($5, $7); ASTNode* d = create_var_decl_node($2, rhs); d->value = 1; $$ = d; }
   | DATASET IDENTIFIER FROM STRING_LITERAL SEMICOLON    { $$ = create_dataset_node($2, $4); }
   | PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON    { $$ = create_predict_node($3, $5); }
-  | VAR IDENTIFIER ASSIGN PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf("ID", 0, NULL, "i"); $$ = create_method_call_node(obj, "predict", NULL); $$ = create_predict_node($6, $8); }
-  | PLOT LPAREN expression_list RPAREN SEMICOLON    { $$ = create_ast_node("PLOT", $3, NULL); }
+  | VAR IDENTIFIER ASSIGN PREDICT LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf(TE_T_ID, 0, NULL, "i"); $$ = create_method_call_node(obj, "predict", NULL); $$ = create_predict_node($6, $8); }
+  | PLOT LPAREN expression_list RPAREN SEMICOLON    { $$ = create_ast_node(TE_T_PLOT, $3, NULL); }
   | MODEL IDENTIFIER LBRACKET layer_list RBRACKET        { ASTNode *layer = $4; (void)layer; ASTNode *modelNode = create_model_node($2, $4); }
   | LAYER IDENTIFIER LPAREN NUMBER COMMA IDENTIFIER RPAREN SEMICOLON     { $$ = create_layer_node($2, $4, $6); }
   | TRAIN LPAREN IDENTIFIER COMMA IDENTIFIER COMMA train_options RPAREN SEMICOLON    { $$ = create_train_node($3, $5, $7); }
@@ -776,14 +776,14 @@ func_call_expr SEMICOLON { $$ = $1; }
     { ClassNode* cls = find_class($7);
       if (!cls) { fprintf(stderr, "class '%s' not found.\n", $7); $$ = NULL; } 
       else { /* v0.0.14: defer load; te_csv_lazy_resolve_all() will autodetect COLUMNAR. */
-             ASTNode* placeholder = create_ast_node("LIST", NULL, NULL);
+             ASTNode* placeholder = create_ast_node(TE_T_LIST, NULL, NULL);
              ASTNode* d = create_var_decl_node($2, placeholder); d->value = 1; /* let = immutable */
              te_csv_lazy_register_df(d, $5, $7, 0);
              $$ = d; } }
   | VAR IDENTIFIER ASSIGN FROM STRING_LITERAL COMMA IDENTIFIER SEMICOLON
     { ClassNode* cls = find_class($7);
       if (!cls) { fprintf(stderr, "class '%s' not found.\n", $7); $$ = NULL; }
-      else { ASTNode* placeholder = create_ast_node("LIST", NULL, NULL);
+      else { ASTNode* placeholder = create_ast_node(TE_T_LIST, NULL, NULL);
              ASTNode* d = create_var_decl_node($2, placeholder);
              te_csv_lazy_register_df(d, $5, $7, 0);
              $$ = d; } }
@@ -792,7 +792,7 @@ func_call_expr SEMICOLON { $$ = $1; }
       if (!cls) { fprintf(stderr, "class '%s' not found.\n", $7); $$ = NULL; }
       else if (strcmp($9, "dataframe") != 0) { fprintf(stderr, "unknown modifier after 'as': '%s' (expected 'dataframe').\n", $9); $$ = NULL; }
       else { /* v1.0.0: defer load to runtime so now_ms() brackets measure I/O. */
-             ASTNode* placeholder = create_ast_node("LIST", NULL, NULL);
+             ASTNode* placeholder = create_ast_node(TE_T_LIST, NULL, NULL);
              ASTNode* d = create_var_decl_node($2, placeholder); d->value = 1;
              te_csv_lazy_register_df(d, $5, $7, 1);
              $$ = d; } }
@@ -800,7 +800,7 @@ func_call_expr SEMICOLON { $$ = $1; }
     { ClassNode* cls = find_class($7);
       if (!cls) { fprintf(stderr, "class '%s' not found.\n", $7); $$ = NULL; }
       else if (strcmp($9, "dataframe") != 0) { fprintf(stderr, "unknown modifier after 'as': '%s' (expected 'dataframe').\n", $9); $$ = NULL; }
-      else { ASTNode* placeholder = create_ast_node("LIST", NULL, NULL);
+      else { ASTNode* placeholder = create_ast_node(TE_T_LIST, NULL, NULL);
              ASTNode* d = create_var_decl_node($2, placeholder);
              te_csv_lazy_register_df(d, $5, $7, 1);
              $$ = d; } }
@@ -810,7 +810,7 @@ func_call_expr:
     IDENTIFIER LPAREN RPAREN { $$ = create_call_node($1, NULL); }
     | IDENTIFIER LPAREN expression_list RPAREN { $$ = create_call_node($1, $3); }
     /* decimal(x): `decimal` es keyword de tipo, así que la conversión se reduce aquí. */
-    | DECIMALTYPE LPAREN expression_list RPAREN { free($1); $$ = create_call_node("decimal", $3); }
+    | DECIMALTYPE LPAREN expression_list RPAREN { free($1); $$ = create_call_node(TE_DT_DECIMAL, $3); }
     /* Gotcha #2: llamada sobre el resultado de otra llamada — `make(10)(5)`,
      * `make(10)(5)(...)`. Left-recursivo sobre func_call_expr: el callee ya
      * reducido se invoca con los nuevos argumentos. */
@@ -826,16 +826,16 @@ func_call_expr:
 for_c_init:
     VAR IDENTIFIER ASSIGN expression                { $$ = create_var_decl_node($2, $4); }
   | LET IDENTIFIER ASSIGN expression                { ASTNode *d = create_var_decl_node($2, $4); d->value = 1; $$ = d; }
-  | INT IDENTIFIER ASSIGN expression                { ASTNode *d = create_var_decl_node($2, $4); d->str_value = strdup("INT"); $$ = d; }
+  | INT IDENTIFIER ASSIGN expression                { ASTNode *d = create_var_decl_node($2, $4); d->str_value = strdup(TE_T_INT); $$ = d; }
 ;
 for_c_update:
-    IDENTIFIER INCREMENT      { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("ADD", id2, create_ast_leaf_number("NUMBER",1,NULL,NULL))); }
-  | IDENTIFIER DECREMENT      { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("SUB", id2, create_ast_leaf_number("NUMBER",1,NULL,NULL))); }
-  | IDENTIFIER PLUS_ASSIGN expression   { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("ADD", id2, $3)); }
-  | IDENTIFIER MINUS_ASSIGN expression  { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("SUB", id2, $3)); }
-  | IDENTIFIER STAR_ASSIGN expression   { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("MUL", id2, $3)); }
-  | IDENTIFIER SLASH_ASSIGN expression  { ASTNode *id1 = create_ast_leaf("IDENTIFIER",0,NULL,$1); ASTNode *id2 = create_ast_leaf("IDENTIFIER",0,NULL,strdup($1)); $$ = create_ast_node("ASSIGN", id1, create_ast_node("DIV", id2, $3)); }
-  | IDENTIFIER ASSIGN expression        { $$ = create_ast_node("ASSIGN", create_ast_leaf("IDENTIFIER",0,NULL,$1), $3); }
+    IDENTIFIER INCREMENT      { ASTNode *id1 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); ASTNode *id2 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,strdup($1)); $$ = create_ast_node(TE_T_ASSIGN, id1, create_ast_node(TE_T_ADD, id2, create_ast_leaf_number(TE_T_NUMBER,1,NULL,NULL))); }
+  | IDENTIFIER DECREMENT      { ASTNode *id1 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); ASTNode *id2 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,strdup($1)); $$ = create_ast_node(TE_T_ASSIGN, id1, create_ast_node(TE_T_SUB, id2, create_ast_leaf_number(TE_T_NUMBER,1,NULL,NULL))); }
+  | IDENTIFIER PLUS_ASSIGN expression   { ASTNode *id1 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); ASTNode *id2 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,strdup($1)); $$ = create_ast_node(TE_T_ASSIGN, id1, create_ast_node(TE_T_ADD, id2, $3)); }
+  | IDENTIFIER MINUS_ASSIGN expression  { ASTNode *id1 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); ASTNode *id2 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,strdup($1)); $$ = create_ast_node(TE_T_ASSIGN, id1, create_ast_node(TE_T_SUB, id2, $3)); }
+  | IDENTIFIER STAR_ASSIGN expression   { ASTNode *id1 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); ASTNode *id2 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,strdup($1)); $$ = create_ast_node(TE_T_ASSIGN, id1, create_ast_node(TE_T_MUL, id2, $3)); }
+  | IDENTIFIER SLASH_ASSIGN expression  { ASTNode *id1 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); ASTNode *id2 = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,strdup($1)); $$ = create_ast_node(TE_T_ASSIGN, id1, create_ast_node(TE_T_DIV, id2, $3)); }
+  | IDENTIFIER ASSIGN expression        { $$ = create_ast_node(TE_T_ASSIGN, create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1), $3); }
 ;
 
 if_statement:
@@ -867,8 +867,8 @@ case_clause:
     ;
 
 statement_list:
-    statement_list statement  { $$ = create_ast_node("STATEMENT_LIST", $1, $2); }
-  | statement                { $$ = create_ast_node("STATEMENT_LIST", $1, NULL); $$->next = NULL; }
+    statement_list statement  { $$ = create_ast_node(TE_T_STATEMENT_LIST, $1, $2); }
+  | statement                { $$ = create_ast_node(TE_T_STATEMENT_LIST, $1, NULL); $$->next = NULL; }
   ;
 
 expression_list:
@@ -975,7 +975,7 @@ static void yyerror(yyscan_t scanner, TeParseCtx *ctx, const char *s) {
 void print_ast(ASTNode *node, int indent) {
     if (!node) return;
     for (int i = 0; i < indent; i++) printf("  ");
-    if (node->type && strcmp(node->type, "FOR") == 0) {
+    if (node->type && strcmp(node->type, TE_T_FOR) == 0) {
         printf(">>> FOR DETECTADO <<<\n");
     }
     if (node->type) {
@@ -1042,7 +1042,7 @@ ASTNode* parse_file(FILE* file) {
     if (parse_result != 0) return NULL;
 
     /* Empty file / only comments: keep the "always an AST" contract. */
-    if (!root) root = create_ast_node("STATEMENT_LIST", NULL, NULL);
+    if (!root) root = create_ast_node(TE_T_STATEMENT_LIST, NULL, NULL);
 
     /* v0.0.14: Resolve deferred CSV loads now that the full AST exists.
      * Auto-detects COLUMNAR-safe usage and avoids per-row wrapper allocs

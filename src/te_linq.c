@@ -32,7 +32,7 @@ static ASTNode *lazy_clone_ops(ASTNode *head) {
     ASTNode *new_head = NULL, *tail = NULL;
     for (ASTNode *cur = head; cur; cur = cur->right) {
         ASTNode *cp = (ASTNode *)calloc(1, sizeof(ASTNode));
-        cp->type = strdup("LAZY_OP");
+        cp->type = strdup(TE_T_LAZY_OP);
         cp->id   = strdup(cur->id ? cur->id : "");
         cp->left = cur->left;   /* shared lambda ref */
         cp->value = cur->value; /* take/skip cap */
@@ -45,11 +45,11 @@ static ASTNode *lazy_clone_ops(ASTNode *head) {
 ASTNode *lazy_extend(ASTNode *parent_lazy, ASTNode *src_list_raw,
                      const char *op_name, ASTNode *lambda_arg, int num_arg) {
     ASTNode *lz = (ASTNode *)calloc(1, sizeof(ASTNode));
-    lz->type = strdup("LAZY_ITER");
+    lz->type = strdup(TE_T_LAZY_ITER);
     lz->left = parent_lazy ? parent_lazy->left : src_list_raw;
     ASTNode *ops = parent_lazy ? lazy_clone_ops(parent_lazy->right) : NULL;
     ASTNode *op = (ASTNode *)calloc(1, sizeof(ASTNode));
-    op->type = strdup("LAZY_OP");
+    op->type = strdup(TE_T_LAZY_OP);
     op->id   = strdup(op_name);
     op->left = lambda_arg;
     op->value = num_arg;
@@ -66,10 +66,10 @@ ASTNode *lazy_extend(ASTNode *parent_lazy, ASTNode *src_list_raw,
 
 ASTNode *lazy_resolve_lambda_arg(ASTNode *arg) {
     if (!arg) return NULL;
-    if (arg->type && strcmp(arg->type, "LAMBDA") == 0) return arg;
-    if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+    if (arg->type && strcmp(arg->type, TE_T_LAMBDA) == 0) return arg;
+    if (arg->type && (strcmp(arg->type, TE_T_ID) == 0 || strcmp(arg->type, TE_T_IDENTIFIER) == 0)) {
         Variable *fv = find_variable(arg->id);
-        if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0)
+        if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, TE_T_LAMBDA) == 0)
             return (ASTNode *)(intptr_t)fv->value.object_value;
     }
     return NULL;
@@ -78,9 +78,9 @@ ASTNode *lazy_resolve_lambda_arg(ASTNode *arg) {
 /* Truthy test mirroring fusion/where logic. */
 static int lazy_truthy(ASTNode *r) {
     if (!r) return 0;
-    if (r->type && strcmp(r->type, "STRING") == 0)
+    if (r->type && strcmp(r->type, TE_T_STRING) == 0)
         return (r->str_value && r->str_value[0]) ? 1 : 0;
-    if (r->type && strcmp(r->type, "NULL") == 0) return 0;
+    if (r->type && strcmp(r->type, TE_T_NULL) == 0) return 0;
     return (evaluate_expression(r) != 0) ? 1 : 0;
 }
 
@@ -184,25 +184,25 @@ int lazy_terminal(ASTNode *lazy_node, ASTNode *node) {
     }
     if (counters) free(counters);
 
-    if (is_toList) { te_req_owned_ast_register(result); add_or_update_variable("__ret__", result); return 1; }
-    if (is_count)  { add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)count, NULL, NULL)); return 1; }
+    if (is_toList) { te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result); return 1; }
+    if (is_count)  { add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)count, NULL, NULL)); return 1; }
     if (is_sum) {
         if (sum_is_int && sum_acc == (double)(long long)sum_acc)
-            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)sum_acc, NULL, NULL));
+            add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)sum_acc, NULL, NULL));
         else {
             char buf[64]; te_fmt_double(buf, sizeof(buf), sum_acc);
-            add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+            add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
         }
         return 1;
     }
     if (is_first) {
-        add_or_update_variable("__ret__", first_out ? first_out : create_ast_leaf("NULL", 0, NULL, NULL));
+        add_or_update_variable(TE_SYM_RET, first_out ? first_out : create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
         return 1;
     }
-    if (is_forEach) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return 1; }
-    if (is_reduce)  { add_or_update_variable("__ret__", reduce_acc ? reduce_acc : create_ast_leaf("NULL", 0, NULL, NULL)); return 1; }
-    if (is_any)     { add_or_update_variable("__ret__", create_ast_leaf_number("INT", any_match,   NULL, NULL)); return 1; }
-    if (is_every)   { add_or_update_variable("__ret__", create_ast_leaf_number("INT", every_match, NULL, NULL)); return 1; }
+    if (is_forEach) { add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
+    if (is_reduce)  { add_or_update_variable(TE_SYM_RET, reduce_acc ? reduce_acc : create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
+    if (is_any)     { add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, any_match,   NULL, NULL)); return 1; }
+    if (is_every)   { add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, every_match, NULL, NULL)); return 1; }
     return 0;
 }
 
@@ -213,7 +213,7 @@ int lazy_terminal(ASTNode *lazy_node, ASTNode *node) {
 /* ast.c helpers used here. find_variable is in ast.h. */
 
 int te_linq_lazy_method_dispatch(ASTNode *node, Variable *v) {
-    if (!v || !v->type || strcmp(v->type, "LAZY_ITER") != 0 || !node || !node->id) return 0;
+    if (!v || !v->type || strcmp(v->type, TE_T_LAZY_ITER) != 0 || !node || !node->id) return 0;
     ASTNode *lz = (ASTNode*)(intptr_t)v->value.object_value;
     const char *m = node->id;
     /* Intermediate: where/filter/select/map (lambda) */
@@ -221,14 +221,14 @@ int te_linq_lazy_method_dispatch(ASTNode *node, Variable *v) {
         strcmp(m, "select") == 0 || strcmp(m, "map") == 0) {
         ASTNode *lam = lazy_resolve_lambda_arg(node->right);
         if (lam) {
-            add_or_update_variable("__ret__", lazy_extend(lz, NULL, m, lam, 0));
+            add_or_update_variable(TE_SYM_RET, lazy_extend(lz, NULL, m, lam, 0));
             return 1;
         }
     }
     /* Intermediate: take/skip (int arg) */
     if (strcmp(m, "take") == 0 || strcmp(m, "skip") == 0) {
         int n = node->right ? (int)evaluate_expression(node->right) : 0;
-        add_or_update_variable("__ret__", lazy_extend(lz, NULL, m, NULL, n));
+        add_or_update_variable(TE_SYM_RET, lazy_extend(lz, NULL, m, NULL, n));
         return 1;
     }
     /* Terminal: toList/toArray/count/sum/first/forEach/reduce/any/every */
@@ -242,8 +242,8 @@ int te_linq_lazy_method_dispatch(ASTNode *node, Variable *v) {
  * equal (type-strict, matching C# default equality semantics). */
 static int te_item_equal(ASTNode *a, ASTNode *b) {
     if (!a || !b) return a == b;
-    int a_str = (a->type && strcmp(a->type, "STRING") == 0);
-    int b_str = (b->type && strcmp(b->type, "STRING") == 0);
+    int a_str = (a->type && strcmp(a->type, TE_T_STRING) == 0);
+    int b_str = (b->type && strcmp(b->type, TE_T_STRING) == 0);
     if (a_str != b_str) return 0;
     if (a_str) {
         return a->str_value && b->str_value && strcmp(a->str_value, b->str_value) == 0;
@@ -257,10 +257,10 @@ static int te_item_equal(ASTNode *a, ASTNode *b) {
  * (literal or identifier). Mirrors the concat/zip resolution pattern. */
 static ASTNode *te_resolve_list_arg(ASTNode *arg) {
     if (!arg) return NULL;
-    if (arg->type && strcmp(arg->type, "LIST") == 0) return arg;
-    if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+    if (arg->type && strcmp(arg->type, TE_T_LIST) == 0) return arg;
+    if (arg->type && (strcmp(arg->type, TE_T_ID) == 0 || strcmp(arg->type, TE_T_IDENTIFIER) == 0)) {
         Variable *ov = find_variable(arg->id);
-        if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "LIST") == 0) {
+        if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, TE_T_LIST) == 0) {
             return (ASTNode*)(intptr_t)ov->value.object_value;
         }
     }
@@ -287,10 +287,10 @@ static int te_ll_numeric(ASTNode *node, ASTNode *list, const char *fname) {
             it = it->next;
         }
         if (is_int && acc == (double)(long long)acc) {
-            te_ret_scalar(create_ast_leaf_number("INT", (long long)acc, NULL, NULL));
+            te_ret_scalar(create_ast_leaf_number(TE_T_INT, (long long)acc, NULL, NULL));
         } else {
             char buf[64]; te_fmt_double(buf, sizeof(buf), acc);
-            te_ret_scalar(create_ast_leaf("FLOAT", 0, buf, NULL));
+            te_ret_scalar(create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
         }
         return 1;
     }
@@ -303,14 +303,14 @@ static int te_ll_numeric(ASTNode *node, ASTNode *list, const char *fname) {
         }
         double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
         char buf[64]; te_fmt_double(buf, sizeof(buf), res);
-        te_ret_scalar(create_ast_leaf("FLOAT", 0, buf, NULL));
+        te_ret_scalar(create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
         return 1;
     }
     if (strcmp(fname, "minVal") == 0 || strcmp(fname, "maxVal") == 0) {
         int want_max = (strcmp(fname, "maxVal") == 0);
         ASTNode *it = list->left;
-        if (!it) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return 1; }
-        int is_str = (it->type && strcmp(it->type, "STRING") == 0);
+        if (!it) { add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
+        int is_str = (it->type && strcmp(it->type, TE_T_STRING) == 0);
         double best_n = 0.0; char *best_s = NULL;
         if (is_str) best_s = it->str_value ? it->str_value : "";
         else best_n = it->str_value ? atof(it->str_value) : (double)it->value;
@@ -327,7 +327,7 @@ static int te_ll_numeric(ASTNode *node, ASTNode *list, const char *fname) {
             }
             it = it->next;
         }
-        add_or_update_variable("__ret__", build_item_from_value(best_node));
+        add_or_update_variable(TE_SYM_RET, build_item_from_value(best_node));
         return 1;
     }
     return 0;
@@ -336,42 +336,42 @@ static int te_ll_numeric(ASTNode *node, ASTNode *list, const char *fname) {
 /* Extraído de te_linq_list_method_dispatch (Fase 2). Devuelve 1 si manejó la llamada. */
 static int te_ll_positional(ASTNode *node, ASTNode *list, const char *fname) {
     if (strcmp(fname, "first") == 0) {
-        if (list->left) add_or_update_variable("__ret__", build_item_from_value(list->left));
-        else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+        if (list->left) add_or_update_variable(TE_SYM_RET, build_item_from_value(list->left));
+        else add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
         return 1;
     }
     if (strcmp(fname, "firstOrDefault") == 0) {
-        if (list->left) add_or_update_variable("__ret__", build_item_from_value(list->left));
-        else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+        if (list->left) add_or_update_variable(TE_SYM_RET, build_item_from_value(list->left));
+        else add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
         return 1;
     }
     if (strcmp(fname, "last") == 0) {
         ASTNode *cur = list->left;
-        if (!cur) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return 1; }
+        if (!cur) { add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
         while (cur->next) cur = cur->next;
-        add_or_update_variable("__ret__", build_item_from_value(cur));
+        add_or_update_variable(TE_SYM_RET, build_item_from_value(cur));
         return 1;
     }
     if (strcmp(fname, "lastOrDefault") == 0) {
         ASTNode *cur = list->left;
-        if (!cur) { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); return 1; }
+        if (!cur) { add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
         while (cur->next) cur = cur->next;
-        add_or_update_variable("__ret__", build_item_from_value(cur));
+        add_or_update_variable(TE_SYM_RET, build_item_from_value(cur));
         return 1;
     }
     if (strcmp(fname, "single") == 0) {
         ASTNode *cur = list->left;
         if (!cur) {
             printf("Error: single() requires exactly one element, list is empty.\n");
-            add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+            add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
             return 1;
         }
         if (cur->next) {
             printf("Error: single() requires exactly one element, list has more than one.\n");
-            add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+            add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
             return 1;
         }
-        add_or_update_variable("__ret__", build_item_from_value(cur));
+        add_or_update_variable(TE_SYM_RET, build_item_from_value(cur));
         return 1;
     }
     if (strcmp(fname, "take") == 0) {
@@ -383,7 +383,7 @@ static int te_ll_positional(ASTNode *node, ASTNode *list, const char *fname) {
             te_list_append(result, build_item_from_value(it));
             it = it->next; i++;
         }
-        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
         return 1;
     }
     if (strcmp(fname, "skip") == 0) {
@@ -395,7 +395,7 @@ static int te_ll_positional(ASTNode *node, ASTNode *list, const char *fname) {
             if (i >= n) te_list_append(result, build_item_from_value(it));
             it = it->next; i++;
         }
-        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
         return 1;
     }
     return 0;
@@ -413,7 +413,7 @@ static int te_ll_set_ops(ASTNode *node, ASTNode *list, const char *fname) {
         char **skeys = (char**)calloc(scap, sizeof(char*));
         ASTNode *it = list->left;
         while (it) {
-            int is_str = (it->type && strcmp(it->type, "STRING") == 0);
+            int is_str = (it->type && strcmp(it->type, TE_T_STRING) == 0);
             int dup = 0;
             if (is_str) {
                 const char *s = it->str_value ? it->str_value : "";
@@ -477,14 +477,14 @@ static int te_ll_set_ops(ASTNode *node, ASTNode *list, const char *fname) {
         }
         for (size_t k = 0; k < scap; k++) if (skeys[k]) free(skeys[k]);
         free(skeys); free(ikeys); free(iused);
-        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
         return 1;
     }
     if (strcmp(fname, "toList") == 0) {
         ASTNode *result = create_list_node(NULL);
         ASTNode *it = list->left;
         while (it) { te_list_append(result, build_item_from_value(it)); it = it->next; }
-        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
         return 1;
     }
     if (strcmp(fname, "concat") == 0) {
@@ -494,10 +494,10 @@ static int te_ll_set_ops(ASTNode *node, ASTNode *list, const char *fname) {
         ASTNode *arg = node->right;
         ASTNode *other_list = NULL;
         if (arg) {
-            if (arg->type && strcmp(arg->type, "LIST") == 0) other_list = arg;
-            else if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+            if (arg->type && strcmp(arg->type, TE_T_LIST) == 0) other_list = arg;
+            else if (arg->type && (strcmp(arg->type, TE_T_ID) == 0 || strcmp(arg->type, TE_T_IDENTIFIER) == 0)) {
                 Variable *ov = find_variable(arg->id);
-                if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "LIST") == 0) {
+                if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, TE_T_LIST) == 0) {
                     other_list = (ASTNode*)(intptr_t)ov->value.object_value;
                 }
             }
@@ -506,7 +506,7 @@ static int te_ll_set_ops(ASTNode *node, ASTNode *list, const char *fname) {
             ASTNode *oi = other_list->left;
             while (oi) { te_list_append(result, build_item_from_value(oi)); oi = oi->next; }
         }
-        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
         return 1;
     }
     if (strcmp(fname, "union") == 0) {
@@ -521,7 +521,7 @@ static int te_ll_set_ops(ASTNode *node, ASTNode *list, const char *fname) {
                 if (!te_list_contains_item(result, oi)) te_list_append(result, build_item_from_value(oi));
             }
         }
-        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
         return 1;
     }
     if (strcmp(fname, "intersect") == 0) {
@@ -538,7 +538,7 @@ static int te_ll_set_ops(ASTNode *node, ASTNode *list, const char *fname) {
             if (!in_other) continue;
             if (!te_list_contains_item(result, it)) te_list_append(result, build_item_from_value(it));
         }
-        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
         return 1;
     }
     if (strcmp(fname, "except") == 0) {
@@ -555,7 +555,7 @@ static int te_ll_set_ops(ASTNode *node, ASTNode *list, const char *fname) {
             if (in_other) continue;
             if (!te_list_contains_item(result, it)) te_list_append(result, build_item_from_value(it));
         }
-        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
         return 1;
     }
     if (strcmp(fname, "zip") == 0) {
@@ -563,23 +563,23 @@ static int te_ll_set_ops(ASTNode *node, ASTNode *list, const char *fname) {
         ASTNode *arg = node->right;
         ASTNode *other_list = NULL;
         if (arg) {
-            if (arg->type && strcmp(arg->type, "LIST") == 0) other_list = arg;
-            else if (arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+            if (arg->type && strcmp(arg->type, TE_T_LIST) == 0) other_list = arg;
+            else if (arg->type && (strcmp(arg->type, TE_T_ID) == 0 || strcmp(arg->type, TE_T_IDENTIFIER) == 0)) {
                 Variable *ov = find_variable(arg->id);
-                if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, "LIST") == 0) {
+                if (ov && ov->vtype == VAL_OBJECT && ov->type && strcmp(ov->type, TE_T_LIST) == 0) {
                     other_list = (ASTNode*)(intptr_t)ov->value.object_value;
                 }
             }
         }
         if (!other_list) {
-            te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+            te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
             return 1;
         }
         ASTNode *a = list->left;
         ASTNode *b = other_list->left;
         while (a && b) {
             ASTNode *lit = (ASTNode*)calloc(1, sizeof(ASTNode));
-            lit->type = strdup("OBJECT_LITERAL");
+            lit->type = strdup(TE_T_OBJECT_LITERAL);
             ASTNode *p1 = create_kv_pair_node("left",  build_item_from_value(a));
             ASTNode *p2 = create_kv_pair_node("right", build_item_from_value(b));
             lit->left = p1;
@@ -588,7 +588,7 @@ static int te_ll_set_ops(ASTNode *node, ASTNode *list, const char *fname) {
             a = a->next;
             b = b->next;
         }
-        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
         return 1;
     }
     return 0;
@@ -601,10 +601,10 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
     /* ===== v0.0.12 #8 Lazy iterator promotion: xs.lazy() -> LAZY_ITER ===== */
     if (strcmp(fname, "lazy") == 0) {
         ASTNode *lz = (ASTNode*)calloc(1, sizeof(ASTNode));
-        lz->type = strdup("LAZY_ITER");
+        lz->type = strdup(TE_T_LAZY_ITER);
         lz->left = list;   /* source LIST (shared ref) */
         lz->right = NULL;  /* empty op chain */
-        add_or_update_variable("__ret__", lz);
+        add_or_update_variable(TE_SYM_RET, lz);
         return 1;
     }
 
@@ -615,7 +615,7 @@ int te_linq_list_method_dispatch(ASTNode *node, ASTNode *list) {
     if (strcmp(fname, "count") == 0 && !node->right) {
         long long n = 0;
         for (ASTNode *it = list->left; it; it = it->next) n++;
-        te_ret_scalar(create_ast_leaf_number("INT", (long long)n, NULL, NULL));
+        te_ret_scalar(create_ast_leaf_number(TE_T_INT, (long long)n, NULL, NULL));
         return 1;
     }
 

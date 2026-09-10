@@ -22,7 +22,7 @@ int te_list_method_dispatch(ASTNode *node, ASTNode *list) {
     /* ---- Ola 13: list extras: size/length, contains, reverse, sort, get ---- */
     if (strcmp(m, "size") == 0 || strcmp(m, "length") == 0) {
         int n = list_length(list);  /* uses cache */
-        add_or_update_variable("__ret__", create_ast_leaf_number("INT", n, NULL, NULL));
+        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, n, NULL, NULL));
         return 1;
     }
     if (strcmp(m, "contains") == 0) {
@@ -34,7 +34,7 @@ int te_list_method_dispatch(ASTNode *node, ASTNode *list) {
             ASTNode *cur = list->left;
             while (cur) {
                 if (cur->type && probe->type && strcmp(cur->type, probe->type) == 0) {
-                    if (strcmp(cur->type, "STRING") == 0) {
+                    if (strcmp(cur->type, TE_T_STRING) == 0) {
                         if (cur->str_value && probe->str_value && strcmp(cur->str_value, probe->str_value) == 0) { found = 1; break; }
                     } else {
                         if (cur->value == probe->value) { found = 1; break; }
@@ -51,7 +51,7 @@ int te_list_method_dispatch(ASTNode *node, ASTNode *list) {
             if (probe->str_value) free(probe->str_value);
             free(probe);
         }
-        add_or_update_variable("__ret__", create_ast_leaf_number("INT", found, NULL, NULL));
+        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, found, NULL, NULL));
         return 1;
     }
     if (strcmp(m, "reverse") == 0) {
@@ -66,7 +66,7 @@ int te_list_method_dispatch(ASTNode *node, ASTNode *list) {
         /* Simple insertion sort on the linked list (numeric or string). OK for small lists.
          * For benchmark needs, replace with merge sort later. */
         int is_str = 0;
-        if (list->left && list->left->type && strcmp(list->left->type, "STRING") == 0) is_str = 1;
+        if (list->left && list->left->type && strcmp(list->left->type, TE_T_STRING) == 0) is_str = 1;
         ASTNode *sorted = NULL;
         ASTNode *cur = list->left;
         while (cur) {
@@ -110,8 +110,8 @@ int te_list_method_dispatch(ASTNode *node, ASTNode *list) {
         ASTNode *arg = node->right;
         int idx = arg ? (int)evaluate_expression(arg) : 0;
         ASTNode *cur = list_get_item(list, idx);  /* Ola 14: O(1) */
-        if (cur) { add_or_update_variable("__ret__", build_item_from_value(cur)); }
-        else { add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL)); }
+        if (cur) { add_or_update_variable(TE_SYM_RET, build_item_from_value(cur)); }
+        else { add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); }
         return 1;
     }
     if (strcmp(m, "join") == 0) {
@@ -134,10 +134,10 @@ int te_list_method_dispatch(ASTNode *node, ASTNode *list) {
             first = 0;
             cur = cur->next;
         }
-        ASTNode *r = create_ast_leaf("STRING", 0, out, NULL);
+        ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
         free(out);
         if (sep) free(sep);
-        add_or_update_variable("__ret__", r);
+        add_or_update_variable(TE_SYM_RET, r);
         return 1;
     }
     return 0;

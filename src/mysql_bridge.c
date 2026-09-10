@@ -203,7 +203,7 @@ ASTNode* mysql_query_to_objects_fast(int conn_id, const char* query, ClassNode* 
         attr_kind[a]     = te_orm_attr_kind(cls->attributes[a].type);
         attr_nullable[a] = te_orm_attr_is_nullable(cls->attributes[a].type);
         shared_id[a]     = te_orm_arena_strdup(cls->attributes[a].id ? cls->attributes[a].id : "");
-        shared_type[a]   = te_orm_arena_strdup(cls->attributes[a].type ? cls->attributes[a].type : "dynamic");
+        shared_type[a]   = te_orm_arena_strdup(cls->attributes[a].type ? cls->attributes[a].type : TE_DT_DYNAMIC);
     }
 
     /* Mapeo columna→atributo (case-insensitive). */
@@ -314,7 +314,7 @@ ASTNode* mysql_query_to_objects_fast(int conn_id, const char* query, ClassNode* 
     }
 
     ASTNode *list_node = (ASTNode*)calloc(1, sizeof(ASTNode));
-    list_node->type      = strdup("LIST");
+    list_node->type      = strdup(TE_T_LIST);
     list_node->left      = first;
     list_node->right     = NULL;
     list_node->next      = NULL;
@@ -378,13 +378,13 @@ ASTNode* mysql_query_result(int conn_id, const char* query) {
             ASTNode* field_node = NULL;
             if (IS_NUM(fields[i].type)) {
                 long long int_value = row[i] ? atoll(row[i]) : 0;
-                field_node = create_ast_leaf("NUMBER", int_value, NULL, (char*)field_name);
+                field_node = create_ast_leaf(TE_T_NUMBER, int_value, NULL, (char*)field_name);
             } else {
-                field_node = create_ast_leaf("STRING", 0, (char*)field_value, (char*)field_name);
+                field_node = create_ast_leaf(TE_T_STRING, 0, (char*)field_value, (char*)field_name);
             }
             row_args = append_to_list(row_args, field_node);
         }
-        ASTNode* row_node = create_ast_node("ARGS", row_args, NULL);
+        ASTNode* row_node = create_ast_node(TE_T_ARGS, row_args, NULL);
         if (!first_row) {
             first_row = row_node;
             last_row = row_node;
@@ -418,19 +418,19 @@ static const char* get_arg_string(ASTNode* args, int index) {
     if (!current) return NULL;
     
     // Primero verificar si el nodo actual es directamente un STRING
-    if (current->type && strcmp(current->type, "STRING") == 0 && current->str_value) {
+    if (current->type && strcmp(current->type, TE_T_STRING) == 0 && current->str_value) {
         return current->str_value;
     }
     
     // Si no, verificar si tiene un left que sea STRING_LITERAL
     if (current->left && current->left->type && 
-        strcmp(current->left->type, "STRING_LITERAL") == 0 && 
+        strcmp(current->left->type, TE_T_STRING_LITERAL) == 0 && 
         current->left->str_value) {
         return current->left->str_value;
     }
 
     // Si es un identificador (variable), resolver su valor string.
-    if (current->type && strcmp(current->type, "IDENTIFIER") == 0 && current->id) {
+    if (current->type && strcmp(current->type, TE_T_IDENTIFIER) == 0 && current->id) {
         Variable* v = find_variable(current->id);
         if (v && v->vtype == VAL_STRING && v->value.string_value) {
             return v->value.string_value;
@@ -439,7 +439,7 @@ static const char* get_arg_string(ASTNode* args, int index) {
 
     // También verificar current->left si es IDENTIFIER.
     if (current->left && current->left->type &&
-        strcmp(current->left->type, "IDENTIFIER") == 0 && current->left->id) {
+        strcmp(current->left->type, TE_T_IDENTIFIER) == 0 && current->left->id) {
         Variable* v = find_variable(current->left->id);
         if (v && v->vtype == VAL_STRING && v->value.string_value) {
             return v->value.string_value;
@@ -459,12 +459,12 @@ static int get_arg_int(ASTNode* args, int index) {
     if (!current) return -1;
 
     // Si es un número
-    if (current->type && strcmp(current->type, "NUMBER") == 0) {
+    if (current->type && strcmp(current->type, TE_T_NUMBER) == 0) {
         return current->value;
     }
 
     // Si es un string que representa un número
-    if (current->type && strcmp(current->type, "STRING") == 0 && current->str_value) {
+    if (current->type && strcmp(current->type, TE_T_STRING) == 0 && current->str_value) {
         char* endptr = NULL;
         long val = strtol(current->str_value, &endptr, 10);
         if (endptr && *endptr == '\0') {
@@ -488,12 +488,12 @@ static int get_arg_int(ASTNode* args, int index) {
     }
 
     // Si no, verificar si tiene un left que sea NUMBER
-    if (current->left && current->left->type && strcmp(current->left->type, "NUMBER") == 0) {
+    if (current->left && current->left->type && strcmp(current->left->type, TE_T_NUMBER) == 0) {
         return current->left->value;
     }
 
     // Si el left es string numérico
-    if (current->left && current->left->type && strcmp(current->left->type, "STRING") == 0 && current->left->str_value) {
+    if (current->left && current->left->type && strcmp(current->left->type, TE_T_STRING) == 0 && current->left->str_value) {
         char* endptr = NULL;
         long val = strtol(current->left->str_value, &endptr, 10);
         if (endptr && *endptr == '\0') {
@@ -508,7 +508,7 @@ static int get_arg_int(ASTNode* args, int index) {
     }
 
     // Si es un identificador, buscar la variable
-    if (current->type && strcmp(current->type, "IDENTIFIER") == 0 && current->id) {
+    if (current->type && strcmp(current->type, TE_T_IDENTIFIER) == 0 && current->id) {
         // printf("[DEBUG] looking up IDENTIFIER variable: %s\n", current->id);
         Variable* v = find_variable(current->id);
         /*if (v) {
@@ -522,7 +522,7 @@ static int get_arg_int(ASTNode* args, int index) {
     }
 
     // También verificar current->left si es IDENTIFIER
-    if (current->left && current->left->type && strcmp(current->left->type, "IDENTIFIER") == 0 && current->left->id) {
+    if (current->left && current->left->type && strcmp(current->left->type, TE_T_IDENTIFIER) == 0 && current->left->id) {
         Variable* v = find_variable(current->left->id);
         if (v && v->vtype == VAL_INT) {
             return v->value.int_value;
@@ -548,11 +548,11 @@ for (ASTNode* p = opts_head; p; p = p->right) {
      * referencia a variable (IDENTIFIER -> p.ej. tls_fp: DB_FP). Sin esto,
      * los valores por variable se ignoraban y opciones como tls_fp/tls_ca
      * quedaban sin efecto (se caia al modo verify por defecto). */
-    const char *v_str = (strcmp(vt, "STRING") == 0) ? v->str_value : NULL;
+    const char *v_str = (strcmp(vt, TE_T_STRING) == 0) ? v->str_value : NULL;
     long v_num = v->value;
-    int v_is_str = (strcmp(vt, "STRING") == 0 && v->str_value);
-    int v_is_num = (strcmp(vt, "NUMBER") == 0 || strcmp(vt, "INT") == 0);
-    if ((strcmp(vt, "IDENTIFIER") == 0 || strcmp(vt, "ID") == 0) && v->id) {
+    int v_is_str = (strcmp(vt, TE_T_STRING) == 0 && v->str_value);
+    int v_is_num = (strcmp(vt, TE_T_NUMBER) == 0 || strcmp(vt, TE_T_INT) == 0);
+    if ((strcmp(vt, TE_T_IDENTIFIER) == 0 || strcmp(vt, TE_T_ID) == 0) && v->id) {
         Variable* rv = find_variable(v->id);
         if (rv) {
             if (rv->vtype == VAL_STRING) {
@@ -754,8 +754,8 @@ void native_mysql_connect(ASTNode* args) {
     int reused = pool_acquire(pool_key);
     if (reused >= 0) {
         conn_req_scoped[reused] = g_vm.db_request_phase;
-        ASTNode* ret_node = create_ast_leaf("NUMBER", reused, NULL, NULL);
-        add_or_update_variable("__ret__", ret_node);
+        ASTNode* ret_node = create_ast_leaf(TE_T_NUMBER, reused, NULL, NULL);
+        add_or_update_variable(TE_SYM_RET, ret_node);
         free_ast(ret_node);
         return;
     }
@@ -784,8 +784,8 @@ void native_mysql_connect(ASTNode* args) {
 
     if (!host || !user || !pass || !db) {
         //printf("[MySQL] Error: Argumentos inválidos para mysql_connect\n"); fflush(stdout);
-        ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
-        add_or_update_variable("__ret__", ret_node);
+        ASTNode* ret_node = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+        add_or_update_variable(TE_SYM_RET, ret_node);
         free_ast(ret_node);
         return;
     }
@@ -801,8 +801,8 @@ void native_mysql_connect(ASTNode* args) {
 
     if (conn_id == -1) {
        // printf("[MySQL] Error: Max conexiones alcanzado\n"); fflush(stdout);
-        ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
-        add_or_update_variable("__ret__", ret_node);
+        ASTNode* ret_node = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+        add_or_update_variable(TE_SYM_RET, ret_node);
         free_ast(ret_node);
         return;
     }
@@ -810,8 +810,8 @@ void native_mysql_connect(ASTNode* args) {
     MYSQL* conn = mysql_init(NULL);
     if (!conn) {
         fprintf(stderr, "[MySQL] Error: mysql_init failed\n"); fflush(stderr);
-        ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
-        add_or_update_variable("__ret__", ret_node);
+        ASTNode* ret_node = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+        add_or_update_variable(TE_SYM_RET, ret_node);
         free_ast(ret_node);
         return;
     }
@@ -844,8 +844,8 @@ void native_mysql_connect(ASTNode* args) {
         const char* err_msg = mysql_error(conn);
         fprintf(stderr, "[MySQL] connection error (errno=%u): %s\n",
                 err_no, err_msg ? err_msg : "(no message)"); fflush(stderr);
-        ASTNode* ret_node = create_ast_leaf("NUMBER", -1, NULL, NULL);
-        add_or_update_variable("__ret__", ret_node);
+        ASTNode* ret_node = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+        add_or_update_variable(TE_SYM_RET, ret_node);
         free_ast(ret_node);
         mysql_close(conn);
         return;
@@ -857,8 +857,8 @@ void native_mysql_connect(ASTNode* args) {
     // next_conn_id is no longer used for allocation logic
     
     printf("[MySQL] Connection successful (ID: %d)%s\n", conn_id, pool_enabled() ? " [pool]" : ""); fflush(stdout);
-    ASTNode* ret_node = create_ast_leaf("NUMBER", conn_id, NULL, NULL);
-    add_or_update_variable("__ret__", ret_node);
+    ASTNode* ret_node = create_ast_leaf(TE_T_NUMBER, conn_id, NULL, NULL);
+    add_or_update_variable(TE_SYM_RET, ret_node);
     free_ast(ret_node);
 }
 
@@ -879,7 +879,7 @@ static ASTNode* mysql_arg_at(ASTNode* args, int idx) {
 static ClassNode* mysql_arg_as_class(ASTNode* args, int idx) {
     ASTNode* a = mysql_arg_at(args, idx);
     if (!a || !a->type) return NULL;
-    if ((strcmp(a->type, "IDENTIFIER") == 0 || strcmp(a->type, "ID") == 0) && a->id) {
+    if ((strcmp(a->type, TE_T_IDENTIFIER) == 0 || strcmp(a->type, TE_T_ID) == 0) && a->id) {
         /* Solo es clase si NO existe una variable con ese nombre. */
         Variable* v = find_variable(a->id);
         if (v) return NULL;
@@ -1097,8 +1097,8 @@ void native_mysql_query(ASTNode* args) {
     
     if (conn_id < 0 || conn_id >= 10 || !connections[conn_id]) {
        // printf("[MySQL] Error: Conexión inválida (ID: %d)\n", conn_id);
-        ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"invalid_connection\"}"), NULL);
-        add_or_update_variable("__ret__", ret_node);
+        ASTNode* ret_node = create_ast_leaf(TE_T_STRING, 0, strdup("{\"error\":\"invalid_connection\"}"), NULL);
+        add_or_update_variable(TE_SYM_RET, ret_node);
         free_ast(ret_node);
         if (params_owned && params_head) free_ast(params_head);
         if (query_owned) free(query_owned);
@@ -1107,8 +1107,8 @@ void native_mysql_query(ASTNode* args) {
     
     if (!query) {
         //printf("[MySQL] Error: Query inválido\n");
-        ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"invalid_query\"}"), NULL);
-        add_or_update_variable("__ret__", ret_node);
+        ASTNode* ret_node = create_ast_leaf(TE_T_STRING, 0, strdup("{\"error\":\"invalid_query\"}"), NULL);
+        add_or_update_variable(TE_SYM_RET, ret_node);
         free_ast(ret_node);
         if (params_owned && params_head) free_ast(params_head);
         return;
@@ -1129,8 +1129,8 @@ void native_mysql_query(ASTNode* args) {
             int prc = qsql ? mysql_run_prepared(conn, qsql, &binds, format, &out) : -1;
             free(qsql); db_bindlist_free(&binds);
             if (prc >= 0) {
-                ASTNode* ret_node = create_ast_leaf("STRING", 0, out, NULL);   /* copia */
-                add_or_update_variable("__ret__", ret_node);
+                ASTNode* ret_node = create_ast_leaf(TE_T_STRING, 0, out, NULL);   /* copia */
+                add_or_update_variable(TE_SYM_RET, ret_node);
                 free_ast(ret_node);
                 free(out);
                 if (prc == 0) { if (g_vm.db_strict_errors && g_vm.api_mode) typeeasy_http_set_status(500); }
@@ -1172,9 +1172,9 @@ void native_mysql_query(ASTNode* args) {
         sb_put_json_escaped_n(&eb, me ? me : "", me ? strlen(me) : 0);
         sb_puts(&eb, "\"}");
         sb_putc(&eb, '\0');
-        ASTNode* ret_node = create_ast_leaf("STRING", 0,
+        ASTNode* ret_node = create_ast_leaf(TE_T_STRING, 0,
             strdup((eb.p && !eb.oom) ? eb.p : "{\"error\":\"db_error\"}"), NULL);
-        add_or_update_variable("__ret__", ret_node);
+        add_or_update_variable(TE_SYM_RET, ret_node);
         free_ast(ret_node);
         free(eb.p);
         /* Strict mode (opt-in, solo modo --api): que un fallo de query NO
@@ -1198,15 +1198,15 @@ void native_mysql_query(ASTNode* args) {
                      "{\"affected_rows\":%llu,\"insert_id\":%llu}",
                      (unsigned long long)mysql_affected_rows(conn),
                      (unsigned long long)mysql_insert_id(conn));
-            ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup(ar_buf), NULL);
-            add_or_update_variable("__ret__", ret_node);
+            ASTNode* ret_node = create_ast_leaf(TE_T_STRING, 0, strdup(ar_buf), NULL);
+            add_or_update_variable(TE_SYM_RET, ret_node);
             free_ast(ret_node);
             if (final_query) free(final_query);
             return;
         } else { // Error fetching result set for a query that should have one
            // printf("[MySQL] Error al obtener resultado: %s\n", mysql_error(conn));
-            ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"no_result\"}"), NULL);
-            add_or_update_variable("__ret__", ret_node);
+            ASTNode* ret_node = create_ast_leaf(TE_T_STRING, 0, strdup("{\"error\":\"no_result\"}"), NULL);
+            add_or_update_variable(TE_SYM_RET, ret_node);
             free_ast(ret_node);
             if (final_query) free(final_query);
             return;
@@ -1280,16 +1280,16 @@ void native_mysql_query(ASTNode* args) {
 
     if (sb.oom) {
         free(sb.p);
-        ASTNode* ret_node = create_ast_leaf("STRING", 0, strdup("{\"error\":\"memory_allocation_failed\"}"), NULL);
-        add_or_update_variable("__ret__", ret_node);
+        ASTNode* ret_node = create_ast_leaf(TE_T_STRING, 0, strdup("{\"error\":\"memory_allocation_failed\"}"), NULL);
+        add_or_update_variable(TE_SYM_RET, ret_node);
         free_ast(ret_node);
         if (final_query) free(final_query);
         return;
     }
 
     sb.p[sb.len] = '\0';  /* sb_reserve garantiza espacio para el NUL */
-    ASTNode* ret_node = create_ast_leaf("STRING", 0, sb.p, NULL);
-    add_or_update_variable("__ret__", ret_node);
+    ASTNode* ret_node = create_ast_leaf(TE_T_STRING, 0, sb.p, NULL);
+    add_or_update_variable(TE_SYM_RET, ret_node);
     free_ast(ret_node);
     free(sb.p);
     if (final_query) free(final_query);

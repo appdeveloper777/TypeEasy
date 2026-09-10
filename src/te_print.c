@@ -14,10 +14,10 @@
  * trailing newline is emitted. */
 void te_print_list_node(ASTNode *listNode, int nl) {
     ASTNode *cur = listNode ? listNode->left : NULL;
-    if (cur && cur->type && strcmp(cur->type, "OBJECT") == 0) {
+    if (cur && cur->type && strcmp(cur->type, TE_T_OBJECT) == 0) {
         dbg_printf("[\n");
         while (cur) {
-            if (cur->type && strcmp(cur->type, "OBJECT") == 0) {
+            if (cur->type && strcmp(cur->type, TE_T_OBJECT) == 0) {
                 ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
                 call_method(obj, "Mostrar");
             }
@@ -33,10 +33,10 @@ void te_print_list_node(ASTNode *listNode, int nl) {
         if (!first) { dbg_printf(", "); append_to_stdout(", "); }
         first = 0;
         char buf[64];
-        if (cur->type && strcmp(cur->type, "STRING") == 0) {
+        if (cur->type && strcmp(cur->type, TE_T_STRING) == 0) {
             const char *s = cur->str_value ? cur->str_value : "";
             dbg_printf("%s", s); append_to_stdout(s);
-        } else if (cur->type && strcmp(cur->type, "FLOAT") == 0) {
+        } else if (cur->type && strcmp(cur->type, TE_T_FLOAT) == 0) {
             te_fmt_double(buf, sizeof(buf), cur->str_value ? atof(cur->str_value) : 0.0);
             dbg_printf("%s", buf); append_to_stdout(buf);
         } else {
@@ -55,20 +55,20 @@ void te_print_list_node(ASTNode *listNode, int nl) {
  * ObjectNode* (which crashes when reading obj->class). */
 char *te_map_field_display(Variable *v, const char *key) {
     if (!v || !v->type) return NULL;
-    if (strcmp(v->type, "MAP") != 0 && strcmp(v->type, "OBJECT_LITERAL") != 0) return NULL;
+    if (strcmp(v->type, TE_T_MAP) != 0 && strcmp(v->type, TE_T_OBJECT_LITERAL) != 0) return NULL;
     ASTNode *map  = (ASTNode*)(intptr_t)v->value.object_value;
     ASTNode *pair = (map && key) ? map_find_pair(map, key) : NULL;
     ASTNode *val  = pair ? pair->left : NULL;
     if (!val || !val->type) return strdup("null");
-    if (strcmp(val->type, "BOOL") == 0) return strdup(val->value ? "true" : "false");
-    if (strcmp(val->type, "NULL") == 0) return strdup("null");
-    if (strcmp(val->type, "STRING") == 0 || strcmp(val->type, "DATETIME") == 0 ||
-        strcmp(val->type, "UUID") == 0)
+    if (strcmp(val->type, TE_T_BOOL) == 0) return strdup(val->value ? "true" : "false");
+    if (strcmp(val->type, TE_T_NULL) == 0) return strdup("null");
+    if (strcmp(val->type, TE_T_STRING) == 0 || strcmp(val->type, TE_T_DATETIME) == 0 ||
+        strcmp(val->type, TE_T_UUID) == 0)
         return strdup(val->str_value ? val->str_value : "");
-    if (strcmp(val->type, "NUMBER") == 0 || strcmp(val->type, "INT") == 0) {
+    if (strcmp(val->type, TE_T_NUMBER) == 0 || strcmp(val->type, TE_T_INT) == 0) {
         char b[32]; snprintf(b, sizeof(b), "%lld", (long long)val->value); return strdup(b);
     }
-    if (strcmp(val->type, "FLOAT") == 0) {
+    if (strcmp(val->type, TE_T_FLOAT) == 0) {
         char b[64]; te_fmt_double(b, sizeof(b), val->str_value ? atof(val->str_value) : 0.0);
         return strdup(b);
     }
@@ -80,37 +80,37 @@ void interpret_print(ASTNode *node) {
         dbg_printf("Error: print without argument\n");
         return;
     }
-    if (arg->type && strcmp(arg->type, "NULL") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_NULL) == 0) {
         dbg_printf("null");
         append_to_stdout("null");
         return;
     }
-    if (arg->type && strcmp(arg->type, "BOOL") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_BOOL) == 0) {
         const char *s = arg->value ? "true" : "false";
         dbg_printf("%s", s);
         append_to_stdout(s);
         return;
     }
-    if (arg->type && strcmp(arg->type, "IDENTIFIER") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_IDENTIFIER) == 0) {
         Variable *_v = find_variable(arg->id);
-        if (_v && _v->type && strcmp(_v->type, "NULL") == 0) { dbg_printf("null"); append_to_stdout("null"); return; }
-        if (_v && _v->type && strcmp(_v->type, "BOOL") == 0) {
+        if (_v && _v->type && strcmp(_v->type, TE_T_NULL) == 0) { dbg_printf("null"); append_to_stdout("null"); return; }
+        if (_v && _v->type && strcmp(_v->type, TE_T_BOOL) == 0) {
             const char *s = _v->value.int_value ? "true" : "false";
             dbg_printf("%s", s); append_to_stdout(s); return;
         }
     }
-    if (arg->type && strcmp(arg->type, "STRING") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_STRING) == 0) {
         dbg_printf("%s", arg->str_value);
         return;
     }
-    if (arg->type && strcmp(arg->type, "STRING_INTERP") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_STRING_INTERP) == 0) {
         char *s = expand_interp_string(arg->str_value);
         dbg_printf("%s", s);
         append_to_stdout(s);
         free(s);
         return;
     }
-    if (arg->type && strcmp(arg->type, "ADD") == 0 && is_string_type(arg)) {
+    if (arg->type && strcmp(arg->type, TE_T_ADD) == 0 && is_string_type(arg)) {
         char *s = get_node_string(arg);
         dbg_printf("%s", s);
         append_to_stdout(s);
@@ -120,18 +120,18 @@ void interpret_print(ASTNode *node) {
     /* println(xs.distinct()) — método que retorna LIST/escalar vía __ret__.
      * Sin esto, un método que retorna lista caía al fallback numérico e
      * imprimía vacío. */
-    if (arg->type && strcmp(arg->type, "CALL_METHOD") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_CALL_METHOD) == 0) {
         interpret_call_method(arg);
-        Variable *r = find_variable("__ret__");
+        Variable *r = find_variable(TE_SYM_RET);
         if (r) {
-            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
+            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, TE_T_LIST) == 0) {
                 te_print_list_node((ASTNode *)(intptr_t)r->value.object_value, 0);
                 return;
             }
             if (r->vtype == VAL_STRING) { dbg_printf("%s", r->value.string_value ? r->value.string_value : ""); append_to_stdout(r->value.string_value ? r->value.string_value : ""); return; }
             if (r->vtype == VAL_INT)    { char b[32]; snprintf(b, sizeof(b), "%lld", r->value.int_value); dbg_printf("%s", b); append_to_stdout(b); return; }
             if (r->vtype == VAL_FLOAT)  { char b[64]; te_fmt_double(b, sizeof(b), r->value.float_value); dbg_printf("%s", b); append_to_stdout(b); return; }
-            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) { dbg_printf("null"); append_to_stdout("null"); return; }
+            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, TE_T_NULL) == 0) { dbg_printf("null"); append_to_stdout("null"); return; }
         }
         return;
     }
@@ -140,22 +140,22 @@ void interpret_print(ASTNode *node) {
      * `arg->id` branch and report `variable 'mysql_query' is not defined`,
      * because a CALL_FUNC node carries the function name in arg->id. Dispatch
      * it like CALL_METHOD and print the captured __ret__ value. */
-    if (arg->type && strcmp(arg->type, "CALL_FUNC") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_CALL_FUNC) == 0) {
         interpret_call_func(arg);
-        Variable *r = find_variable("__ret__");
+        Variable *r = find_variable(TE_SYM_RET);
         if (r) {
-            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
+            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, TE_T_LIST) == 0) {
                 te_print_list_node((ASTNode *)(intptr_t)r->value.object_value, 0);
                 return;
             }
             if (r->vtype == VAL_STRING) { dbg_printf("%s", r->value.string_value ? r->value.string_value : ""); append_to_stdout(r->value.string_value ? r->value.string_value : ""); return; }
             if (r->vtype == VAL_INT)    { char b[32]; snprintf(b, sizeof(b), "%lld", r->value.int_value); dbg_printf("%s", b); append_to_stdout(b); return; }
             if (r->vtype == VAL_FLOAT)  { char b[64]; te_fmt_double(b, sizeof(b), r->value.float_value); dbg_printf("%s", b); append_to_stdout(b); return; }
-            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) { dbg_printf("null"); append_to_stdout("null"); return; }
+            if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, TE_T_NULL) == 0) { dbg_printf("null"); append_to_stdout("null"); return; }
         }
         return;
     }
-    if (arg->type && strcmp(arg->type, "ACCESS_EXPR") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_ACCESS_EXPR) == 0) {
         ASTNode *map = resolve_to_map(arg->left);
         if (map) {
             char keybuf[1024];
@@ -164,8 +164,8 @@ void interpret_print(ASTNode *node) {
             ASTNode *pair = map_find_pair(map, key);
             if (!pair) { dbg_printf("Error: key '%s' not found.\n", key); return; }
             ASTNode *val = pair->left;
-            if (val && val->type && strcmp(val->type, "STRING") == 0) dbg_printf("%s", val->str_value);
-            else if (val && val->type && strcmp(val->type, "FLOAT") == 0) { char b[64]; te_fmt_double(b, sizeof(b), atof(val->str_value)); dbg_printf("%s", b); }
+            if (val && val->type && strcmp(val->type, TE_T_STRING) == 0) dbg_printf("%s", val->str_value);
+            else if (val && val->type && strcmp(val->type, TE_T_FLOAT) == 0) { char b[64]; te_fmt_double(b, sizeof(b), atof(val->str_value)); dbg_printf("%s", b); }
             else { double v_ = evaluate_expression(val); char b[64]; te_fmt_double(b, sizeof(b), v_); dbg_printf("%s", b); }
             return;
         }
@@ -181,13 +181,13 @@ void interpret_print(ASTNode *node) {
         }
         ASTNode *item = list_get_item(list, idx);
         if (!item) return;
-        if (item->type && strcmp(item->type, "STRING") == 0) dbg_printf("%s", item->str_value);
-        else if (item->type && strcmp(item->type, "FLOAT") == 0) { char b[64]; te_fmt_double(b, sizeof(b), atof(item->str_value)); dbg_printf("%s", b); }
+        if (item->type && strcmp(item->type, TE_T_STRING) == 0) dbg_printf("%s", item->str_value);
+        else if (item->type && strcmp(item->type, TE_T_FLOAT) == 0) { char b[64]; te_fmt_double(b, sizeof(b), atof(item->str_value)); dbg_printf("%s", b); }
         else { double v_ = evaluate_expression(item); char b[64]; te_fmt_double(b, sizeof(b), v_); dbg_printf("%s", b); }
         return;
     }
     /* Fase 1a: print(arr[i]) — soporta strings y números */
-    if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_ACCESS_ATTR) == 0) {
         ASTNode *o = arg->left;
         ASTNode *a = arg->right;
         /* Fase 1a: arr.length / map.length / str.length */
@@ -212,7 +212,7 @@ void interpret_print(ASTNode *node) {
         }
         /* v1.0.0 fix: var is a MAP / OBJECT_LITERAL → resolve `o.attr` as a
          * map lookup instead of casting to ObjectNode* (which crashes). */
-        if (v->type && (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0)) {
+        if (v->type && (strcmp(v->type, TE_T_MAP) == 0 || strcmp(v->type, TE_T_OBJECT_LITERAL) == 0)) {
             char *s = te_map_field_display(v, a->id);
             if (s) { dbg_printf("%s", s); append_to_stdout(s); free(s); }
             return;
@@ -246,9 +246,9 @@ void interpret_print(ASTNode *node) {
             dbg_printf("Error: variable '%s' is not defined.\n", arg->id);
             return;
         }
-        if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
+        if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, TE_T_LIST) == 0) {
             ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
-            if (listNode && strcmp(listNode->type, "LIST") == 0) {
+            if (listNode && strcmp(listNode->type, TE_T_LIST) == 0) {
                 te_print_list_node(listNode, 0);
                 return;
             }
@@ -280,7 +280,7 @@ void interpret_print(ASTNode *node) {
 }
 /* Extraído de interpret_println (Fase 2). Devuelve 1 si manejó la llamada. */
 static int te_println_access_expr(ASTNode *arg) {
-    if (arg->type && strcmp(arg->type, "ACCESS_EXPR") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_ACCESS_EXPR) == 0) {
         /* Fase 1c: println(m["k"]) */
         ASTNode *map = resolve_to_map(arg->left);
         if (map) {
@@ -290,8 +290,8 @@ static int te_println_access_expr(ASTNode *arg) {
             ASTNode *pair = map_find_pair(map, key);
             if (!pair) { dbg_printf("Error: key '%s' not found.\n", key); return 1; }
             ASTNode *val = pair->left;
-            if (val && val->type && strcmp(val->type, "STRING") == 0) dbg_printf("%s\n", val->str_value);
-            else if (val && val->type && strcmp(val->type, "FLOAT") == 0) { char b[64]; te_fmt_double(b, sizeof(b), atof(val->str_value)); dbg_printf("%s\n", b); }
+            if (val && val->type && strcmp(val->type, TE_T_STRING) == 0) dbg_printf("%s\n", val->str_value);
+            else if (val && val->type && strcmp(val->type, TE_T_FLOAT) == 0) { char b[64]; te_fmt_double(b, sizeof(b), atof(val->str_value)); dbg_printf("%s\n", b); }
             else { double v_ = evaluate_expression(val); char b[64]; te_fmt_double(b, sizeof(b), v_); dbg_printf("%s\n", b); }
             return 1;
         }
@@ -308,9 +308,9 @@ static int te_println_access_expr(ASTNode *arg) {
         }
         ASTNode *item = list_get_item(list, idx);
         if (!item) return 1;
-        if (item->type && strcmp(item->type, "STRING") == 0) {
+        if (item->type && strcmp(item->type, TE_T_STRING) == 0) {
             dbg_printf("%s\n", item->str_value);
-        } else if (item->type && strcmp(item->type, "FLOAT") == 0) {
+        } else if (item->type && strcmp(item->type, TE_T_FLOAT) == 0) {
             char b[64]; te_fmt_double(b, sizeof(b), atof(item->str_value)); dbg_printf("%s\n", b);
         } else {
             double v = evaluate_expression(item);
@@ -323,7 +323,7 @@ static int te_println_access_expr(ASTNode *arg) {
 
 /* Extraído de interpret_println (Fase 2). Devuelve 1 si manejó la llamada. */
 static int te_println_access_attr(ASTNode *arg) {
-    if (arg->type && strcmp(arg->type, "ACCESS_ATTR") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_ACCESS_ATTR) == 0) {
         ASTNode *o = arg->left;
         ASTNode *a = arg->right;
         /* Fase 1a: arr.length / map.length / str.length */
@@ -358,7 +358,7 @@ static int te_println_access_attr(ASTNode *arg) {
         }
         /* Bug fix: println(arr[i].attr) — o es ACCESS_EXPR.
          * Va antes de find_variable porque o->id es NULL aquí. */
-        if (o && o->type && strcmp(o->type, "ACCESS_EXPR") == 0) {
+        if (o && o->type && strcmp(o->type, TE_T_ACCESS_EXPR) == 0) {
             ASTNode *list2 = resolve_to_list(o->left);
             if (list2 && o->right) {
                 int idx2 = (int)evaluate_expression(o->right);
@@ -369,7 +369,7 @@ static int te_println_access_attr(ASTNode *arg) {
                 }
                 ASTNode *item = list_get_item(list2, idx2);
                 ObjectNode *iobj = NULL;
-                if (item && item->type && strcmp(item->type, "OBJECT") == 0) {
+                if (item && item->type && strcmp(item->type, TE_T_OBJECT) == 0) {
                     if (item->extra) iobj = (ObjectNode*)item->extra;
                     else iobj = (ObjectNode*)(intptr_t)item->value;
                 }
@@ -408,7 +408,7 @@ static int te_println_access_attr(ASTNode *arg) {
                     ASTNode *pair = map_find_pair(map2, key2);
                     ASTNode *val  = pair ? pair->left : NULL;
                     ObjectNode *iobj = NULL;
-                    if (val && val->type && strcmp(val->type, "OBJECT") == 0) {
+                    if (val && val->type && strcmp(val->type, TE_T_OBJECT) == 0) {
                         if (val->extra) iobj = (ObjectNode*)val->extra;
                         else iobj = (ObjectNode*)(intptr_t)val->value;
                     }
@@ -446,7 +446,7 @@ static int te_println_access_attr(ASTNode *arg) {
         }
         /* v1.0.0 fix: var is a MAP / OBJECT_LITERAL → resolve `o.attr` as a
          * map lookup instead of casting to ObjectNode* (which crashes). */
-        if (v->type && (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0)) {
+        if (v->type && (strcmp(v->type, TE_T_MAP) == 0 || strcmp(v->type, TE_T_OBJECT_LITERAL) == 0)) {
             char *s = te_map_field_display(v, a->id);
             if (s) { dbg_printf("%s\n", s); append_to_stdout(s); append_to_stdout("\n"); free(s); }
             else { dbg_printf("null\n"); append_to_stdout("null\n"); }
@@ -491,32 +491,32 @@ void interpret_println(ASTNode *node) {
         dbg_printf("Error: print without argument\n");
         return;
     }
-    if (arg->type && strcmp(arg->type, "NULL") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_NULL) == 0) {
         dbg_printf("null\n");
         append_to_stdout("null\n");
         return;
     }
-    if (arg->type && strcmp(arg->type, "BOOL") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_BOOL) == 0) {
         const char *s = arg->value ? "true" : "false";
         dbg_printf("%s\n", s);
         append_to_stdout(s); append_to_stdout("\n");
         return;
     }
-    if (arg->type && strcmp(arg->type, "IDENTIFIER") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_IDENTIFIER) == 0) {
         Variable *_v = find_variable(arg->id);
-        if (_v && _v->type && strcmp(_v->type, "NULL") == 0) { dbg_printf("null\n"); append_to_stdout("null\n"); return; }
-        if (_v && _v->type && strcmp(_v->type, "BOOL") == 0) {
+        if (_v && _v->type && strcmp(_v->type, TE_T_NULL) == 0) { dbg_printf("null\n"); append_to_stdout("null\n"); return; }
+        if (_v && _v->type && strcmp(_v->type, TE_T_BOOL) == 0) {
             const char *s = _v->value.int_value ? "true" : "false";
             dbg_printf("%s\n", s); append_to_stdout(s); append_to_stdout("\n"); return;
         }
     }
-    if (arg->type && strcmp(arg->type, "STRING") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_STRING) == 0) {
         dbg_printf("%s\n", arg->str_value);
         append_to_stdout(arg->str_value);
         append_to_stdout("\n");
         return;
     }
-    if (arg->type && strcmp(arg->type, "STRING_INTERP") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_STRING_INTERP) == 0) {
         char *s = expand_interp_string(arg->str_value);
         dbg_printf("%s\n", s);
         append_to_stdout(s);
@@ -524,7 +524,7 @@ void interpret_println(ASTNode *node) {
         free(s);
         return;
     }
-    if (arg->type && strcmp(arg->type, "ADD") == 0 && is_string_type(arg)) {
+    if (arg->type && strcmp(arg->type, TE_T_ADD) == 0 && is_string_type(arg)) {
         char *s = get_node_string(arg);
         dbg_printf("%s\n", s);
         append_to_stdout(s);
@@ -532,19 +532,19 @@ void interpret_println(ASTNode *node) {
         free(s);
         return;
     }
-    if (arg->type && strcmp(arg->type, "CALL_METHOD") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_CALL_METHOD) == 0) {
         interpret_call_method(arg);
-        Variable *r = find_variable("__ret__");
+        Variable *r = find_variable(TE_SYM_RET);
         if (!r) { dbg_printf("\n"); return; }
         if (r->vtype == VAL_STRING) { dbg_printf("%s\n", r->value.string_value ? r->value.string_value : ""); return; }
-        if (r->vtype == VAL_INT && r->type && strcmp(r->type, "BOOL") == 0) {
+        if (r->vtype == VAL_INT && r->type && strcmp(r->type, TE_T_BOOL) == 0) {
             const char *s = r->value.int_value ? "true" : "false";
             dbg_printf("%s\n", s); return;
         }
         if (r->vtype == VAL_INT) { dbg_printf("%lld\n", r->value.int_value); return; }
         if (r->vtype == VAL_FLOAT) { char b[64]; te_fmt_double(b, sizeof(b), r->value.float_value); dbg_printf("%s\n", b); return; }
-        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "NULL") == 0) { dbg_printf("null\n"); return; }
-        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
+        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, TE_T_NULL) == 0) { dbg_printf("null\n"); return; }
+        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, TE_T_LIST) == 0) {
             ASTNode *listNode = (ASTNode*)(intptr_t)r->value.object_value;
             if (listNode) { te_print_list_node(listNode, 1); return; }
         }
@@ -552,38 +552,38 @@ void interpret_println(ASTNode *node) {
         return;
     }
     /* Ola 13: println(builtin(...)) — dispatch via __ret__ */
-    if (arg->type && strcmp(arg->type, "CALL_FUNC") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_CALL_FUNC) == 0) {
         interpret_call_func(arg);
-        Variable *r = find_variable("__ret__");
+        Variable *r = find_variable(TE_SYM_RET);
         if (!r) { dbg_printf("\n"); return; }
         if (r->vtype == VAL_STRING) { dbg_printf("%s\n", r->value.string_value ? r->value.string_value : ""); append_to_stdout(r->value.string_value ? r->value.string_value : ""); append_to_stdout("\n"); return; }
-        if (r->vtype == VAL_INT && r->type && strcmp(r->type, "BOOL") == 0) {
+        if (r->vtype == VAL_INT && r->type && strcmp(r->type, TE_T_BOOL) == 0) {
             const char *s = r->value.int_value ? "true" : "false";
             dbg_printf("%s\n", s); append_to_stdout(s); append_to_stdout("\n"); return;
         }
         if (r->vtype == VAL_INT)    { dbg_printf("%lld\n", r->value.int_value); char tmp[32]; snprintf(tmp,32,"%lld\n",r->value.int_value); append_to_stdout(tmp); return; }
         if (r->vtype == VAL_FLOAT)  { char b[64]; te_fmt_double(b, sizeof(b), r->value.float_value); dbg_printf("%s\n", b); append_to_stdout(b); append_to_stdout("\n"); return; }
-        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
+        if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, TE_T_LIST) == 0) {
             ASTNode *listNode = (ASTNode*)(intptr_t)r->value.object_value;
             if (listNode) { te_print_list_node(listNode, 1); return; }
         }
         dbg_printf("\n");
         return;
     }
-    if (arg->type && strcmp(arg->type, "NULL_COALESCE") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_NULL_COALESCE) == 0) {
         ASTNode *l = arg->left;
         ASTNode *chosen = te_expr_is_null(l) ? arg->right : l;
         ASTNode wrapper; memset(&wrapper, 0, sizeof(ASTNode));
-        wrapper.type = strdup("PRINTLN"); wrapper.left = chosen;
+        wrapper.type = strdup(TE_T_PRINTLN); wrapper.left = chosen;
         interpret_println(&wrapper);
         free(wrapper.type);
         return;
     }
-    if (arg->type && strcmp(arg->type, "TERNARY") == 0) {
+    if (arg->type && strcmp(arg->type, TE_T_TERNARY) == 0) {
         int cond = (evaluate_expression(arg->left) != 0.0);
         ASTNode *chosen = cond ? arg->right : arg->extra;
         ASTNode wrapper; memset(&wrapper, 0, sizeof(ASTNode));
-        wrapper.type = strdup("PRINTLN"); wrapper.left = chosen;
+        wrapper.type = strdup(TE_T_PRINTLN); wrapper.left = chosen;
         interpret_println(&wrapper);
         free(wrapper.type);
         return;
@@ -597,9 +597,9 @@ void interpret_println(ASTNode *node) {
             dbg_printf("Error: variable '%s' is not defined.\n", arg->id);
             return;
         }
-        if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "LIST") == 0) {
+        if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, TE_T_LIST) == 0) {
             ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
-            if (listNode && strcmp(listNode->type, "LIST") == 0) {
+            if (listNode && strcmp(listNode->type, TE_T_LIST) == 0) {
                 te_print_list_node(listNode, 1);
                 return;
             }

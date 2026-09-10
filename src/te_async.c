@@ -114,13 +114,13 @@ static int te_async_step(void) {
             char *line = NULL;
             int rr = te_bridge_poll_line(t->slot, &line);
             if (rr == 1) {
-                t->result = create_ast_leaf("STRING", 0, line ? line : "", NULL);
+                t->result = create_ast_leaf(TE_T_STRING, 0, line ? line : "", NULL);
                 if (line) free(line);
                 t->state = TS_DONE;
                 progress = 1;
             } else if (rr < 0) {
                 /* EOF/error: complete with an empty string rather than hang. */
-                t->result = create_ast_leaf("STRING", 0, "", NULL);
+                t->result = create_ast_leaf(TE_T_STRING, 0, "", NULL);
                 t->state = TS_DONE;
                 progress = 1;
             }
@@ -186,7 +186,7 @@ static ASTNode *te_task_take_result(int id) {
         T()->tasks[id].result = NULL;
         T()->tasks[id].lambda = NULL;
     }
-    if (!r) r = create_ast_leaf("STRING", 0, "", NULL);
+    if (!r) r = create_ast_leaf(TE_T_STRING, 0, "", NULL);
     return r;
 }
 
@@ -200,8 +200,8 @@ static int adapt_spawn(ASTNode *node, ASTNode *args) {
     (void)node;
     int id = te_task_find_free();
     if (id < 0 || !args) {
-        add_or_update_variable("__ret__",
-            create_ast_leaf_number("INT", -1, NULL, NULL));
+        add_or_update_variable(TE_SYM_RET,
+            create_ast_leaf_number(TE_T_INT, -1, NULL, NULL));
         return 1;
     }
     T()->tasks[id].in_use = 1;
@@ -211,8 +211,8 @@ static int adapt_spawn(ASTNode *node, ASTNode *args) {
     T()->tasks[id].lambda = args; /* raw lambda node; AST outlives the task */
     T()->tasks[id].slot   = -1;
     T()->tasks[id].result = NULL;
-    add_or_update_variable("__ret__",
-        create_ast_leaf_number("INT", id, NULL, NULL));
+    add_or_update_variable(TE_SYM_RET,
+        create_ast_leaf_number(TE_T_INT, id, NULL, NULL));
     return 1;
 }
 
@@ -227,8 +227,8 @@ static int adapt_lang_call_async(ASTNode *node, ASTNode *args) {
     int id = te_task_find_free();
     if (id < 0) {
         if (req) free(req);
-        add_or_update_variable("__ret__",
-            create_ast_leaf_number("INT", -1, NULL, NULL));
+        add_or_update_variable(TE_SYM_RET,
+            create_ast_leaf_number(TE_T_INT, -1, NULL, NULL));
         return 1;
     }
     /* Hand the request off now; the reply is harvested non-blockingly later. */
@@ -242,8 +242,8 @@ static int adapt_lang_call_async(ASTNode *node, ASTNode *args) {
     T()->tasks[id].slot   = slot;
     T()->tasks[id].lambda = NULL;
     T()->tasks[id].result = NULL;
-    add_or_update_variable("__ret__",
-        create_ast_leaf_number("INT", id, NULL, NULL));
+    add_or_update_variable(TE_SYM_RET,
+        create_ast_leaf_number(TE_T_INT, id, NULL, NULL));
     return 1;
 }
 
@@ -252,13 +252,13 @@ static int adapt_await_task(ASTNode *node, ASTNode *args) {
     (void)node;
     int id = args ? (int)evaluate_expression(args) : -1;
     if (!te_task_valid(id)) {
-        add_or_update_variable("__ret__",
-            create_ast_leaf("STRING", 0, "", NULL));
+        add_or_update_variable(TE_SYM_RET,
+            create_ast_leaf(TE_T_STRING, 0, "", NULL));
         return 1;
     }
     int ids[1] = { id };
     te_async_run_until(ids, 1);
-    add_or_update_variable("__ret__", te_task_take_result(id));
+    add_or_update_variable(TE_SYM_RET, te_task_take_result(id));
     return 1;
 }
 
@@ -271,14 +271,14 @@ static int te_async_collect_ids(ASTNode *args, int *out, int max) {
 
     ASTNode *items = NULL; /* a chain to walk via ->next if we find a LIST */
 
-    if (args->type && strcmp(args->type, "LIST") == 0) {
+    if (args->type && strcmp(args->type, TE_T_LIST) == 0) {
         items = args->left;
     } else if (args->type &&
-               (strcmp(args->type, "IDENTIFIER") == 0 ||
-                strcmp(args->type, "ID") == 0) &&
+               (strcmp(args->type, TE_T_IDENTIFIER) == 0 ||
+                strcmp(args->type, TE_T_ID) == 0) &&
                args->next == NULL) {
         Variable *v = find_variable(args->id);
-        if (v && v->type && strcmp(v->type, "LIST") == 0) {
+        if (v && v->type && strcmp(v->type, TE_T_LIST) == 0) {
             ASTNode *root = (ASTNode *)(intptr_t)v->value.object_value;
             if (root) items = root->left;
         }
@@ -311,7 +311,7 @@ static int adapt_await_all(ASTNode *node, ASTNode *args) {
         if (!head) head = tail = r;
         else { tail->next = r; tail = r; }
     }
-    add_or_update_variable("__ret__", create_list_node(head));
+    add_or_update_variable(TE_SYM_RET, create_list_node(head));
     return 1;
 }
 

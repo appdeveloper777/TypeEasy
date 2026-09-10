@@ -7,6 +7,9 @@
 #include "te_vm.h"
 #include "te_decimal.h"
 
+/* Palabra clave SQL emitida en el texto de la sentencia (no confundir con el tag de tipo TE_T_NULL). */
+#define DB_SQL_NULL "NULL"
+
 /* === Flag opt-in: tratar el STRING vacio ("") como SQL NULL ================
  * Por default 0 = comportamiento legacy (interpola ''). Cuando se enciende
  * con sql_set_empty_as_null(true) (o via env TYPEEASY_SQL_EMPTY_AS_NULL=1),
@@ -37,15 +40,15 @@ ASTNode* db_arg_as_map_head(ASTNode* args, int idx, int* out_owned) {
     if (!cur || !cur->type) return NULL;
 
     /* Caso 1: literal { "k": v, ... } */
-    if (strcmp(cur->type, "OBJECT_LITERAL") == 0) return cur->left;
+    if (strcmp(cur->type, TE_T_OBJECT_LITERAL) == 0) return cur->left;
 
     /* Caso 2: IDENTIFIER → Variable */
-    if ((strcmp(cur->type, "IDENTIFIER") == 0 || strcmp(cur->type, "ID") == 0) && cur->id) {
+    if ((strcmp(cur->type, TE_T_IDENTIFIER) == 0 || strcmp(cur->type, TE_T_ID) == 0) && cur->id) {
         Variable* v = find_variable(cur->id);
         if (!v) return NULL;
 
         /* 2a: variable de tipo MAP */
-        if (v->type && strcmp(v->type, "MAP") == 0) {
+        if (v->type && strcmp(v->type, TE_T_MAP) == 0) {
             ASTNode* m = (ASTNode*)(intptr_t)v->value.object_value;
             return m ? m->left : NULL;
         }
@@ -64,19 +67,19 @@ ASTNode* db_arg_as_map_head(ASTNode* args, int idx, int* out_owned) {
                 if (!a->id) continue;
                 ASTNode* leaf = NULL;
                 if (a->vtype == VAL_INT) {
-                    leaf = create_ast_leaf("NUMBER", a->value.int_value, NULL, NULL);
+                    leaf = create_ast_leaf(TE_T_NUMBER, a->value.int_value, NULL, NULL);
                 } else if (te_var_is_decimal(a)) {
                     leaf = te_dec_leaf(a->value.string_value);
                 } else if (a->vtype == VAL_STRING) {
-                    leaf = create_ast_leaf("STRING", 0,
+                    leaf = create_ast_leaf(TE_T_STRING, 0,
                                            a->value.string_value ? a->value.string_value : "",
                                            NULL);
                 } else if (a->vtype == VAL_FLOAT) {
                     char tmp[64];
                     snprintf(tmp, sizeof(tmp), "%g", a->value.float_value);
-                    leaf = create_ast_leaf("DB_RAW", 0, tmp, NULL);
+                    leaf = create_ast_leaf(TE_T_DB_RAW, 0, tmp, NULL);
                 } else {
-                    leaf = create_ast_leaf("NULL", 0, NULL, NULL);
+                    leaf = create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
                 }
                 ASTNode* pair = create_kv_pair_node(a->id, leaf);
                 if (!head) head = pair;
@@ -176,60 +179,60 @@ static int db_str_is_number(const char* s) {
  * resuelve aquí (host, con acceso a los tipos del runtime) y no con un
  * heurístico de string dentro del plugin, que no puede distinguirlos. */
 static ASTNode* db_value_to_typed_leaf(ASTNode* val) {
-    if (!val || !val->type) return create_ast_leaf("NULL", 0, NULL, NULL);
+    if (!val || !val->type) return create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
     const char* t = val->type;
 
     /* Leaf ya tipado: literal inline `{"@n":1000}` o atributo de clase
      * sintetizado por db_arg_as_map_head. Reusar su tipo/valor tal cual. */
-    if (strcmp(t, "NUMBER") == 0 || strcmp(t, "INT") == 0)
-        return create_ast_leaf_number("INT", val->value, NULL, NULL);
-    if (strcmp(t, "BOOL") == 0)
-        return create_ast_leaf_number("INT", val->value ? 1 : 0, NULL, NULL);
-    if (strcmp(t, "FLOAT") == 0 || strcmp(t, "DB_RAW") == 0)
-        return create_ast_leaf("DB_RAW", 0,
+    if (strcmp(t, TE_T_NUMBER) == 0 || strcmp(t, TE_T_INT) == 0)
+        return create_ast_leaf_number(TE_T_INT, val->value, NULL, NULL);
+    if (strcmp(t, TE_T_BOOL) == 0)
+        return create_ast_leaf_number(TE_T_INT, val->value ? 1 : 0, NULL, NULL);
+    if (strcmp(t, TE_T_FLOAT) == 0 || strcmp(t, TE_T_DB_RAW) == 0)
+        return create_ast_leaf(TE_T_DB_RAW, 0,
                                (val->str_value && *val->str_value) ? val->str_value : "0", NULL);
-    if (strcmp(t, "STRING") == 0 || strcmp(t, "STRING_LITERAL") == 0)
-        return create_ast_leaf("STRING", 0, val->str_value ? val->str_value : "", NULL);
-    if (strcmp(t, "NULL") == 0 || strcmp(t, "NULLTOK") == 0)
-        return create_ast_leaf("NULL", 0, NULL, NULL);
+    if (strcmp(t, TE_T_STRING) == 0 || strcmp(t, TE_T_STRING_LITERAL) == 0)
+        return create_ast_leaf(TE_T_STRING, 0, val->str_value ? val->str_value : "", NULL);
+    if (strcmp(t, TE_T_NULL) == 0 || strcmp(t, TE_T_NULLTOK) == 0)
+        return create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
 
     /* IDENTIFIER/ID -> resolver por el vtype EN RUNTIME de la variable. Núcleo
      * del bug: `let a=1000; {"@n":a}` debe ligar INTEGER, no TEXT. */
-    if ((strcmp(t, "IDENTIFIER") == 0 || strcmp(t, "ID") == 0) && val->id) {
+    if ((strcmp(t, TE_T_IDENTIFIER) == 0 || strcmp(t, TE_T_ID) == 0) && val->id) {
         Variable* v = find_variable(val->id);
-        if (!v) return create_ast_leaf("NULL", 0, NULL, NULL);
+        if (!v) return create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
         if (v->vtype == VAL_INT)
-            return create_ast_leaf_number("INT", v->value.int_value, NULL, NULL);
+            return create_ast_leaf_number(TE_T_INT, v->value.int_value, NULL, NULL);
         if (v->vtype == VAL_FLOAT) {
             char b[64]; te_fmt_double(b, sizeof(b), v->value.float_value);
-            return create_ast_leaf("DB_RAW", 0, b, NULL);
+            return create_ast_leaf(TE_T_DB_RAW, 0, b, NULL);
         }
         if (v->vtype == VAL_STRING)
-            return create_ast_leaf("STRING", 0,
+            return create_ast_leaf(TE_T_STRING, 0,
                                    v->value.string_value ? v->value.string_value : "", NULL);
-        return create_ast_leaf("NULL", 0, NULL, NULL);
+        return create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
     }
 
     /* CALL_FUNC/CALL_METHOD -> EJECUTAR una sola vez y leer el tipo REAL de
      * __ret__. Cubre to_int(...)/to_float(...) (deben ligar INTEGER/REAL) y
      * now()/uuid_v4() (deben ligar TEXT). get_node_string corre la llamada y
      * deja __ret__ con el valor tipado. */
-    if (strcmp(t, "CALL_FUNC") == 0 || strcmp(t, "CALL_METHOD") == 0) {
+    if (strcmp(t, TE_T_CALL_FUNC) == 0 || strcmp(t, TE_T_CALL_METHOD) == 0) {
         char* s = get_node_string(val);
-        Variable* r = find_variable("__ret__");
+        Variable* r = find_variable(TE_SYM_RET);
         ASTNode* leaf;
         if (r && r->vtype == VAL_INT)
-            leaf = create_ast_leaf_number("INT", r->value.int_value, NULL, NULL);
+            leaf = create_ast_leaf_number(TE_T_INT, r->value.int_value, NULL, NULL);
         else if (r && r->vtype == VAL_FLOAT) {
             char b[64]; te_fmt_double(b, sizeof(b), r->value.float_value);
-            leaf = create_ast_leaf("DB_RAW", 0, b, NULL);
+            leaf = create_ast_leaf(TE_T_DB_RAW, 0, b, NULL);
         } else if (r && r->vtype == VAL_STRING)
-            leaf = create_ast_leaf("STRING", 0,
+            leaf = create_ast_leaf(TE_T_STRING, 0,
                      r->value.string_value ? r->value.string_value : (s ? s : ""), NULL);
         else if (s && *s)
-            leaf = create_ast_leaf("STRING", 0, s, NULL);
+            leaf = create_ast_leaf(TE_T_STRING, 0, s, NULL);
         else
-            leaf = create_ast_leaf("NULL", 0, NULL, NULL);
+            leaf = create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
         if (s) free(s);
         return leaf;
     }
@@ -240,15 +243,15 @@ static ASTNode* db_value_to_typed_leaf(ASTNode* val) {
      * interpolación); resto -> STRING; vacío -> NULL. */
     {
         char* s = get_node_string(val);
-        if (!s || !*s) { if (s) free(s); return create_ast_leaf("NULL", 0, NULL, NULL); }
+        if (!s || !*s) { if (s) free(s); return create_ast_leaf(TE_T_NULL, 0, NULL, NULL); }
         ASTNode* leaf;
         if (db_str_is_number(s)) {
             if (strpbrk(s, ".eE"))
-                leaf = create_ast_leaf("DB_RAW", 0, s, NULL);
+                leaf = create_ast_leaf(TE_T_DB_RAW, 0, s, NULL);
             else
-                leaf = create_ast_leaf_number("INT", atoll(s), NULL, NULL);
+                leaf = create_ast_leaf_number(TE_T_INT, atoll(s), NULL, NULL);
         } else {
-            leaf = create_ast_leaf("STRING", 0, s, NULL);
+            leaf = create_ast_leaf(TE_T_STRING, 0, s, NULL);
         }
         free(s);
         return leaf;
@@ -292,7 +295,7 @@ ASTNode* db_arg_as_typed_map_head(ASTNode* args, int idx, int* out_owned) {
 static int db_emit_resolved(char** buf, size_t* len, size_t* cap,
                             ASTNode* val, db_escape_fn escape, void* ctx, DbBindList* sink) {
     char* s = get_node_string(val);
-    if (!s || !*s) { if (s) free(s); if (sink) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL); buf_append(buf, len, cap, "NULL", 4); return 1; }
+    if (!s || !*s) { if (s) free(s); if (sink) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL); buf_append(buf, len, cap, DB_SQL_NULL, 4); return 1; }
     if (db_str_is_number(s)) {
         if (sink) { int r = sink_emit(sink, buf, len, cap, DB_BIND_NUMTEXT, 0, 0, s); free(s); return r; }
         buf_append(buf, len, cap, s, strlen(s));
@@ -302,7 +305,7 @@ static int db_emit_resolved(char** buf, size_t* len, size_t* cap,
     if (sink) { int r = sink_emit(sink, buf, len, cap, DB_BIND_STRING, 0, 0, s); free(s); return r; }
     char* esc = escape(s, ctx);
     free(s);
-    if (!esc) { buf_append(buf, len, cap, "NULL", 4); return 1; }
+    if (!esc) { buf_append(buf, len, cap, DB_SQL_NULL, 4); return 1; }
     buf_append(buf, len, cap, "'", 1);
     buf_append(buf, len, cap, esc, strlen(esc));
     buf_append(buf, len, cap, "'", 1);
@@ -316,7 +319,7 @@ static int append_value(char** buf, size_t* len, size_t* cap,
                         ASTNode* val, db_escape_fn escape, void* ctx, DbBindList* sink) {
     if (!val || !val->type) {
         if (sink) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL);
-        buf_append(buf, len, cap, "NULL", 4);
+        buf_append(buf, len, cap, DB_SQL_NULL, 4);
         return 1;
     }
     /* Resolver IDENTIFIER → variable */
@@ -326,7 +329,7 @@ static int append_value(char** buf, size_t* len, size_t* cap,
     const char* vs = NULL;
     int kind = 0; /* 1=int 2=float 3=str 4=null */
 
-    if (strcmp(tipo, "NUMBER") == 0 || strcmp(tipo, "INT") == 0) {
+    if (strcmp(tipo, TE_T_NUMBER) == 0 || strcmp(tipo, TE_T_INT) == 0) {
         /* "NUMBER" = literal entero del parser TypeEasy; "INT" = entero
          * producido por json_parse() (te_json crea leaves "INT", no "NUMBER").
          * Sin la rama "INT" un objeto reusado como bind-params —p.ej.
@@ -335,41 +338,41 @@ static int append_value(char** buf, size_t* len, size_t* cap,
          * las columnas string sí se enlazaban. Ambos guardan el entero en
          * val->value. */
         kind = 1; vi = val->value;
-    } else if (strcmp(tipo, "STRING") == 0 || strcmp(tipo, "STRING_LITERAL") == 0) {
+    } else if (strcmp(tipo, TE_T_STRING) == 0 || strcmp(tipo, TE_T_STRING_LITERAL) == 0) {
         kind = 3; vs = val->str_value ? val->str_value : "";
-    } else if (strcmp(tipo, "DB_RAW") == 0) {
+    } else if (strcmp(tipo, TE_T_DB_RAW) == 0) {
         /* Valor crudo ya formateado (ej. float "%g"). Se interpola sin comillas. */
-        const char* raw = val->str_value ? val->str_value : "NULL";
+        const char* raw = val->str_value ? val->str_value : DB_SQL_NULL;
         if (sink) {
-            if (strcmp(raw, "NULL") == 0) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL);
+            if (strcmp(raw, DB_SQL_NULL) == 0) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL);
             return sink_emit(sink, buf, len, cap, db_str_is_number(raw) ? DB_BIND_NUMTEXT : DB_BIND_STRING, 0, 0, raw);
         }
         buf_append(buf, len, cap, raw, strlen(raw));
         return 1;
-    } else if (strcmp(tipo, "FLOAT") == 0 || strcmp(tipo, "FLOAT_LITERAL") == 0 || strcmp(tipo, "DECIMAL") == 0) {
+    } else if (strcmp(tipo, TE_T_FLOAT) == 0 || strcmp(tipo, TE_T_FLOAT_LITERAL) == 0 || strcmp(tipo, TE_T_DECIMAL) == 0) {
         /* Literal flotante (p.ej. 19.9): el parser lo guarda como un leaf
          * "FLOAT" con el texto numérico en str_value (value=0). Sin esta rama
          * caía al `else` final (kind=4) y se interpolaba NULL, perdiendo el
          * valor en INSERT/UPDATE con params { "@price": 19.9 }. Se interpola
          * crudo, sin comillas, igual que un número. */
-        const char* raw = (val->str_value && *val->str_value) ? val->str_value : "NULL";
+        const char* raw = (val->str_value && *val->str_value) ? val->str_value : DB_SQL_NULL;
         if (sink) {
-            if (strcmp(raw, "NULL") == 0) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL);
+            if (strcmp(raw, DB_SQL_NULL) == 0) return sink_emit(sink, buf, len, cap, DB_BIND_NULL, 0, 0, NULL);
             return sink_emit(sink, buf, len, cap, DB_BIND_NUMTEXT, 0, 0, raw);
         }
         buf_append(buf, len, cap, raw, strlen(raw));
         return 1;
-    } else if (strcmp(tipo, "BOOL") == 0) {
+    } else if (strcmp(tipo, TE_T_BOOL) == 0) {
         /* Literal booleano (true/false): el parser lo guarda como un leaf
          * "BOOL" con value=1/0 (sin str_value). SQL estándar no tiene un tipo
          * boolean portable en parámetros, así que se interpola como entero
          * 1/0 (compatible con TINYINT/BOOLEAN de MySQL y INTEGER de SQLite).
          * Sin esta rama caía al `else` final (kind=4) y se perdía como NULL. */
         kind = 1; vi = val->value ? 1 : 0;
-    } else if (strcmp(tipo, "NULL") == 0 || strcmp(tipo, "NULLTOK") == 0) {
+    } else if (strcmp(tipo, TE_T_NULL) == 0 || strcmp(tipo, TE_T_NULLTOK) == 0) {
 
         kind = 4;
-    } else if ((strcmp(tipo, "IDENTIFIER") == 0 || strcmp(tipo, "ID") == 0) && val->id) {
+    } else if ((strcmp(tipo, TE_T_IDENTIFIER) == 0 || strcmp(tipo, TE_T_ID) == 0) && val->id) {
         Variable* v = find_variable(val->id);
         if (!v) { kind = 4; }
         else if (v->vtype == VAL_INT) { kind = 1; vi = v->value.int_value; }
@@ -383,7 +386,7 @@ static int append_value(char** buf, size_t* len, size_t* cap,
         }
         else if (v->vtype == VAL_STRING) { kind = 3; vs = v->value.string_value ? v->value.string_value : ""; }
         else { kind = 4; }
-    } else if (strcmp(tipo, "ACCESS_ATTR") == 0 && val->left && val->right) {
+    } else if (strcmp(tipo, TE_T_ACCESS_ATTR) == 0 && val->left && val->right) {
         /* Acceso a miembro `obj.attr` (p.ej. body.codcontacto en un INSERT).
          * Sin esto el valor se ignoraba (kind=4 -> NULL) y la fila se insertaba
          * vacia. Resolvemos la variable OBJECT y leemos el atributo por su id,
@@ -399,7 +402,7 @@ static int append_value(char** buf, size_t* len, size_t* cap,
          * un ObjectNode*, así que leer ->class sería un acceso mal tipado; esos
          * casos (mapVar.clave) se resuelven abajo vía get_node_string. */
         if (ov && ov->vtype == VAL_OBJECT && ov->type &&
-            strcmp(ov->type, "OBJECT") == 0 &&
+            strcmp(ov->type, TE_T_OBJECT) == 0 &&
             ov->value.object_value && ov->value.object_value->class && attr_name) {
             ObjectNode* obj = ov->value.object_value;
             for (int i = 0; i < obj->class->attr_count; i++) {
@@ -426,14 +429,14 @@ static int append_value(char** buf, size_t* len, size_t* cap,
              * texto entrecomillado, ausente/null -> NULL). */
             return db_emit_resolved(buf, len, cap, val, escape, ctx, sink);
         }
-    } else if (strcmp(tipo, "ACCESS_EXPR") == 0) {
+    } else if (strcmp(tipo, TE_T_ACCESS_EXPR) == 0) {
         /* Indexación inline como valor de bind-param: `{ "@x": row["activo"] }`,
          * `{ "@x": arr[i] }`, `{ "@x": m["k"] }`. Sin esta rama caía al `else`
          * final (kind=4) y se interpolaba NULL, perdiendo valores numéricos de
          * una colección (variante inline del bug "número de objeto -> NULL").
          * Se resuelve por la forma string del runtime con detección numérica. */
         return db_emit_resolved(buf, len, cap, val, escape, ctx, sink);
-    } else if (strcmp(tipo, "CALL_FUNC") == 0 || strcmp(tipo, "CALL_METHOD") == 0) {
+    } else if (strcmp(tipo, TE_T_CALL_FUNC) == 0 || strcmp(tipo, TE_T_CALL_METHOD) == 0) {
         /* Valor que es una llamada inline en el map, p.ej.
          * { "@c": now(), "@u": uuid_v4(), "@n": to_int(x) }. get_node_string
          * EJECUTA la llamada (corre la función/método y lee __ret__) y devuelve
@@ -481,11 +484,11 @@ static int append_value(char** buf, size_t* len, size_t* cap,
         case 3: {
             /* Opt-in: STRING vacio "" -> NULL (vease g_db_empty_as_null arriba). */
             if (g_vm.db_empty_as_null && (!vs || !*vs)) {
-                buf_append(buf, len, cap, "NULL", 4);
+                buf_append(buf, len, cap, DB_SQL_NULL, 4);
                 return 1;
             }
             char* esc = escape(vs, ctx);
-            if (!esc) { buf_append(buf, len, cap, "NULL", 4); return 1; }
+            if (!esc) { buf_append(buf, len, cap, DB_SQL_NULL, 4); return 1; }
             buf_append(buf, len, cap, "'", 1);
             buf_append(buf, len, cap, esc, strlen(esc));
             buf_append(buf, len, cap, "'", 1);
@@ -494,7 +497,7 @@ static int append_value(char** buf, size_t* len, size_t* cap,
         }
         case 4:
         default:
-            buf_append(buf, len, cap, "NULL", 4);
+            buf_append(buf, len, cap, DB_SQL_NULL, 4);
             return 1;
     }
 }

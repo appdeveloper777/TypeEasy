@@ -42,11 +42,11 @@ static ASTNode* pg_arg_at(ASTNode* args, int index) {
 static const char* pg_arg_str(ASTNode* args, int index) {
     ASTNode* current = pg_arg_at(args, index);
     if (!current) return NULL;
-    if (current->type && strcmp(current->type, "STRING") == 0 && current->str_value) return current->str_value;
+    if (current->type && strcmp(current->type, TE_T_STRING) == 0 && current->str_value) return current->str_value;
     if (current->left && current->left->type &&
-        strcmp(current->left->type, "STRING_LITERAL") == 0 && current->left->str_value)
+        strcmp(current->left->type, TE_T_STRING_LITERAL) == 0 && current->left->str_value)
         return current->left->str_value;
-    if (current->type && strcmp(current->type, "IDENTIFIER") == 0 && current->id) {
+    if (current->type && strcmp(current->type, TE_T_IDENTIFIER) == 0 && current->id) {
         Variable* v = find_variable((char*)current->id);
         if (v && v->vtype == VAL_STRING) return v->value.string_value;
     }
@@ -56,17 +56,17 @@ static const char* pg_arg_str(ASTNode* args, int index) {
 static int pg_arg_int(ASTNode* args, int index) {
     ASTNode* current = pg_arg_at(args, index);
     if (!current) return -1;
-    if (current->type && strcmp(current->type, "NUMBER") == 0) return current->value;
-    if (current->type && strcmp(current->type, "STRING") == 0 && current->str_value) {
+    if (current->type && strcmp(current->type, TE_T_NUMBER) == 0) return current->value;
+    if (current->type && strcmp(current->type, TE_T_STRING) == 0 && current->str_value) {
         char* endptr = NULL;
         long val = strtol(current->str_value, &endptr, 10);
         if (endptr && *endptr == '\0') return (int)val;
         Variable* v = find_variable((char*)current->str_value);
         if (v && v->vtype == VAL_INT) return v->value.int_value;
     }
-    if (current->left && current->left->type && strcmp(current->left->type, "NUMBER") == 0)
+    if (current->left && current->left->type && strcmp(current->left->type, TE_T_NUMBER) == 0)
         return current->left->value;
-    if (current->type && strcmp(current->type, "IDENTIFIER") == 0 && current->id) {
+    if (current->type && strcmp(current->type, TE_T_IDENTIFIER) == 0 && current->id) {
         Variable* v = find_variable(current->id);
         if (v && v->vtype == VAL_INT) return v->value.int_value;
     }
@@ -160,8 +160,8 @@ void native_postgres_connect(ASTNode* args) {
     if (port <= 0) port = 5432;
 
     if (!host || !user || !db) {
-        ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         return;
     }
 
@@ -169,8 +169,8 @@ void native_postgres_connect(ASTNode* args) {
     for (int i = 0; i < PG_POOL_SIZE; i++) if (!pg_connections[i]) { slot = i; break; }
     if (slot < 0) {
         fprintf(stderr, "[Postgres] Pool lleno\n");
-        ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         return;
     }
 
@@ -183,16 +183,16 @@ void native_postgres_connect(ASTNode* args) {
     if (PQstatus(conn) != CONNECTION_OK) {
         fprintf(stderr, "[Postgres] connection error: %s\n", PQerrorMessage(conn));
         PQfinish(conn);
-        ASTNode* r = create_ast_leaf("NUMBER", -1, NULL, NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         return;
     }
 
     pg_connections[slot] = conn;
     pg_req_scoped[slot] = g_vm.db_request_phase;
     printf("[Postgres] Connection successful (ID: %d)\n", slot); fflush(stdout);
-    ASTNode* r = create_ast_leaf("NUMBER", slot, NULL, NULL);
-    add_or_update_variable("__ret__", r); free_ast(r);
+    ASTNode* r = create_ast_leaf(TE_T_NUMBER, slot, NULL, NULL);
+    add_or_update_variable(TE_SYM_RET, r); free_ast(r);
 }
 
 /* native_postgres_query(conn_id, query, [params_map], [format=json|xml]) → string en __ret__ */
@@ -218,15 +218,15 @@ void native_postgres_query(ASTNode* args) {
     if (!format || !*format) format = "json";
 
     if (conn_id < 0 || conn_id >= PG_POOL_SIZE || !pg_connections[conn_id]) {
-        ASTNode* r = create_ast_leaf("STRING", 0, strdup("{\"error\":\"invalid_connection\"}"), NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_STRING, 0, strdup("{\"error\":\"invalid_connection\"}"), NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         if (params_owned && params_head) free_ast(params_head);
         free(query_owned);
         return;
     }
     if (!query) {
-        ASTNode* r = create_ast_leaf("STRING", 0, strdup("{\"error\":\"invalid_query\"}"), NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_STRING, 0, strdup("{\"error\":\"invalid_query\"}"), NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         if (params_owned && params_head) free_ast(params_head);
         return;
     }
@@ -292,8 +292,8 @@ void native_postgres_query(ASTNode* args) {
         const char *ct = PQcmdTuples(res);
         snprintf(buf, sizeof(buf), "{\"affected_rows\":%s}", (ct && *ct) ? ct : "0");
         PQclear(res);
-        ASTNode* r = create_ast_leaf("STRING", 0, strdup(buf), NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_STRING, 0, strdup(buf), NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         if (final_query) free(final_query);
         return;
     }
@@ -307,9 +307,9 @@ void native_postgres_query(ASTNode* args) {
         sb_puts(&eb, "\"}");
         sb_putc(&eb, '\0');
         PQclear(res);
-        ASTNode* r = create_ast_leaf("STRING", 0,
+        ASTNode* r = create_ast_leaf(TE_T_STRING, 0,
             strdup((eb.p && !eb.oom) ? eb.p : "{\"error\":\"db_error\"}"), NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         free(eb.p);
         /* Strict mode solo aplica en --api; en CLI es no-op (ver mysql_bridge.c). */
         { if (g_vm.db_strict_errors && g_vm.api_mode) typeeasy_http_set_status(500); }
@@ -368,15 +368,15 @@ void native_postgres_query(ASTNode* args) {
 
     if (sb.oom) {
         free(sb.p);
-        ASTNode* r = create_ast_leaf("STRING", 0, strdup("{\"error\":\"memory_allocation_failed\"}"), NULL);
-        add_or_update_variable("__ret__", r); free_ast(r);
+        ASTNode* r = create_ast_leaf(TE_T_STRING, 0, strdup("{\"error\":\"memory_allocation_failed\"}"), NULL);
+        add_or_update_variable(TE_SYM_RET, r); free_ast(r);
         if (final_query) free(final_query);
         return;
     }
 
     sb.p[sb.len] = '\0';
-    ASTNode* ret = create_ast_leaf("STRING", 0, sb.p, NULL);
-    add_or_update_variable("__ret__", ret); free_ast(ret);
+    ASTNode* ret = create_ast_leaf(TE_T_STRING, 0, sb.p, NULL);
+    add_or_update_variable(TE_SYM_RET, ret); free_ast(ret);
     free(sb.p);
     if (final_query) free(final_query);
 }

@@ -20,7 +20,7 @@ static int lookup_int(ASTNode *n, long long *out) {
     if (v && (!v->id || strcmp(v->id, n->id) != 0)) v = NULL;   /* slot reciclado entre requests */
     if (!v) v = find_variable(n->id);
     if (!v || v->vtype != VAL_INT) return 0;
-    if (v->type && strcmp(v->type, "NULL") == 0) return 0;
+    if (v->type && strcmp(v->type, TE_T_NULL) == 0) return 0;
     *out = v->value.int_value;
     return 1;
 }

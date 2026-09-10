@@ -538,10 +538,10 @@ ObjectNode *create_objects_bulk(ClassNode *cls, int N) {
             va[a].type = cls->attributes[a].type;
             va[a].is_const = 0;
             const char *t = cls->attributes[a].type;
-            if (t && strcmp(t, "string") == 0) {
+            if (t && strcmp(t, TE_DT_STRING) == 0) {
                 va[a].vtype = VAL_STRING;
                 va[a].value.string_value = NULL; /* caller fills */
-            } else if (t && strcmp(t, "float") == 0) {
+            } else if (t && strcmp(t, TE_DT_FLOAT) == 0) {
                 va[a].vtype = VAL_FLOAT;
                 va[a].value.float_value = 0.0;
             } else {
@@ -1069,15 +1069,15 @@ static int csv_next_record_readonly(const char *src, size_t len, size_t *pos,
 }
 
 int csv_attr_is_int(const char *t) {
-    return t && (!strcmp(t, "int") || !strcmp(t, "int?"));
+    return t && (!strcmp(t, TE_DT_INT) || !strcmp(t, TE_DT_INT_OPT));
 }
 int csv_attr_is_string(const char *t) {
-    return t && (!strcmp(t, "string") || !strcmp(t, "string?"));
+    return t && (!strcmp(t, TE_DT_STRING) || !strcmp(t, TE_DT_STRING_OPT));
 }
 /* v0.0.14 polish #6a: float column support en path columnar. */
 int csv_attr_is_float(const char *t) {
-    return t && (!strcmp(t, "float")  || !strcmp(t, "float?")  ||
-                 !strcmp(t, "FLOAT")  || !strcmp(t, "double") ||
+    return t && (!strcmp(t, TE_DT_FLOAT)  || !strcmp(t, TE_DT_FLOAT_OPT)  ||
+                 !strcmp(t, TE_T_FLOAT)  || !strcmp(t, "double") ||
                  !strcmp(t, "double?")|| !strcmp(t, "Double"));
 }
 int csv_attr_is_nullable(const char *t) {
@@ -1097,7 +1097,7 @@ char *te_orm_arena_strdup(const char *s) { return csv_arena_strdup(s); }
 char *te_orm_arena_dup(const char *s, size_t n) { return csv_arena_dup(s, n); }
 ASTNode *te_orm_pool_alloc(void) { return ast_pool_alloc(); }
 const char *te_orm_wrapper_obj_type(void) {
-    if (!C()->wrapper_obj_type) C()->wrapper_obj_type = csv_arena_strdup("OBJECT");
+    if (!C()->wrapper_obj_type) C()->wrapper_obj_type = csv_arena_strdup(TE_T_OBJECT);
     return C()->wrapper_obj_type;
 }
 /* ORM kind enum (mysql_bridge.c consumer): 0=int, 1=string, 2=other, 3=float.
@@ -1365,7 +1365,7 @@ void te_csv_pool_init(int n) { (void)n; }
 #define TE_DF_SENTINEL (-0x0DF0DF)
 
 DataFrame *te_list_df(ASTNode *list) {
-    if (!list || !list->type || strcmp(list->type, "LIST") != 0) return NULL;
+    if (!list || !list->type || strcmp(list->type, TE_T_LIST) != 0) return NULL;
     TEListIdx *ix = (TEListIdx*)list->extra;
     if (!ix || ix->cap != TE_DF_SENTINEL) return NULL;
     return (DataFrame*)(void*)ix->items;
@@ -1374,7 +1374,7 @@ DataFrame *te_list_df(ASTNode *list) {
 static ASTNode *te_df_wrap(DataFrame *df) {
     if (!df) return NULL;
     ASTNode *out = (ASTNode*)calloc(1, sizeof(ASTNode));
-    out->type = strdup("LIST");
+    out->type = strdup(TE_T_LIST);
     out->left = NULL;
     out->value = 1;
     TEListIdx *ix = (TEListIdx*)calloc(1, sizeof(TEListIdx));
@@ -1858,8 +1858,8 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
     const char *s2 = (arg2 && arg2->str_value) ? arg2->str_value : NULL;
 
     if (strcmp(m, "count") == 0 && !arg1) {
-        add_or_update_variable("__ret__",
-            create_ast_leaf_number("INT", df->row_count, NULL, NULL));
+        add_or_update_variable(TE_SYM_RET,
+            create_ast_leaf_number(TE_T_INT, df->row_count, NULL, NULL));
         return 1;
     }
     if (s1 && (strcmp(m, "sum") == 0 || strcmp(m, "min") == 0 || strcmp(m, "max") == 0)) {
@@ -1882,13 +1882,13 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
         /* TE INT es i32; si el resultado overflowea, devolvemos FLOAT
          * (double exacto hasta 2^53 ~ 9e15). Igual semántica que sumBy de OO mode. */
         if (r >= INT_MIN && r <= INT_MAX) {
-            add_or_update_variable("__ret__",
-                create_ast_leaf_number("INT", (long long)r, NULL, NULL));
+            add_or_update_variable(TE_SYM_RET,
+                create_ast_leaf_number(TE_T_INT, (long long)r, NULL, NULL));
         } else {
             char buf[32];
             snprintf(buf, sizeof(buf), "%lld", r);
-            add_or_update_variable("__ret__",
-                create_ast_leaf_number("FLOAT", 0, buf, NULL));
+            add_or_update_variable(TE_SYM_RET,
+                create_ast_leaf_number(TE_T_FLOAT, 0, buf, NULL));
         }
         return 1;
     }
@@ -1897,7 +1897,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
      * lambda. In DataFrame mode there are no row ObjectNodes, so the generic
      * LINQ iter would see an empty list and return 0. Detect SPEC_ATTR via
      * fast_lambda_analyze and reduce the corresponding column directly. */
-    if (arg1 && arg1->type && strcmp(arg1->type, "LAMBDA") == 0 &&
+    if (arg1 && arg1->type && strcmp(arg1->type, TE_T_LAMBDA) == 0 &&
         (strcmp(m, "sumBy") == 0 || strcmp(m, "avgBy") == 0 ||
          strcmp(m, "minBy") == 0 || strcmp(m, "maxBy") == 0)) {
         FastLambda fl;
@@ -1928,23 +1928,23 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
                 }
                 if (is_avg) {
                     if (n == 0) {
-                        add_or_update_variable("__ret__",
-                            create_ast_leaf_number("INT", 0, NULL, NULL));
+                        add_or_update_variable(TE_SYM_RET,
+                            create_ast_leaf_number(TE_T_INT, 0, NULL, NULL));
                     } else {
                         double avg = (double)r / (double)n;
                         char buf[40];
                         te_fmt_double(buf, sizeof(buf), avg);
-                        add_or_update_variable("__ret__",
-                            create_ast_leaf_number("FLOAT", 0, buf, NULL));
+                        add_or_update_variable(TE_SYM_RET,
+                            create_ast_leaf_number(TE_T_FLOAT, 0, buf, NULL));
                     }
                 } else if (r >= INT_MIN && r <= INT_MAX) {
-                    add_or_update_variable("__ret__",
-                        create_ast_leaf_number("INT", (long long)r, NULL, NULL));
+                    add_or_update_variable(TE_SYM_RET,
+                        create_ast_leaf_number(TE_T_INT, (long long)r, NULL, NULL));
                 } else {
                     char buf[32];
                     snprintf(buf, sizeof(buf), "%lld", r);
-                    add_or_update_variable("__ret__",
-                        create_ast_leaf_number("FLOAT", 0, buf, NULL));
+                    add_or_update_variable(TE_SYM_RET,
+                        create_ast_leaf_number(TE_T_FLOAT, 0, buf, NULL));
                 }
                 return 1;
             } else { /* K_FLOAT */
@@ -1970,8 +1970,8 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
                 }
                 char buf[40];
                 te_fmt_double(buf, sizeof(buf), acc);
-                add_or_update_variable("__ret__",
-                    create_ast_leaf_number("FLOAT", 0, buf, NULL));
+                add_or_update_variable(TE_SYM_RET,
+                    create_ast_leaf_number(TE_T_FLOAT, 0, buf, NULL));
                 return 1;
             }
         }
@@ -1995,7 +1995,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
                     s1, s2, (t1 - t0) / 1000, df->row_count, res ? res->row_count : 0);
         }
         if (!res) return 0;
-        add_or_update_variable("__ret__", te_df_wrap(res));
+        add_or_update_variable(TE_SYM_RET, te_df_wrap(res));
         return 1;
     }
     if (strcmp(m, "show") == 0 && !arg1) {
@@ -2019,7 +2019,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
             printf("\n");
         }
         if (df->row_count > limit) printf("... (%d more rows)\n", df->row_count - limit);
-        add_or_update_variable("__ret__", create_ast_leaf_number("INT", df->row_count, NULL, NULL));
+        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, df->row_count, NULL, NULL));
         return 1;
     }
     if ((strcmp(m, "toList") == 0 || strcmp(m, "toArray") == 0) && !arg1) {
@@ -2050,7 +2050,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
         }
         /* Build LIST root + TEListIdx in one pass. */
         ASTNode *list = (ASTNode*)calloc(1, sizeof(ASTNode));
-        list->type = strdup("LIST");
+        list->type = strdup(TE_T_LIST);
         TEListIdx *ix = (TEListIdx*)calloc(1, sizeof(TEListIdx));
         int cap = N < 8 ? 8 : N;
         ix->items = (ASTNode**)calloc((size_t)cap, sizeof(ASTNode*));
@@ -2091,7 +2091,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
             /* ASTNode wrapper from pool (no malloc); type still strdup'd
              * (arena unsafe per ast_pool_alloc comment). */
             ASTNode *on = ast_pool_alloc();
-            on->type = strdup("OBJECT");
+            on->type = strdup(TE_T_OBJECT);
             on->value = (int)(intptr_t)obj;
             on->extra = (struct ASTNode*)obj;
             ix->items[i] = on;
@@ -2104,7 +2104,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
             long long t1 = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
             fprintf(stderr, "[DF-OP] toList %lldus n=%d\n", (t1 - t0) / 1000, N);
         }
-        add_or_update_variable("__ret__", list);
+        add_or_update_variable(TE_SYM_RET, list);
         return 1;
     }
     return 0;
@@ -2784,11 +2784,11 @@ static void csv_parse_parallel(int can_parallel, ClassNode *cls, char *src, size
                 const char *t = cls->attributes[k].type;
                 int kind = 3;
                 if (t) {
-                    if (!strcmp(t,"int") || !strcmp(t,"INT") || !strcmp(t,"long") ||
-                        !strcmp(t,"Integer") || !strcmp(t,"bool") || !strcmp(t,"BOOL")) kind = 0;
-                    else if (!strcmp(t,"float") || !strcmp(t,"FLOAT") || !strcmp(t,"double") ||
+                    if (!strcmp(t,TE_DT_INT) || !strcmp(t,TE_T_INT) || !strcmp(t,"long") ||
+                        !strcmp(t,"Integer") || !strcmp(t,TE_DT_BOOL) || !strcmp(t,TE_T_BOOL)) kind = 0;
+                    else if (!strcmp(t,TE_DT_FLOAT) || !strcmp(t,TE_T_FLOAT) || !strcmp(t,"double") ||
                              !strcmp(t,"Double")) kind = 1;
-                    else if (!strcmp(t,"string") || !strcmp(t,"STRING") || !strcmp(t,"String")) kind = 2;
+                    else if (!strcmp(t,TE_DT_STRING) || !strcmp(t,TE_T_STRING) || !strcmp(t,"String")) kind = 2;
                 }
                 gcache->kinds[k] = kind;
                 if (kind == 0) {
@@ -2908,11 +2908,11 @@ static void csv_parse_sequential(ClassNode *cls, char *src, size_t len, size_t p
                 const char *t = cls->attributes[k].type;
                 int kind = 3;
                 if (t) {
-                    if (!strcmp(t,"int") || !strcmp(t,"INT") || !strcmp(t,"long") ||
-                        !strcmp(t,"Integer") || !strcmp(t,"bool") || !strcmp(t,"BOOL")) kind = 0;
-                    else if (!strcmp(t,"float") || !strcmp(t,"FLOAT") || !strcmp(t,"double") ||
+                    if (!strcmp(t,TE_DT_INT) || !strcmp(t,TE_T_INT) || !strcmp(t,"long") ||
+                        !strcmp(t,"Integer") || !strcmp(t,TE_DT_BOOL) || !strcmp(t,TE_T_BOOL)) kind = 0;
+                    else if (!strcmp(t,TE_DT_FLOAT) || !strcmp(t,TE_T_FLOAT) || !strcmp(t,"double") ||
                              !strcmp(t,"Double")) kind = 1;
-                    else if (!strcmp(t,"string") || !strcmp(t,"STRING") || !strcmp(t,"String")) kind = 2;
+                    else if (!strcmp(t,TE_DT_STRING) || !strcmp(t,TE_T_STRING) || !strcmp(t,"String")) kind = 2;
                 }
                 gcache->kinds[k] = kind;
                 if (kind == 0) {
@@ -3000,11 +3000,11 @@ static void csv_build_cfg(ClassNode *cls, char **header, int header_n, const cha
      * (main thread). Workers usan estos punteros directos (read-only). */
     char **shared_attr_id_arena   = (char**)malloc(nattr * sizeof(char*));
     char **shared_attr_type_arena = (char**)malloc(nattr * sizeof(char*));
-    char *null_type_arena = csv_arena_strdup("NULL");
+    char *null_type_arena = csv_arena_strdup(TE_T_NULL);
     char *shared_class_name_arena = csv_arena_strdup(cls->name);
     /* Inicializa una sola vez el literal global del type del wrapper. */
     if (!C()->wrapper_obj_type) {
-        C()->wrapper_obj_type = csv_arena_strdup("OBJECT");
+        C()->wrapper_obj_type = csv_arena_strdup(TE_T_OBJECT);
     }
     char *shared_obj_type = C()->wrapper_obj_type;
     for (int a = 0; a < nattr; a++) {
@@ -3235,7 +3235,7 @@ ASTNode* from_csv_to_list(const char* filename, ClassNode* cls) {
      * desde mmap con MAP_PRIVATE). Vive lo que dura el proceso. */
 
     ASTNode* listNode = calloc(1, sizeof(ASTNode));
-    listNode->type = strdup("LIST");
+    listNode->type = strdup(TE_T_LIST);
     listNode->left = first;
     listNode->right = NULL;
     listNode->next = NULL;
@@ -3369,20 +3369,20 @@ static void csv_lazy_scan(ASTNode *node, ASTNode *parent, const char *var_name, 
     static int depth = 0;
     if (++depth > 100000) { depth--; *unsafe = 1; return; }  /* safety net */
 
-    if (node->type && (strcmp(node->type, "IDENTIFIER") == 0 || strcmp(node->type, "ID") == 0)
+    if (node->type && (strcmp(node->type, TE_T_IDENTIFIER) == 0 || strcmp(node->type, TE_T_ID) == 0)
         && node->id && strcmp(node->id, var_name) == 0) {
         /* This is a reference to our CSV list. Inspect parent context. */
         int safe = 0;
         if (parent && parent->type) {
-            if (strcmp(parent->type, "CALL_METHOD") == 0 && parent->left == node) {
+            if (strcmp(parent->type, TE_T_CALL_METHOD) == 0 && parent->left == node) {
                 /* receiver of a method call: e.g. list.sumBy(...) */
                 if (csv_lazy_method_is_safe(parent->id)) safe = 1;
-            } else if (strcmp(parent->type, "ACCESS_ATTR") == 0 && parent->left == node) {
+            } else if (strcmp(parent->type, TE_T_ACCESS_ATTR) == 0 && parent->left == node) {
                 /* receiver of attribute access: list.length — attr name lives
                  * in parent->right (an ID leaf), not in parent->id. */
                 if (parent->right && parent->right->id
                     && csv_lazy_attr_is_safe(parent->right->id)) safe = 1;
-            } else if (strcmp(parent->type, "VAR_DECL") == 0 && parent->left == node) {
+            } else if (strcmp(parent->type, TE_T_VAR_DECL) == 0 && parent->left == node) {
                 /* The init link from var_decl to itself — ignore. Shouldn't
                  * happen via traversal since we placed the IDENTIFIER inside
                  * an expression, but stay defensive. */
@@ -3403,9 +3403,9 @@ static void csv_lazy_scan(ASTNode *node, ASTNode *parent, const char *var_name, 
     csv_lazy_scan(node->next,  node, var_name, unsafe);
     if (node->extra && node->type) {
         const char *t = node->type;
-        int skip_extra = (strcmp(t, "OBJECT") == 0 || strcmp(t, "LIST") == 0
-                       || strcmp(t, "MAP") == 0 || strcmp(t, "THIS") == 0
-                       || strcmp(t, "DATAFRAME") == 0 || strcmp(t, "CSV_LOAD") == 0);
+        int skip_extra = (strcmp(t, TE_T_OBJECT) == 0 || strcmp(t, TE_T_LIST) == 0
+                       || strcmp(t, TE_T_MAP) == 0 || strcmp(t, TE_T_THIS) == 0
+                       || strcmp(t, TE_T_DATAFRAME) == 0 || strcmp(t, TE_T_CSV_LOAD) == 0);
         if (!skip_extra) csv_lazy_scan(node->extra, node, var_name, unsafe);
     }
     depth--;
@@ -3462,7 +3462,7 @@ void te_csv_lazy_resolve_all(ASTNode *root) {
                 cd->is_dataframe = e->is_dataframe;
                 cd->columnar_decision = columnar_decision;
                 if (placeholder->type) free(placeholder->type);
-                placeholder->type = strdup("CSV_LOAD");
+                placeholder->type = strdup(TE_T_CSV_LOAD);
                 placeholder->extra = (struct ASTNode*)cd;
                 /* Do NOT free filename/class_name — descriptor owns them now. */
                 continue;
@@ -3488,7 +3488,7 @@ void te_csv_lazy_resolve_all(ASTNode *root) {
  * body instead of caching the first request's data. */
 ASTNode *te_csv_runtime_load(ASTNode *placeholder) {
     if (!placeholder || !placeholder->type) return NULL;
-    if (strcmp(placeholder->type, "CSV_LOAD") != 0) return NULL;
+    if (strcmp(placeholder->type, TE_T_CSV_LOAD) != 0) return NULL;
     CsvDeferred *cd = (CsvDeferred*)placeholder->extra;
     if (!cd) return NULL;
 

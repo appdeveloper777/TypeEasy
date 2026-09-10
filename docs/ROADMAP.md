@@ -54,6 +54,18 @@ Reglas: un PR = un movimiento (los fixes van aparte con su test); suite Win+Linu
 + ASAN + `--syntax-check` del `main.te` del ERP (120 archivos) antes y después;
 bench de referencia (clínica, `--workers 2`, ~1.010 rps) no puede bajar.
 
+### Cierre arquitectónico 0.1.1 (2026-09-09) — lo que faltaba para decir "resuelto"
+
+| Ítem | Antes | Ahora | Guardia |
+|------|-------|-------|---------|
+| **Un solo motor de ejecución** | walker + bytecode + trace-JIT x86_64 con tres semánticas numéricas (divergencias reales: int64 > 2^53, clase de ítem de lista, cambio de tipo entre corridas) | `te_num.h` es la única aritmética (inline, compartida por walker y bytecode); el bytecode es un **acelerador con guards** que deoptimiza al walker; trace-JIT borrado (`bytecode.c`, `strvars.c`, `main.c` muertos borrados) | `tests/regress/run_bc_diff.py`: cada test corre con y sin bytecode y la salida debe ser idéntica (CI) |
+| **Globales de proceso** | 165 `g_*` (lexer/parser incluidos) | **3 justificados** (`g_vm_main_storage`, `g_stop_requested`, `g_reload_requested`, en `scripts/core_debt_allow.txt`); todo lo demás vive en `TeVM`, `te_vm_cur` es `__thread`; flex/bison reentrantes (`TeParseCtx`) | `audit_core_debt.sh` (allowlist) + `--selftest-vm` corre 2 VMs **en 2 hilos** |
+| **`decimal`** | dinero en `double` | tipo `decimal` exacto (`__int128` + escala): literal `1.10m`, `decimal(x)`, `+ - * / %`, comparaciones, `.round(n)`, JSON sin comillas, bind SQL `NUMTEXT`, atributos/params/retornos de clase | `tests/lang/01_types/decimal_basic.te` |
+| **Magic strings de tipo** | ~2.150 literales `"STRING"`, `"INT"`, `"int"`… repartidos en 34 archivos (un typo compila y falla en silencio) | `src/te_types.h` es la única definición (`TE_T_*` runtime, `TE_DT_*` declarados); reemplazo mecánico con `tools/refactor/detag.cjs` | `audit_core_debt.sh` → `detag.cjs --check` (baseline **0**) |
+
+Siguiente deuda medida (no bloqueante): sustituir los `strcmp(type, TE_T_X)` por `nk_of(node) == NK_X`
+donde el nodo ya tiene `NodeKind` cacheado (hoy ~25 % de los sitios usan el enum).
+
 ### Features en espera (el congelamiento de sintaxis terminó con la Fase 2; priorizar en 0.1.x)
 - `switch`/`match`; `for (a, b in map)`; spread `...`; string multilinea.
 - Registrar aquí cualquier pedido de sintaxis con el caso de uso que lo motiva.

@@ -54,12 +54,12 @@ int te_math_method_dispatch(ASTNode *node, ASTNode *objNode) {
 
     ASTNode *r;
     if (res == (int)res) {
-        r = create_ast_leaf_number("INT", (long long)res, NULL, NULL);
+        r = create_ast_leaf_number(TE_T_INT, (long long)res, NULL, NULL);
     } else {
         char buf[64];
         te_fmt_double(buf, sizeof(buf), res);
-        r = create_ast_leaf("FLOAT", 0, buf, NULL);
+        r = create_ast_leaf(TE_T_FLOAT, 0, buf, NULL);
     }
-    add_or_update_variable("__ret__", r);
+    add_or_update_variable(TE_SYM_RET, r);
     return 1;
 }

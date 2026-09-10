@@ -140,7 +140,7 @@ static int te_lq_map(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fnam
                     int ok = 1;
                     ASTNode *it = item;
                     while (it) {
-                        if (!it->type || strcmp(it->type, "OBJECT") != 0 || !it->extra) { ok = 0; break; }
+                        if (!it->type || strcmp(it->type, TE_T_OBJECT) != 0 || !it->extra) { ok = 0; break; }
                         ObjectNode *obj = (ObjectNode*)it->extra;
                         int idx = fl_attr_idx(&fl, obj);
                         if (idx < 0) { ok = 0; break; }
@@ -148,19 +148,19 @@ static int te_lq_map(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fnam
                         ASTNode *node = NULL;
                         if (a->vtype == VAL_INT) {
                             /* Igual que build_item_from_value: tipo "NUMBER" + ->value. */
-                            node = create_ast_leaf_number("NUMBER", a->value.int_value, NULL, NULL);
+                            node = create_ast_leaf_number(TE_T_NUMBER, a->value.int_value, NULL, NULL);
                         } else if (a->vtype == VAL_FLOAT) {
                             char buf[64]; te_fmt_double(buf, sizeof(buf), a->value.float_value);
-                            node = create_ast_leaf("FLOAT", 0, buf, NULL);
+                            node = create_ast_leaf(TE_T_FLOAT, 0, buf, NULL);
                         } else if (a->vtype == VAL_STRING) {
-                            node = create_ast_leaf("STRING", 0,
+                            node = create_ast_leaf(TE_T_STRING, 0,
                                 a->value.string_value ? a->value.string_value : "", NULL);
                         } else { ok = 0; break; }
                         te_list_append(result, node);
                         it = it->next;
                     }
                     if (ok) {
-                        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                         return 1;
                     }
                     /* fallthrough: descartar parcial y rehacer por el path general. */
@@ -179,16 +179,16 @@ static int te_lq_map(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fnam
                         if (!fast_eval(&fl, it, &rv, &rv_is_int)) { ok = 0; break; }
                         ASTNode *node;
                         if (rv_is_int) {
-                            node = create_ast_leaf_number("NUMBER", (long long)rv, NULL, NULL);
+                            node = create_ast_leaf_number(TE_T_NUMBER, (long long)rv, NULL, NULL);
                         } else {
                             char buf[64]; te_fmt_double(buf, sizeof(buf), rv);
-                            node = create_ast_leaf("FLOAT", 0, buf, NULL);
+                            node = create_ast_leaf(TE_T_FLOAT, 0, buf, NULL);
                         }
                         te_list_append(result, node);
                         it = it->next;
                     }
                     if (ok) {
-                        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                         return 1;
                     }
                     /* fallthrough: descartar parcial y rehacer por path general. */
@@ -199,7 +199,7 @@ static int te_lq_map(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fnam
                         te_list_append(result, build_item_from_value(item));
                         item = item->next;
                     }
-                    te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                    te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                     return 1;
                 }
                 while (item) {
@@ -208,7 +208,7 @@ static int te_lq_map(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fnam
                     item = item->next;
                 }
                 te_req_owned_ast_register(result);
-                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                 return 1;
             }
     return 0;
@@ -240,7 +240,7 @@ static int te_lq_filter(ASTNode *node, ASTNode *list, ASTNode *fn, const char *f
                             result->value = 1;
                             te_colcache_attach_lazy(cc, mask, result, new_n);
                             /* mask ownership pasó a la vista — NO free. */
-                            te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                            te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                             return 1;
                         }
                         free(mask);
@@ -284,7 +284,7 @@ static int te_lq_filter(ASTNode *node, ASTNode *list, ASTNode *fn, const char *f
                                     if (mask[k]) te_list_append(result, build_item_from_value(arr[k]));
                                 }
                                 free(arr); free(mask);
-                                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                                te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                                 return 1;
                             }
                             free(arr); free(mask);
@@ -302,7 +302,7 @@ static int te_lq_filter(ASTNode *node, ASTNode *list, ASTNode *fn, const char *f
                         item = item->next;
                     }
                     if (ok) {
-                        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                         return 1;
                     }
                     /* fallback: rebuild a fresh list (cannot reuse partial). */
@@ -314,9 +314,9 @@ static int te_lq_filter(ASTNode *node, ASTNode *list, ASTNode *fn, const char *f
                     ASTNode *r = call_lambda(fn, item);
                     int truthy = 0;
                     if (r) {
-                        if (r->type && strcmp(r->type, "STRING") == 0) {
+                        if (r->type && strcmp(r->type, TE_T_STRING) == 0) {
                             truthy = (r->str_value && r->str_value[0]) ? 1 : 0;
-                        } else if (r->type && strcmp(r->type, "NULL") == 0) {
+                        } else if (r->type && strcmp(r->type, TE_T_NULL) == 0) {
                             truthy = 0;
                         } else {
                             truthy = (evaluate_expression(r) != 0) ? 1 : 0;
@@ -330,7 +330,7 @@ static int te_lq_filter(ASTNode *node, ASTNode *list, ASTNode *fn, const char *f
                     item = next_item;
                 }
                 te_req_owned_ast_register(result);
-                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                 return 1;
             }
     return 0;
@@ -345,14 +345,14 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                 if (initArg) {
                     if (is_string_type(initArg)) {
                         char *s = get_node_string(initArg);
-                        acc = create_ast_leaf("STRING", 0, s, NULL); free(s);
+                        acc = create_ast_leaf(TE_T_STRING, 0, s, NULL); free(s);
                     } else {
                         double r = evaluate_expression(initArg);
-                        if (r == (double)(long long)r) acc = create_ast_leaf_number("NUMBER", (long long)r, NULL, NULL);
-                        else { char b[64]; te_fmt_double(b,sizeof(b),r); acc = create_ast_leaf("FLOAT", 0, b, NULL); }
+                        if (r == (double)(long long)r) acc = create_ast_leaf_number(TE_T_NUMBER, (long long)r, NULL, NULL);
+                        else { char b[64]; te_fmt_double(b,sizeof(b),r); acc = create_ast_leaf(TE_T_FLOAT, 0, b, NULL); }
                     }
                 } else {
-                    acc = create_ast_leaf_number("NUMBER", 0, NULL, NULL);
+                    acc = create_ast_leaf_number(TE_T_NUMBER, 0, NULL, NULL);
                 }
                 ASTNode *item = list->left;
                 while (item) {
@@ -371,7 +371,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     if (r) acc = r;
                     item = item->next;
                 }
-                add_or_update_variable("__ret__", acc);
+                add_or_update_variable(TE_SYM_RET, acc);
                 return 1;
             }
             if (strcmp(fname, "forEach") == 0) {
@@ -380,7 +380,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     te_free_lambda_result(call_lambda(fn, item));
                     item = item->next;
                 }
-                add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                 return 1;
             }
             if (strcmp(fname, "find") == 0) {
@@ -391,13 +391,13 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                         double v; int vint;
                         if (!fast_eval(&fl, item, &v, &vint)) { ok = 0; break; }
                         if (v != 0.0) {
-                            add_or_update_variable("__ret__", build_item_from_value(item));
+                            add_or_update_variable(TE_SYM_RET, build_item_from_value(item));
                             return 1;
                         }
                         item = item->next;
                     }
                     if (ok) {
-                        add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                         return 1;
                     }
                     item = list->left;
@@ -407,12 +407,12 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     int t = (r && evaluate_expression(r) != 0);
                     te_free_lambda_result(r);
                     if (t) {
-                        add_or_update_variable("__ret__", build_item_from_value(item));
+                        add_or_update_variable(TE_SYM_RET, build_item_from_value(item));
                         return 1;
                     }
                     item = item->next;
                 }
-                add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                 return 1;
             }
             if (strcmp(fname, "any") == 0) {
@@ -425,7 +425,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     if (t) { found = 1; break; }
                     item = item->next;
                 }
-                add_or_update_variable("__ret__", create_ast_leaf_number("BOOL", found, NULL, NULL));
+                add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_BOOL, found, NULL, NULL));
                 return 1;
             }
             if (strcmp(fname, "every") == 0) {
@@ -440,7 +440,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                         item = item->next;
                     }
                     if (ok) {
-                        add_or_update_variable("__ret__", create_ast_leaf_number("BOOL", all, NULL, NULL));
+                        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_BOOL, all, NULL, NULL));
                         return 1;
                     }
                     item = list->left; all = 1;
@@ -452,7 +452,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     if (t) { all = 0; break; }
                     item = item->next;
                 }
-                add_or_update_variable("__ret__", create_ast_leaf_number("BOOL", all, NULL, NULL));
+                add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_BOOL, all, NULL, NULL));
                 return 1;
             }
             /* ===== v0.0.11 LINQ-style higher-order operators ===== */
@@ -468,7 +468,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                         item = item->next;
                     }
                     if (ok) {
-                        add_or_update_variable("__ret__", create_ast_leaf_number("BOOL", none_match, NULL, NULL));
+                        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_BOOL, none_match, NULL, NULL));
                         return 1;
                     }
                     item = list->left; none_match = 1;
@@ -480,7 +480,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     if (t) { none_match = 0; break; }
                     item = item->next;
                 }
-                add_or_update_variable("__ret__", create_ast_leaf_number("BOOL", none_match, NULL, NULL));
+                add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_BOOL, none_match, NULL, NULL));
                 return 1;
             }
             if (strcmp(fname, "lastWhere") == 0) {
@@ -495,8 +495,8 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                         item = item->next;
                     }
                     if (ok) {
-                        if (last_match) add_or_update_variable("__ret__", build_item_from_value(last_match));
-                        else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                        if (last_match) add_or_update_variable(TE_SYM_RET, build_item_from_value(last_match));
+                        else add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                         return 1;
                     }
                     item = list->left; last_match = NULL;
@@ -507,8 +507,8 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     te_free_lambda_result(r);
                     item = item->next;
                 }
-                if (last_match) add_or_update_variable("__ret__", build_item_from_value(last_match));
-                else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                if (last_match) add_or_update_variable(TE_SYM_RET, build_item_from_value(last_match));
+                else add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                 return 1;
             }
             if (strcmp(fname, "countWhere") == 0) {
@@ -524,7 +524,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                         if (te_colcache_eval_pred(cc, aidx, &fl, mask)) {
                             long long total = te_colcache_count(cc, mask);
                             free(mask);
-                            add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)total, NULL, NULL));
+                            add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)total, NULL, NULL));
                             return 1;
                         }
                         free(mask);
@@ -555,7 +555,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                             }
                             free(arr);
                             if (!fail) {
-                                add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)total, NULL, NULL));
+                                add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)total, NULL, NULL));
                                 return 1;
                             }
                             /* fall through to sequential fallback */
@@ -572,7 +572,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                             item = item->next;
                         }
                         if (ok) {
-                            add_or_update_variable("__ret__", create_ast_leaf_number("INT", cnt, NULL, NULL));
+                            add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, cnt, NULL, NULL));
                             return 1;
                         }
                     }
@@ -584,7 +584,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     te_free_lambda_result(r);
                     item = item->next;
                 }
-                add_or_update_variable("__ret__", create_ast_leaf_number("INT", cnt, NULL, NULL));
+                add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, cnt, NULL, NULL));
                 return 1;
             }
     return 0;
@@ -604,14 +604,14 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                         if (te_colcache_sum(cc, aidx, NULL, &itotal, &dtotal, &is_int)) {
                             if (is_int) {
                                 if (itotal >= INT_MIN && itotal <= INT_MAX) {
-                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)itotal, NULL, NULL));
+                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)itotal, NULL, NULL));
                                 } else {
                                     char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
-                                    add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                                 }
                             } else {
                                 char buf[64]; te_fmt_double(buf, sizeof(buf), dtotal);
-                                add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                             }
                             return 1;
                         }
@@ -648,14 +648,14 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                             if (!fail) {
                                 if (!any_float) {
                                     if (itotal >= INT_MIN && itotal <= INT_MAX) {
-                                        add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)itotal, NULL, NULL));
+                                        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)itotal, NULL, NULL));
                                     } else {
                                         char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
-                                        add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                                     }
                                 } else {
                                     char buf[64]; te_fmt_double(buf, sizeof(buf), dtotal + (double)itotal);
-                                    add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                                 }
                                 return 1;
                             }
@@ -677,14 +677,14 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                                 /* Build a NUMBER node carrying the int64 via str_value
                                  * when it overflows int32, otherwise the usual int slot. */
                                 if (iacc >= INT_MIN && iacc <= INT_MAX) {
-                                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)iacc, NULL, NULL));
+                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)iacc, NULL, NULL));
                                 } else {
                                     char buf[32]; snprintf(buf, sizeof(buf), "%lld", iacc);
-                                    add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                                 }
                             } else {
                                 char buf[64]; te_fmt_double(buf, sizeof(buf), dacc + (double)iacc);
-                                add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                                add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                             }
                             return 1;
                         }
@@ -704,10 +704,10 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                     item = item->next;
                 }
                 if (is_int && acc == (double)(long long)acc) {
-                    add_or_update_variable("__ret__", create_ast_leaf_number("INT", (long long)acc, NULL, NULL));
+                    add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)acc, NULL, NULL));
                 } else {
                     char buf[64]; te_fmt_double(buf, sizeof(buf), acc);
-                    add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                 }
                 return 1;
             }
@@ -726,7 +726,7 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                             double sum = is_int ? (double)itotal : dtotal;
                             double res = n > 0 ? sum / (double)n : 0.0;
                             char buf[64]; te_fmt_double(buf, sizeof(buf), res);
-                            add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                            add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                             return 1;
                         }
                     }
@@ -742,7 +742,7 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                     if (ok) {
                         double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
                         char buf[64]; te_fmt_double(buf, sizeof(buf), res);
-                        add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                         return 1;
                     }
                     item = list->left; acc = 0.0; cnt = 0;
@@ -755,7 +755,7 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                 }
                 double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
                 char buf[64]; te_fmt_double(buf, sizeof(buf), res);
-                add_or_update_variable("__ret__", create_ast_leaf("FLOAT", 0, buf, NULL));
+                add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                 return 1;
             }
             if (strcmp(fname, "minBy") == 0 || strcmp(fname, "maxBy") == 0) {
@@ -774,7 +774,7 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                         if (aidx >= 0) {
                             int bidx = -1;
                             if (te_colcache_minmax(cc, aidx, want_max, NULL, &bidx) && bidx >= 0) {
-                                add_or_update_variable("__ret__", build_item_from_value(cc->items[bidx]));
+                                add_or_update_variable(TE_SYM_RET, build_item_from_value(cc->items[bidx]));
                                 return 1;
                             }
                         }
@@ -790,8 +790,8 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                         item = item->next;
                     }
                     if (ok) {
-                        if (best_item) add_or_update_variable("__ret__", build_item_from_value(best_item));
-                        else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                        if (best_item) add_or_update_variable(TE_SYM_RET, build_item_from_value(best_item));
+                        else add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                         return 1;
                     }
                     item = list->left; best_item = NULL; first = 1; best_key = 0.0;
@@ -804,8 +804,8 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                     else if (want_max ? (k > best_key) : (k < best_key)) { best_key = k; best_item = item; }
                     item = item->next;
                 }
-                if (best_item) add_or_update_variable("__ret__", build_item_from_value(best_item));
-                else add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                if (best_item) add_or_update_variable(TE_SYM_RET, build_item_from_value(best_item));
+                else add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                 return 1;
             }
     return 0;
@@ -826,7 +826,7 @@ static int te_lq_take_skip_flat_group(ASTNode *node, ASTNode *list, ASTNode *fn,
                         item = item->next;
                     }
                     if (ok) {
-                        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                         return 1;
                     }
                     result = create_list_node(NULL);
@@ -840,7 +840,7 @@ static int te_lq_take_skip_flat_group(ASTNode *node, ASTNode *list, ASTNode *fn,
                     te_list_append(result, build_item_from_value(item));
                     item = item->next;
                 }
-                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                 return 1;
             }
             if (strcmp(fname, "skipWhile") == 0) {
@@ -859,7 +859,7 @@ static int te_lq_take_skip_flat_group(ASTNode *node, ASTNode *list, ASTNode *fn,
                         item = item->next;
                     }
                     if (ok) {
-                        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                         return 1;
                     }
                     result = create_list_node(NULL);
@@ -875,7 +875,7 @@ static int te_lq_take_skip_flat_group(ASTNode *node, ASTNode *list, ASTNode *fn,
                     if (!skipping) te_list_append(result, build_item_from_value(item));
                     item = item->next;
                 }
-                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                 return 1;
             }
             if (strcmp(fname, "flatMap") == 0 || strcmp(fname, "selectMany") == 0) {
@@ -883,7 +883,7 @@ static int te_lq_take_skip_flat_group(ASTNode *node, ASTNode *list, ASTNode *fn,
                 ASTNode *item = list->left;
                 while (item) {
                     ASTNode *r = call_lambda(fn, item);
-                    if (r && r->type && strcmp(r->type, "LIST") == 0) {
+                    if (r && r->type && strcmp(r->type, TE_T_LIST) == 0) {
                         ASTNode *inner = r->left;
                         while (inner) {
                             te_list_append(result, build_item_from_value(inner));
@@ -894,7 +894,7 @@ static int te_lq_take_skip_flat_group(ASTNode *node, ASTNode *list, ASTNode *fn,
                     }
                     item = item->next;
                 }
-                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                 return 1;
             }
             if (strcmp(fname, "groupBy") == 0) {
@@ -925,13 +925,13 @@ static int te_lq_take_skip_flat_group(ASTNode *node, ASTNode *list, ASTNode *fn,
                             }
                             bk[nkeys] = v;
                             ASTNode *grp = (ASTNode*)calloc(1, sizeof(ASTNode));
-                            grp->type = strdup("OBJECT_LITERAL");
+                            grp->type = strdup(TE_T_OBJECT_LITERAL);
                             /* Formato de key: enteros como "%lld" para
                              * compatibilidad con el comportamiento previo
                              * (groupBy int → key "3"); floats como "%g". */
                             char kbuf[32];
                             te_fmt_double(kbuf, sizeof(kbuf), v);
-                            ASTNode *kv_key = create_kv_pair_node("key", create_ast_leaf("STRING", 0, kbuf, NULL));
+                            ASTNode *kv_key = create_kv_pair_node("key", create_ast_leaf(TE_T_STRING, 0, kbuf, NULL));
                             group_items = create_list_node(NULL);
                             ASTNode *kv_items = create_kv_pair_node("items", group_items);
                             grp->left = kv_key;
@@ -950,7 +950,7 @@ static int te_lq_take_skip_flat_group(ASTNode *node, ASTNode *list, ASTNode *fn,
                     }
                     free(bk); free(bg);
                     if (ok) {
-                        te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                        te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                         return 1;
                     }
                     /* fallback: rebuild from scratch */
@@ -981,9 +981,9 @@ static int te_lq_take_skip_flat_group(ASTNode *node, ASTNode *list, ASTNode *fn,
                         if (!hk[i_h]) {
                             hk[i_h] = key_str;   /* hash table owns this strdup */
                             ASTNode *grp = (ASTNode*)calloc(1, sizeof(ASTNode));
-                            grp->type = strdup("OBJECT_LITERAL");
+                            grp->type = strdup(TE_T_OBJECT_LITERAL);
                             ASTNode *kv_key = create_kv_pair_node("key",
-                                create_ast_leaf("STRING", 0, key_str, NULL));
+                                create_ast_leaf(TE_T_STRING, 0, key_str, NULL));
                             group_items = create_list_node(NULL);
                             ASTNode *kv_items = create_kv_pair_node("items", group_items);
                             grp->left = kv_key;
@@ -1025,7 +1025,7 @@ static int te_lq_take_skip_flat_group(ASTNode *node, ASTNode *list, ASTNode *fn,
                     for (size_t k = 0; k < hcap; k++) if (hk[k]) free(hk[k]);
                     free(hk); free(hv);
                 }
-                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                 return 1;
             }
     return 0;
@@ -1041,7 +1041,7 @@ static int te_lq_order(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fn
                  * trivial accessor / arithmetic). Sort indices, not the heavy
                  * ASTNode* themselves, to keep swaps cheap. */
                 int n = list_length(list);
-                if (n <= 0) { add_or_update_variable("__ret__", create_list_node(NULL)); return 1; }
+                if (n <= 0) { add_or_update_variable(TE_SYM_RET, create_list_node(NULL)); return 1; }
                 ASTNode **items_arr = (ASTNode**)calloc(n, sizeof(ASTNode*));
                 double *keys = (double*)calloc(n, sizeof(double));
                 char **skeys = (char**)calloc(n, sizeof(char*));
@@ -1068,7 +1068,7 @@ static int te_lq_order(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fn
                 if (!fast_ok) {
                     while (it && i < n) {
                         ASTNode *k = call_lambda(fn, it);
-                        if (k && k->type && strcmp(k->type, "STRING") == 0) {
+                        if (k && k->type && strcmp(k->type, TE_T_STRING) == 0) {
                             is_str_key = 1;
                             skeys[i] = strdup(k->str_value ? k->str_value : "");
                         } else if (k) {
@@ -1114,7 +1114,7 @@ static int te_lq_order(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fn
                 g_then_ncols = 1;
                 for (int a = 0; a < n; a++) if (skeys[a]) free(skeys[a]);
                 free(items_arr); free(keys); free(skeys); free(idx);
-                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                 return 1;
             }
             if (strcmp(fname, "thenBy") == 0 || strcmp(fname, "thenByDescending") == 0) {
@@ -1126,7 +1126,7 @@ static int te_lq_order(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fn
                  * key — equivalent to orderBy. */
                 int descending = (strcmp(fname, "thenByDescending") == 0);
                 int n = list_length(list);
-                if (n <= 0) { add_or_update_variable("__ret__", create_list_node(NULL)); return 1; }
+                if (n <= 0) { add_or_update_variable(TE_SYM_RET, create_list_node(NULL)); return 1; }
 
                 /* Collect the input items. */
                 ASTNode **items_arr = (ASTNode**)calloc(n, sizeof(ASTNode*));
@@ -1159,7 +1159,7 @@ static int te_lq_order(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fn
                 if (!fast_ok) {
                     for (int a = 0; a < n; a++) {
                         ASTNode *k = call_lambda(fn, items_arr[a]);
-                        if (k && k->type && strcmp(k->type, "STRING") == 0) {
+                        if (k && k->type && strcmp(k->type, TE_T_STRING) == 0) {
                             is_str_key = 1;
                             skeys[a] = strdup(k->str_value ? k->str_value : "");
                         } else if (k) {
@@ -1209,7 +1209,7 @@ static int te_lq_order(ASTNode *node, ASTNode *list, ASTNode *fn, const char *fn
                 for (int c = 0; c < g_then_ncols; c++) te_col_reorder(&g_then_cols[c], idx, n);
 
                 free(items_arr); free(keys); free(skeys); free(idx);
-                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                 return 1;
             }
     return 0;
@@ -1260,7 +1260,7 @@ static int te_lq_distinct_tomap(ASTNode *node, ASTNode *list, ASTNode *fn, const
                         item = item->next;
                     }
                     free(ikeys); free(iused);
-                    if (ok) { te_req_owned_ast_register(result); add_or_update_variable("__ret__", result); return 1; }
+                    if (ok) { te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result); return 1; }
                     /* fallback */
                     result = create_list_node(NULL);
                     item = list->left;
@@ -1306,14 +1306,14 @@ static int te_lq_distinct_tomap(ASTNode *node, ASTNode *list, ASTNode *fn, const
                     for (size_t k = 0; k < scap; k++) if (skeys[k]) free(skeys[k]);
                     free(skeys);
                 }
-                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                 return 1;
             }
             if (strcmp(fname, "toMap") == 0) {
                 /* toMap(keyFn): builds OBJECT_LITERAL {key1: item1, key2: item2, ...}.
                  * Last write wins on duplicate keys. Hash table dedupes keys in O(1). */
                 ASTNode *result = (ASTNode*)calloc(1, sizeof(ASTNode));
-                result->type = strdup("OBJECT_LITERAL");
+                result->type = strdup(TE_T_OBJECT_LITERAL);
                 ASTNode *tail = NULL;
                 size_t hcap = 64, hcount = 0;
                 char    **hk = (char**)calloc(hcap, sizeof(char*));
@@ -1367,7 +1367,7 @@ static int te_lq_distinct_tomap(ASTNode *node, ASTNode *list, ASTNode *fn, const
                 }
                 for (size_t k = 0; k < hcap; k++) if (hk[k]) free(hk[k]);
                 free(hk); free(hv);
-                te_req_owned_ast_register(result); add_or_update_variable("__ret__", result);
+                te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result);
                 return 1;
             }
     return 0;
@@ -1414,17 +1414,17 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
                 strcmp(node->id, "toDictionary") == 0)) {
             ASTNode *arg = node->right;
             ASTNode *fn = NULL;
-            if (arg && arg->type && strcmp(arg->type, "LAMBDA") == 0) {
+            if (arg && arg->type && strcmp(arg->type, TE_T_LAMBDA) == 0) {
                 fn = arg;
-            } else if (arg && arg->type && (strcmp(arg->type, "ID") == 0 || strcmp(arg->type, "IDENTIFIER") == 0)) {
+            } else if (arg && arg->type && (strcmp(arg->type, TE_T_ID) == 0 || strcmp(arg->type, TE_T_IDENTIFIER) == 0)) {
                 Variable *fv = find_variable(arg->id);
-                if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, "LAMBDA") == 0) {
+                if (fv && fv->vtype == VAL_OBJECT && fv->type && strcmp(fv->type, TE_T_LAMBDA) == 0) {
                     fn = (ASTNode*)(intptr_t)fv->value.object_value;
                 }
             }
             if (!fn) {
                 printf("Error: %s() requires a lambda or function value.\n", node->id);
-                add_or_update_variable("__ret__", create_ast_leaf("NULL", 0, NULL, NULL));
+                add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                 return 1;
             }
             /* v0.0.11: normalize aliases so we can reuse existing branches */

@@ -71,12 +71,12 @@ const char* detect_response_type(ASTNode *body) {
     
     // Recursively search for RETURN_XML or RETURN_JSON nodes
     if (body->type) {
-        if (strcmp(body->type, "RETURN_XML") == 0) return "xml";
-        if (strcmp(body->type, "RETURN_JSON") == 0) return "json";
+        if (strcmp(body->type, TE_T_RETURN_XML) == 0) return "xml";
+        if (strcmp(body->type, TE_T_RETURN_JSON) == 0) return "json";
         
         // Handle explicit return xml() / return json()
-        if (strcmp(body->type, "RETURN") == 0 && body->left) {
-            if (body->left->type && strcmp(body->left->type, "CALL_FUNC") == 0 && body->left->id) {
+        if (strcmp(body->type, TE_T_RETURN) == 0 && body->left) {
+            if (body->left->type && strcmp(body->left->type, TE_T_CALL_FUNC) == 0 && body->left->id) {
                 if (strcmp(body->left->id, "xml") == 0) return "xml";
                 if (strcmp(body->left->id, "json") == 0) return "json";
             }
@@ -346,7 +346,7 @@ extern Variable *find_variable(char *id);
 static void test_runner_register_globals(void) {
     /* Pre-create __test_failed = 0 (script can read/write via builtins
      * defined in ast.c — we add `assert`/`assert_eq` to te_builtin_dispatch). */
-    ASTNode *zero = create_ast_leaf_number("INT", 0, NULL, NULL);
+    ASTNode *zero = create_ast_leaf_number(TE_T_INT, 0, NULL, NULL);
     add_or_update_variable("__test_failed", zero);
 }
 
@@ -554,7 +554,7 @@ static int te_main_invoke(const char *invoke_func) {
             g_vm.suppress_stdout = 0;
 
             // Verificar si hubo un retorno (return json(...))
-            Variable *ret_var = find_variable("__ret__");
+            Variable *ret_var = find_variable(TE_SYM_RET);
             if (ret_var && ret_var->vtype == VAL_STRING) {
                 // Imprimir el resultado (JSON/XML) a stdout
                 printf("%s", ret_var->value.string_value);

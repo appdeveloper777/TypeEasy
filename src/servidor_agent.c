@@ -224,11 +224,11 @@ void handle_nlu_bridge(char* method_name, ASTNode* args) {
         }
     }
     
-    ASTNode* result_node = create_ast_leaf("OBJECT", 0, NULL, NULL);
-    result_node->type = strdup("OBJECT");   
+    ASTNode* result_node = create_ast_leaf(TE_T_OBJECT, 0, NULL, NULL);
+    result_node->type = strdup(TE_T_OBJECT);   
     result_node->extra = (struct ASTNode*)result_obj;
     
-    add_or_update_variable("__ret__", result_node);
+    add_or_update_variable(TE_SYM_RET, result_node);
 }
 
 void handle_gemini_bridge(char* method_name, ASTNode* args) {
@@ -273,7 +273,7 @@ void handle_gemini_bridge(char* method_name, ASTNode* args) {
             } else {
                 te_log("Gemini response: %s", chunk.memory);
                 ASTNode* resp_node = create_string_node(chunk.memory);
-                add_or_update_variable("__ret__", resp_node);
+                add_or_update_variable(TE_SYM_RET, resp_node);
             }
             
             curl_easy_cleanup(curl);
@@ -295,20 +295,20 @@ void handle_api_bridge(char* method_name, ASTNode* args) {
             "Menú del Día: Tacos (3€), Burritos (5€), Enchiladas (4€)"
         );
 
-        add_or_update_variable("__ret__", menu_node);
+        add_or_update_variable(TE_SYM_RET, menu_node);
     }
 }
 
 ASTNode* runtime_find_listener(const char* bridge_name, const char* event_name) {
     ASTNode* agent = (*A()).agents;
     while (agent) {
-        if (agent->type && strcmp(agent->type, "AGENT") == 0) {
+        if (agent->type && strcmp(agent->type, TE_T_AGENT) == 0) {
             ASTNode* listener_list = agent->left;
             for (ASTNode* listener = listener_list; listener; listener = listener->right) {
-                if (!listener->type || strcmp(listener->type, "LISTENER") != 0) continue;
+                if (!listener->type || strcmp(listener->type, TE_T_LISTENER) != 0) continue;
 
                 ASTNode* expr = listener->left;
-                if (expr && expr->type && strcmp(expr->type, "CALL_METHOD") == 0 &&
+                if (expr && expr->type && strcmp(expr->type, TE_T_CALL_METHOD) == 0 &&
                     expr->left && expr->left->id && strcmp(expr->left->id, bridge_name) == 0 &&
                     expr->id && strcmp(expr->id, event_name) == 0) {
 
@@ -403,14 +403,14 @@ void runtime_init(ASTNode* ast_root) {
 
     while (node) {
         ASTNode* current_stmt = NULL;
-        if (node->type && (strcmp(node->type, "STATEMENT_LIST") == 0 || strcmp(node->type, "AGENT_LIST") == 0)) {
+        if (node->type && (strcmp(node->type, TE_T_STATEMENT_LIST) == 0 || strcmp(node->type, TE_T_AGENT_LIST) == 0)) {
             current_stmt = node->right;
             node = node->left;
         } else {
             current_stmt = node;
             node = NULL;
         }
-        if (current_stmt && current_stmt->type && strcmp(current_stmt->type, "AGENT") == 0) {
+        if (current_stmt && current_stmt->type && strcmp(current_stmt->type, TE_T_AGENT) == 0) {
             te_log("Agent registered: %s", current_stmt->id);
             current_stmt->next = (*A()).agents;
             (*A()).agents = current_stmt;
@@ -422,18 +422,18 @@ void runtime_init(ASTNode* ast_root) {
     add_class(bridge_class);
 
     ClassNode* entity_map_class = create_class("EntityMap");
-    add_attribute_to_class(entity_map_class, "item", "string");
-    add_attribute_to_class(entity_map_class, "cantidad", "int");
+    add_attribute_to_class(entity_map_class, "item", TE_DT_STRING);
+    add_attribute_to_class(entity_map_class, "cantidad", TE_DT_INT);
     add_class(entity_map_class);
 
     ClassNode* nlu_class = create_class("NluResult");
-    add_attribute_to_class(nlu_class, "tipo", "string");
-    add_attribute_to_class(nlu_class, "item", "string");
-    add_attribute_to_class(nlu_class, "cantidad", "int");
+    add_attribute_to_class(nlu_class, "tipo", TE_DT_STRING);
+    add_attribute_to_class(nlu_class, "item", TE_DT_STRING);
+    add_attribute_to_class(nlu_class, "cantidad", TE_DT_INT);
     add_class(nlu_class);
 
     ClassNode* session_class = create_class("Session");
-    add_attribute_to_class(session_class, "paso", "string");
+    add_attribute_to_class(session_class, "paso", TE_DT_STRING);
     add_class(session_class);
 }
 

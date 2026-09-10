@@ -18,6 +18,8 @@ on:
       - 'scripts/audit_llp64_prototypes.sh'
       - 'scripts/audit_core_debt.sh'
       - 'scripts/core_debt_baseline.txt'
+      - 'scripts/core_debt_allow.txt'
+      - 'tools/refactor/detag.cjs'
       - 'scripts/run_fuzz.sh'
       - 'scripts/build_fuzzer.sh'
       - 'scripts/run_asan_tests.sh'
@@ -40,6 +42,8 @@ on:
       - 'scripts/audit_llp64_prototypes.sh'
       - 'scripts/audit_core_debt.sh'
       - 'scripts/core_debt_baseline.txt'
+      - 'scripts/core_debt_allow.txt'
+      - 'tools/refactor/detag.cjs'
   workflow_dispatch:
 
 permissions:
@@ -63,12 +67,13 @@ jobs:
     # Guard de deuda del nucleo (Fase 0 del plan de refactor): falla si aparece un
     # global g_* nuevo en los modulos del interprete o una funcion nueva > 300
     # lineas, o si una de las funciones largas ya existentes CRECE. La baseline
-    # (scripts/core_debt_baseline.txt) solo puede achicarse.
+    # (scripts/core_debt_baseline.txt) solo puede achicarse. Tambien exige 0 globales
+    # no justificados (core_debt_allow.txt) y 0 magic strings de tipo (te_types.h).
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Audit core debt (globals + long functions)
+      - name: Audit core debt (globals + long functions + magic type tags)
         run: bash scripts/audit_core_debt.sh
 
   lang-conformance:

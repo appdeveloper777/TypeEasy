@@ -17,18 +17,18 @@ void interpret_for_in(TeVM *vm, ASTNode *node) {
     ASTNode *list_expr = node->left;
     ASTNode *listNode = NULL;
     if (list_expr->type && (
-        strcmp(list_expr->type, "ID") == 0 ||
-        strcmp(list_expr->type, "IDENTIFIER") == 0)) {
+        strcmp(list_expr->type, TE_T_ID) == 0 ||
+        strcmp(list_expr->type, TE_T_IDENTIFIER) == 0)) {
         Variable *v = find_variable(list_expr->id);
         if (!v) {
             /* variable not found (debug log removed) */
             return;
         }       
-        if (!v || v->vtype != VAL_OBJECT || strcmp(v->type, "LIST") != 0) {
+        if (!v || v->vtype != VAL_OBJECT || strcmp(v->type, TE_T_LIST) != 0) {
             /* null / "" iterate zero times (json_parse("") yields ""). Anything
              * else is a real mistake: say WHAT it is. The ERP case was a
              * db_query error envelope `{"error":...}` being for-in'd. */
-            int silent = (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, "NULL") == 0) ||
+            int silent = (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, TE_T_NULL) == 0) ||
                          (v->vtype == VAL_STRING && (!v->value.string_value || !v->value.string_value[0]));
             if (!silent) {
                 char loc[512]; te_runtime_location(loc, sizeof(loc));
@@ -36,7 +36,7 @@ void interpret_for_in(TeVM *vm, ASTNode *node) {
                                  v->vtype == VAL_FLOAT ? "a number" : (v->type ? v->type : "an object");
                 char *detail = NULL;
                 if (v->vtype == VAL_OBJECT && v->type && v->value.object_value &&
-                    (strcmp(v->type, "MAP") == 0 || strcmp(v->type, "OBJECT_LITERAL") == 0))
+                    (strcmp(v->type, TE_T_MAP) == 0 || strcmp(v->type, TE_T_OBJECT_LITERAL) == 0))
                     detail = te_map_node_to_string((ASTNode *)(intptr_t)v->value.object_value);
                 else if (v->vtype == VAL_STRING) detail = strdup(v->value.string_value);
                 if (detail && strlen(detail) > 160) { detail[157] = '.'; detail[158] = '.'; detail[159] = '.'; detail[160] = 0; }
@@ -48,7 +48,7 @@ void interpret_for_in(TeVM *vm, ASTNode *node) {
         }
         listNode = (ASTNode *)(intptr_t)v->value.object_value;
     }
-    else if (list_expr->type && strcmp(list_expr->type, "LIST") == 0) {
+    else if (list_expr->type && strcmp(list_expr->type, TE_T_LIST) == 0) {
         listNode = list_expr;
     }
     else {
@@ -62,15 +62,15 @@ void interpret_for_in(TeVM *vm, ASTNode *node) {
          * capturado aquí sigue válido durante todo el bucle. */
         interpret_ast(list_expr);
         if (vm->throw_flag || vm->return_flag) return;
-        Variable *r = find_variable("__ret__");
-        if (r && r->vtype == VAL_OBJECT && r->type && strcmp(r->type, "LIST") == 0) {
+        Variable *r = find_variable(TE_SYM_RET);
+        if (r && r->vtype == VAL_OBJECT && r->type && strcmp(r->type, TE_T_LIST) == 0) {
             listNode = (ASTNode *)(intptr_t)r->value.object_value;
         } else {
             printf("Error: unsupported for-in expression (type: %s).\n", list_expr->type);
             return;
         }
     }
-    if (!listNode || strcmp(listNode->type, "LIST") != 0) {
+    if (!listNode || strcmp(listNode->type, TE_T_LIST) != 0) {
         printf("Error: node is not a valid list.\n");
         return;
     }
@@ -84,7 +84,7 @@ void interpret_for_in(TeVM *vm, ASTNode *node) {
     for (ASTNode *item = items; item; item = item->next) {
         debugger_on_loop_iteration();
         te_scope_unwind_to(te_loop_scope_mark);
-        if (item->type && strcmp(item->type, "OBJECT") == 0) {
+        if (item->type && strcmp(item->type, TE_T_OBJECT) == 0) {
             // Get ObjectNode from extra field (where create_object_with_args stores it)
             // For backward compatibility, also check value field for objects created differently
             ObjectNode *obj = (ObjectNode *)item->extra;
@@ -94,7 +94,7 @@ void interpret_for_in(TeVM *vm, ASTNode *node) {
             }
             if (!list_expr->id || strcmp(node->id, list_expr->id) != 0) {
                 ASTNode *wrapper = calloc(1, sizeof(ASTNode));
-                wrapper->type = strdup("OBJECT");
+                wrapper->type = strdup(TE_T_OBJECT);
                 wrapper->id = strdup(node->id);
                 wrapper->left = wrapper->right = NULL;
                 /* Store pointer in 'extra' to be consistent with create_object_with_args()/declare_variable */
@@ -147,7 +147,7 @@ void interpret_for(TeVM *vm, ASTNode *node) {
     {
         ASTNode seed;
         memset(&seed, 0, sizeof(seed));
-        seed.type = "INT";
+        seed.type = TE_T_INT;
         seed.kind = NK_NUMBER;
         seed.value = (long long)evaluate_expression(node->left);
         add_or_update_variable(node->id, &seed);

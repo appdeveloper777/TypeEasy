@@ -96,11 +96,11 @@ static int te_colcache_kind_for_attr(ClassNode *cls, int attr_idx) {
     if (!cls || attr_idx < 0 || attr_idx >= cls->attr_count) return 3;
     const char *t = cls->attributes[attr_idx].type;
     if (!t) return 3;
-    if (!strcmp(t,"int") || !strcmp(t,"INT") || !strcmp(t,"long") ||
-        !strcmp(t,"Integer") || !strcmp(t,"bool") || !strcmp(t,"BOOL")) return 0;
-    if (!strcmp(t,"float") || !strcmp(t,"FLOAT") || !strcmp(t,"double") ||
+    if (!strcmp(t,TE_DT_INT) || !strcmp(t,TE_T_INT) || !strcmp(t,"long") ||
+        !strcmp(t,"Integer") || !strcmp(t,TE_DT_BOOL) || !strcmp(t,TE_T_BOOL)) return 0;
+    if (!strcmp(t,TE_DT_FLOAT) || !strcmp(t,TE_T_FLOAT) || !strcmp(t,"double") ||
         !strcmp(t,"Double")) return 1;
-    if (!strcmp(t,"string") || !strcmp(t,"STRING") || !strcmp(t,"String")) return 2;
+    if (!strcmp(t,TE_DT_STRING) || !strcmp(t,TE_T_STRING) || !strcmp(t,"String")) return 2;
     return 3;
 }
 
@@ -141,7 +141,7 @@ void te_colcache_build(ASTNode *list_head, ClassNode *cls) {
      * (target ~100ms on 8 cores). */
     int i = 0;
     for (ASTNode *it = list_head->left; it; it = it->next, i++) {
-        if (!it->type || strcmp(it->type, "OBJECT") != 0 || !it->extra) {
+        if (!it->type || strcmp(it->type, TE_T_OBJECT) != 0 || !it->extra) {
             te_colcache_free(c);
             return;
         }
@@ -430,10 +430,10 @@ static inline void te_simd_cmp_f64(const double *col, int n, int spec, double k,
  * ========================================================================== */
 
 static int fl_is_attr_of_param(ASTNode *N, const char *pname, size_t plen) {
-    if (!N || !N->type || strcmp(N->type, "ACCESS_ATTR") != 0) return 0;
+    if (!N || !N->type || strcmp(N->type, TE_T_ACCESS_ATTR) != 0) return 0;
     ASTNode *L = N->left, *R = N->right;
     if (!L || !L->type || !L->id) return 0;
-    if (strcmp(L->type, "IDENTIFIER") != 0 && strcmp(L->type, "ID") != 0) return 0;
+    if (strcmp(L->type, TE_T_IDENTIFIER) != 0 && strcmp(L->type, TE_T_ID) != 0) return 0;
     if (strlen(L->id) != plen || memcmp(L->id, pname, plen) != 0) return 0;
     if (!R || !R->id) return 0;
     return 1;
@@ -463,9 +463,9 @@ LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out) {
     if (plen == 0 || plen >= 128) return SPEC_NONE;
 
     ASTNode *body = fn->left;
-    if (body->type && strcmp(body->type, "STATEMENT_LIST") == 0) return SPEC_NONE;
+    if (body->type && strcmp(body->type, TE_T_STATEMENT_LIST) == 0) return SPEC_NONE;
 
-    if (body->type && (strcmp(body->type, "IDENTIFIER") == 0 || strcmp(body->type, "ID") == 0)) {
+    if (body->type && (strcmp(body->type, TE_T_IDENTIFIER) == 0 || strcmp(body->type, TE_T_ID) == 0)) {
         if (body->id && strlen(body->id) == plen && memcmp(body->id, params, plen) == 0) {
             out->spec = SPEC_IDENT;
             return SPEC_IDENT;
@@ -481,16 +481,16 @@ LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out) {
 
     if (body->type && body->left && body->right) {
         LambdaSpec s = SPEC_NONE;
-        if      (strcmp(body->type, "GT")    == 0) s = SPEC_CMP_GT;
-        else if (strcmp(body->type, "LT")    == 0) s = SPEC_CMP_LT;
-        else if (strcmp(body->type, "GT_EQ") == 0) s = SPEC_CMP_LE;
-        else if (strcmp(body->type, "LT_EQ") == 0) s = SPEC_CMP_GE;
-        else if (strcmp(body->type, "EQ")    == 0) s = SPEC_CMP_EQ;
-        else if (strcmp(body->type, "DIFF")  == 0) s = SPEC_CMP_NE;
-        else if (strcmp(body->type, "MOD")   == 0) s = SPEC_MOD_K;
+        if      (strcmp(body->type, TE_T_GT)    == 0) s = SPEC_CMP_GT;
+        else if (strcmp(body->type, TE_T_LT)    == 0) s = SPEC_CMP_LT;
+        else if (strcmp(body->type, TE_T_GT_EQ) == 0) s = SPEC_CMP_LE;
+        else if (strcmp(body->type, TE_T_LT_EQ) == 0) s = SPEC_CMP_GE;
+        else if (strcmp(body->type, TE_T_EQ)    == 0) s = SPEC_CMP_EQ;
+        else if (strcmp(body->type, TE_T_DIFF)  == 0) s = SPEC_CMP_NE;
+        else if (strcmp(body->type, TE_T_MOD)   == 0) s = SPEC_MOD_K;
         if (s != SPEC_NONE && fl_is_attr_of_param(body->left, params, plen)) {
             ASTNode *R = body->right;
-            if (R->type && (strcmp(R->type, "NUMBER") == 0 || strcmp(R->type, "INT") == 0)) {
+            if (R->type && (strcmp(R->type, TE_T_NUMBER) == 0 || strcmp(R->type, TE_T_INT) == 0)) {
                 out->spec = s;
                 out->attr_name = body->left->right->id;
                 out->k = (long long)R->value;
@@ -498,7 +498,7 @@ LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out) {
                 out->k_is_float = 0;
                 return s;
             }
-            if (R->type && strcmp(R->type, "FLOAT") == 0 && R->str_value) {
+            if (R->type && strcmp(R->type, TE_T_FLOAT) == 0 && R->str_value) {
                 out->spec = s;
                 out->attr_name = body->left->right->id;
                 out->k_d = atof(R->str_value);
@@ -507,7 +507,7 @@ LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out) {
                 return s;
             }
             if ((s == SPEC_CMP_EQ || s == SPEC_CMP_NE) &&
-                R->type && strcmp(R->type, "STRING") == 0 && R->str_value) {
+                R->type && strcmp(R->type, TE_T_STRING) == 0 && R->str_value) {
                 LambdaSpec ss = (s == SPEC_CMP_EQ) ? SPEC_CMP_EQ_STR : SPEC_CMP_NE_STR;
                 out->spec = ss;
                 out->attr_name = body->left->right->id;
@@ -524,9 +524,9 @@ LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out) {
      * call_lambda (nivel 3); ahora habilita el fast-path nivel 2. */
     if (body->type && body->left && body->right) {
         LambdaSpec sa = SPEC_NONE, sk = SPEC_NONE;
-        if      (strcmp(body->type, "MUL") == 0) { sa = SPEC_MUL_ATTR_ATTR; sk = SPEC_MUL_ATTR_K; }
-        else if (strcmp(body->type, "ADD") == 0) { sa = SPEC_ADD_ATTR_ATTR; sk = SPEC_ADD_ATTR_K; }
-        else if (strcmp(body->type, "SUB") == 0) { sa = SPEC_SUB_ATTR_ATTR; sk = SPEC_SUB_ATTR_K; }
+        if      (strcmp(body->type, TE_T_MUL) == 0) { sa = SPEC_MUL_ATTR_ATTR; sk = SPEC_MUL_ATTR_K; }
+        else if (strcmp(body->type, TE_T_ADD) == 0) { sa = SPEC_ADD_ATTR_ATTR; sk = SPEC_ADD_ATTR_K; }
+        else if (strcmp(body->type, TE_T_SUB) == 0) { sa = SPEC_SUB_ATTR_ATTR; sk = SPEC_SUB_ATTR_K; }
         if (sa != SPEC_NONE && fl_is_attr_of_param(body->left, params, plen)) {
             ASTNode *R = body->right;
             if (fl_is_attr_of_param(R, params, plen)) {
@@ -535,7 +535,7 @@ LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out) {
                 out->attr_name2 = R->right->id;
                 return sa;
             }
-            if (R->type && (strcmp(R->type, "NUMBER") == 0 || strcmp(R->type, "INT") == 0)) {
+            if (R->type && (strcmp(R->type, TE_T_NUMBER) == 0 || strcmp(R->type, TE_T_INT) == 0)) {
                 out->spec = sk;
                 out->attr_name = body->left->right->id;
                 out->k = (long long)R->value;
@@ -543,7 +543,7 @@ LambdaSpec fast_lambda_analyze(ASTNode *fn, FastLambda *out) {
                 out->k_is_float = 0;
                 return sk;
             }
-            if (R->type && strcmp(R->type, "FLOAT") == 0 && R->str_value) {
+            if (R->type && strcmp(R->type, TE_T_FLOAT) == 0 && R->str_value) {
                 out->spec = sk;
                 out->attr_name = body->left->right->id;
                 out->k_d = atof(R->str_value);

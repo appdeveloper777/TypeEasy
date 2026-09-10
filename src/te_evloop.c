@@ -408,9 +408,9 @@ static ASTNode *evloop_clone_rec(ASTNode *n, int with_next) {
 
 /* Produce an owned copy of a task result value (top-level ->next detached). */
 static ASTNode *evloop_clone_value(ASTNode *r) {
-    if (!r) return create_ast_leaf("STRING", 0, "", NULL);
+    if (!r) return create_ast_leaf(TE_T_STRING, 0, "", NULL);
     ASTNode *c = evloop_clone_rec(r, 0);
-    return c ? c : create_ast_leaf("STRING", 0, "", NULL);
+    return c ? c : create_ast_leaf(TE_T_STRING, 0, "", NULL);
 }
 
 static ASTNode *fiber_take_result(int id) {
@@ -430,7 +430,7 @@ static ASTNode *fiber_take_result(int id) {
         f->lambda  = NULL;
         f->started = 0;
     }
-    if (!r) r = create_ast_leaf("STRING", 0, "", NULL);
+    if (!r) r = create_ast_leaf(TE_T_STRING, 0, "", NULL);
     return r;
 }
 
@@ -651,8 +651,8 @@ static int adapt_go(ASTNode *node, ASTNode *args) {
     (void)node;
     int id = fiber_find_free();
     if (id < 0 || !args) {
-        add_or_update_variable("__ret__",
-            create_ast_leaf_number("INT", -1, NULL, NULL));
+        add_or_update_variable(TE_SYM_RET,
+            create_ast_leaf_number(TE_T_INT, -1, NULL, NULL));
         return 1;
     }
     Fiber *f = &E()->fibers[id];
@@ -665,8 +665,8 @@ static int adapt_go(ASTNode *node, ASTNode *args) {
     /* Seed the fiber's scope with the current (global) scope so the coroutine
      * can read variables defined before it was spawned. */
     ctx_save(&f->ctx);
-    add_or_update_variable("__ret__",
-        create_ast_leaf_number("INT", id, NULL, NULL));
+    add_or_update_variable(TE_SYM_RET,
+        create_ast_leaf_number(TE_T_INT, id, NULL, NULL));
     return 1;
 }
 
@@ -683,8 +683,8 @@ static int adapt_sleep_async(ASTNode *node, ASTNode *args) {
     } else {
         te_msleep(ms);
     }
-    add_or_update_variable("__ret__",
-        create_ast_leaf_number("INT", 0, NULL, NULL));
+    add_or_update_variable(TE_SYM_RET,
+        create_ast_leaf_number(TE_T_INT, 0, NULL, NULL));
     return 1;
 }
 
@@ -708,8 +708,8 @@ static int adapt_read_file_async(ASTNode *node, ASTNode *args) {
             fiber_yield();                 /* loop runs others until job->done */
             /* resumed: worker finished, result is published */
             const char *body = (job->ok && job->out_buf) ? job->out_buf : "";
-            add_or_update_variable("__ret__",
-                create_ast_leaf("STRING", 0, (char *)body, NULL));
+            add_or_update_variable(TE_SYM_RET,
+                create_ast_leaf(TE_T_STRING, 0, (char *)body, NULL));
             E()->current->io_job = NULL;
             free(job->in_str);
             free(job->out_buf);
@@ -737,8 +737,8 @@ static int adapt_read_file_async(ASTNode *node, ASTNode *args) {
             fclose(fp);
         }
     }
-    add_or_update_variable("__ret__",
-        create_ast_leaf("STRING", 0, body ? body : "", NULL));
+    add_or_update_variable(TE_SYM_RET,
+        create_ast_leaf(TE_T_STRING, 0, body ? body : "", NULL));
     free(body);
     free(path);
     return 1;
@@ -749,12 +749,12 @@ static int adapt_await_async(ASTNode *node, ASTNode *args) {
     (void)node;
     int id = args ? (int)evaluate_expression(args) : -1;
     if (!fiber_valid(id)) {
-        add_or_update_variable("__ret__", create_ast_leaf("STRING", 0, "", NULL));
+        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, "", NULL));
         return 1;
     }
     int ids[1] = { id };
     evloop_run_until(ids, 1);
-    add_or_update_variable("__ret__", fiber_take_result(id));
+    add_or_update_variable(TE_SYM_RET, fiber_take_result(id));
     return 1;
 }
 
@@ -764,14 +764,14 @@ static int evloop_collect_ids(ASTNode *args, int *out, int max) {
     if (!args) return 0;
     ASTNode *items = NULL;
 
-    if (args->type && strcmp(args->type, "LIST") == 0) {
+    if (args->type && strcmp(args->type, TE_T_LIST) == 0) {
         items = args->left;
     } else if (args->type &&
-               (strcmp(args->type, "IDENTIFIER") == 0 ||
-                strcmp(args->type, "ID") == 0) &&
+               (strcmp(args->type, TE_T_IDENTIFIER) == 0 ||
+                strcmp(args->type, TE_T_ID) == 0) &&
                args->next == NULL) {
         Variable *v = find_variable(args->id);
-        if (v && v->type && strcmp(v->type, "LIST") == 0) {
+        if (v && v->type && strcmp(v->type, TE_T_LIST) == 0) {
             ASTNode *root = (ASTNode *)(intptr_t)v->value.object_value;
             if (root) items = root->left;
         }
@@ -800,7 +800,7 @@ static int adapt_await_async_all(ASTNode *node, ASTNode *args) {
         if (!head) head = tail = r;
         else { tail->next = r; tail = r; }
     }
-    add_or_update_variable("__ret__", create_list_node(head));
+    add_or_update_variable(TE_SYM_RET, create_list_node(head));
     return 1;
 }
 

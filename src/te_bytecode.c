@@ -135,7 +135,7 @@ static int bc_guard_this_slot(BCC *c, int slot) {
 static int var_is_numeric(const Variable *v) {
     if (!v) return 0;
     if (v->vtype != VAL_INT && v->vtype != VAL_FLOAT) return 0;
-    if (v->type && strcmp(v->type, "NULL") == 0) return 0;
+    if (v->type && strcmp(v->type, TE_T_NULL) == 0) return 0;
     return 1;
 }
 
@@ -147,8 +147,8 @@ static Variable *bc_resolve_var(ASTNode *node) {
 }
 
 static int attr_type_is_numeric(const char *t) {
-    return t && (strcmp(t, "int") == 0 || strcmp(t, "float") == 0 ||
-                 strcmp(t, "INT") == 0 || strcmp(t, "FLOAT") == 0);
+    return t && (strcmp(t, TE_DT_INT) == 0 || strcmp(t, TE_DT_FLOAT) == 0 ||
+                 strcmp(t, TE_T_INT) == 0 || strcmp(t, TE_T_FLOAT) == 0);
 }
 
 static int bc_compile(BCC *c, ASTNode *node);
@@ -228,13 +228,13 @@ static int bc_c_access_attr(BCC *c, ASTNode *node) {
         if (!list_id || !idx_exp) return 0;
         if (nk_of(list_id) != NK_IDENTIFIER && nk_of(list_id) != NK_ID) return 0;
         Variable *lv = bc_resolve_var(list_id);
-        if (!lv || lv->vtype != VAL_OBJECT || !lv->type || strcmp(lv->type, "LIST") != 0) return 0;
+        if (!lv || lv->vtype != VAL_OBJECT || !lv->type || strcmp(lv->type, TE_T_LIST) != 0) return 0;
         ASTNode *list = (ASTNode *)(intptr_t)lv->value.object_value;
         if (!list) return 0;
         TEListIdx *ix = (TEListIdx *)list->extra;
         if (!ix || ix->len <= 0) return 0;
         ASTNode *first = ix->items[0];
-        if (!first || !first->type || strcmp(first->type, "OBJECT") != 0) return 0;
+        if (!first || !first->type || strcmp(first->type, TE_T_OBJECT) != 0) return 0;
         ObjectNode *fobj = first->extra ? (ObjectNode *)first->extra : (ObjectNode *)(intptr_t)first->value;
         if (!fobj || !fobj->class) return 0;
         int slot = -1;
@@ -256,7 +256,7 @@ static int bc_c_access_attr(BCC *c, ASTNode *node) {
         return 1;
     }
 
-    if (!objRef->id || strcmp(objRef->id, "this") != 0) return 0;
+    if (!objRef->id || strcmp(objRef->id, TE_SYM_THIS) != 0) return 0;
     if (!c->cls) return 0;
     int slot = -1;
     for (int i = 0; i < c->cls->attr_count; i++) {
@@ -289,7 +289,7 @@ static int bc_c_call_method(BCC *c, ASTNode *node) {
     if (!objRef || !objRef->id || !node->id) return 0;
     Variable *ov = bc_resolve_var(objRef);
     if (!ov || ov->vtype != VAL_OBJECT) return 0;
-    if (ov->type && (strcmp(ov->type, "LIST") == 0 || strcmp(ov->type, "MAP") == 0 || strcmp(ov->type, "LAMBDA") == 0)) return 0;
+    if (ov->type && (strcmp(ov->type, TE_T_LIST) == 0 || strcmp(ov->type, TE_T_MAP) == 0 || strcmp(ov->type, TE_T_LAMBDA) == 0)) return 0;
     ObjectNode *obj = ov->value.object_value;
     if (!obj || !obj->class) return 0;
 
@@ -297,7 +297,7 @@ static int bc_c_call_method(BCC *c, ASTNode *node) {
     for (MethodNode *it = obj->class->methods; it; it = it->next)
         if (it->name && strcmp(it->name, node->id) == 0) { mm = it; break; }
     if (!mm) return 0;
-    if (!mm->return_type || (strcmp(mm->return_type, "int") != 0 && strcmp(mm->return_type, "float") != 0)) return 0;
+    if (!mm->return_type || (strcmp(mm->return_type, TE_DT_INT) != 0 && strcmp(mm->return_type, TE_DT_FLOAT) != 0)) return 0;
 
     BCInfo *body = bc_get_or_compile_method(mm, obj->class);
     if (!body) return 0;
@@ -453,7 +453,7 @@ static int bc_guards_ok(const BCInfo *info) {
             if (!o || o->class != g->cls) return 0;
             break;
         }
-        case 2: if (!g->var || g->var->vtype != VAL_OBJECT || !g->var->type || strcmp(g->var->type, "LIST") != 0) return 0; break;
+        case 2: if (!g->var || g->var->vtype != VAL_OBJECT || !g->var->type || strcmp(g->var->type, TE_T_LIST) != 0) return 0; break;
         default: return 0;
         }
     }
@@ -614,7 +614,7 @@ do_i64_const:
     istack[isp++] = ip->u.ival; ip++; DISPATCH();
 do_i64_var: {
     Variable *v = ip->u.var;
-    if (v->vtype != VAL_INT || (v->type && strcmp(v->type, "NULL") == 0)) I64_FAIL();
+    if (v->vtype != VAL_INT || (v->type && strcmp(v->type, TE_T_NULL) == 0)) I64_FAIL();
     istack[isp++] = v->value.int_value; ip++; DISPATCH();
 }
 do_i64_add: IBIN(a + b);
@@ -726,10 +726,10 @@ BCInfo *bc_get_or_compile_method(MethodNode *m, ClassNode *cls) {
         Variable *pv = (Variable *)p->cached_var;
         if (!pv) pv = find_variable_for(p->name);
         if (!pv && g_vm.var_count < MAX_VARS) {
-            int is_float = p->type && (strcmp(p->type, "float") == 0 || strcmp(p->type, "FLOAT") == 0);
+            int is_float = p->type && (strcmp(p->type, TE_DT_FLOAT) == 0 || strcmp(p->type, TE_T_FLOAT) == 0);
             Variable *nv = &g_vm.vars[g_vm.var_count++];
             nv->id = strdup(p->name);
-            nv->type = strdup(is_float ? "FLOAT" : "INT");
+            nv->type = strdup(is_float ? TE_T_FLOAT : TE_T_INT);
             nv->is_const = 0;
             nv->vtype = is_float ? VAL_FLOAT : VAL_INT;
             if (is_float) nv->value.float_value = 0.0; else nv->value.int_value = 0;
@@ -832,7 +832,7 @@ static int bc_compile_for(BCC *c, ASTNode *node) {
     Variable *fv = find_variable_for(node->id);
     if (!fv && g_vm.var_count < MAX_VARS) {
         Variable *nv = &g_vm.vars[g_vm.var_count++];
-        nv->id = strdup(node->id); nv->type = strdup("INT"); nv->is_const = 0;
+        nv->id = strdup(node->id); nv->type = strdup(TE_T_INT); nv->is_const = 0;
         nv->vtype = VAL_INT; nv->value.int_value = 0;
         fv = nv;
     }

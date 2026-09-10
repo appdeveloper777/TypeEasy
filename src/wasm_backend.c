@@ -99,20 +99,20 @@ static const char *local_name(WasmContext *ctx, const char *source_name) {
 static void collect_locals(WasmContext *ctx, ASTNode *node) {
     if (!node || ctx->error[0]) return;
 
-    if (is_node(node, "STATEMENT_LIST")) {
+    if (is_node(node, TE_T_STATEMENT_LIST)) {
         collect_locals(ctx, node->left);
         collect_locals(ctx, node->right);
         collect_locals(ctx, node->next);
         return;
     }
 
-    if (is_node(node, "VAR_DECL") && node->id) {
+    if (is_node(node, TE_T_VAR_DECL) && node->id) {
         add_local(ctx, node->id);
-    } else if (is_node(node, "DECLARE") && node->left && node->left->id) {
+    } else if (is_node(node, TE_T_DECLARE) && node->left && node->left->id) {
         add_local(ctx, node->left->id);
-    } else if (is_node(node, "ASSIGN") && node->left && node->left->id) {
+    } else if (is_node(node, TE_T_ASSIGN) && node->left && node->left->id) {
         add_local(ctx, node->left->id);
-    } else if (is_node(node, "FOR") && node->id) {
+    } else if (is_node(node, TE_T_FOR) && node->id) {
         add_local(ctx, node->id);
     }
 
@@ -133,35 +133,35 @@ static void emit_binary(WasmContext *ctx, ASTNode *node, const char *op) {
 static void emit_expr(WasmContext *ctx, ASTNode *node) {
     if (!node || ctx->error[0]) return;
 
-    if (is_node(node, "NUMBER") || is_node(node, "INT")) {
+    if (is_node(node, TE_T_NUMBER) || is_node(node, TE_T_INT)) {
         char buffer[64];
         snprintf(buffer, sizeof(buffer), "i32.const %lld", (long long)node->value);
         wasm_line(ctx, buffer);
-    } else if (is_node(node, "IDENTIFIER") || is_node(node, "ID")) {
+    } else if (is_node(node, TE_T_IDENTIFIER) || is_node(node, TE_T_ID)) {
         const char *name = local_name(ctx, node->id);
         if (!name) return;
         char buffer[WASM_NAME_LEN + 32];
         snprintf(buffer, sizeof(buffer), "local.get $%s", name);
         wasm_line(ctx, buffer);
-    } else if (is_node(node, "ADD")) {
+    } else if (is_node(node, TE_T_ADD)) {
         emit_binary(ctx, node, "i32.add");
-    } else if (is_node(node, "SUB")) {
+    } else if (is_node(node, TE_T_SUB)) {
         emit_binary(ctx, node, "i32.sub");
-    } else if (is_node(node, "MUL")) {
+    } else if (is_node(node, TE_T_MUL)) {
         emit_binary(ctx, node, "i32.mul");
-    } else if (is_node(node, "DIV")) {
+    } else if (is_node(node, TE_T_DIV)) {
         emit_binary(ctx, node, "i32.div_s");
-    } else if (is_node(node, "LT")) {
+    } else if (is_node(node, TE_T_LT)) {
         emit_binary(ctx, node, "i32.lt_s");
-    } else if (is_node(node, "GT")) {
+    } else if (is_node(node, TE_T_GT)) {
         emit_binary(ctx, node, "i32.gt_s");
-    } else if (is_node(node, "EQ")) {
+    } else if (is_node(node, TE_T_EQ)) {
         emit_binary(ctx, node, "i32.eq");
-    } else if (is_node(node, "GT_EQ")) {
+    } else if (is_node(node, TE_T_GT_EQ)) {
         emit_binary(ctx, node, "i32.ge_s");
-    } else if (is_node(node, "LT_EQ")) {
+    } else if (is_node(node, TE_T_LT_EQ)) {
         emit_binary(ctx, node, "i32.le_s");
-    } else if (is_node(node, "DIFF")) {
+    } else if (is_node(node, TE_T_DIFF)) {
         emit_binary(ctx, node, "i32.ne");
     } else {
         wasm_set_error(ctx, "Expresion no soportada por backend Wasm", node);
@@ -189,20 +189,20 @@ static void emit_print(WasmContext *ctx, ASTNode *expr, int newline) {
 static void emit_stmt(WasmContext *ctx, ASTNode *node) {
     if (!node || ctx->error[0]) return;
 
-    if (is_node(node, "STATEMENT_LIST")) {
+    if (is_node(node, TE_T_STATEMENT_LIST)) {
         emit_stmt(ctx, node->left);
         emit_stmt(ctx, node->right);
-    } else if (is_node(node, "VAR_DECL")) {
+    } else if (is_node(node, TE_T_VAR_DECL)) {
         emit_var_set(ctx, node->id, node->left);
-    } else if (is_node(node, "DECLARE")) {
+    } else if (is_node(node, TE_T_DECLARE)) {
         emit_var_set(ctx, node->left->id, node->right);
-    } else if (is_node(node, "ASSIGN")) {
+    } else if (is_node(node, TE_T_ASSIGN)) {
         emit_var_set(ctx, node->left->id, node->right);
-    } else if (is_node(node, "PRINT")) {
+    } else if (is_node(node, TE_T_PRINT)) {
         emit_print(ctx, node->left, 0);
-    } else if (is_node(node, "PRINTLN")) {
+    } else if (is_node(node, TE_T_PRINTLN)) {
         emit_print(ctx, node->left, 1);
-    } else if (is_node(node, "IF")) {
+    } else if (is_node(node, TE_T_IF)) {
         emit_expr(ctx, node->left);
         if (ctx->error[0]) return;
         wasm_line(ctx, "if");
@@ -216,13 +216,13 @@ static void emit_stmt(WasmContext *ctx, ASTNode *node) {
         }
         ctx->indent--;
         wasm_line(ctx, "end");
-    } else if (is_node(node, "FOR")) {
+    } else if (is_node(node, TE_T_FOR)) {
         wasm_set_error(ctx, "for numerico todavia no esta soportado por backend Wasm", node);
-    } else if (is_node(node, "ENDPOINT_DECL")) {
+    } else if (is_node(node, TE_T_ENDPOINT_DECL)) {
         wasm_set_error(ctx, "endpoint no esta soportado por backend Wasm", node);
-    } else if (is_node(node, "CALL_FUNC") || is_node(node, "CALL_METHOD")) {
+    } else if (is_node(node, TE_T_CALL_FUNC) || is_node(node, TE_T_CALL_METHOD)) {
         wasm_set_error(ctx, "llamadas nativas/metodos no soportadas por backend Wasm", node);
-    } else if (is_node(node, "RETURN")) {
+    } else if (is_node(node, TE_T_RETURN)) {
         wasm_set_error(ctx, "return no esta soportado en el main Wasm inicial", node);
     } else {
         wasm_set_error(ctx, "Sentencia no soportada por backend Wasm", node);
