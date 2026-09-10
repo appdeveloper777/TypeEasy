@@ -1,0 +1,68 @@
+// Fase E (modelo de valores unificado): casos que ANTES daban 0/""/objeto compartido porque
+// declaración, asignación, return y binding de argumentos tenían tablas de tipos distintas.
+// expect: msg=a|f=2.5 s=x|k=hola|dist=1|gt=1|ok=1|miss=[]|oor=null|t=grande|arg=7.25 y|attr=3.5|ret=1|dec=4.50|cnt=2|clon=1|neg=-7|json=[true,false]
+class P { a:float; b:string; __constructor(_a:float, _b:string) { this.a = _a; this.b = _b; } Half() : float { return this.a / 2; } Big() : bool { return this.a > 1; } }
+var out = "";
+// 1. asignar el valor de otra variable dentro de un for-in (gotcha 2026-06-14: daba 0)
+var msg = "";
+for (let x in ["a", "b"]) { if (msg == "") { msg = x; } }
+out = out + "msg=" + msg;
+// 2. constructor con params mixtos float+string: el float NO se trunca (antes 2)
+let p = new P(2.5, "x");
+out = out + "|f=" + p.a + " s=" + p.b;
+// 3. asignación desde campo de MAP sobre variable existente (antes solo OBJECT)
+let m = { k: "hola", n: 3 };
+var k = "";
+k = m.k;
+out = out + "|k=" + k;
+// 4. dos `new` en la misma función son objetos DISTINTOS (antes aliasaban el template)
+let mk = fn(v) => { let q = new P(v, "q"); return q; };
+let q1 = mk(1.0);
+let q2 = mk(9.0);
+out = out + "|dist=" + (q1.a != q2.a ? 1 : 0);
+// 5. un lambda que retorna una comparación devuelve bool (en contexto string un bool imprime 1/0)
+let gt = fn(v) => v > 2;
+out = out + "|gt=" + gt(5);
+// 6. declaración tipada bool desde comparación de strings
+bool ok = ("abc" == "abc");
+out = out + "|ok=" + ok;
+// 7. clave ausente -> "" y índice fuera de rango -> null (contratos documentados)
+let miss = m["nope"];
+out = out + "|miss=[" + miss + "]";
+let xs = [10, 20];
+let oor = xs[99];
+out = out + "|oor=" + (oor ?? "null");
+// 8. ternario con strings en asignación sobre variable existente
+var t = "";
+t = xs[1] > 15 ? "grande" : "chico";
+out = out + "|t=" + t;
+// 9. `new X()` pasado DIRECTO como argumento se construye (antes llegaba sin constructor)
+let show = fn(o) => o.a + " " + o.b;
+out = out + "|arg=" + show(new P(7.25, "y"));
+// 10. atributo float leído por asignación (antes truncado a int en algunos caminos)
+var attr = 0;
+attr = p.Half() + 2.25;
+out = out + "|attr=" + attr;
+// 11. return de método bool
+out = out + "|ret=" + p.Big();
+// 12. decimal declarado desde entero: widening exacto
+decimal dec = 4;
+dec = dec + 0.50m;
+out = out + "|dec=" + dec;
+// 13. lista fresca por evaluación dentro de una fn llamada dos veces
+let acc = fn() => { var l = []; l.push(1); l.push(2); return l.length; };
+acc();
+out = out + "|cnt=" + acc();
+// 14. objeto de `let` es clon: mutar la copia no toca la siguiente instancia
+let c1 = new P(1.0, "c"); c1.a = 5.0;
+let c2 = new P(1.0, "c");
+out = out + "|clon=" + c2.a;
+// 15. negativo exacto por asignación
+var neg = 0;
+neg = -(3 + 4);
+out = out + "|neg=" + neg;
+// 16. json de una lista de bools producida por lambda
+let bs = [true, false];
+let mapped = bs.map(fn(b) => b);
+out = out + "|json=" + json(mapped);
+println(out);

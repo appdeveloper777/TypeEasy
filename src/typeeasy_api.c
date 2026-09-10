@@ -362,6 +362,11 @@ static void te_req_owned_register(ObjectNode *obj) {
     }
     g_vm.req_owned_objects[g_vm.req_owned_count++] = obj;
 }
+/* Fase E: instancias frescas de `new X(...)` evaluadas dentro de un request (te_eval_value). */
+void te_req_owned_obj_register(ObjectNode *obj) {
+    if (!obj || !g_vm.te_request_active) return;
+    te_req_owned_register(obj);
+}
 
 /* v0.0.30 (leak fix): registro paralelo de arboles JSON heap creados por el
  * builtin json_parse() durante un request. te_value_to_variable aliasa (no copia)

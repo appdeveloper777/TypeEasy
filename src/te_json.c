@@ -10,6 +10,7 @@
 #include "te_vm.h"
 #include "te_value.h"
 #include "te_decimal.h"
+#include "te_value.h"
 
 #include <ctype.h>
 #include <stdint.h>
@@ -65,34 +66,53 @@ static void te_json_emit_str(TeBuf *b, const char *s) {
 }
 
 /* Recursive JSON emitter for an AST node. */
+/* Emite un VALOR de runtime (Variable/TeValue). Instancias de clase -> objeto con sus atributos. */
+void te_json_emit_value(TeBuf *b, const Variable *v) {
+    if (!v) { tebuf_puts(b, "null"); return; }
+    const char *tag = v->type ? v->type : "";
+    if (v->vtype == VAL_STRING) {
+        if (te_var_is_decimal(v)) { tebuf_puts(b, v->value.string_value ? v->value.string_value : "0"); return; }
+        te_json_emit_str(b, v->value.string_value ? v->value.string_value : "");
+        return;
+    }
+    if (v->vtype == VAL_INT) {
+        if (strcmp(tag, TE_T_BOOL) == 0) { tebuf_puts(b, v->value.int_value ? "true" : "false"); return; }
+        char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)v->value.int_value); tebuf_puts(b, tmp); return;
+    }
+    if (v->vtype == VAL_FLOAT) { char tmp[64]; te_fmt_double(tmp, sizeof(tmp), v->value.float_value); tebuf_puts(b, tmp); return; }
+    /* VAL_OBJECT */
+    if (!v->value.object_value || strcmp(tag, TE_T_NULL) == 0) { tebuf_puts(b, "null"); return; }
+    if (strcmp(tag, TE_T_LIST) == 0 || strcmp(tag, TE_T_MAP) == 0 || strcmp(tag, TE_T_OBJECT_LITERAL) == 0) {
+        te_json_emit_node(b, (ASTNode *)(intptr_t)v->value.object_value);
+        return;
+    }
+    if (strcmp(tag, TE_T_OBJECT) == 0) {
+        ObjectNode *o = v->value.object_value;
+        if (!o->class) { tebuf_puts(b, "null"); return; }
+        tebuf_putc(b, '{');
+        for (int i = 0; i < o->class->attr_count; i++) {
+            if (i) tebuf_putc(b, ',');
+            te_json_emit_str(b, o->class->attributes[i].id ? o->class->attributes[i].id : "");
+            tebuf_putc(b, ':');
+            te_json_emit_value(b, &o->attributes[i]);
+        }
+        tebuf_putc(b, '}');
+        return;
+    }
+    tebuf_puts(b, "null");   /* LAMBDA / LAZY_ITER / ...: no serializable */
+}
+
+/* Recursive JSON emitter for an AST node. Nodos de DATOS (hojas, LIST, MAP, OBJECT construido)
+ * se emiten directo; cualquier EXPRESIÓN (identificador, llamada, aritmética, acceso, ternario,
+ * `new`, ...) se evalúa por el camino único te_eval_value y se emite su valor. */
 void te_json_emit_node(TeBuf *b, ASTNode *n) {
     if (!n) { tebuf_puts(b, "null"); return; }
     if (!n->type) { tebuf_puts(b, "null"); return; }
-    /* v1.0.0: evaluate embedded CALL_FUNC/CALL_METHOD (e.g. map literal
-     * values like `{"id": uuid_v4()}` stored raw in KV_PAIR->left).
-     * Requires hooks; otherwise emit null. */
-    if (strcmp(n->type, TE_T_CALL_FUNC) == 0 || strcmp(n->type, TE_T_CALL_METHOD) == 0) {
-        te_json_eval_fn hook = (strcmp(n->type, TE_T_CALL_FUNC) == 0)
-                                ? g_vm.json_eval_call_func
-                                : g_vm.json_eval_call_method;
-        if (!hook) { tebuf_puts(b, "null"); return; }
-        hook(n);
-        Variable *r = find_variable(TE_SYM_RET);
-        if (!r) { tebuf_puts(b, "null"); return; }
-        if (te_var_is_decimal(r)) { tebuf_puts(b, r->value.string_value ? r->value.string_value : "0"); return; }
-        if (r->vtype == VAL_STRING) { te_json_emit_str(b, r->value.string_value ? r->value.string_value : ""); return; }
-        if (r->vtype == VAL_INT) {
-            if (r->type && strcmp(r->type, TE_T_BOOL) == 0) { tebuf_puts(b, r->value.int_value ? "true" : "false"); return; }
-            char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)r->value.int_value); tebuf_puts(b, tmp); return;
-        }
-        if (r->vtype == VAL_FLOAT) { char tmp[64]; te_fmt_double(tmp, sizeof(tmp), r->value.float_value); tebuf_puts(b, tmp); return; }
-        tebuf_puts(b, "null"); return;
-    }
     if (strcmp(n->type, TE_T_BOOL) == 0) {
         tebuf_puts(b, n->value ? "true" : "false");
         return;
     }
-    if (strcmp(n->type, TE_T_STRING) == 0) {
+    if (strcmp(n->type, TE_T_STRING) == 0 || strcmp(n->type, TE_T_DATETIME) == 0 || strcmp(n->type, TE_T_UUID) == 0) {
         te_json_emit_str(b, n->str_value ? n->str_value : "");
         return;
     }
@@ -105,6 +125,7 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
         tebuf_puts(b, s);
         return;
     }
+    if (strcmp(n->type, TE_T_NULL) == 0) { tebuf_puts(b, "null"); return; }
     if (strcmp(n->type, TE_T_LIST) == 0) {
         tebuf_putc(b, '[');
         ASTNode *cur = n->left;
@@ -133,113 +154,18 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
         tebuf_putc(b, '}');
         return;
     }
-    if (strcmp(n->type, TE_T_IDENTIFIER) == 0 && n->id) {
-        Variable *v = find_variable(n->id);
-        if (v) {
-            if (v->type && strcmp(v->type, TE_T_BOOL) == 0) {
-                tebuf_puts(b, v->value.int_value ? "true" : "false");
-                return;
-            }
-            if (v->type && strcmp(v->type, TE_T_NULL) == 0) { tebuf_puts(b, "null"); return; }
-            if (te_var_is_decimal(v)) { tebuf_puts(b, v->value.string_value ? v->value.string_value : "0"); return; }
-            if (v->vtype == VAL_STRING) { te_json_emit_str(b, v->value.string_value ? v->value.string_value : ""); return; }
-            if (v->vtype == VAL_INT)    { char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)v->value.int_value); tebuf_puts(b, tmp); return; }
-            if (v->vtype == VAL_FLOAT)  { char tmp[64]; te_fmt_double(tmp, sizeof(tmp), v->value.float_value); tebuf_puts(b, tmp); return; }
-            if (v->type && (strcmp(v->type,TE_T_LIST)==0 || strcmp(v->type,TE_T_MAP)==0)) {
-                te_json_emit_node(b, (ASTNode*)(intptr_t)v->value.object_value);
-                return;
-            }
-        }
-    }
-    /* v1.0.1: evaluate expression nodes used as inline object-literal values,
-     * e.g. { mensaje: "Hola " + nombre } (ADD string concat) or an
-     * interpolated string { mensaje: $"Hola {nombre}" }. Strings go through
-     * get_node_string(); numeric arithmetic through evaluate_expression(). */
-    if (strcmp(n->type, TE_T_ADD) == 0 || strcmp(n->type, TE_T_SUB) == 0 ||
-        strcmp(n->type, TE_T_MUL) == 0 || strcmp(n->type, TE_T_DIV) == 0 ||
-        strcmp(n->type, TE_T_MOD) == 0 || strcmp(n->type, TE_T_NEG) == 0 ||
-        strcmp(n->type, TE_T_STRING_INTERP) == 0) {
-        if (strcmp(n->type, TE_T_STRING_INTERP) == 0 || is_string_type(n)) {
-            char *s = get_node_string(n);
-            te_json_emit_str(b, s ? s : "");
-            if (s) free(s);
-        } else {
-            long long i64v;
-            double d = te_eval_i64(n, &i64v) ? (double)i64v : evaluate_expression(n);   /* Fase 1b */
-            if (te_eval_i64(n, &i64v)) {
-                char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", i64v);
-                tebuf_puts(b, tmp);
-            } else if (d == (long long)d) {
-                char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)d);
-                tebuf_puts(b, tmp);
-            } else {
-                char tmp[64]; te_fmt_double(tmp, sizeof(tmp), d);
-                tebuf_puts(b, tmp);
-            }
-        }
+    if (strcmp(n->type, TE_T_OBJECT) == 0 && !n->is_new_expr) {
+        TeValue v; te_leaf_to_value(n, &v);
+        te_json_emit_value(b, &v);
+        te_val_free(&v);
         return;
     }
-    /* Bug fix (0.0.31): object-property access used as a map-literal value,
-     * e.g. json({ req: b.req, num: b.num }) where `b` is a model-bound object.
-     * Without this, ACCESS_ATTR (the `obj.field` node) fell through to the
-     * final "null". Resolve it the same way concat()/get_node_string() and the
-     * DB binder do: string attributes via get_node_string(), numeric ones via
-     * evaluate_expression(), so the serialized JSON value preserves its type
-     * (consistent with the 0.0.29 fix for objects-as-arguments). */
-    if (strcmp(n->type, TE_T_ACCESS_ATTR) == 0) {
-        if (is_string_type(n)) {
-            char *s = get_node_string(n);
-            te_json_emit_str(b, s ? s : "");
-            if (s) free(s);
-        } else {
-            long long i64v;
-            double d = te_eval_i64(n, &i64v) ? (double)i64v : evaluate_expression(n);   /* Fase 1b */
-            if (te_eval_i64(n, &i64v)) {
-                char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", i64v);
-                tebuf_puts(b, tmp);
-            } else if (d == (long long)d) {
-                char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)d);
-                tebuf_puts(b, tmp);
-            } else {
-                char tmp[64]; te_fmt_double(tmp, sizeof(tmp), d);
-                tebuf_puts(b, tmp);
-            }
-        }
-        return;
-    }
-    /* gotcha #5: indexar un map/list inline como valor de un object-literal
-     * — { x: datos["k"] } / { y: items[0] }. Resolvemos el ACCESS_EXPR a su
-     * nodo-valor subyacente y lo re-emitimos para preservar su tipo
-     * (string / número / bool / mapa anidado). Antes caía al "null" final. */
-    if (strcmp(n->type, TE_T_ACCESS_EXPR) == 0) {
-        ASTNode *val = NULL;
-        ASTNode *map = resolve_to_map(n->left);
-        if (map) {
-            const char *key = NULL;
-            if (n->right && n->right->type) {
-                if (strcmp(n->right->type, TE_T_STRING) == 0) key = n->right->str_value;
-                else if (strcmp(n->right->type, TE_T_IDENTIFIER) == 0 ||
-                         strcmp(n->right->type, TE_T_ID) == 0) {
-                    Variable *kv = find_variable(n->right->id);
-                    if (kv && kv->vtype == VAL_STRING) key = kv->value.string_value;
-                }
-            }
-            if (key) {
-                ASTNode *pair = map_find_pair(map, key);
-                if (pair) val = pair->left;
-            }
-        } else {
-            ASTNode *list = resolve_to_list(n->left);
-            if (list && n->right) {
-                int idx = (int)evaluate_expression(n->right);
-                if (idx >= 0 && idx < list_length(list)) val = list_get_item(list, idx);
-            }
-        }
-        if (val) { te_json_emit_node(b, val); return; }
-        tebuf_puts(b, "null");
-        return;
-    }
-    tebuf_puts(b, "null");
+    if (strcmp(n->type, TE_T_LAMBDA) == 0 || strcmp(n->type, TE_T_KV_PAIR) == 0) { tebuf_puts(b, "null"); return; }
+    /* expresión: un solo camino */
+    TeValue v;
+    te_eval_value(n, &v);
+    te_json_emit_value(b, &v);
+    te_val_free(&v);
 }
 
 /* ------------------------------------------------------------------

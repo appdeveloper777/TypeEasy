@@ -112,6 +112,9 @@ typedef struct ASTNode {
     /* Gotcha 30c: item copy of a LIST-literal instance. left/right point into
      * the parse-time template, so free_ast must free this node only. */
     int   borrowed_children;
+    /* Fase E: 1 en el nodo OBJECT que produce la gramática para `new X(args)` (expresión a
+     * construir); 0 en los OBJECT que son DATOS (items de lista, wrappers) que se aliasan. */
+    int   is_new_expr;
     /* v0.0.13 (perf): columnar cache attached to LIST head when items are
      * homogeneous OBJECTs from a CSV load. NULL on all non-LIST nodes and on
      * LIST nodes that don't qualify. Owned by the LIST node; freed when the
@@ -301,6 +304,7 @@ void te_req_free_json_tree(ASTNode *root);
 void te_ret_scalar(ASTNode *n);
 void te_free_lambda_result(ASTNode *r);
 void te_req_owned_ast_register(ASTNode *root);
+void te_req_owned_obj_register(ObjectNode *obj);
 /* Gotcha 30c: fresh per-evaluation instance of a LIST literal (see ast.c). */
 ASTNode* te_list_literal_instance(ASTNode *lit);
 /* Function frames (locals shadow the caller's slots; see ast.c). */

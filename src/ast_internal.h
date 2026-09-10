@@ -47,6 +47,7 @@ void interpret_call_func(ASTNode *node);
 void interpret_call_method(ASTNode *node);
 const char* te_map_key_coerce(ASTNode *keyNode, char *buf, size_t cap);
 char* te_map_node_to_string(ASTNode *mapNode);
+char* te_list_node_to_string(ASTNode *listNode);
 int te_expr_is_null(ASTNode *l);
 void te_scope_unwind_to(int target);
 void interpret_statement_list(ASTNode *node);
@@ -69,5 +70,10 @@ Variable *te_decl_slot(const char *id);
 ASTNode* resolve_access_item(ASTNode *node);
 void te_sym_insert(const char *id, int idx);
 void te_value_to_variable(Variable *dst, ASTNode *value);
+void te_list_literal_construct_objects(ASTNode *value);   /* construye los `new X()` de un literal LIST (ast.c) */
+ObjectNode* clone_object(ObjectNode *original);
+Variable *find_variable_for(char *id);
+void te_set_ret_string(const char *s);   /* __ret__ = STRING (ast.c) */
+void te_set_ret_int(int n);
 
 #endif /* TE_AST_INTERNAL_H */

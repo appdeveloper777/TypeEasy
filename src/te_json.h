@@ -28,6 +28,8 @@ void te_json_set_eval_hooks(te_json_eval_fn call_func,
 /* Serialize `n` as JSON into `b`. Handles STRING/INT/NUMBER/FLOAT/BOOL/
  * LIST/MAP/OBJECT_LITERAL/IDENTIFIER and (if hooks set) CALL_FUNC/CALL_METHOD. */
 void te_json_emit_node(TeBuf *b, ASTNode *n);
+/* Serializa un valor de runtime (Variable/TeValue): escalares, null, LIST/MAP, instancia de clase. */
+void te_json_emit_value(TeBuf *b, const Variable *v);
 
 /* Parse a JSON value from *p (advances *p past consumed input).
  * Returns a freshly-allocated AST tree, or NULL on hard error. */
