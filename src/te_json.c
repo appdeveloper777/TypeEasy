@@ -9,6 +9,7 @@
 #include "ast.h"
 #include "te_vm.h"
 #include "te_value.h"
+#include "te_decimal.h"
 
 #include <ctype.h>
 #include <stdint.h>
@@ -78,6 +79,7 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
         hook(n);
         Variable *r = find_variable("__ret__");
         if (!r) { tebuf_puts(b, "null"); return; }
+        if (te_var_is_decimal(r)) { tebuf_puts(b, r->value.string_value ? r->value.string_value : "0"); return; }
         if (r->vtype == VAL_STRING) { te_json_emit_str(b, r->value.string_value ? r->value.string_value : ""); return; }
         if (r->vtype == VAL_INT) {
             if (r->type && strcmp(r->type, "BOOL") == 0) { tebuf_puts(b, r->value.int_value ? "true" : "false"); return; }
@@ -98,7 +100,7 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
         char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)n->value); tebuf_puts(b, tmp);
         return;
     }
-    if (strcmp(n->type, "FLOAT") == 0) {
+    if (strcmp(n->type, "FLOAT") == 0 || strcmp(n->type, "DECIMAL") == 0) {
         const char *s = n->str_value ? n->str_value : "0";
         tebuf_puts(b, s);
         return;
@@ -139,6 +141,7 @@ void te_json_emit_node(TeBuf *b, ASTNode *n) {
                 return;
             }
             if (v->type && strcmp(v->type, "NULL") == 0) { tebuf_puts(b, "null"); return; }
+            if (te_var_is_decimal(v)) { tebuf_puts(b, v->value.string_value ? v->value.string_value : "0"); return; }
             if (v->vtype == VAL_STRING) { te_json_emit_str(b, v->value.string_value ? v->value.string_value : ""); return; }
             if (v->vtype == VAL_INT)    { char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)v->value.int_value); tebuf_puts(b, tmp); return; }
             if (v->vtype == VAL_FLOAT)  { char tmp[64]; te_fmt_double(tmp, sizeof(tmp), v->value.float_value); tebuf_puts(b, tmp); return; }

@@ -1,4 +1,5 @@
 // expect-contains: -
 // expect-contains: T
+// nondeterministic: wall clock (bc-diff runs bc/walker one second apart)
 let t = now();
 println(t);

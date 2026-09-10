@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include "ast.h"
 #include "te_num.h"
+#include "te_decimal.h"
 #include "te_vm.h"
 #include "ast_internal.h"
 
@@ -188,9 +189,10 @@ static int te_decl_object_ctor(TeVM *vm, ASTNode *node, ASTNode *value_node, Var
             ParameterNode *p = m->params;
             ASTNode      *arg = object_node_for_constructor->left; // Usar el nodo correcto
             while (p && arg) {
-                ASTNode *vn = NULL;
+                ASTNode *vn = te_dec_arg_leaf(arg);
                // fprintf(stderr, "[DEBUG] Constructor arg: param=%s, arg->type=%s\n", p->name, arg->type ? arg->type : "NULL");
-                if (arg->type && (strcmp(arg->type, "STRING") == 0 || strcmp(arg->type, "STRING_LITERAL") == 0)) {
+                if (vn) {
+                } else if (arg->type && (strcmp(arg->type, "STRING") == 0 || strcmp(arg->type, "STRING_LITERAL") == 0)) {
                     vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
                     //fprintf(stderr, "[DEBUG] Constructor arg string val: %s\n", arg->str_value);
                 } else if (arg->type && strcmp(arg->type, "FLOAT") == 0) {
@@ -312,6 +314,8 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         } else if (strcmp(value_node->type, "ADD") == 0 || strcmp(value_node->type, "SUB") == 0 || strcmp(value_node->type, "MUL") == 0 || strcmp(value_node->type, "DIV") == 0 || strcmp(value_node->type, "MOD") == 0 || strcmp(value_node->type, "NEG") == 0 || strcmp(value_node->type, "BIT_AND") == 0 || strcmp(value_node->type, "BIT_OR") == 0 || strcmp(value_node->type, "BIT_XOR") == 0 || strcmp(value_node->type, "BIT_NOT") == 0 || strcmp(value_node->type, "SHL") == 0 || strcmp(value_node->type, "SHR") == 0 || strcmp(value_node->type, "IN") == 0) {
             if (strcmp(value_node->type, "ADD") == 0 && is_string_type(value_node)) {
                 effective_value_type_str = "STRING";
+            } else if (te_dec_expr_has_decimal(value_node)) {
+                effective_value_type_str = "DECIMAL";
             } else {
                 double result = evaluate_expression(value_node);
                 if (result == (int)result) {
@@ -388,7 +392,9 @@ if (value_node && (strcmp(value_node->type, "CALL_METHOD") == 0 || strcmp(value_
         //printf("[DEBUG] interpret_var_decl: assigning from evaluated_value_var (vtype=%d)\n", evaluated_value_var->vtype); fflush(stdout);
         
         // Crea un nuevo nodo AST persistente para almacenar el valor
-        if (evaluated_value_var->vtype == VAL_STRING) {
+        if (te_var_is_decimal(evaluated_value_var)) {
+            value_to_assign_node = te_dec_leaf(evaluated_value_var->value.string_value);
+        } else if (evaluated_value_var->vtype == VAL_STRING) {
             /* create_ast_leaf copia el string -> pasar el puntero directo.
              * El strdup() previo quedaba huerfano (fuga por cada `let x=func()`
              * que devuelve string: request_param, concat, jwt_sign, etc.). */
@@ -575,6 +581,27 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
         return;
     }
 
+    /* decimal: evaluación exacta (literal, variable, atributo, expresión o llamada). */
+    if (strcmp(declared, "decimal") == 0 || strcmp(declared, "decimal?") == 0) {
+        char dec[TE_DEC_TEXT_MAX];
+        if (!te_dec_eval(value_node, dec, sizeof(dec))) {
+            char *s = get_node_string(value_node);
+            TeDec d;
+            if (!s || !te_dec_parse(s, &d)) {
+                fprintf(stderr, "Error: cannot assign '%s' to decimal attribute '%s'.\n", s ? s : "", attr_name);
+                if (s) free(s);
+                return;
+            }
+            te_dec_format(&d, dec, sizeof(dec));
+            free(s);
+        }
+        if (obj->attributes[idx].vtype == VAL_STRING && obj->attributes[idx].value.string_value)
+            free(obj->attributes[idx].value.string_value);
+        obj->attributes[idx].vtype = VAL_STRING;
+        obj->attributes[idx].value.string_value = strdup(dec);
+        return;
+    }
+
     /* Validación de tipo: no permitir asignar un valor de tipo incompatible.
      * Se determina si el atributo declarado es de texto (string) o numérico,
      * y si el valor asignado es de texto o numérico. Un desajuste aborta. */
@@ -723,7 +750,9 @@ static void te_assign_from_call(TeVM *vm, ASTNode *node, ASTNode *var_node, ASTN
 
         // 3. Crear un nodo temporal para el valor
         ASTNode *temp_node = NULL;
-        if (ret_val->vtype == VAL_STRING) {
+        if (te_var_is_decimal(ret_val)) {
+            temp_node = te_dec_leaf(ret_val->value.string_value);
+        } else if (ret_val->vtype == VAL_STRING) {
             /* create_ast_leaf interna/copia el string: pasar el puntero directo.
              * El strdup() previo quedaba huerfano (fuga por cada `var x=func()`). */
             temp_node = create_ast_leaf("STRING", 0, ret_val->value.string_value, NULL);
@@ -896,7 +925,10 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
         }
         long long i64v; double result;
         ASTNode* temp_node = NULL;
-        if (te_eval_num(value_node, &i64v, &result)) {   /* Fase 1b */
+        char dec[TE_DEC_TEXT_MAX];
+        if (te_dec_expr_has_decimal(value_node) && te_dec_eval(value_node, dec, sizeof(dec))) {   /* decimal exacto */
+            temp_node = te_dec_leaf(dec);
+        } else if (te_eval_num(value_node, &i64v, &result)) {   /* Fase 1b */
             temp_node = create_ast_leaf_number("INT", i64v, NULL, NULL);
         } else {
             char* str_res = double_to_string(result);

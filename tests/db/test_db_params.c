@@ -47,6 +47,11 @@ ASTNode *create_kv_pair_node(char *key, ASTNode *value) {
     return n;
 }
 Variable *find_variable(char *name) { (void)name; return NULL; }
+/* te_decimal.c (no enlazado): db_params solo consulta el tag y crea el leaf. */
+int te_var_is_decimal(const Variable *v) {
+    return v && v->vtype == VAL_STRING && v->type && strcmp(v->type, "DECIMAL") == 0;
+}
+ASTNode *te_dec_leaf(const char *text) { return create_ast_leaf("DECIMAL", 0, (char *)(text ? text : "0"), NULL); }
 
 /* db_arg_as_typed_map_head() (no ejercitado por este test) referencia estos
  * símbolos; se stubean para resolver el enlace sin arrastrar ast.c. */

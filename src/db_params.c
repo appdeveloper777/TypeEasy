@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include <stdint.h>
 #include "te_vm.h"
+#include "te_decimal.h"
 
 /* === Flag opt-in: tratar el STRING vacio ("") como SQL NULL ================
  * Por default 0 = comportamiento legacy (interpola ''). Cuando se enciende
@@ -64,6 +65,8 @@ ASTNode* db_arg_as_map_head(ASTNode* args, int idx, int* out_owned) {
                 ASTNode* leaf = NULL;
                 if (a->vtype == VAL_INT) {
                     leaf = create_ast_leaf("NUMBER", a->value.int_value, NULL, NULL);
+                } else if (te_var_is_decimal(a)) {
+                    leaf = te_dec_leaf(a->value.string_value);
                 } else if (a->vtype == VAL_STRING) {
                     leaf = create_ast_leaf("STRING", 0,
                                            a->value.string_value ? a->value.string_value : "",
@@ -343,7 +346,7 @@ static int append_value(char** buf, size_t* len, size_t* cap,
         }
         buf_append(buf, len, cap, raw, strlen(raw));
         return 1;
-    } else if (strcmp(tipo, "FLOAT") == 0 || strcmp(tipo, "FLOAT_LITERAL") == 0) {
+    } else if (strcmp(tipo, "FLOAT") == 0 || strcmp(tipo, "FLOAT_LITERAL") == 0 || strcmp(tipo, "DECIMAL") == 0) {
         /* Literal flotante (p.ej. 19.9): el parser lo guarda como un leaf
          * "FLOAT" con el texto numérico en str_value (value=0). Sin esta rama
          * caía al `else` final (kind=4) y se interpolaba NULL, perdiendo el
@@ -371,6 +374,13 @@ static int append_value(char** buf, size_t* len, size_t* cap,
         if (!v) { kind = 4; }
         else if (v->vtype == VAL_INT) { kind = 1; vi = v->value.int_value; }
         else if (v->vtype == VAL_FLOAT) { kind = 2; vf = v->value.float_value; }
+        else if (te_var_is_decimal(v)) {
+            /* decimal: texto numérico exacto, sin comillas (DECIMAL de SQL lo recibe intacto) */
+            const char *raw = v->value.string_value ? v->value.string_value : "0";
+            if (sink) return sink_emit(sink, buf, len, cap, DB_BIND_NUMTEXT, 0, 0, raw);
+            buf_append(buf, len, cap, raw, strlen(raw));
+            return 1;
+        }
         else if (v->vtype == VAL_STRING) { kind = 3; vs = v->value.string_value ? v->value.string_value : ""; }
         else { kind = 4; }
     } else if (strcmp(tipo, "ACCESS_ATTR") == 0 && val->left && val->right) {
@@ -399,6 +409,12 @@ static int append_value(char** buf, size_t* len, size_t* cap,
                     handled = 1; /* atributo encontrado: null/objeto -> NULL (kind=4) */
                     if (attr->vtype == VAL_INT) { kind = 1; vi = attr->value.int_value; }
                     else if (attr->vtype == VAL_FLOAT) { kind = 2; vf = attr->value.float_value; }
+                    else if (te_var_is_decimal(attr)) {
+                        const char *raw = attr->value.string_value ? attr->value.string_value : "0";
+                        if (sink) return sink_emit(sink, buf, len, cap, DB_BIND_NUMTEXT, 0, 0, raw);
+                        buf_append(buf, len, cap, raw, strlen(raw));
+                        return 1;
+                    }
                     else if (attr->vtype == VAL_STRING) { kind = 3; vs = attr->value.string_value ? attr->value.string_value : ""; }
                     break;
                 }

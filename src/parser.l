@@ -212,6 +212,7 @@
 "true"                  { return TRUETOK; }
 "false"                 { return FALSETOK; }
 "bool"                  { g_vm.decl_stmt_line = yylineno; yylval->sval = strdup(yytext); return BOOLTYPE; }
+"decimal"               { g_vm.decl_stmt_line = yylineno; yylval->sval = strdup(yytext); return DECIMALTYPE; }
 "datetime"              { g_vm.decl_stmt_line = yylineno; yylval->sval = strdup(yytext); return DATETIMETYPE; }
 "uuid"                  { g_vm.decl_stmt_line = yylineno; yylval->sval = strdup(yytext); return UUIDTYPE; }
 "try"                   { return TRY; }
@@ -352,6 +353,14 @@
     buf[j] = '\0';
     yylval->ival = strtoll(buf, NULL, 10);
     return NUMBER;
+}
+[0-9][0-9_]*(\.[0-9][0-9_]*)?m  {
+    /* Literal decimal exacto: 12.50m / 3m (sufijo m, como C#) */
+    char buf[64]; int j = 0;
+    for (char *p = yytext; *p && *p != 'm' && j < 63; p++) if (*p != '_') buf[j++] = *p;
+    buf[j] = '\0';
+    yylval->sval = strdup(buf);
+    return DECIMAL_LITERAL;
 }
 [0-9][0-9_]*\.[0-9][0-9_]*  {
     /* Float con underscores opcional */

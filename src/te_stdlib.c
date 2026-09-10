@@ -33,6 +33,7 @@
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
 #include "te_vm.h"
+#include "te_decimal.h"
 
 /* ---- Bridges to ast.c (de-staticized helpers) ---- */
 extern void evaluate_native_args(ASTNode *arg);
@@ -796,6 +797,7 @@ int te_builtin_dispatch(ASTNode *node) {
      * load_native) live in the hash table; the legacy if-chain below
      * remains as transparent fallback for builtins not yet migrated. */
     if (te_builtin_dispatch_registry(node, a0)) return 1;
+    if (te_dec_builtin(fn, a0)) return 1;          /* decimal(x) (te_decimal.c) */
 
     if (te_bi_core(fn, node, a0, a1)) return 1;
 

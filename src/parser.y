@@ -51,7 +51,7 @@
 %token       PUBLIC PRIVATE PROTECTED
 %token       NULLTOK QMARK
 %token       TRUETOK FALSETOK
-%token <sval> BOOLTYPE DATETIMETYPE UUIDTYPE
+%token <sval> BOOLTYPE DATETIMETYPE UUIDTYPE DECIMALTYPE DECIMAL_LITERAL
 %token       TRY CATCH FINALLY THROW
 %token       PLUS_ASSIGN MINUS_ASSIGN STAR_ASSIGN SLASH_ASSIGN INCREMENT DECREMENT
 %token       WHILE BREAK CONTINUE
@@ -445,12 +445,14 @@ attribute_decl:
   | member_name COLON STRING SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "string"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
   | member_name COLON FLOAT SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "float"); } else { fprintf(stderr, "Error: no class defined for attribute '%s'.\n", $1); } }
   | member_name COLON BOOLTYPE SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "bool"); } }
+  | member_name COLON DECIMALTYPE SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "decimal"); } }
   | member_name COLON DATETIMETYPE SEMICOLON { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "datetime"); } }
   | member_name COLON UUIDTYPE SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "uuid"); } }
   | member_name COLON INT QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "int?"); } }
   | member_name COLON STRING QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "string?"); } }
   | member_name COLON FLOAT QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "float?"); } }
   | member_name COLON BOOLTYPE QMARK SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "bool?"); } }
+  | member_name COLON DECIMALTYPE QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "decimal?"); } }
   | member_name COLON DATETIMETYPE QMARK SEMICOLON { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "datetime?"); } }
   | member_name COLON UUIDTYPE QMARK SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, "uuid?"); } }
   /* C#/C-style fields: [public|private|protected] type name [= default] ; */
@@ -469,6 +471,7 @@ field_type:
   | STRING       { $$ = $1; }
   | FLOAT        { $$ = $1; }
   | BOOLTYPE     { $$ = $1; }
+  | DECIMALTYPE  { $$ = $1; }
   | DATETIMETYPE { $$ = $1; }
   | UUIDTYPE     { $$ = $1; }
   ;
@@ -492,6 +495,8 @@ parameter_decl:
   | IDENTIFIER COLON FLOAT     { $$ = create_parameter_node($1, $3); }
   | FLOAT IDENTIFIER           { $$ = create_parameter_node($2, $1); }
   | IDENTIFIER COLON BOOLTYPE     { $$ = create_parameter_node($1, $3); }
+  | IDENTIFIER COLON DECIMALTYPE  { $$ = create_parameter_node($1, $3); }
+  | DECIMALTYPE IDENTIFIER        { $$ = create_parameter_node($2, $1); }
   | IDENTIFIER COLON DATETIMETYPE { $$ = create_parameter_node($1, $3); }
   | IDENTIFIER COLON UUIDTYPE     { $$ = create_parameter_node($1, $3); }
   ;
@@ -511,6 +516,7 @@ method_return_type:
   | VOID     { $$ = strdup("void"); }
   | DYNAMIC  { $$ = strdup("dynamic"); }
   | BOOLTYPE     { $$ = strdup("bool"); }
+  | DECIMALTYPE  { $$ = strdup("decimal"); }
   | DATETIMETYPE { $$ = strdup("datetime"); }
   | UUIDTYPE     { $$ = strdup("uuid"); }
   | INT QMARK      { $$ = strdup("int?"); }
@@ -518,6 +524,7 @@ method_return_type:
   | FLOAT QMARK    { $$ = strdup("float?"); }
   | DYNAMIC QMARK  { $$ = strdup("dynamic?"); }
   | BOOLTYPE QMARK     { $$ = strdup("bool?"); }
+  | DECIMALTYPE QMARK  { $$ = strdup("decimal?"); }
   | DATETIMETYPE QMARK { $$ = strdup("datetime?"); }
   | UUIDTYPE QMARK     { $$ = strdup("uuid?"); }
   | IDENTIFIER QMARK { char *t = malloc(strlen($1)+2); sprintf(t,"%s?",$1); free($1); $$ = t; }
@@ -568,6 +575,7 @@ expression:
   | IDENTIFIER       { $$ = create_ast_leaf("IDENTIFIER", 0, NULL, $1); }
   | NUMBER       { $$ = create_ast_leaf("NUMBER", $1, NULL, NULL); }
   | FLOAT_LITERAL       { $$ = create_ast_leaf("FLOAT", 0, $1, NULL); }
+  | DECIMAL_LITERAL     { $$ = create_ast_leaf("DECIMAL", 0, $1, NULL); }
   | STRING_LITERAL       { $$ = create_ast_leaf("STRING", 0, $1, NULL); }
   | STRING_INTERP        { $$ = create_ast_leaf("STRING_INTERP", 0, $1, NULL); }
   | NULLTOK       { $$ = create_ast_leaf("NULL", 0, NULL, NULL); }
@@ -639,6 +647,7 @@ var_decl:
   | CONST IDENTIFIER COLON type_name ASSIGN expression SEMICOLON  { ASTNode* d = create_var_decl_node($2, $6); d->value = 1; if ($4) d->str_value = $4; $$ = d; }
   | STRING IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("STRING"); $$ = decl; }
   | BOOLTYPE IDENTIFIER ASSIGN expression SEMICOLON     { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("BOOL"); $$ = decl; }
+  | DECIMALTYPE IDENTIFIER ASSIGN expression SEMICOLON  { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("DECIMAL"); $$ = decl; }
   | DATETIMETYPE IDENTIFIER ASSIGN expression SEMICOLON { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("DATETIME"); $$ = decl; }
   | UUIDTYPE IDENTIFIER ASSIGN expression SEMICOLON     { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup("UUID"); $$ = decl; }
   | VAR IDENTIFIER ASSIGN expression SEMICOLON  { $$ = create_var_decl_node($2, $4); }
@@ -660,6 +669,7 @@ type_name:
   | FLOAT        { $$ = strdup("FLOAT"); }
   | STRING       { $$ = strdup("STRING"); }
   | BOOLTYPE     { $$ = strdup("BOOL"); }
+  | DECIMALTYPE  { $$ = strdup("DECIMAL"); }
   | DATETIMETYPE { $$ = strdup("DATETIME"); }
   | UUIDTYPE     { $$ = strdup("UUID"); }
   | IDENTIFIER   { $$ = NULL; /* custom/unknown type: keep dynamic */ }
@@ -799,6 +809,8 @@ func_call_expr SEMICOLON { $$ = $1; }
 func_call_expr:
     IDENTIFIER LPAREN RPAREN { $$ = create_call_node($1, NULL); }
     | IDENTIFIER LPAREN expression_list RPAREN { $$ = create_call_node($1, $3); }
+    /* decimal(x): `decimal` es keyword de tipo, así que la conversión se reduce aquí. */
+    | DECIMALTYPE LPAREN expression_list RPAREN { free($1); $$ = create_call_node("decimal", $3); }
     /* Gotcha #2: llamada sobre el resultado de otra llamada — `make(10)(5)`,
      * `make(10)(5)(...)`. Left-recursivo sobre func_call_expr: el callee ya
      * reducido se invoca con los nuevos argumentos. */

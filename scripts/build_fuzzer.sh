@@ -38,7 +38,7 @@ MOTOR_OBJS="ast.o mysql_bridge.o postgres_bridge.o sqlserver_bridge.o \
 db_params.o orm_bridge.o typeeasy_api.o typeeasy_api_server.o wasm_backend.o \
 debugger.o te_builtins.o te_http.o te_json.o te_bytecode.o te_csv.o te_xlsx.o te_colcache.o \
 te_stdlib.o te_bridge.o te_async.o te_evloop.o te_linq.o te_linq_ops.o te_math.o te_string.o \
-te_list.o te_map.o te_print.o te_interp_flow.o te_value.o te_vm.o te_interp_decl.o"
+te_list.o te_map.o te_print.o te_interp_flow.o te_value.o te_vm.o te_decimal.o te_interp_decl.o"
 GLUE_OBJS="parser.tab.o lex.yy.o civetweb.o te_websocket.o"
 ALL_OBJS="$MOTOR_OBJS $GLUE_OBJS"
 

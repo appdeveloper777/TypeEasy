@@ -1,0 +1,35 @@
+// decimal: aritmética exacta para dinero (sufijo m, decimal(x), round, JSON, comparaciones).
+// expect: 0.3|0.1+0.2 float=0.30000000000000004|3.105|2.200|2.50|0.333333333333333333|0.10|3.33|10.01|-3.33|1|1|1|dec|33.33|{"total":33.33,"iva":2.33}|1010.10|{"cantidad": 3, "precio": 337.00}|1011.00|decimal|-7.5|7.5|100.00|21.690000
+let a = 0.1m;
+let b = 0.2m;
+let s = a + b;
+var out = "" + s;
+let f = 0.1 + 0.2;
+out = out + "|0.1+0.2 float=" + f;
+out = out + "|" + (1.10m + 2.005m);
+out = out + "|" + (1.10m * 2.0m);
+out = out + "|" + (10.00m / 4m);
+out = out + "|" + (1m / 3m);
+out = out + "|" + (1m % 0.30m);
+let t = 10m / 3m;
+out = out + "|" + t.round(2);
+out = out + "|" + (10.005m).round(2);
+out = out + "|" + (-10m / 3m).round(2);
+out = out + "|" + (1.10m == 1.1m ? 1 : 0);
+out = out + "|" + (2.5m > 2.49m ? 1 : 0);
+out = out + "|" + (0.1m + 0.2m == 0.3m ? 1 : 0);
+decimal precio = 33.33m;
+out = out + "|dec|" + precio;
+let iva = (precio * 0.07m).round(2);
+out = out + "|" + json({ total: precio, iva: iva });
+class Linea { cantidad:int; precio:decimal; __constructor(_c:int, _p:decimal) { this.cantidad = _c; this.precio = _p; } Total() : decimal { return this.precio * this.cantidad; } }
+let l = new Linea(3, 336.70m);
+out = out + "|" + l.Total();
+l.precio = l.precio + 0.30m;
+out = out + "|" + json(l) + "|" + l.Total();
+out = out + "|" + (decimal("12.5") == 12.50m ? "decimal" : "no");
+out = out + "|" + (-(7.5m)) + "|" + (-7.5m).abs();
+var acum = 0m;
+for (i = 0; 10; 1) { acum = acum + 10m; }
+out = out + "|" + acum.round(2) + "|" + (decimal(21.69) * 1.0000m);
+println(out);

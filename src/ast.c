@@ -26,6 +26,7 @@
 #include "te_http.h"
 #include "te_json.h"
 #include "te_bytecode.h"
+#include "te_decimal.h"
 #include "te_num.h"
 #include "te_csv.h"
 #include "te_xlsx.h"
@@ -615,7 +616,9 @@ void native_json(ASTNode *arg) {
                         strcat(json_buffer, temp);
                         
                         Variable *attr = &obj->attributes[i];
-                        if (attr->vtype == VAL_STRING) {
+                        if (te_var_is_decimal(attr)) {
+                            strcat(json_buffer, attr->value.string_value ? attr->value.string_value : "0");
+                        } else if (attr->vtype == VAL_STRING) {
                             strcat(json_buffer, "\"");
                             strcat(json_buffer, attr->value.string_value ? attr->value.string_value : "");
                             strcat(json_buffer, "\"");
@@ -670,7 +673,9 @@ void native_json(ASTNode *arg) {
         char temp[512];
         snprintf(temp, sizeof(temp), "\"%s\": ", obj->class->attributes[i].id);
         strcat(json_buffer, temp);
-        if (obj->attributes[i].vtype == VAL_STRING) {
+        if (te_var_is_decimal(&obj->attributes[i])) {
+            strcat(json_buffer, obj->attributes[i].value.string_value ? obj->attributes[i].value.string_value : "0");
+        } else if (obj->attributes[i].vtype == VAL_STRING) {
             strcat(json_buffer, "\"");
             strcat(json_buffer, obj->attributes[i].value.string_value ? obj->attributes[i].value.string_value : "");
             strcat(json_buffer, "\"");
@@ -994,6 +999,8 @@ char* get_node_string(ASTNode* node) {
             free(l); free(r);
             return out;
         }
+        char dec[TE_DEC_TEXT_MAX];
+        if (te_dec_expr_has_decimal(node) && te_dec_eval(node, dec, sizeof(dec))) return strdup(dec);   /* decimal exacto */
         long long i64v;
         if (te_eval_i64(node, &i64v)) { snprintf(temp, sizeof(temp), "%lld", i64v); return strdup(temp); }   /* Fase 1b */
         double d = evaluate_expression(node);
@@ -1009,6 +1016,12 @@ char* get_node_string(ASTNode* node) {
     if (node->type && strcmp(node->type, "FLOAT") == 0) {
         te_fmt_double(temp, sizeof(temp), node->str_value ? atof(node->str_value) : 0.0);
         return strdup(temp);
+    }
+    if (node->type && strcmp(node->type, "DECIMAL") == 0) return strdup(node->str_value ? node->str_value : "0");
+    if (node->type && (strcmp(node->type, "SUB") == 0 || strcmp(node->type, "MUL") == 0 || strcmp(node->type, "DIV") == 0 ||
+                       strcmp(node->type, "MOD") == 0 || strcmp(node->type, "NEG") == 0) && te_dec_expr_has_decimal(node)) {
+        char dec[TE_DEC_TEXT_MAX];
+        if (te_dec_eval(node, dec, sizeof(dec))) return strdup(dec);
     }
 
     if (node->type && (strcmp(node->type, "IDENTIFIER") == 0 || strcmp(node->type, "ID") == 0)) {
@@ -2690,6 +2703,9 @@ ObjectNode *create_object(ClassNode *class) {
         } else if (strcmp(bt, "float") == 0) {
             obj->attributes[i].vtype = VAL_FLOAT;
             obj->attributes[i].value.float_value = 0.0;
+        } else if (strcmp(bt, "decimal") == 0) {
+            obj->attributes[i].vtype = VAL_STRING;
+            obj->attributes[i].value.string_value = strdup("0");
         } else {
             obj->attributes[i].vtype = VAL_INT;
             obj->attributes[i].value.int_value = 0;
@@ -3278,8 +3294,9 @@ static void te_list_literal_construct_objects(ASTNode *value) {
         if (m) {
             ParameterNode *p = m->params;
             while (p && arg) {
-                ASTNode *vn = NULL;
-                if (arg->type && strcmp(arg->type, "STRING") == 0) {
+                ASTNode *vn = te_dec_arg_leaf(arg);
+                if (vn) {
+                } else if (arg->type && strcmp(arg->type, "STRING") == 0) {
                     vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
                 } 
                 else if (arg->type && strcmp(arg->type, "FLOAT") == 0) {
@@ -3433,6 +3450,13 @@ void declare_variable(char *id, ASTNode *value, int is_const) {
             return;
         }
         long long i64v;
+        char dec[TE_DEC_TEXT_MAX];
+        if (te_dec_expr_has_decimal(value) && te_dec_eval(value, dec, sizeof(dec))) {   /* decimal exacto */
+            g_vm.vars[my_index].vtype = VAL_STRING;
+            g_vm.vars[my_index].value.string_value = strdup(dec);
+            g_vm.vars[my_index].type = strdup("DECIMAL");
+            return;
+        }
         if (te_eval_i64(value, &i64v)) {   /* Fase 1b: entero exacto de 64 bits */
             g_vm.vars[my_index].vtype = VAL_INT;
             g_vm.vars[my_index].value.int_value = i64v;
@@ -3685,6 +3709,11 @@ void te_value_to_variable(Variable *dst, ASTNode *value) {
         dst->vtype = VAL_FLOAT;
         dst->type = strdup("FLOAT");
         dst->value.float_value = value->str_value ? atof(value->str_value) : 0.0;
+    } else if (strcmp(t, "DECIMAL") == 0) {
+        /* decimal: texto canónico en string_value con tag DECIMAL (ver te_decimal.h) */
+        dst->vtype = VAL_STRING;
+        dst->type = strdup("DECIMAL");
+        dst->value.string_value = strdup(value->str_value ? value->str_value : "0");
     } else if (strcmp(t, "BOOL") == 0) {
         /* #5: un literal/valor BOOL se almacena con payload entero (0|1) pero
          * conserva el tag de tipo "BOOL" para que print/concat lo muestren como
@@ -3841,6 +3870,7 @@ NodeKind nk_from_str(const char *t) {
             if (!strcmp(t, "FOR_IN")) return NK_FOR_IN;
             if (!strcmp(t, "FOR_C")) return NK_FOR_C;
             if (!strcmp(t, "FLOAT")) return NK_FLOAT;
+            if (!strcmp(t, "DECIMAL")) return NK_DECIMAL;
             if (!strcmp(t, "FILTER_CALL")) return NK_FILTER_CALL;
             if (!strcmp(t, "FPRINT")) return NK_FPRINT;
             if (!strcmp(t, "FPRINTLN")) return NK_FPRINTLN;
@@ -4394,7 +4424,7 @@ int is_string_type(ASTNode *node) {
     if (node->type && (strcmp(node->type, "STRING") == 0 || strcmp(node->type, "STRING_LITERAL") == 0 || strcmp(node->type, "STRING_INTERP") == 0)) return 1;
     if (node->type && (strcmp(node->type, "IDENTIFIER") == 0 || strcmp(node->type, "ID") == 0)) {
         Variable *v = find_variable(node->id);
-        if (v && v->vtype == VAL_STRING) return 1;
+        if (v && v->vtype == VAL_STRING && !te_var_is_decimal(v)) return 1;   /* decimal: numérico, no concatena */
     }
     if (node->type && strcmp(node->type, "ACCESS_ATTR") == 0) {
         ASTNode *o = node->left;
@@ -4446,7 +4476,7 @@ int is_string_type(ASTNode *node) {
         if (obj && obj->class) {
             for (int i = 0; i < obj->class->attr_count; i++) {
                 if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
-                    if (obj->attributes[i].vtype == VAL_STRING) return 1;
+                    if (obj->attributes[i].vtype == VAL_STRING && !te_var_is_decimal(&obj->attributes[i])) return 1;
                 }
             }
         }
@@ -5411,6 +5441,7 @@ double te_var_as_double(Variable *var, const char *name) {
     if (var->type && strcmp(var->type, "NULL") == 0) return 0;
     if (var->vtype == VAL_INT)   return (double)var->value.int_value;
     if (var->vtype == VAL_FLOAT) return var->value.float_value;
+    if (te_var_is_decimal(var)) return strtod(var->value.string_value ? var->value.string_value : "0", NULL);
     if (var->vtype == VAL_STRING) {
         printf("Error: variable '%s' is a string, cannot be evaluated as a number.\n", name ? name : "?");
         return 0;
@@ -5867,6 +5898,13 @@ double te_walk_expression(ASTNode *node) {
     if (!node) return 0;
     NodeKind k = nk_of(node);
 
+    /* decimal: si la expresión toca un operando decimal, aritmética y comparaciones
+     * se resuelven EXACTAS (te_decimal.c) y aquí solo se convierte el resultado. */
+    if ((k >= NK_ADD && k <= NK_MOD) || (k >= NK_GT && k <= NK_LT_EQ) || k == NK_NEG) {
+        double dv;
+        if (te_dec_expr_has_decimal(node) && te_dec_eval_double(node, &dv)) return dv;
+    }
+
     switch (k) {
     case NK_NULL:
         return 0; /* null como número = 0 */
@@ -5879,6 +5917,8 @@ double te_walk_expression(ASTNode *node) {
 
     case NK_FLOAT:
         return atof(node->str_value);
+    case NK_DECIMAL:
+        return node->str_value ? strtod(node->str_value, NULL) : 0;
 
     case NK_GT: case NK_LT: case NK_GT_EQ: case NK_LT_EQ:
     case NK_ADD: case NK_SUB: case NK_MUL: case NK_DIV: case NK_MOD:
@@ -6893,6 +6933,16 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
                 else if (strcmp(val->type, "STRING") == 0) d = atof(val->str_value ? val->str_value : "0");
                 dst->value.float_value = d;
                 dst->vtype = VAL_FLOAT;
+            } else if (strcmp(atype, "decimal") == 0) {
+                /* texto numérico exacto tal como vino en el JSON (número o string) */
+                char nb[32]; const char *src = "0";
+                if (strcmp(val->type, "INT") == 0) { snprintf(nb, sizeof nb, "%lld", (long long)val->value); src = nb; }
+                else if (val->str_value && *val->str_value) src = val->str_value;
+                TeDec d; char dec[TE_DEC_TEXT_MAX];
+                if (te_dec_parse(src, &d)) te_dec_format(&d, dec, sizeof dec); else snprintf(dec, sizeof dec, "0");
+                if (dst->vtype == VAL_STRING && dst->value.string_value) free(dst->value.string_value);
+                dst->value.string_value = strdup(dec);
+                dst->vtype = VAL_STRING;
             } else {
                 /* int / default */
                 int iv = 0;
@@ -7447,8 +7497,9 @@ static int te_cm_list_builtin(ASTNode *node, ASTNode *objNode, Variable *v) {
                         ParameterNode *p = m->params;
                         ASTNode *carg = arg->left;
                         while (p && carg) {
-                            ASTNode *vn = NULL;
-                            if (carg->type && strcmp(carg->type, "STRING") == 0) {
+                            ASTNode *vn = te_dec_arg_leaf(carg);
+                            if (vn) {
+                            } else if (carg->type && strcmp(carg->type, "STRING") == 0) {
                                 vn = create_ast_leaf("STRING", 0, carg->str_value, NULL);
                             } else if (carg->type && strcmp(carg->type, "FLOAT") == 0) {
                                 vn = create_ast_leaf("FLOAT", 0, carg->str_value, NULL);
@@ -7724,8 +7775,9 @@ static int te_cm_bind_args(ASTNode *node, MethodNode *m, ObjectNode *obj) {
         }
     }
     while (p && arg) {
-        ASTNode *vn = NULL;
-        if (arg->type && strcmp(arg->type, "STRING") == 0) {
+        ASTNode *vn = te_dec_arg_leaf(arg);
+        if (vn) {
+        } else if (arg->type && strcmp(arg->type, "STRING") == 0) {
             vn = create_ast_leaf("STRING", 0, arg->str_value, NULL);
         } else if (arg->type && (strcmp(arg->type,"ID")==0 || strcmp(arg->type,"IDENTIFIER")==0)) {
             Variable *v_arg = find_variable(arg->id);
@@ -7883,7 +7935,10 @@ static int te_cm_materialize_return(ASTNode *node, MethodNode *m, ObjectNode *ob
                 native_json(g_vm.return_node->left);
             } else {
                 ASTNode *lit = NULL;
-                if (g_vm.return_node->type && strcmp(g_vm.return_node->type, "STRING") == 0) {
+                char decbuf[TE_DEC_TEXT_MAX];
+                if (te_dec_expr_has_decimal(g_vm.return_node) && te_dec_eval(g_vm.return_node, decbuf, sizeof(decbuf))) {
+                    lit = te_dec_leaf(decbuf);   /* decimal exacto: literal, variable, atributo o expresión */
+                } else if (g_vm.return_node->type && strcmp(g_vm.return_node->type, "STRING") == 0) {
                     lit = create_ast_leaf("STRING", 0, g_vm.return_node->str_value, NULL);
                 } else if (g_vm.return_node->id) {
                     Variable *rv = find_variable(g_vm.return_node->id);
@@ -7972,11 +8027,13 @@ static int te_cm_materialize_return(ASTNode *node, MethodNode *m, ObjectNode *ob
                             if (strcmp(expected_cmp, "string") == 0 && strcmp(actual, "STRING") == 0) ok = 1;
                             if (strcmp(expected_cmp, "float") == 0  && (strcmp(actual, "FLOAT") == 0 || strcmp(actual, "INT") == 0)) ok = 1;
                             if (strcmp(expected_cmp, "bool") == 0   && (strcmp(actual, "BOOL") == 0 || strcmp(actual, "INT") == 0)) ok = 1;
+                            if (strcmp(expected_cmp, "decimal") == 0 && (strcmp(actual, "DECIMAL") == 0 || strcmp(actual, "INT") == 0)) ok = 1;
                             if (!ok) {
                                 const char *actual_lower = "?";
                                 if (strcmp(actual, "INT") == 0)    actual_lower = "int";
                                 else if (strcmp(actual, "STRING") == 0) actual_lower = "string";
                                 else if (strcmp(actual, "FLOAT") == 0)  actual_lower = "float";
+                                else if (strcmp(actual, "DECIMAL") == 0) actual_lower = "decimal";
                                 else if (strcmp(actual, "BOOL") == 0)   actual_lower = "bool";
                                 else if (strcmp(actual, "NULL") == 0)   actual_lower = "null";
                                 char buf[256];
@@ -8155,6 +8212,7 @@ static void interpret_call_method_impl(ASTNode *node) {
     /* Fase 8: string methods (.upper/.lower/.trim/.contains/.split/.length
      * + Ola 13 extras). Dispatched in te_string.c (Nivel B paso 2.b). */
     if (te_string_method_dispatch(node, objNode, v)) return;
+    if (te_dec_method_dispatch(node, objNode, v)) return;   /* d.round(n) / d.to_float() / ... (te_decimal.c) */
 
     if (g_vm.ret_var_active) {
         if (g_vm.ret_var.vtype == VAL_STRING && g_vm.ret_var.value.string_value) {
@@ -8834,6 +8892,7 @@ static ASTNode* call_lambda_exec_body(ASTNode *lambda) {
             }
         }
         long long i64r;
+        { char dec[TE_DEC_TEXT_MAX]; if (te_dec_expr_has_decimal(ret) && te_dec_eval(ret, dec, sizeof(dec))) return te_dec_leaf(dec); }
         if (te_eval_i64(ret, &i64r)) return create_ast_leaf_number("NUMBER", i64r, NULL, NULL);   /* Fase 1b */
         double dr = evaluate_expression(ret);
         if (dr == (double)(long long)dr) return create_ast_leaf_number("NUMBER", (long long)dr, NULL, NULL);
@@ -8940,6 +8999,7 @@ static ASTNode* call_lambda_exec_body(ASTNode *lambda) {
         }
     }
     long long i64v;
+    { char dec[TE_DEC_TEXT_MAX]; if (te_dec_expr_has_decimal(body) && te_dec_eval(body, dec, sizeof(dec))) return te_dec_leaf(dec); }
     if (te_eval_i64(body, &i64v)) return create_ast_leaf_number("NUMBER", i64v, NULL, NULL);   /* Fase 1b */
     double r = evaluate_expression(body);
     if (r == (double)(long long)r) {
