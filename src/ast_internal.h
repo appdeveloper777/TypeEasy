@@ -76,4 +76,20 @@ Variable *find_variable_for(char *id);
 void te_set_ret_string(const char *s);   /* __ret__ = STRING (ast.c) */
 void te_set_ret_int(int n);
 
+/* Fase F: frames de llamada (lambdas, métodos, constructores). El frame es DUEÑO de los slots
+ * creados durante la llamada (se liberan al pop), sombrea en sitio los slots del llamador que
+ * la llamada re-declara/ata (se restauran al pop) y salva/restaura el registro `this`. */
+typedef struct { Variable *slot; Variable saved; } ParamShadow;
+typedef struct TeFrame {
+    ParamShadow *sh;
+    int n, cap;
+    int base;                 /* g_vm.var_count al entrar */
+    ObjectNode *saved_this; int saved_this_active;
+    struct TeFrame *prev;
+} TeFrame;
+void te_frame_push(TeFrame *f);
+void te_frame_pop(TeFrame *f);
+void te_set_this(ObjectNode *obj);
+void te_call_ctor(ObjectNode *obj, ASTNode *args);   /* frame + bind args + __constructor + limpia return */
+
 #endif /* TE_AST_INTERNAL_H */

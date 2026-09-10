@@ -378,6 +378,7 @@ void te_depth_enter(void);
 void te_depth_leave(void);
 static void interpret_call_func_impl(ASTNode *node);
 static void interpret_call_method_impl(ASTNode *node);
+static void te_cm_invoke(ASTNode *node, MethodNode *m, ObjectNode *obj, Variable *v);
 static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList);
 
 // Helper: Recursively evaluate arguments for native calls
@@ -2044,6 +2045,7 @@ void runtime_reset_vars_to_initial_state() {
     g_vm.var_count = g_vm.initial_var_count;
     /* Ola 16: drop hash entries beyond initial state. */
     te_sym_reset_to(g_vm.initial_var_count);
+    g_vm.this_active = 0;
 
     // También limpia la variable de retorno global
     if (g_vm.ret_var_active) {
@@ -2476,6 +2478,34 @@ static void te_sym_reset_to(int initial_count) {
     }
 }
 
+/* Borra la entrada `id` SOLO si apunta al slot idx (backward-shift para sondeo lineal). Si el
+ * nombre también existe en un slot inferior (global sombreado por append), la búsqueda lineal
+ * de find_variable lo re-inserta en la primera consulta. */
+static void te_sym_remove_idx(const char *id, int idx) {
+    if (!g_vm.sym_init || !id) return;
+    uint64_t h = te_str_hash(id);
+    int mask = TE_SYM_CAP - 1;
+    int i = (int)(h & (uint64_t)mask);
+    for (;;) {
+        const char *sk = g_vm.sym_slots[i].key;
+        if (sk == NULL) return;
+        if (sk == id || (g_vm.sym_slots[i].hash == h && strcmp(sk, id) == 0)) break;
+        i = (i + 1) & mask;
+    }
+    if (g_vm.sym_slots[i].idx != idx) return;
+    int j = i;
+    for (;;) {
+        j = (j + 1) & mask;
+        if (g_vm.sym_slots[j].key == NULL) break;
+        int k = (int)(g_vm.sym_slots[j].hash & (uint64_t)mask);   /* home de j */
+        int stays = (i <= j) ? (i < k && k <= j) : (i < k || k <= j);
+        if (stays) continue;
+        g_vm.sym_slots[i] = g_vm.sym_slots[j];
+        i = j;
+    }
+    g_vm.sym_slots[i].key = NULL; g_vm.sym_slots[i].hash = 0; g_vm.sym_slots[i].idx = -1;
+}
+
 /* Block-scope unwind: free and drop every variable slot at index >= target,
  * restoring var_count and the name->index side-index to the pre-block state.
  * Used by the loop interpreters so a `let` declared inside a loop body reuses
@@ -2489,14 +2519,13 @@ void te_scope_unwind_to(int target) {
     if (target < 0) target = 0;
     if (target >= g_vm.var_count) return;            /* nothing new this iteration */
     for (int i = target; i < g_vm.var_count; i++) {
-        if (g_vm.vars[i].id) free(g_vm.vars[i].id);
+        if (g_vm.vars[i].id) { te_sym_remove_idx(g_vm.vars[i].id, i); free(g_vm.vars[i].id); }
         if (g_vm.vars[i].type) free(g_vm.vars[i].type);
         if (g_vm.vars[i].vtype == VAL_STRING && g_vm.vars[i].value.string_value)
             free(g_vm.vars[i].value.string_value);
         memset(&g_vm.vars[i], 0, sizeof(Variable));
     }
     g_vm.var_count = target;
-    te_sym_reset_to(target);
 }
 
 /* Rebuild the variable name->index side-index from the live vars[0..var_count).
@@ -2537,6 +2566,7 @@ typedef struct TeReqState {
     int       ret_active;
     int       return_flag, throw_flag, call_depth;
     void     *frames;         /* g_vm.frame_top of the yielded request */
+    ObjectNode *this_obj; int this_active;   /* registro `this` del request */
     jmp_buf  *recovery;
     char     *claims;         /* g_current_claims (owned) */
     /* http context (ownership moved out of the globals) */
@@ -2593,6 +2623,9 @@ void *te_reqstate_save(void) {
     s->throw_flag  = g_vm.throw_flag;
     s->call_depth  = g_vm.call_depth;
     s->frames      = te_frames_save();
+    s->this_obj    = g_vm.this_active ? g_vm.this_reg.value.object_value : NULL;
+    s->this_active = g_vm.this_active;
+    g_vm.this_active = 0;
     s->recovery    = g_vm.runtime_recovery;
     g_vm.return_flag = 0; g_vm.throw_flag = 0; g_vm.call_depth = 0;
 
@@ -2643,6 +2676,8 @@ void te_reqstate_restore(void *st) {
     g_vm.throw_flag  = s->throw_flag;
     g_vm.call_depth = s->call_depth;
     te_frames_restore(s->frames);
+    g_vm.this_active = s->this_active;
+    if (s->this_active) te_set_this(s->this_obj);
     g_vm.runtime_recovery = s->recovery;
 
     if (g_vm.current_claims) free(g_vm.current_claims);
@@ -2733,6 +2768,7 @@ Variable *find_variable(char *id) {
     if (strcmp(id, TE_SYM_RET) == 0 && g_vm.ret_var_active) {
         return &g_vm.ret_var;
     }
+    if (id[0] == 't' && g_vm.this_active && strcmp(id, TE_SYM_THIS) == 0) return &g_vm.this_reg;
 
     /* Ola 16: hash side-index. */
     int idx = te_sym_lookup(id);
@@ -2789,6 +2825,7 @@ Variable *find_variable_for(char *id) {
     if (strcmp(id, TE_SYM_RET) == 0 && g_vm.ret_var_active) {
         return &g_vm.ret_var;
     }
+    if (id[0] == 't' && g_vm.this_active && strcmp(id, TE_SYM_THIS) == 0) return &g_vm.this_reg;
 
     /* Ola 16: hash side-index. */
     int idx = te_sym_lookup(id);
@@ -2816,24 +2853,21 @@ void te_value_to_variable(Variable *dst, ASTNode *value);
  * a TeFrame generalises that: every slot that existed BEFORE the call and is
  * (re)declared or bound during it is saved once and restored on exit. Slots
  * created inside the call are left in place (same as before). Frames live on
- * the C stack of call_lambda_impl and chain through g_frame_top. */
-typedef struct { Variable *slot; Variable saved; } ParamShadow;
-typedef struct TeFrame {
-    ParamShadow *sh;
-    int n, cap;
-    int base;                 /* g_vm.var_count at call entry */
-    struct TeFrame *prev;
-} TeFrame;
+ * the C stack of call_lambda_impl and chain through g_frame_top.
+ * Fase F: TeFrame vive en ast_internal.h; también lo usan métodos y constructores, es dueño
+ * de los slots creados durante la llamada (liberados al pop) y salva/restaura `this`. */
 
-static void te_frame_push(TeFrame *f) {
+void te_frame_push(TeFrame *f) {
     f->sh = NULL; f->n = 0; f->cap = 0;
     f->base = g_vm.var_count;
+    f->saved_this = g_vm.this_active ? g_vm.this_reg.value.object_value : NULL;
+    f->saved_this_active = g_vm.this_active;
     f->prev = g_vm.frame_top;
     g_vm.frame_top = f;
 }
 
 static void te_frame_shadow_slot(TeFrame *f, Variable *ex) {
-    if (!f || !ex || ex == &g_vm.ret_var) return;
+    if (!f || !ex || ex == &g_vm.ret_var || ex == &g_vm.this_reg) return;
     for (int i = 0; i < f->n; i++)
         if (f->sh[i].slot == ex) return;   /* already saved in this frame */
     if (f->n >= f->cap) {
@@ -2854,7 +2888,7 @@ static void te_frame_shadow_slot(TeFrame *f, Variable *ex) {
     ex->is_const = 0;                      /* allow the local to overwrite */
 }
 
-static void te_frame_pop(TeFrame *f) {
+void te_frame_pop(TeFrame *f) {
     for (int k = f->n - 1; k >= 0; k--) {
         Variable *slot = f->sh[k].slot;
         free(slot->type);
@@ -2868,13 +2902,41 @@ static void te_frame_pop(TeFrame *f) {
         slot->value    = f->sh[k].saved.value;
     }
     free(f->sh);
+    te_scope_unwind_to(f->base);           /* locales y params de la llamada mueren aquí */
+    g_vm.this_active = f->saved_this_active;
+    if (f->saved_this_active) g_vm.this_reg.value.object_value = f->saved_this;
     g_vm.frame_top = f->prev;
 }
 
+/* `this` como registro de la VM (antes slot "this" en vars[] + cache this_var/this_wrap). */
+void te_set_this(ObjectNode *obj) {
+    Variable *t = &g_vm.this_reg;
+    if (!t->id)   t->id   = strdup(TE_SYM_THIS);
+    if (!t->type) t->type = strdup(TE_T_OBJECT);
+    t->is_const = 0;
+    t->vtype = VAL_OBJECT;
+    t->value.object_value = obj;
+    g_vm.this_active = 1;
+}
+
 /* Fatal errors longjmp past te_frame_pop; the request recovery path calls this. */
-void te_frames_reset(void) { g_vm.frame_top = NULL; }
+void te_frames_reset(void) { g_vm.frame_top = NULL; g_vm.this_active = 0; }
 void *te_frames_save(void)  { void *t = g_vm.frame_top; g_vm.frame_top = NULL; return t; }
 void  te_frames_restore(void *t) { g_vm.frame_top = (TeFrame *)t; }
+
+void te_call_ctor(ObjectNode *obj, ASTNode *args) {
+    if (!obj || !obj->class) return;
+    MethodNode *m = obj->class->methods;
+    while (m && strcmp(m->name, TE_SYM_CTOR) != 0) m = m->next;
+    if (!m) return;
+    TeFrame fr;
+    te_frame_push(&fr);
+    te_bind_args(m->params, args);
+    call_method(obj, TE_SYM_CTOR);
+    te_frame_pop(&fr);
+    g_vm.return_flag = 0;
+    g_vm.return_node = NULL;
+}
 
 /* Bug ERP 2026-08-27 ("stale return" / Bug A): slot ÚNICO por nombre al
  * re-declarar. Antes cada `let/var x` APPENDEABA un slot nuevo aunque ya
@@ -2891,7 +2953,7 @@ void  te_frames_restore(void *t) { g_vm.frame_top = (TeFrame *)t; }
  * existe, appendea como antes. Devuelve NULL solo si vars[] está lleno. */
 Variable *te_decl_slot(const char *id) {
     Variable *ex = find_variable_for((char *)id);
-    if (ex && ex != &g_vm.ret_var) {
+    if (ex && ex != &g_vm.ret_var && ex != &g_vm.this_reg) {
         int idx = (int)(ex - g_vm.vars);
         if (idx >= g_vm.initial_var_count && idx < g_vm.var_count) {
             /* Frames: a local (re)declared inside a fn call shadows the slot the
@@ -2915,13 +2977,14 @@ Variable *te_decl_slot(const char *id) {
     return nv;
 }
 
-/* Fase E: liga un parámetro (o local sintético) al valor *v, que queda vacío. Misma política que
- * el binding de lambdas: si el nombre ya existe se SOMBREA en el frame actual (te_frame_pop lo
- * restaura) y se sobreescribe en sitio; si no, se crea el slot. */
+/* Fase E/F: liga un parámetro (o local sintético) al valor *v, que queda vacío. Si el nombre es un
+ * GLOBAL de módulo (idx < initial_var_count) se appendea un slot nuevo que lo sombrea (el global
+ * nunca se toca: otro request en coop-yield podría leerlo); si es un slot del llamador se sombrea
+ * en sitio (te_frame_pop lo restaura); si no existe, se crea. Los slots nuevos mueren con el frame. */
 void te_bind_param(const char *name, TeValue *v) {
     Variable *ex = find_variable_for((char *)name);
-    if (ex && ex != &g_vm.ret_var) {
-        if (g_vm.frame_top) te_frame_shadow_slot(g_vm.frame_top, ex);
+    if (ex && ex != &g_vm.ret_var && ex != &g_vm.this_reg && (int)(ex - g_vm.vars) >= g_vm.initial_var_count) {
+        if (g_vm.frame_top && (int)(ex - g_vm.vars) < g_vm.frame_top->base) te_frame_shadow_slot(g_vm.frame_top, ex);
         ex->is_const = 0;
         te_val_move_into(ex, v);
         return;
@@ -2981,13 +3044,7 @@ void te_list_literal_construct_objects(ASTNode *value) {
         }
 
         if (m) {
-            ParameterNode *p = m->params;
-            te_bind_args(p, arg);   /* Fase E */
-            call_method(obj_clonado, TE_SYM_CTOR);
-            /* Ensure constructor side-effects (like return_flag) don't block later AST execution */
-            g_vm.return_flag = 0;
-            g_vm.return_node = NULL;
-            /* debug print removed */
+            te_call_ctor(obj_clonado, arg);   /* Fase F: frame propio */
         }
         /* NOTE: do NOT null out cur->left here. The args must survive so
          * that the persistent embedded API can re-run this constructor on
@@ -5359,14 +5416,7 @@ double te_walk_expression(ASTNode *node) {
 }
 
 void call_method(ObjectNode *obj, char *method) {
-    /* debug print removed */
-    ASTNode *thisNode = (ASTNode *)calloc(1, sizeof(ASTNode));
-    thisNode->type = strdup(TE_T_OBJECT);
-    thisNode->id = strdup(TE_SYM_THIS);
-    thisNode->left = thisNode->right = NULL;
-    thisNode->extra = (struct ASTNode*)obj; // store ObjectNode pointer in 'extra' (consistent with create_object_with_args)
-    thisNode->value = 0;
-    add_or_update_variable(TE_SYM_THIS, thisNode);
+    te_set_this(obj);   /* Fase F: registro; el frame que envuelve la llamada lo restaura */
 
     MethodNode *m = obj->class->methods;
     while (m) {
@@ -6879,12 +6929,7 @@ static int te_cm_list_builtin(ASTNode *node, ASTNode *objNode, Variable *v) {
                     MethodNode *m = obj_clone->class->methods;
                     while (m && strcmp(m->name, TE_SYM_CTOR) != 0) m = m->next;
                     if (m) {
-                        ParameterNode *p = m->params;
-                        ASTNode *carg = arg->left;
-                        te_bind_args(p, carg);   /* Fase E */
-                        call_method(obj_clone, TE_SYM_CTOR);
-                        g_vm.return_flag = 0;
-                        g_vm.return_node = NULL;
+                        te_call_ctor(obj_clone, arg->left);   /* Fase F: frame propio */
                     }
                     new_item->type = strdup(TE_T_OBJECT);
                     new_item->extra = (struct ASTNode*)obj_clone;
@@ -7019,122 +7064,17 @@ static int te_cm_bridge(ASTNode *node, ObjectNode *obj, Variable *v) {
 
 /* Extraído de interpret_call_method_impl (Fase 2). Devuelve 1 si manejó la llamada. */
 static int te_cm_bind_this(ASTNode *node, ObjectNode *obj, Variable *v) {
-    /* ====================================================================
-     * Ola 3 Fase D (perf): FAST `this` setup.
-     * Cached: persistent Variable* "this" + single reusable wrapper, POR VM
-     * (g_vm.this_var / g_vm.this_wrap). Eran statics de función: un global de
-     * proceso invisible al audit que apuntaba al vars[] de OTRA VM ya destruida
-     * (heap-use-after-free bajo ASan en --selftest-vm con 2 hilos).
-     * Hot path patches both pointers (no calloc/strdup/add_or_update).
-     * Switch: TYPEEASY_NO_FASTTHIS=1.
-     * ==================================================================== */
-    static int      ft_init        = 0;
-    static int      ft_enabled     = 1;
-    if (!ft_init) {
-        const char *e = getenv("TYPEEASY_NO_FASTTHIS");
-        if (e && e[0] && e[0] != '0') ft_enabled = 0;
-        ft_init = 1;
-    }
-    if (ft_enabled && g_vm.this_var && g_vm.this_wrap) {
-        /* Hot path: just patch the cached objects. */
-        g_vm.this_var->vtype              = VAL_OBJECT;
-        g_vm.this_var->value.object_value = obj;
-        g_vm.this_wrap->extra             = (struct ASTNode*)obj;
-    } else {
-        /* Cold path: original setup, plus capture the cache. */
-        ASTNode *thisNode = calloc(1, sizeof(ASTNode));
-        thisNode->type  = strdup(TE_T_OBJECT);
-        thisNode->id    = strdup(TE_SYM_THIS);
-        thisNode->left  = thisNode->right = NULL;
-        thisNode->extra = (struct ASTNode*)obj;
-        thisNode->value = 0;
-        add_or_update_variable(TE_SYM_THIS, thisNode);
-        if (ft_enabled) {
-            g_vm.this_var  = find_variable_for(TE_SYM_THIS);
-            g_vm.this_wrap = thisNode;
-        }
-    }
+    (void)node; (void)v;
+    te_set_this(obj);   /* Fase F: registro de la VM; el TeFrame del llamador lo restaura */
     return 0;
 }
 
-/* Extraído de interpret_call_method_impl (Fase 2). Devuelve 1 si manejó la llamada. */
+/* Extraído de interpret_call_method_impl (Fase 2). Devuelve 1 si manejó la llamada.
+ * Fase F: sin FASTCALL (escribía el arg directo en el slot cacheado del param, sin sombra:
+ * rompía la recursión y evaluaba cada arg DESPUÉS de ligar el anterior). */
 static int te_cm_bind_args(ASTNode *node, MethodNode *m, ObjectNode *obj) {
-    ParameterNode *p = m->params;
-    ASTNode      *arg = node->right; // CORRECCIÓN
-    /* ====================================================================
-     * Ola 3 Fase B: FAST CALL PATH
-     * --------------------------------------------------------------------
-     * If every declared parameter is numeric (int/float) we bypass
-     * create_ast_leaf_number + add_or_update_variable per arg and write
-     * directly into the param's cached Variable*. Switch TYPEEASY_NO_FASTCALL=1
-     * to disable.
-     * ==================================================================== */
-    {
-        static int fc_init = 0;
-        static int fc_enabled = 1;
-        if (!fc_init) {
-            const char *e = getenv("TYPEEASY_NO_FASTCALL");
-            if (e && e[0] && e[0] != '0') fc_enabled = 0;
-            fc_init = 1;
-        }
-        if (fc_enabled && p) {
-            int all_numeric = 1;
-            ParameterNode *pp = p;
-            while (pp) {
-                if (!pp->type
-                    || (strcmp(pp->type, TE_DT_INT)    != 0
-                     && strcmp(pp->type, TE_DT_FLOAT)  != 0
-                     && strcmp(pp->type, TE_T_INT)    != 0
-                     && strcmp(pp->type, TE_T_FLOAT)  != 0)) {
-                    all_numeric = 0; break;
-                }
-                pp = pp->next;
-            }
-            if (all_numeric) {
-                ParameterNode *cur_p = p;
-                ASTNode       *cur_a = arg;
-                while (cur_p && cur_a) {
-                    Variable *fv = (Variable*)cur_p->cached_var;
-                    if (!fv) {
-                        fv = find_variable_for(cur_p->name);
-                        if (!fv) {
-                            /* Create a fresh slot only once. */
-                            if (g_vm.var_count < MAX_VARS) {
-                                g_vm.vars[g_vm.var_count].id       = strdup(cur_p->name);
-                                g_vm.vars[g_vm.var_count].type     = strdup(cur_p->type);
-                                g_vm.vars[g_vm.var_count].is_const = 0;
-                                g_vm.vars[g_vm.var_count].vtype    = (strcmp(cur_p->type, TE_DT_FLOAT)==0
-                                                           || strcmp(cur_p->type, TE_T_FLOAT)==0)
-                                                           ? VAL_FLOAT : VAL_INT;
-                                if (g_vm.vars[g_vm.var_count].vtype == VAL_FLOAT)
-                                    g_vm.vars[g_vm.var_count].value.float_value = 0.0;
-                                else
-                                    g_vm.vars[g_vm.var_count].value.int_value = 0;
-                                fv = &g_vm.vars[g_vm.var_count];
-                                g_vm.var_count++;
-                            }
-                        }
-                        cur_p->cached_var = fv;
-                    }
-                    if (fv) {
-                        double d = evaluate_expression(cur_a);
-                        if (fv->vtype == VAL_FLOAT) {
-                            fv->value.float_value = d;
-                        } else {
-                            fv->vtype = VAL_INT;
-                            fv->value.int_value  = (int)d;
-                        }
-                    }
-                    cur_p = cur_p->next;
-                    cur_a = cur_a->next; /* gotcha #1: step args via ->next */
-                }
-                /* args bound directly; skip slow path */
-                goto fastcall_args_done;
-            }
-        }
-    }
-    te_bind_args(p, arg);   /* Fase E: valor real de cada argumento (te_eval_value) */
-fastcall_args_done:
+    (void)obj;
+    te_bind_args(m->params, node->right);
     return 0;
 }
 
@@ -7578,6 +7518,15 @@ static void interpret_call_method_impl(ASTNode *node) {
         }
     }
 
+    /* Fase F: la llamada corre en su propio frame (params/locales mueren al salir, `this` y los
+     * slots del llamador se restauran). El return se materializa en __ret__ ANTES del pop. */
+    TeFrame _fr;
+    te_frame_push(&_fr);
+    te_cm_invoke(node, m, obj, v);
+    te_frame_pop(&_fr);
+}
+
+static void te_cm_invoke(ASTNode *node, MethodNode *m, ObjectNode *obj, Variable *v) {
     if (te_cm_bind_this(node, obj, v)) return;
     if (te_cm_bind_args(node, m, obj)) return;
 
@@ -7939,13 +7888,6 @@ ASTNode* call_lambda(ASTNode *lambda, ASTNode *argsList) {
  * contents before binding and restore them once the body has run, so the
  * outer const is untouched after the call returns. Save/restore lives on the
  * C stack, making it re-entrant for recursive lambdas. */
-#define LAMBDA_MAX_SHADOW 64
-
-static void te_lambda_save_shadow(const char *name) {
-    Variable *ex = find_variable_for((char *)name);
-    if (!ex) return;                       /* fresh param: nothing to shadow */
-    te_frame_shadow_slot(g_vm.frame_top, ex);
-}
 
 static ASTNode* call_lambda_exec_body(ASTNode *lambda);
 
@@ -8111,7 +8053,7 @@ static void interpret_fprint(ASTNode *node) {
                 while (cur) {
                     if (cur->type && strcmp(cur->type, TE_T_OBJECT) == 0) {
                         ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
-                        call_method(obj, "Mostrar");
+                        { TeFrame fr; te_frame_push(&fr); call_method(obj, "Mostrar"); te_frame_pop(&fr); }
                     }
                     cur = cur->next; // CORRECCIÓN
                 }
@@ -8198,7 +8140,7 @@ static void interpret_fprintln(ASTNode *node) {
                 while (cur) {
                     if (cur->type && strcmp(cur->type, TE_T_OBJECT) == 0) {
                         ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
-                        call_method(obj, "Mostrar");
+                        { TeFrame fr; te_frame_push(&fr); call_method(obj, "Mostrar"); te_frame_pop(&fr); }
                     }
                     cur = cur->next; // CORRECCIÓN
                 }

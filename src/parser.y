@@ -572,6 +572,7 @@ expression:
         $$ = create_ast_node(TE_T_ACCESS_ATTR, $1, attr); }
   | THIS DOT IDENTIFIER       { $$ = create_ast_node(TE_T_ACCESS_ATTR, create_ast_leaf(TE_T_ID, 0, NULL, TE_SYM_THIS), create_ast_leaf(TE_T_ID, 0, NULL, $3)); }
   | THIS DOT IDENTIFIER LPAREN RPAREN       { $$ = create_method_call_node(create_ast_leaf(TE_T_ID, 0, NULL, TE_SYM_THIS), $3, NULL); }
+  | THIS DOT IDENTIFIER LPAREN expression_list RPAREN { $$ = create_method_call_node(create_ast_leaf(TE_T_ID, 0, NULL, TE_SYM_THIS), $3, $5); }
   | IDENTIFIER       { $$ = create_ast_leaf(TE_T_IDENTIFIER, 0, NULL, $1); }
   | NUMBER       { $$ = create_ast_leaf(TE_T_NUMBER, $1, NULL, NULL); }
   | FLOAT_LITERAL       { $$ = create_ast_leaf(TE_T_FLOAT, 0, $1, NULL); }
@@ -716,6 +717,7 @@ func_call_expr SEMICOLON { $$ = $1; }
   | IDENTIFIER DOT IDENTIFIER LPAREN RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$1); $$ = create_method_call_node(obj, $3, NULL); }
   | IDENTIFIER DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON  { ASTNode *obj = create_ast_leaf(TE_T_ID,0,NULL,$1); $$ = create_method_call_node(obj, $3, $5); }
   | THIS DOT IDENTIFIER LPAREN RPAREN SEMICOLON                 { ASTNode *thisObj = create_ast_leaf(TE_T_ID,0,NULL,TE_SYM_THIS); $$ = create_method_call_node(thisObj, $3, NULL); }
+  | THIS DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON { ASTNode *thisObj = create_ast_leaf(TE_T_ID,0,NULL,TE_SYM_THIS); $$ = create_method_call_node(thisObj, $3, $5); }
   | STRING IDENTIFIER ASSIGN STRING_LITERAL SEMICOLON           { $$ = create_var_decl_node($2, create_string_node($4)); }
   | INT IDENTIFIER ASSIGN expression SEMICOLON                  { $$ = create_var_decl_node($2, create_int_node($4->value)); }
   | FLOAT IDENTIFIER ASSIGN expression SEMICOLON                { ASTNode* decl = create_var_decl_node($2, $4); decl->str_value = strdup(TE_T_FLOAT); $$ = decl; }

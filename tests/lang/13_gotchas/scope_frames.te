@@ -1,0 +1,76 @@
+// Fase F (scoping real): frames en métodos/constructores/lambdas dueños de sus slots, `this` como
+// registro restaurado tras llamadas anidadas, params/locales nunca pisan globales, args evaluados
+// en el scope del llamador antes de ligar. ANTES: fib(10)=-80, tmp global=30, x global=1, fuga=42.
+class M {
+    fib(n: int): int {
+        if (n < 2) { return n; }
+        let a = this.fib(n - 1);
+        let b = this.fib(n - 2);
+        return a + b;
+    }
+    fib2(n: int): int {
+        if (n < 2) { return n; }
+        return this.fib2(n - 1) + this.fib2(n - 2);
+    }
+    conLocal(k: int): int {
+        let tmp = k * 10;
+        var acc = 0;
+        acc = acc + tmp;
+        return acc;
+    }
+    usaGlobal(x: int): int {
+        return x + 1;
+    }
+    conStr(s: string): string {
+        let nombre = "M:" + s;
+        return nombre;
+    }
+}
+let m = new M();
+let x = 100;
+let tmp = 5;
+let n = 7;
+let nombre = "global";
+println("fib10=" + m.fib(10));
+println("fib2_10=" + m.fib2(10));
+println("conLocal=" + m.conLocal(3));
+println("tmp_global_despues=" + tmp);
+println("usaGlobal=" + m.usaGlobal(1));
+println("x_global_despues=" + x);
+println("n_global_despues=" + n);
+println("conStr=" + m.conStr("a"));
+println("nombre_global_despues=" + nombre);
+let f = fn(n) => n * 2;
+println("lam=" + f(21));
+println("n_tras_lambda=" + n);
+let g = fn(q) => { let x = q + 1; return x; };
+println("g=" + g(1));
+println("x_tras_lambda_local=" + x);
+let fact = fn(k) => { if (k <= 1) { return 1; } return k * fact(k - 1); };
+println("fact5=" + fact(5));
+var contador = 0;
+let inc = fn() => { contador = contador + 1; return contador; };
+inc(); inc();
+println("contador=" + contador);
+let h = fn() => { let soloDentro = 42; return soloDentro; };
+h();
+println("fuga=" + (soloDentro ?? "no"));
+class B {
+    v : int;
+    __constructor(_v : int) { this.v = _v; }
+    get() : int { return this.v; }
+}
+let bb = new B(2);
+class A {
+    v : int;
+    __constructor(_v : int) { this.v = _v; }
+    mix() : int { let o = bb.get(); return this.v * 10 + o; }
+    twice() : int { bb.get(); return this.v; }
+    swap(a : int, b : int) : int { return a * 100 + b; }
+}
+let aa = new A(1);
+println("mix=" + aa.mix());
+println("twice=" + aa.twice());
+let a = 7;
+let b = 3;
+println("swap=" + aa.swap(b, a));

@@ -64,7 +64,7 @@ typedef struct TeVM {
     MethodNode **bc_methods; int bc_methods_n, bc_methods_cap;
     ObjectNode *bc_this;                                     /* `this` del cuerpo de método en ejecución */
     ObjectNode *bc_this_stack[16]; int bc_this_sp;           /* llamadas inline anidadas */
-    Variable *this_var; ASTNode *this_wrap;                  /* cache FAST `this` (te_cm_bind_this): slot + wrapper reutilizable, por VM */
+    Variable this_reg; int this_active;                      /* `this` es un REGISTRO (como __ret__), no un slot de vars[]; cada TeFrame lo salva/restaura */
     /* --- posición del lexer (antes yylineno/g_vm.lex_file_id/g_decl_stmt_line globales) --- */
     int lex_line;              /* línea del último token (la actualiza el wrapper yylex) */
     int lex_file_id;           /* archivo que se está lexeando (0 = principal) */

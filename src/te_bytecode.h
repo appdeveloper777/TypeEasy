@@ -85,6 +85,7 @@ typedef struct BCGuard {
     Variable *var;
     int kind;
     struct ClassNode *cls;
+    const char *id;          /* Fase F: identidad del slot (id del nodo AST); un slot reciclado con otro nombre no pasa */
 } BCGuard;
 
 typedef struct BCInfo {

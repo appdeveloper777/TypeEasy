@@ -278,20 +278,29 @@ static void eval_access_expr(ASTNode *n, TeValue *out) {
 /* Binding de argumentos a parámetros con el valor REAL de cada expresión. Un `int` declarado
  * trunca floats y un `float` promueve enteros (misma semántica que el fast-path numérico). */
 void te_bind_args(ParameterNode *p, ASTNode *args) {
+    /* Todos los argumentos se evalúan en el scope del LLAMADOR antes de ligar el primero:
+     * `f(b, a)` con params (a, b) no debe ver la `a` recién ligada. */
+    TeValue stackv[16]; TeValue *vals = stackv;
+    int n = 0;
+    for (ParameterNode *q = p; q; q = q->next) n++;
+    if (n > 16) vals = (TeValue *)calloc((size_t)n, sizeof(TeValue));
+    int i = 0;
     ASTNode *arg = args;
-    while (p && arg) {
-        TeValue v; te_eval_value(arg, &v);
-        if (p->type) {
-            if ((strcmp(p->type, TE_DT_INT) == 0 || strcmp(p->type, TE_T_INT) == 0) && v.vtype == VAL_FLOAT)
-                te_val_set_int(&v, (long long)v.value.float_value);
-            else if ((strcmp(p->type, TE_DT_FLOAT) == 0 || strcmp(p->type, TE_T_FLOAT) == 0) && v.vtype == VAL_INT &&
-                     (!v.type || strcmp(v.type, TE_T_BOOL) != 0))
-                te_val_set_float(&v, (double)v.value.int_value);
+    for (ParameterNode *q = p; q && arg; q = q->next, arg = arg->next) te_eval_value(arg, &vals[i++]);   /* gotcha #1: args por ->next */
+    int bound = i;
+    i = 0;
+    for (ParameterNode *q = p; q && i < bound; q = q->next, i++) {
+        TeValue *v = &vals[i];
+        if (q->type) {
+            if ((strcmp(q->type, TE_DT_INT) == 0 || strcmp(q->type, TE_T_INT) == 0) && v->vtype == VAL_FLOAT)
+                te_val_set_int(v, (long long)v->value.float_value);
+            else if ((strcmp(q->type, TE_DT_FLOAT) == 0 || strcmp(q->type, TE_T_FLOAT) == 0) && v->vtype == VAL_INT &&
+                     (!v->type || strcmp(v->type, TE_T_BOOL) != 0))
+                te_val_set_float(v, (double)v->value.int_value);
         }
-        te_bind_param(p->name, &v);
-        p = p->next;
-        arg = arg->next;   /* gotcha #1: los argumentos se encadenan por ->next */
+        te_bind_param(q->name, v);
     }
+    if (vals != stackv) free(vals);
 }
 
 /* `new X(args)` como EXPRESIÓN: instancia fresca (clon del template de parse) + constructor.
@@ -302,14 +311,7 @@ static void eval_new_object(ASTNode *n, TeValue *out) {
     if (!tmpl || !tmpl->class) { te_val_set_ref(out, TE_T_OBJECT, tmpl); return; }   /* nodos MODEL/ML */
     ObjectNode *obj = clone_object(tmpl);
     te_req_owned_obj_register(obj);
-    MethodNode *m = obj->class->methods;
-    while (m && strcmp(m->name, TE_SYM_CTOR) != 0) m = m->next;
-    if (m) {
-        te_bind_args(m->params, n->left);
-        call_method(obj, TE_SYM_CTOR);
-        g_vm.return_flag = 0;
-        g_vm.return_node = NULL;
-    }
+    te_call_ctor(obj, n->left);   /* Fase F: frame propio (args evaluados en el scope del llamador) */
     te_val_set_ref(out, TE_T_OBJECT, obj);
 }
 

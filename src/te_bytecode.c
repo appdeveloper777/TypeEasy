@@ -117,11 +117,11 @@ static int bc_emit_var(BCC *c, BCOp op, Variable *v) {
     int i = bc_emit(c, op); if (i >= 0) c->out[i].u.var = v; return i;
 }
 
-static int bc_guard(BCC *c, Variable *v, int kind, ClassNode *cls) {
+static int bc_guard(BCC *c, Variable *v, int kind, ClassNode *cls, const char *id) {
     for (int i = 0; i < c->n_guards; i++)
         if (c->guards[i].var == v && c->guards[i].kind == kind) return 1;
     if (c->n_guards >= BC_MAX_GUARDS) return 0;
-    c->guards[c->n_guards].var = v; c->guards[c->n_guards].kind = kind; c->guards[c->n_guards].cls = cls;
+    c->guards[c->n_guards].var = v; c->guards[c->n_guards].kind = kind; c->guards[c->n_guards].cls = cls; c->guards[c->n_guards].id = id;
     c->n_guards++;
     return 1;
 }
@@ -246,7 +246,7 @@ static int bc_c_access_attr(BCC *c, ASTNode *node) {
         }
         if (slot < 0) return 0;
         if (!bc_compile(c, idx_exp)) return 0;
-        if (!bc_guard(c, lv, 2, NULL)) return 0;
+        if (!bc_guard(c, lv, 2, NULL, list_id->id)) return 0;
         ListItemAttrSite *s = (ListItemAttrSite *)calloc(1, sizeof(ListItemAttrSite));
         if (!s) return 0;
         s->list_var = lv; s->expected_class = fobj->class; s->attr_slot = slot; s->node = node;
@@ -318,7 +318,7 @@ static int bc_c_call_method(BCC *c, ASTNode *node) {
         else if (ak == NK_IDENTIFIER || ak == NK_ID) {
             Variable *v = bc_resolve_var(a);
             if (!var_is_numeric(v)) return 0;
-            if (!bc_guard(c, v, 0, NULL)) return 0;
+            if (!bc_guard(c, v, 0, NULL, a->id)) return 0;
             bc_emit_var(c, BC_LOAD_VAR, v);
         } else return 0;
         if (c->failed) return 0;
@@ -328,6 +328,7 @@ static int bc_c_call_method(BCC *c, ASTNode *node) {
     int idx = 0;
     for (ParameterNode *p = mm->params; p; p = p->next) {
         Variable *pv = (Variable *)p->cached_var;
+        if (pv && (!pv->id || strcmp(pv->id, p->name) != 0)) pv = NULL;   /* slot liberado por un frame */
         if (!pv) pv = find_variable_for(p->name);
         if (!pv) return 0;   /* bc_get_or_compile_method ya creó los slots */
         p->cached_var = pv;
@@ -338,12 +339,12 @@ static int bc_c_call_method(BCC *c, ASTNode *node) {
     if (body_len < 0) body_len = 0;
     if (c->pos + n_params + 2 + body_len >= c->max) return 0;
     for (int i = n_params - 1; i >= 0; i--) bc_emit_var(c, BC_STORE_VAR, param_vars[i]);
-    if (!bc_guard(c, ov, 1, obj->class)) return 0;
+    if (!bc_guard(c, ov, 1, obj->class, objRef->id)) return 0;
     bc_emit_var(c, BC_SET_THIS, ov);
     if (body_len > 0) { memcpy(&c->out[c->pos], body->code, (size_t)body_len * sizeof(Instr)); c->pos += body_len; }
     /* Los guards del cuerpo (params numéricos) se heredan; sus this.attr los
      * cubre el guard de clase del objeto (kind 1). */
-    for (int i = 0; i < body->n_guards; i++) bc_guard(c, body->guards[i].var, body->guards[i].kind, body->guards[i].cls);
+    for (int i = 0; i < body->n_guards; i++) bc_guard(c, body->guards[i].var, body->guards[i].kind, body->guards[i].cls, body->guards[i].id);
     bc_emit(c, BC_RESTORE_THIS);
     return !c->failed;
 }
@@ -362,7 +363,7 @@ static int bc_compile(BCC *c, ASTNode *node) {
     case NK_IDENTIFIER: {
         Variable *v = bc_resolve_var(node);
         if (!var_is_numeric(v)) return 0;
-        if (!bc_guard(c, v, 0, NULL)) return 0;
+        if (!bc_guard(c, v, 0, NULL, node->id)) return 0;
         bc_emit_var(c, BC_LOAD_VAR, v);
         return !c->failed;
     }
@@ -445,6 +446,7 @@ static int bc_compile_i64(BCC *c, ASTNode *n) {
 static int bc_guards_ok(const BCInfo *info) {
     for (int i = 0; i < info->n_guards; i++) {
         const BCGuard *g = &info->guards[i];
+        if (!g->var || (g->id && (!g->var->id || strcmp(g->var->id, g->id) != 0))) return 0;   /* slot reciclado */
         switch (g->kind) {
         case 0: if (!var_is_numeric(g->var)) return 0; break;
         case 1: {
@@ -724,6 +726,7 @@ BCInfo *bc_get_or_compile_method(MethodNode *m, ClassNode *cls) {
     for (ParameterNode *p = m->params; p; p = p->next) {
         if (!p->name) continue;
         Variable *pv = (Variable *)p->cached_var;
+        if (pv && (!pv->id || strcmp(pv->id, p->name) != 0)) pv = NULL;   /* slot liberado por un frame */
         if (!pv) pv = find_variable_for(p->name);
         if (!pv && g_vm.var_count < MAX_VARS) {
             int is_float = p->type && (strcmp(p->type, TE_DT_FLOAT) == 0 || strcmp(p->type, TE_T_FLOAT) == 0);
@@ -768,7 +771,7 @@ static int bc_compile_assign(BCC *c, ASTNode *node) {
     if (!fv) { fv = find_variable_for(var_node->id); if (fv) var_node->cached_var = fv; }
     if (!fv || fv->is_const || !var_is_numeric(fv)) return 0;
     if (vk == NK_ADD && is_string_type(value_node)) return 0;
-    if (!bc_guard(c, fv, 0, NULL)) return 0;
+    if (!bc_guard(c, fv, 0, NULL, var_node->id)) return 0;
 
     if (i64_eligible(value_node)) {
         int begin = bc_emit(c, BC_I64_BEGIN);
@@ -843,7 +846,7 @@ static int bc_compile_for(BCC *c, ASTNode *node) {
     int limit_val = (int)node->right->value;          /* mismos casts que interpret_for */
     int step_val  = (int)update_body->left->value;
     if (step_val == 0) return 0;
-    if (!bc_guard(c, fv, 0, NULL)) return 0;
+    if (!bc_guard(c, fv, 0, NULL, node->id)) return 0;
 
     bc_emit_const(c, (double)init_val);            /* literal entero -> te_num_store deja INT */
     bc_emit_var(c, BC_STORE_VAR, fv);
