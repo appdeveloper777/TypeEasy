@@ -115,6 +115,9 @@ typedef struct ASTNode {
     /* Fase E: 1 en el nodo OBJECT que produce la gramática para `new X(args)` (expresión a
      * construir); 0 en los OBJECT que son DATOS (items de lista, wrappers) que se aliasan. */
     int   is_new_expr;
+    /* Fase F: entorno capturado de un LAMBDA que es CLOSURE (instancia creada dentro de una
+     * llamada con variables libres de los frames activos). NULL en el template de parse. */
+    struct TeClosureEnv *closure;
     /* v0.0.13 (perf): columnar cache attached to LIST head when items are
      * homogeneous OBJECTs from a CSV load. NULL on all non-LIST nodes and on
      * LIST nodes that don't qualify. Owned by the LIST node; freed when the

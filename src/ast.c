@@ -2431,7 +2431,7 @@ static inline void te_sym_clear(void) {
     g_vm.sym_init = 1;
 }
 
-static inline int te_sym_lookup(const char *id) {
+int te_sym_lookup(const char *id) {
     if (!g_vm.sym_init) return -1;
     if (!id) return -1;
     uint64_t h = te_str_hash(id);
@@ -2862,47 +2862,35 @@ void te_frame_push(TeFrame *f) {
     f->base = g_vm.var_count;
     f->saved_this = g_vm.this_active ? g_vm.this_reg.value.object_value : NULL;
     f->saved_this_active = g_vm.this_active;
+    f->closures = NULL;
     f->prev = g_vm.frame_top;
     g_vm.frame_top = f;
 }
 
-static void te_frame_shadow_slot(TeFrame *f, Variable *ex) {
-    if (!f || !ex || ex == &g_vm.ret_var || ex == &g_vm.this_reg) return;
-    for (int i = 0; i < f->n; i++)
-        if (f->sh[i].slot == ex) return;   /* already saved in this frame */
+/* Anota que `prev` (slot de un scope exterior) va a quedar sombreado por un slot nuevo: al pop
+ * la symtab vuelve a apuntar a prev. */
+static void te_frame_note_shadow(TeFrame *f, Variable *prev) {
+    if (!f || !prev || prev == &g_vm.ret_var || prev == &g_vm.this_reg || !prev->id) return;
+    int idx = (int)(prev - g_vm.vars);
+    for (int i = 0; i < f->n; i++) if (f->sh[i].prev_idx == idx) return;
     if (f->n >= f->cap) {
         int ncap = f->cap ? f->cap * 2 : 16;
-        ParamShadow *g = (ParamShadow *)realloc(f->sh, (size_t)ncap * sizeof(ParamShadow));
-        if (!g) return;                   /* OOM: fall back to old (leaky) behaviour */
+        TeSymRestore *g = (TeSymRestore *)realloc(f->sh, (size_t)ncap * sizeof(TeSymRestore));
+        if (!g) return;
         f->sh = g; f->cap = ncap;
     }
-    ParamShadow *ps = &f->sh[f->n++];
-    ps->slot  = ex;
-    ps->saved = *ex;                       /* shallow copy of the union + tags */
-    /* Deep-copy owned strings: the binder frees the slot's `type` and
-     * `string_value` while (re)declaring. */
-    ps->saved.type = ex->type ? strdup(ex->type) : NULL;
-    if (ex->vtype == VAL_STRING)
-        ps->saved.value.string_value =
-            ex->value.string_value ? strdup(ex->value.string_value) : NULL;
-    ex->is_const = 0;                      /* allow the local to overwrite */
+    f->sh[f->n].name = prev->id; f->sh[f->n].prev_idx = idx; f->n++;
 }
 
 void te_frame_pop(TeFrame *f) {
-    for (int k = f->n - 1; k >= 0; k--) {
-        Variable *slot = f->sh[k].slot;
-        free(slot->type);
-        if (slot->vtype == VAL_STRING && slot->value.string_value)
-            free(slot->value.string_value);
-        /* Restore the outer variable (ownership of saved.type / saved string
-         * transfers back to the slot). `id` was never touched. */
-        slot->is_const = f->sh[k].saved.is_const;
-        slot->vtype    = f->sh[k].saved.vtype;
-        slot->type     = f->sh[k].saved.type;
-        slot->value    = f->sh[k].saved.value;
+    te_frame_close_upvalues(f);            /* closures que capturaron slots de este frame */
+    te_scope_unwind_to(f->base);           /* locales y params de la llamada mueren aquí */
+    for (int k = f->n - 1; k >= 0; k--) {  /* la symtab vuelve a los slots sombreados */
+        int idx = f->sh[k].prev_idx;
+        if (idx >= 0 && idx < g_vm.var_count && g_vm.vars[idx].id == f->sh[k].name)
+            te_sym_insert(g_vm.vars[idx].id, idx);
     }
     free(f->sh);
-    te_scope_unwind_to(f->base);           /* locales y params de la llamada mueren aquí */
     g_vm.this_active = f->saved_this_active;
     if (f->saved_this_active) g_vm.this_reg.value.object_value = f->saved_this;
     g_vm.frame_top = f->prev;
@@ -2955,18 +2943,19 @@ Variable *te_decl_slot(const char *id) {
     Variable *ex = find_variable_for((char *)id);
     if (ex && ex != &g_vm.ret_var && ex != &g_vm.this_reg) {
         int idx = (int)(ex - g_vm.vars);
-        if (idx >= g_vm.initial_var_count && idx < g_vm.var_count) {
-            /* Frames: a local (re)declared inside a fn call shadows the slot the
-             * caller owned; save it once so te_frame_pop restores it. Slots
-             * created inside this same call (idx >= base) are simply reused. */
-            if (g_vm.frame_top && idx < g_vm.frame_top->base) te_frame_shadow_slot(g_vm.frame_top, ex);
+        int base = g_vm.frame_top ? g_vm.frame_top->base : g_vm.initial_var_count;
+        if (idx >= base && idx < g_vm.var_count) {
+            /* re-declaración en el MISMO scope (loop body, segunda `let x` en la fn): reusar el slot */
             if (ex->vtype == VAL_STRING && ex->value.string_value)
                 free(ex->value.string_value);
             if (ex->type) { free(ex->type); ex->type = NULL; }
             memset(&ex->value, 0, sizeof(ex->value));
             ex->vtype = VAL_INT;
+            ex->is_const = 0;
             return ex;
         }
+        /* nombre de un scope exterior (llamador o global): sombra por append, nunca se pisa */
+        te_frame_note_shadow(g_vm.frame_top, ex);
     }
     if (g_vm.var_count >= MAX_VARS) return NULL;
     Variable *nv = &g_vm.vars[g_vm.var_count];
@@ -2977,29 +2966,17 @@ Variable *te_decl_slot(const char *id) {
     return nv;
 }
 
-/* Fase E/F: liga un parámetro (o local sintético) al valor *v, que queda vacío. Si el nombre es un
- * GLOBAL de módulo (idx < initial_var_count) se appendea un slot nuevo que lo sombrea (el global
- * nunca se toca: otro request en coop-yield podría leerlo); si es un slot del llamador se sombrea
- * en sitio (te_frame_pop lo restaura); si no existe, se crea. Los slots nuevos mueren con el frame. */
+/* Fase E/F: liga un parámetro (o upvalue) al valor *v, que queda vacío. Misma política que
+ * te_decl_slot: si el nombre ya existe en ESTE frame se sobreescribe; si existe fuera (llamador o
+ * global) se appendea un slot sombra y la symtab se restaura al pop; si no existe, se crea. */
 void te_bind_param(const char *name, TeValue *v) {
-    Variable *ex = find_variable_for((char *)name);
-    if (ex && ex != &g_vm.ret_var && ex != &g_vm.this_reg && (int)(ex - g_vm.vars) >= g_vm.initial_var_count) {
-        if (g_vm.frame_top && (int)(ex - g_vm.vars) < g_vm.frame_top->base) te_frame_shadow_slot(g_vm.frame_top, ex);
-        ex->is_const = 0;
-        te_val_move_into(ex, v);
-        return;
-    }
-    if (g_vm.var_count >= MAX_VARS) {
+    Variable *slot = te_decl_slot(name);
+    if (!slot) {
         te_val_free(v);
         te_runtime_fatalf("Error: too many declared variables (limit %d).", MAX_VARS);
         return;
     }
-    Variable *nv = &g_vm.vars[g_vm.var_count];
-    memset(nv, 0, sizeof(*nv));
-    nv->id = strdup(name);
-    g_vm.var_count++;
-    te_sym_insert(nv->id, (int)(nv - g_vm.vars));
-    te_val_move_into(nv, v);
+    te_val_move_into(slot, v);
 }
 
 /* Constructs `new X(...)` items of a LIST literal in place (template keeps the
@@ -4850,24 +4827,24 @@ int te_expr_is_null(ASTNode *l) {
 /* Bytecode VM (compile+exec), profiler, tracer and x86_64 JIT now live in
  * te_bytecode.c (Fase 2 modularization). Public API in te_bytecode.h. */
 /* NK_IDENTIFIER — extraído de evaluate_expression (Fase 2). */
+Variable *te_resolve_cached(ASTNode *n) {
+    Variable *v = (Variable *)n->cached_var;
+    int idx = te_sym_lookup(n->id);
+    if (idx >= 0 && idx < g_vm.var_count) {
+        v = &g_vm.vars[idx];
+    } else if (!(v && (v == &g_vm.ret_var || v == &g_vm.this_reg))) {
+        v = find_variable(n->id);          /* registros (__ret__/this) o scan lineal */
+    } else if (v == &g_vm.ret_var && !g_vm.ret_var_active) {
+        v = find_variable(n->id);
+    } else if (v == &g_vm.this_reg && !g_vm.this_active) {
+        v = find_variable(n->id);
+    }
+    n->cached_var = v;
+    return v;
+}
+
 static double te_ev_identifier(ASTNode *node) {
-        /* Fase 2 (perf): cache Variable* on first lookup.
-         * vars[] is append-only with stable pointers, so this is safe.
-         * EXCEPT: runtime_reset_vars_to_initial_state() between API
-         * requests truncates var_count and wipes slots, so a cached
-         * pointer from a previous request may now point to a recycled
-         * (or zeroed) slot. Re-validate by comparing the slot's id. */
-        Variable *var = (Variable *)node->cached_var;
-        if (var && node->id) {
-            if (!var->id || strcmp(var->id, node->id) != 0) {
-                var = NULL;
-                node->cached_var = NULL;
-            }
-        }
-        if (!var) {
-            var = find_variable(node->id);
-            node->cached_var = var;
-        }
+        Variable *var = te_resolve_cached(node);
         if (var) {
             return te_var_as_double(var, node->id);
         } else {
@@ -6939,47 +6916,33 @@ static int te_cm_list_builtin(ASTNode *node, ASTNode *objNode, Variable *v) {
                     new_item->type = strdup(TE_T_NUMBER);
                     new_item->value = 0;
                 }
-            } else if (arg->type && strcmp(arg->type, TE_T_STRING) == 0) {
-                new_item->type = strdup(TE_T_STRING);
-                new_item->str_value = strdup(arg->str_value);
-            } else if (arg->type && (strcmp(arg->type, TE_T_IDENTIFIER) == 0 || strcmp(arg->type, TE_T_ID) == 0)) {
-                Variable *av = find_variable(arg->id);
-                if (av && av->vtype == VAL_OBJECT && av->value.object_value) {
-                    /* Root fix (prod UAF SIGSEGV in te_expr_is_null/is_string_type):
-                     * a CLASS instance pushed via a variable used to SHARE the
-                     * ObjectNode pointer. When the source variable's object was
-                     * later freed (free_object_node on scope/lambda teardown) the
-                     * list element dangled -> use-after-free reading
-                     * obj->class->attributes[i].id (== NULL after the chunk was
-                     * reused). Clone the instance so the list OWNS its own copy,
-                     * exactly like the push(new X()) and push({...}) paths already
-                     * do. Only class instances (type "OBJECT") are cloned;
-                     * MAP/LIST/LAMBDA (also VAL_OBJECT) keep the shared pointer. */
-                    if (av->type && strcmp(av->type, TE_T_OBJECT) == 0) {
-                        ObjectNode *cl = clone_object((ObjectNode*)av->value.object_value);
-                        new_item->type = strdup(TE_T_OBJECT);
-                        new_item->extra = (struct ASTNode*)cl;
-                        new_item->value = (int)(intptr_t)cl;
-                    } else {
-                        new_item->type = strdup(TE_T_OBJECT);
-                        new_item->extra = (struct ASTNode*)av->value.object_value;
-                        new_item->value = (int)(intptr_t)av->value.object_value;
-                    }
-                } else if (av && av->vtype == VAL_STRING) {
-                    new_item->type = strdup(TE_T_STRING);
-                    new_item->str_value = strdup(av->value.string_value);
-                } else if (av && av->vtype == VAL_FLOAT) {
-                    new_item->type = strdup(TE_T_FLOAT);
-                    char buf[64]; te_fmt_double(buf, sizeof(buf), av->value.float_value);
-                    new_item->str_value = strdup(buf);
-                } else if (av) {
-                    new_item->type = strdup(TE_T_NUMBER);
-                    new_item->value = av->value.int_value;
-                }
             } else {
-                double vv = evaluate_expression(arg);
-                if (vv == (int)vv) { new_item->type = strdup(TE_T_NUMBER); new_item->value = (int)vv; }
-                else { new_item->type = strdup(TE_T_FLOAT); char buf[64]; te_fmt_double(buf, sizeof(buf), vv); new_item->str_value = strdup(buf); }
+                /* Fase F: camino único (antes una escalera de tipos propia: un lambda literal caía a
+                 * evaluate_expression -> 0 y una variable LIST/MAP/LAMBDA se guardaba como "OBJECT").
+                 * Escalares: leaf fresco. OBJECT: clon (la lista es dueña, como push(new X())).
+                 * LIST/MAP/LAMBDA: wrapper alias (el nodo fuente puede estar encadenado por ->next). */
+                TeValue v; te_eval_value(arg, &v);
+                free(new_item);
+                const char *tag = te_val_tag(&v);
+                int is_ref = (v.vtype == VAL_OBJECT && !te_val_is_null(&v));
+                if (is_ref && strcmp(tag, TE_T_OBJECT) == 0) {
+                    new_item = create_object_node(clone_object((ObjectNode *)v.value.object_value));
+                } else if (is_ref && (strcmp(tag, TE_T_LIST) == 0 || strcmp(tag, TE_T_MAP) == 0 || strcmp(tag, TE_T_LAMBDA) == 0)) {
+                    ASTNode *src = (ASTNode *)(intptr_t)v.value.object_value;
+                    new_item = (ASTNode *)calloc(1, sizeof(ASTNode));
+                    new_item->type = strdup(tag);
+                    new_item->kind = nk_from_str(tag);
+                    new_item->id = src->id ? strdup(src->id) : NULL;
+                    new_item->left = src->left; new_item->right = src->right; new_item->extra = src->extra;
+                    new_item->closure = src->closure;
+                    new_item->str_value = src->str_value ? strdup(src->str_value) : NULL;
+                    new_item->value = src->value;
+                    new_item->borrowed_children = 1;
+                    new_item->bc = BC_NOT_COMPILABLE;
+                } else {
+                    new_item = te_val_to_leaf(&v);
+                }
+                te_val_free(&v);
             }
             new_item->next = NULL;
             te_list_append(list, new_item);   /* Ola 14b: O(1) amortizado */
@@ -7101,7 +7064,7 @@ static int te_cm_body_bytecode(ASTNode *node, MethodNode *m, ObjectNode *obj) {
             && (strcmp(m->return_type, TE_DT_INT)   == 0
              || strcmp(m->return_type, TE_DT_FLOAT) == 0)
             && obj && obj->class) {
-            BCInfo *bi = bc_get_or_compile_method(m, obj->class);
+            BCInfo *bi = bc_get_or_compile_method(m, obj->class, 1);
             double rv;
             ObjectNode *saved_this = g_vm.bc_this;
             g_vm.bc_this = obj;
@@ -7213,6 +7176,10 @@ static int te_cm_materialize_return(ASTNode *node, MethodNode *m, ObjectNode *ob
                 /* Fase E: el valor de retorno se evalúa por el camino único. */
                 TeValue rv;
                 te_eval_value(g_vm.return_node, &rv);
+                /* Fase F: un lambda que escapa del método captura sus variables libres (los locales
+                 * del método mueren en te_frame_pop). */
+                if (rv.vtype == VAL_OBJECT && rv.type && strcmp(rv.type, TE_T_LAMBDA) == 0 && rv.value.object_value)
+                    rv.value.object_value = (void *)te_capture_lambda((ASTNode *)(intptr_t)rv.value.object_value);
                 if (m->return_type
                     && strcmp(m->return_type, TE_DT_DYNAMIC) != 0
                     && strcmp(m->return_type, TE_DT_VOID) != 0) {
@@ -7505,6 +7472,16 @@ static void interpret_call_method_impl(ASTNode *node) {
     MethodNode *m = obj->class->methods;
     while (m && strcmp(m->name, node->id) != 0) m = m->next;
     if (!m) {
+        /* Fase F: `obj.cb(args)` donde cb es un atributo dynamic que guarda un lambda */
+        for (int i = 0; i < obj->class->attr_count; i++) {
+            Variable *a = &obj->attributes[i];
+            if (obj->class->attributes[i].id && strcmp(obj->class->attributes[i].id, node->id) == 0
+                && a->vtype == VAL_OBJECT && a->type && strcmp(a->type, TE_T_LAMBDA) == 0 && a->value.object_value) {
+                ASTNode *r = call_lambda((ASTNode *)(intptr_t)a->value.object_value, node->right);
+                if (r) add_or_update_variable(TE_SYM_RET, r);
+                return;
+            }
+        }
         printf("Error: method '%s' not found in class '%s'.\n", node->id, obj->class->name);
         return;
     }
@@ -7771,7 +7748,7 @@ ASTNode* create_lambda_multi_node(const char *paramsCsv, ASTNode *body) {
  * leaf con su valor concreto actual. Es semántica de closure-by-value.
  * ============================================================ */
 
-/* ¿`name` aparece en el set '\1'-separado `shadow`? */
+/* ¿`name` aparece en el set '\1'-separado `shadow`? (usado por el chequeo de aridad) */
 static int te_name_in_shadow(const char *shadow, const char *name) {
     if (!shadow || !name) return 0;
     size_t nl = strlen(name);
@@ -7784,88 +7761,10 @@ static int te_name_in_shadow(const char *shadow, const char *name) {
     return 0;
 }
 
-/* Clona `n` recursivamente; sustituye identificadores libres por su valor.
- * `shadow` lista (separada por '\1') los nombres ligados por parámetros de
- * lambdas anidados, que NO deben sustituirse. */
-static ASTNode *te_clone_capture(ASTNode *n, const char *shadow) {
-    if (!n) return NULL;
-    /* Identificador libre -> sustituir por su valor concreto actual. */
-    if (n->type && (strcmp(n->type, TE_T_IDENTIFIER) == 0 || strcmp(n->type, TE_T_ID) == 0)
-        && n->id && !te_name_in_shadow(shadow, n->id)) {
-        Variable *v = find_variable(n->id);
-        if (v) {
-            if (v->vtype == VAL_INT) {
-                const char *t = (v->type && strcmp(v->type, TE_T_BOOL) == 0) ? TE_T_BOOL : TE_T_NUMBER;
-                ASTNode *r = create_ast_leaf_number((char*)t, v->value.int_value, NULL, NULL);
-                if (r) r->bc = BC_NOT_COMPILABLE;
-                return r;
-            }
-            if (v->vtype == VAL_FLOAT) {
-                char buf[64]; te_fmt_double(buf, sizeof(buf), v->value.float_value);
-                ASTNode *r = create_ast_leaf(TE_T_FLOAT, 0, buf, NULL);
-                if (r) r->bc = BC_NOT_COMPILABLE;
-                return r;
-            }
-            if (v->vtype == VAL_STRING) {
-                ASTNode *r = create_ast_leaf(TE_T_STRING, 0,
-                    v->value.string_value ? v->value.string_value : "", NULL);
-                if (r) r->bc = BC_NOT_COMPILABLE;
-                return r;
-            }
-            /* OBJECT/LIST/MAP/etc.: no inlineable como leaf simple; se deja el
-             * identificador (puede ser global/persistente). */
-        }
-        /* No resuelto: copiar el identificador tal cual. */
-    }
-    /* Copia genérica del nodo. */
-    ASTNode *c = (ASTNode*)calloc(1, sizeof(ASTNode));
-    if (!c) return NULL;
-    c->type = n->type ? strdup(n->type) : NULL;
-    c->kind = n->kind;
-    c->id = n->id ? strdup(n->id) : NULL;
-    c->value = n->value;
-    c->str_value = n->str_value ? strdup(n->str_value) : NULL;
-    c->str_interned = 0;
-    c->line = n->line;
-    c->bc = BC_NOT_COMPILABLE;
-    /* Al descender en un LAMBDA anidado, sus parámetros sombrean. */
-    if (n->type && strcmp(n->type, TE_T_LAMBDA) == 0 && n->id && n->id[0]) {
-        size_t sl = shadow ? strlen(shadow) : 0;
-        size_t pl = strlen(n->id);
-        char *ns = (char*)malloc(sl + 1 + pl + 1);
-        if (ns) {
-            if (sl) { memcpy(ns, shadow, sl); ns[sl] = '\1'; memcpy(ns + sl + 1, n->id, pl + 1); }
-            else    { memcpy(ns, n->id, pl + 1); }
-            c->left  = te_clone_capture(n->left,  ns);
-            c->right = te_clone_capture(n->right, ns);
-            c->next  = te_clone_capture(n->next,  shadow);
-            c->extra = te_clone_capture(n->extra, ns);
-            free(ns);
-            return c;
-        }
-    }
-    c->left  = te_clone_capture(n->left,  shadow);
-    c->right = te_clone_capture(n->right, shadow);
-    c->next  = te_clone_capture(n->next,  shadow);
-    c->extra = te_clone_capture(n->extra, shadow);
-    return c;
-}
-
-/* Captura un lambda que será retornado: clona el body sustituyendo las
- * variables libres por su valor actual. Los parámetros del propio lambda
- * (lam->id) se mantienen como variables. */
+/* Fase F: un lambda que escapa (return / atributo / valor) es una CLOSURE por referencia
+ * (te_closure_make, te_value.c). Idempotente: si ya es closure o no hay frame, devuelve el nodo. */
 ASTNode *te_capture_lambda(ASTNode *lam) {
-    if (!lam) return NULL;
-    ASTNode *c = (ASTNode*)calloc(1, sizeof(ASTNode));
-    if (!c) return lam;
-    c->type = strdup(TE_T_LAMBDA);
-    c->kind = lam->kind;
-    c->id = lam->id ? strdup(lam->id) : strdup("");
-    c->line = lam->line;
-    c->bc = BC_NOT_COMPILABLE;
-    /* El body se clona con los parámetros propios sombreados. */
-    c->left = te_clone_capture(lam->left, c->id);
-    return c;
+    return te_closure_make(lam);
 }
 
 ASTNode* call_lambda(ASTNode *lambda, ASTNode *argsList) {
@@ -7926,9 +7825,15 @@ static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
             if (*e == '\1') p = e + 1; else p = e;
         }
     }
+    te_closure_bind_in(lambda);   /* upvalues + this de la closure (sombras: el frame las restaura) */
     {
+        TeClosureEnv *env = lambda->closure;
+        Variable tmp_stack[16], *tmp = tmp_stack;
+        if (env && env->n > 16) tmp = (Variable *)calloc((size_t)env->n, sizeof(Variable));
         ASTNode *_lam_res = call_lambda_exec_body(lambda);
+        if (env) te_closure_snapshot(lambda, tmp);   /* antes del pop: leer los upvalues ligados */
         te_frame_pop(&_frame);
+        if (env) { te_closure_write_back(lambda, tmp); if (tmp != tmp_stack) free(tmp); }
         return _lam_res;
     }
 }

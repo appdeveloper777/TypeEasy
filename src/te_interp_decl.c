@@ -125,7 +125,16 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
     }
     if(idx<0){ printf("Error: attribute '%s' not found in class '%s'.\n", attr_name, obj->class->name); return; }
     if (!te_attr_access_ok(obj->class, idx, access->left)) return;
-    const char *declared = obj->attributes[idx].type; 
+    /* Fase F: el tipo DECLARADO vive en la clase; en la instancia `type` es el tag de runtime para
+     * atributos `dynamic` (LAMBDA/LIST/MAP/OBJECT/STRING/...). */
+    const char *declared = obj->class->attributes[idx].type ? obj->class->attributes[idx].type : obj->attributes[idx].type;
+    if (declared && strcmp(declared, TE_DT_DYNAMIC) == 0) {
+        TeValue v; te_eval_value(value_node, &v);
+        if (v.vtype == VAL_OBJECT && v.type && strcmp(v.type, TE_T_LAMBDA) == 0 && v.value.object_value)
+            v.value.object_value = (void *)te_capture_lambda((ASTNode *)(intptr_t)v.value.object_value);   /* escapa del frame */
+        te_val_move_into(&obj->attributes[idx], &v);
+        return;
+    }
 
     /* detailed attribute assignment trace removed */
 
@@ -283,9 +292,7 @@ static int te_assign_from_call_fast(TeVM *vm, ASTNode *var_node, ASTNode *value_
     if (!(fr_enabled && g_vm.ret_var_active
           && (g_vm.ret_var.vtype == VAL_INT || g_vm.ret_var.vtype == VAL_FLOAT)
           && (!g_vm.ret_var.type || strcmp(g_vm.ret_var.type, TE_T_BOOL) != 0))) return 0;
-    Variable *fv = (Variable *)var_node->cached_var;
-    if (fv && (!fv->id || strcmp(fv->id, var_node->id) != 0)) { fv = NULL; var_node->cached_var = NULL; }
-    if (!fv) { fv = find_variable_for(var_node->id); if (fv) var_node->cached_var = fv; }
+    Variable *fv = te_resolve_cached(var_node);
     if (!(fv && !fv->is_const && (fv->vtype == VAL_INT || fv->vtype == VAL_FLOAT)
           && (!fv->type || strcmp(fv->type, TE_T_BOOL) != 0))) return 0;
     if (g_vm.ret_var.vtype == VAL_FLOAT) { fv->vtype = VAL_FLOAT; fv->value.float_value = g_vm.ret_var.value.float_value; if (fv->type && strcmp(fv->type, TE_T_FLOAT) != 0) { free(fv->type); fv->type = strdup(TE_T_FLOAT); } }
@@ -297,9 +304,7 @@ static int te_assign_from_call_fast(TeVM *vm, ASTNode *var_node, ASTNode *value_
 
 /* Asigna *v a la variable `name` (existente: respeta const; nueva: la crea). */
 void te_assign_value(ASTNode *var_node, TeValue *v) {
-    Variable *dst = (Variable *)var_node->cached_var;
-    if (dst && (!dst->id || strcmp(dst->id, var_node->id) != 0)) { dst = NULL; var_node->cached_var = NULL; }
-    if (!dst) { dst = find_variable_for(var_node->id); if (dst) var_node->cached_var = dst; }
+    Variable *dst = te_resolve_cached(var_node);
     if (dst) {
         if (dst->is_const) { te_val_free(v); te_runtime_fatalf("Error: cannot assign to constant variable '%s'.", var_node->id); return; }
         te_val_move_into(dst, v);
@@ -337,16 +342,7 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
     /* Fase 2 (perf): fast-path for "x = numeric_expr" with cached Variable*.
      * Hot in for/while loops. Skips strdup/find_variable_for/temp_node alloc. */
     {
-        Variable *fv = (Variable *)var_node->cached_var;
-        if (fv && (!fv->id || strcmp(fv->id, var_node->id) != 0)) {
-            /* slot reciclado (reset/unwind): revalidar por id como NK_IDENTIFIER */
-            fv = NULL;
-            var_node->cached_var = NULL;
-        }
-        if (!fv) {
-            fv = find_variable_for(var_node->id);
-            if (fv) var_node->cached_var = fv;
-        }
+        Variable *fv = te_resolve_cached(var_node);
         if (fv && !fv->is_const && (fv->vtype == VAL_INT || fv->vtype == VAL_FLOAT)) {
             NodeKind vk = nk_of(value_node);
             if (vk == NK_ADD || vk == NK_SUB || vk == NK_MUL || vk == NK_DIV

@@ -112,7 +112,9 @@ BCInfo *bc_get_or_compile(ASTNode *node);
 BCInfo *bc_get_or_compile_stmt(ASTNode *node);
 
 /* Compile `m`'s body (`{ return <numeric expr>; }`) bound to class `cls`. */
-BCInfo *bc_get_or_compile_method(MethodNode *m, ClassNode *cls);
+/* in_method_frame=1: llamado desde el cuerpo del método (params ya ligados en este frame);
+ * 0: inline desde el llamador — un slot existente con el nombre de un param es AJENO (no compila). */
+BCInfo *bc_get_or_compile_method(MethodNode *m, ClassNode *cls, int in_method_frame);
 
 /* Run a compiled program. Returns 1 and sets *result (top of stack, 0.0 for
  * statements) — or 0 if the entry guard failed (deopt: caller must run the

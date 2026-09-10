@@ -455,6 +455,11 @@ attribute_decl:
   | member_name COLON DECIMALTYPE QMARK SEMICOLON  { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_DECIMAL_OPT); } }
   | member_name COLON DATETIMETYPE QMARK SEMICOLON { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_DATETIME_OPT); } }
   | member_name COLON UUIDTYPE QMARK SEMICOLON     { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_UUID_OPT); } }
+  /* Fase F: atributo `dynamic` (lambdas/callbacks) o de tipo clase (`other : B;`), sin chequeo de tipo */
+  | member_name COLON DYNAMIC SEMICOLON            { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_DYNAMIC); } }
+  | member_name COLON DYNAMIC QMARK SEMICOLON      { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_DYNAMIC); } }
+  | member_name COLON IDENTIFIER SEMICOLON         { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_DYNAMIC); } free($3); }
+  | member_name COLON IDENTIFIER QMARK SEMICOLON   { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $1, TE_DT_DYNAMIC); } free($3); }
   /* C#/C-style fields: [public|private|protected] type name [= default] ; */
   | field_type IDENTIFIER SEMICOLON
       { if (ctx->last_class) { add_attribute_to_class(ctx->last_class, $2, $1); } free($1); }
@@ -499,6 +504,8 @@ parameter_decl:
   | DECIMALTYPE IDENTIFIER        { $$ = create_parameter_node($2, $1); }
   | IDENTIFIER COLON DATETIMETYPE { $$ = create_parameter_node($1, $3); }
   | IDENTIFIER COLON UUIDTYPE     { $$ = create_parameter_node($1, $3); }
+  /* Fase F: parámetro `dynamic` (lambda/list/map/objeto), sin coerción. (Tipo clase `b : B` ya existe en parameter_list.) */
+  | IDENTIFIER COLON DYNAMIC      { $$ = create_parameter_node($1, TE_DT_DYNAMIC); }
   ;
 
 parameter_list:

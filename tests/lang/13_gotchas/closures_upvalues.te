@@ -1,0 +1,97 @@
+// Fase F2 (closures por referencia): un lambda que escapa de su frame (return, atributo dynamic,
+// lista) o que se llama desde otro método captura sus variables libres LÉXICAMENTE (upvalues):
+// mientras el frame vive comparte el slot (mutación visible), al morir el frame el valor se cierra
+// en la closure. ANTES: resolución dinámica (lex=1001, k del llamador) y locales muertos tras F1.
+class Reg {
+    cb : dynamic;
+    fac : int;
+    __constructor() { this.fac = 3; }
+    mk(k : int) : dynamic {
+        let f = fn(x) => x * k;
+        return f;
+    }
+    store(k : int) : void {
+        let base = k + 100;
+        this.cb = fn(x) => x + base;
+    }
+    lex(k : int) : int {
+        let f = fn(x) => x + k;
+        return this.apply(f, 1);
+    }
+    apply(f : dynamic, k : int) : int {
+        let kk = k * 1000;
+        return f(kk);
+    }
+    lst(k : int) : dynamic {
+        let m = 2;
+        let fs = [];
+        fs.push(fn(x) => x * m + k);
+        return fs;
+    }
+}
+let r = new Reg();
+let dbl = r.mk(2);
+println("mk=" + dbl(21));
+r.store(5);
+let cb = r.cb;
+println("store=" + cb(1));
+println("lex=" + r.lex(7));
+let fs = r.lst(1);
+let g = fs[0];
+println("lst=" + g(10));
+let make = fn(n) => fn(x) => x + n;
+let add10 = make(10);
+println("nested=" + add10(5));
+var acc = 0;
+let addAcc = fn(v) => { acc = acc + v; return acc; };
+addAcc(3); addAcc(4);
+println("acc=" + acc);
+class Cnt {
+    run() : int {
+        var total = 0;
+        let xs = [1, 2, 3];
+        xs.forEach(fn(i) => { total = total + i; });
+        return total;
+    }
+}
+let c = new Cnt();
+println("forEach=" + c.run());
+
+class R {
+    lex(k : int) : int {
+        let f = fn(x) => x + k;
+        return this.apply(f, 1);
+    }
+    apply(f : dynamic, k : int) : int {
+        let kk = k * 1000;
+        return f(kk);
+    }
+    lex2(k : int) : int {
+        let f = fn(x) => x + k;
+        return f(5);
+    }
+    mut() : int {
+        var total = 0;
+        let add = fn(v) => { total = total + v; return total; };
+        add(1); add(2);
+        return total;
+    }
+}
+let r2 = new R();
+println("lex=" + r2.lex(7));
+println("lex2=" + r2.lex2(7));
+println("mut=" + r2.mut());
+let fs = [];
+fs.push(fn(x) => x * 2);
+let g = fs[0];
+println("g=" + g(3));
+let hs = [fn(x) => x + 1];
+let h = hs[0];
+println("h=" + h(3));
+let inner = [1, 2];
+let outer = [];
+outer.push(inner);
+outer.push("s");
+outer.push(2.5);
+outer.push(7);
+println(json(outer));

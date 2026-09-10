@@ -364,7 +364,7 @@ int te_eval_value(ASTNode *n, TeValue *out) {
     }
     if (t) {
         if (strcmp(t, TE_T_CALL_EXPR) == 0) { eval_call(n, out); return 1; }
-        if (strcmp(t, TE_T_LAMBDA) == 0)    { te_val_set_ref(out, TE_T_LAMBDA, n); return 1; }
+        if (strcmp(t, TE_T_LAMBDA) == 0)    { te_val_set_ref(out, TE_T_LAMBDA, te_closure_make(n)); return 1; }
         if (strcmp(t, TE_T_LAZY_ITER) == 0) { te_val_set_ref(out, TE_T_LAZY_ITER, n->extra ? n->extra : n); return 1; }
         if (strcmp(t, TE_T_MAP) == 0)       { te_val_set_ref(out, TE_T_MAP, n); return 1; }
         if (strcmp(t, TE_T_DATETIME) == 0 || strcmp(t, TE_T_UUID) == 0) { te_val_set_string_tag(out, t, n->str_value); return 1; }
@@ -383,9 +383,7 @@ int te_eval_value(ASTNode *n, TeValue *out) {
 
 static int lookup_int(ASTNode *n, long long *out) {
     if (!n->id) return 0;
-    Variable *v = (Variable *)n->cached_var;
-    if (v && (!v->id || strcmp(v->id, n->id) != 0)) v = NULL;   /* slot reciclado entre requests */
-    if (!v) v = find_variable(n->id);
+    Variable *v = te_resolve_cached(n);
     if (!v || v->vtype != VAL_INT) return 0;
     if (v->type && strcmp(v->type, TE_T_NULL) == 0) return 0;
     *out = v->value.int_value;
@@ -442,4 +440,204 @@ int te_eval_i64(ASTNode *node, long long *out) {
     case NK_DIFF:  *out = a != b; return 1;
     default: return 0;
     }
+}
+
+/* ======================================================================================
+ * Fase F: closures por referencia (upvalues).
+ * ====================================================================================== */
+
+typedef struct { char **names; int n, cap; } TeNameSet;
+
+static int nameset_has(const TeNameSet *s, const char *id) {
+    for (int i = 0; i < s->n; i++) if (strcmp(s->names[i], id) == 0) return 1;
+    return 0;
+}
+static void nameset_add(TeNameSet *s, const char *id) {
+    if (!id || nameset_has(s, id)) return;
+    if (s->n >= s->cap) {
+        int nc = s->cap ? s->cap * 2 : 8;
+        char **g = (char **)realloc(s->names, (size_t)nc * sizeof(char *));
+        if (!g) return;
+        s->names = g; s->cap = nc;
+    }
+    s->names[s->n++] = strdup(id);
+}
+static void nameset_add_csv(TeNameSet *s, const char *csv) {   /* '\1'-separado (params de lambda) */
+    const char *p = csv;
+    while (p && *p) {
+        const char *e = p; while (*e && *e != '\1') e++;
+        char nm[128]; size_t n = (size_t)(e - p); if (n >= sizeof nm) n = sizeof nm - 1;
+        memcpy(nm, p, n); nm[n] = 0;
+        nameset_add(s, nm);
+        p = (*e == '\1') ? e + 1 : e;
+    }
+}
+static void nameset_free(TeNameSet *s) {
+    for (int i = 0; i < s->n; i++) free(s->names[i]);
+    free(s->names); s->names = NULL; s->n = s->cap = 0;
+}
+
+/* Recorre el body: `refs` = identificadores usados; `bound` = nombres ligados dentro (let/var,
+ * variables de loop, params de lambdas anidados). Solo baja por extra en LAMBDA (en OBJECT es
+ * un ObjectNode*). */
+static void closure_scan(ASTNode *n, TeNameSet *refs, TeNameSet *bound, int *uses_this) {
+    if (!n) return;
+    NodeKind k = nk_of(n);
+    if (k == NK_IDENTIFIER || k == NK_ID) {
+        if (n->id) { if (strcmp(n->id, TE_SYM_THIS) == 0) *uses_this = 1; else nameset_add(refs, n->id); }
+        return;
+    }
+    if (n->type && strcmp(n->type, TE_T_LAMBDA) == 0) {
+        if (n->id) nameset_add_csv(bound, n->id);
+        closure_scan(n->left, refs, bound, uses_this);
+        closure_scan(n->extra, refs, bound, uses_this);
+        return;
+    }
+    if (k == NK_VAR_DECL || k == NK_FOR || k == NK_FOR_IN || k == NK_FOR_C) { if (n->id) nameset_add(bound, n->id); }
+    closure_scan(n->left, refs, bound, uses_this);
+    closure_scan(n->right, refs, bound, uses_this);
+    closure_scan(n->next, refs, bound, uses_this);
+}
+
+static void closures_register_request(ASTNode *cl) {
+    if (!g_vm.te_request_active) return;   /* script: vive hasta el fin del proceso */
+    if (g_vm.req_closures_n >= g_vm.req_closures_cap) {
+        int nc = g_vm.req_closures_cap ? g_vm.req_closures_cap * 2 : 32;
+        ASTNode **g = (ASTNode **)realloc(g_vm.req_closures, (size_t)nc * sizeof(ASTNode *));
+        if (!g) return;
+        g_vm.req_closures = g; g_vm.req_closures_cap = nc;
+    }
+    g_vm.req_closures[g_vm.req_closures_n++] = cl;
+}
+
+static void frame_register_closure(TeFrame *f, ASTNode *cl) {
+    for (TeClosureRef *r = f->closures; r; r = r->next) if (r->cl == cl) return;
+    TeClosureRef *r = (TeClosureRef *)malloc(sizeof(TeClosureRef));
+    if (!r) return;
+    r->cl = cl; r->next = f->closures; f->closures = r;
+}
+
+ASTNode *te_closure_make(ASTNode *lam) {
+    if (!lam || lam->closure || !g_vm.frame_top) return lam;   /* ya es closure / top-level: dinámico */
+    int floor = g_vm.var_count;
+    for (TeFrame *f = g_vm.frame_top; f; f = f->prev) floor = f->base;
+
+    TeNameSet refs = {0}, bound = {0};
+    int uses_this = 0;
+    if (lam->id) nameset_add_csv(&bound, lam->id);   /* params propios */
+    closure_scan(lam->left, &refs, &bound, &uses_this);
+
+    /* candidatas: libres, resuelven AHORA a un slot de un frame activo */
+    int cap = 0; Variable **slots = NULL; char **names = NULL;
+    for (int i = 0; i < refs.n; i++) {
+        const char *id = refs.names[i];
+        if (nameset_has(&bound, id) || strcmp(id, TE_SYM_RET) == 0) continue;
+        Variable *v = find_variable((char *)id);
+        if (!v || v < g_vm.vars || v >= g_vm.vars + MAX_VARS) continue;
+        if ((int)(v - g_vm.vars) < floor) continue;
+        if (cap == 0) { slots = (Variable **)calloc((size_t)refs.n, sizeof(Variable *)); names = (char **)calloc((size_t)refs.n, sizeof(char *)); }
+        slots[cap] = v; names[cap] = strdup(id); cap++;
+    }
+    nameset_free(&refs);
+    nameset_free(&bound);
+
+    if (cap == 0 && !(uses_this && g_vm.this_active)) return lam;
+
+    TeClosureEnv *env = (TeClosureEnv *)calloc(1, sizeof(TeClosureEnv));
+    env->n = cap; env->names = names; env->open = slots;
+    env->cells = (Variable *)calloc((size_t)(cap ? cap : 1), sizeof(Variable));
+    env->has_this = (uses_this && g_vm.this_active);
+    env->this_obj = env->has_this ? g_vm.this_reg.value.object_value : NULL;
+
+    ASTNode *cl = (ASTNode *)calloc(1, sizeof(ASTNode));
+    cl->type = strdup(TE_T_LAMBDA);
+    cl->kind = lam->kind;
+    cl->id = strdup(lam->id ? lam->id : "");
+    cl->left = lam->left;                 /* body: ALIAS al template (no se libera con la closure) */
+    cl->extra = lam->extra;
+    cl->line = lam->line; cl->file_id = lam->file_id;
+    cl->bc = BC_NOT_COMPILABLE;
+    cl->borrowed_children = 1;
+    cl->closure = env;
+
+    /* registrar en cada frame dueño de algún slot capturado (se cierra al pop de ese frame) */
+    for (int i = 0; i < cap; i++) {
+        int idx = (int)(slots[i] - g_vm.vars);
+        TeFrame *owner = NULL;
+        for (TeFrame *f = g_vm.frame_top; f; f = f->prev) { if (idx >= f->base) { owner = f; break; } }
+        if (owner) frame_register_closure(owner, cl);
+    }
+    closures_register_request(cl);
+    return cl;
+}
+
+void te_frame_close_upvalues(TeFrame *f) {
+    TeClosureRef *r = f->closures;
+    while (r) {
+        TeClosureEnv *env = r->cl->closure;
+        if (env) {
+            for (int i = 0; i < env->n; i++) {
+                Variable *o = env->open[i];
+                if (o && (int)(o - g_vm.vars) >= f->base) {
+                    te_val_free(&env->cells[i]);
+                    te_val_copy(&env->cells[i], o);
+                    env->open[i] = NULL;
+                }
+            }
+        }
+        TeClosureRef *nx = r->next; free(r); r = nx;
+    }
+    f->closures = NULL;
+}
+
+void te_closure_bind_in(ASTNode *cl) {
+    TeClosureEnv *env = cl ? cl->closure : NULL;
+    if (!env) return;
+    for (int i = 0; i < env->n; i++) {
+        TeValue v; te_val_init(&v);
+        te_val_copy(&v, env->open[i] ? env->open[i] : &env->cells[i]);
+        te_bind_param(env->names[i], &v);
+    }
+    if (env->has_this) te_set_this(env->this_obj);
+}
+
+void te_closure_snapshot(ASTNode *cl, Variable *tmp) {
+    TeClosureEnv *env = cl ? cl->closure : NULL;
+    if (!env) return;
+    for (int i = 0; i < env->n; i++) {
+        te_val_init(&tmp[i]);
+        Variable *b = find_variable_for(env->names[i]);
+        if (b) te_val_copy(&tmp[i], b);
+    }
+}
+
+void te_closure_write_back(ASTNode *cl, Variable *tmp) {
+    TeClosureEnv *env = cl ? cl->closure : NULL;
+    if (!env) return;
+    for (int i = 0; i < env->n; i++) {
+        Variable *dst = env->open[i] ? env->open[i] : &env->cells[i];
+        if (dst != &env->cells[i]) {
+            /* slot abierto: conservar id/is_const del slot; mover valor */
+            int is_const = dst->is_const;
+            te_val_move_into(dst, &tmp[i]);
+            dst->is_const = is_const;
+        } else {
+            te_val_free(dst);
+            te_val_move_into(dst, &tmp[i]);
+        }
+    }
+}
+
+static void closure_free(ASTNode *cl) {
+    TeClosureEnv *env = cl->closure;
+    if (env) {
+        for (int i = 0; i < env->n; i++) { free(env->names[i]); te_val_free(&env->cells[i]); }
+        free(env->names); free(env->open); free(env->cells); free(env);
+    }
+    free(cl->type); free(cl->id); free(cl);
+}
+
+void te_closures_free_request(void) {
+    for (int i = 0; i < g_vm.req_closures_n; i++) closure_free(g_vm.req_closures[i]);
+    g_vm.req_closures_n = 0;
 }

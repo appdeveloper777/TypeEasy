@@ -392,11 +392,13 @@ void te_req_owned_ast_register(ASTNode *root) {
 }
 
 static void te_req_owned_free_all(void) {
+    extern void te_closures_free_request(void);
     for (int i = 0; i < g_vm.req_owned_count; i++) free_object_node(g_vm.req_owned_objects[i]);
     g_vm.req_owned_count = 0;
     extern void te_req_free_json_tree(ASTNode *root);
     for (int i = 0; i < g_vm.req_owned_ast_count; i++) te_req_free_json_tree(g_vm.req_owned_ast[i]);
     g_vm.req_owned_ast_count = 0;
+    te_closures_free_request();
 }
 
 /* v0.0.30 (estabilidad): cleanup simetrico para el path de error (longjmp ->

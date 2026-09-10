@@ -77,19 +77,43 @@ void te_set_ret_string(const char *s);   /* __ret__ = STRING (ast.c) */
 void te_set_ret_int(int n);
 
 /* Fase F: frames de llamada (lambdas, métodos, constructores). El frame es DUEÑO de los slots
- * creados durante la llamada (se liberan al pop), sombrea en sitio los slots del llamador que
- * la llamada re-declara/ata (se restauran al pop) y salva/restaura el registro `this`. */
-typedef struct { Variable *slot; Variable saved; } ParamShadow;
+ * creados durante la llamada (se liberan al pop). Un nombre que ya existía fuera NUNCA se pisa:
+ * la llamada appendea un slot nuevo que lo sombrea y anota (nombre, idx previo) para restaurar
+ * la entrada de la symtab al pop. También salva/restaura el registro `this`. */
+typedef struct { const char *name; int prev_idx; } TeSymRestore;
+typedef struct TeClosureRef { ASTNode *cl; struct TeClosureRef *next; } TeClosureRef;
 typedef struct TeFrame {
-    ParamShadow *sh;
+    TeSymRestore *sh;
     int n, cap;
     int base;                 /* g_vm.var_count al entrar */
     ObjectNode *saved_this; int saved_this_active;
+    TeClosureRef *closures;   /* closures que capturaron slots de ESTE frame (se cierran al pop) */
     struct TeFrame *prev;
 } TeFrame;
 void te_frame_push(TeFrame *f);
 void te_frame_pop(TeFrame *f);
 void te_set_this(ObjectNode *obj);
 void te_call_ctor(ObjectNode *obj, ASTNode *args);   /* frame + bind args + __constructor + limpia return */
+int  te_sym_lookup(const char *id);                   /* idx en vars[] o -1 (hash O(1)) */
+/* Resuelve el slot de un IDENTIFIER validando node->cached_var contra la symtab (identidad real:
+ * el slot VISIBLE con ese nombre, no cualquier slot que se llame igual). */
+Variable *te_resolve_cached(ASTNode *n);
+
+/* Fase F: closures por REFERENCIA (upvalues). te_closure_make: instancia de un lambda que
+ * captura las variables libres que viven en frames activos (abiertas mientras el frame vive,
+ * cerradas —copiadas al env— en te_frame_pop). Devuelve el template si no hay nada que capturar. */
+typedef struct TeClosureEnv {
+    int n;
+    char **names;
+    Variable **open;          /* slot vivo en vars[] o NULL si ya se cerró */
+    Variable *cells;          /* valor cerrado (owned) */
+    ObjectNode *this_obj; int has_this;
+} TeClosureEnv;
+ASTNode *te_closure_make(ASTNode *lam);
+void te_closure_bind_in(ASTNode *cl);                 /* tras te_frame_push + params: liga upvalues + this */
+void te_closure_snapshot(ASTNode *cl, Variable *tmp); /* antes del pop: lee los upvalues ligados */
+void te_closure_write_back(ASTNode *cl, Variable *tmp);/* tras el pop: escribe en slot abierto / cell */
+void te_frame_close_upvalues(TeFrame *f);            /* llamado por te_frame_pop */
+void te_closures_free_request(void);                   /* libera las closures del request (typeeasy_api.c) */
 
 #endif /* TE_AST_INTERNAL_H */

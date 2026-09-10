@@ -21,6 +21,7 @@
 #include "ast.h"
 #include "te_num.h"
 #include "te_vm.h"
+#include "ast_internal.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -37,13 +38,7 @@ typedef struct TEListIdx {
 
 extern int is_string_type(ASTNode *node);
 
-/* Local copy of the ast.c static-inline nk_of helper — pure, no globals. */
-static inline NodeKind nk_of(ASTNode *n) {
-    if (!n) return NK_UNKNOWN;
-    if (n->kind != NK_UNKNOWN) return n->kind;
-    if (n->type) n->kind = nk_from_str(n->type);
-    return n->kind;
-}
+/* nk_of: ast_internal.h */
 
 /* ------------------------------------------------------------------------ */
 /* Registro de programas compilados (para invalidar entre requests)          */
@@ -140,10 +135,8 @@ static int var_is_numeric(const Variable *v) {
 }
 
 static Variable *bc_resolve_var(ASTNode *node) {
-    Variable *v = (Variable *)node->cached_var;
-    if (v && node->id && (!v->id || strcmp(v->id, node->id) != 0)) { v = NULL; node->cached_var = NULL; }
-    if (!v && node->id) { v = find_variable(node->id); if (v) node->cached_var = v; }
-    return v;
+    if (!node->id) return (Variable *)node->cached_var;
+    return te_resolve_cached(node);
 }
 
 static int attr_type_is_numeric(const char *t) {
@@ -299,7 +292,7 @@ static int bc_c_call_method(BCC *c, ASTNode *node) {
     if (!mm) return 0;
     if (!mm->return_type || (strcmp(mm->return_type, TE_DT_INT) != 0 && strcmp(mm->return_type, TE_DT_FLOAT) != 0)) return 0;
 
-    BCInfo *body = bc_get_or_compile_method(mm, obj->class);
+    BCInfo *body = bc_get_or_compile_method(mm, obj->class, 0);
     if (!body) return 0;
 
     int n_params = 0;
@@ -446,7 +439,11 @@ static int bc_compile_i64(BCC *c, ASTNode *n) {
 static int bc_guards_ok(const BCInfo *info) {
     for (int i = 0; i < info->n_guards; i++) {
         const BCGuard *g = &info->guards[i];
-        if (!g->var || (g->id && (!g->var->id || strcmp(g->var->id, g->id) != 0))) return 0;   /* slot reciclado */
+        if (!g->var) return 0;
+        if (g->id && g->var != &g_vm.this_reg) {   /* identidad: el slot VISIBLE con ese nombre */
+            int idx = te_sym_lookup(g->id);
+            if (idx < 0 || &g_vm.vars[idx] != g->var) return 0;
+        }
         switch (g->kind) {
         case 0: if (!var_is_numeric(g->var)) return 0; break;
         case 1: {
@@ -713,7 +710,7 @@ static ASTNode *bc_find_single_return(ASTNode *body) {
     return NULL;
 }
 
-BCInfo *bc_get_or_compile_method(MethodNode *m, ClassNode *cls) {
+BCInfo *bc_get_or_compile_method(MethodNode *m, ClassNode *cls, int in_method_frame) {
     if (!m) return NULL;
     if (m->bc_body == BC_NOT_COMPILABLE) return NULL;
     if (m->bc_body) return (BCInfo *)m->bc_body;
@@ -728,6 +725,7 @@ BCInfo *bc_get_or_compile_method(MethodNode *m, ClassNode *cls) {
         Variable *pv = (Variable *)p->cached_var;
         if (pv && (!pv->id || strcmp(pv->id, p->name) != 0)) pv = NULL;   /* slot liberado por un frame */
         if (!pv) pv = find_variable_for(p->name);
+        if (pv && !in_method_frame) return NULL;   /* variable del llamador con el nombre del param: no inline */
         if (!pv && g_vm.var_count < MAX_VARS) {
             int is_float = p->type && (strcmp(p->type, TE_DT_FLOAT) == 0 || strcmp(p->type, TE_T_FLOAT) == 0);
             Variable *nv = &g_vm.vars[g_vm.var_count++];
@@ -736,6 +734,7 @@ BCInfo *bc_get_or_compile_method(MethodNode *m, ClassNode *cls) {
             nv->is_const = 0;
             nv->vtype = is_float ? VAL_FLOAT : VAL_INT;
             if (is_float) nv->value.float_value = 0.0; else nv->value.int_value = 0;
+            te_sym_insert(nv->id, (int)(nv - g_vm.vars));
             pv = nv;
         }
         if (pv) p->cached_var = pv;
@@ -766,9 +765,7 @@ static int bc_compile_assign(BCC *c, ASTNode *node) {
     NodeKind vk = nk_of(value_node);
     if (vk != NK_ADD && vk != NK_SUB && vk != NK_MUL && vk != NK_DIV &&
         vk != NK_NUMBER && vk != NK_INT && vk != NK_FLOAT && vk != NK_IDENTIFIER) return 0;
-    Variable *fv = (Variable *)var_node->cached_var;
-    if (fv && (!fv->id || strcmp(fv->id, var_node->id) != 0)) { fv = NULL; var_node->cached_var = NULL; }
-    if (!fv) { fv = find_variable_for(var_node->id); if (fv) var_node->cached_var = fv; }
+    Variable *fv = te_resolve_cached(var_node);
     if (!fv || fv->is_const || !var_is_numeric(fv)) return 0;
     if (vk == NK_ADD && is_string_type(value_node)) return 0;
     if (!bc_guard(c, fv, 0, NULL, var_node->id)) return 0;
@@ -837,6 +834,7 @@ static int bc_compile_for(BCC *c, ASTNode *node) {
         Variable *nv = &g_vm.vars[g_vm.var_count++];
         nv->id = strdup(node->id); nv->type = strdup(TE_T_INT); nv->is_const = 0;
         nv->vtype = VAL_INT; nv->value.int_value = 0;
+        te_sym_insert(nv->id, (int)(nv - g_vm.vars));
         fv = nv;
     }
     if (!fv || fv->is_const || fv->vtype != VAL_INT) return 0;

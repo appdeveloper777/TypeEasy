@@ -81,6 +81,7 @@ typedef struct TeVM {
     /* --- request en curso (typeeasy_api.c): objetos/ASTs que se liberan al terminar --- */
     ObjectNode **req_owned_objects; int req_owned_count, req_owned_cap;
     ASTNode **req_owned_ast; int req_owned_ast_count, req_owned_ast_cap;
+    ASTNode **req_closures; int req_closures_n, req_closures_cap;   /* Fase F: closures creadas en el request */
     char *param_validation_error;
     /* --- --test / --syntax-check (typeeasy_main.c) --- */
     int test_failed, test_assertions;
