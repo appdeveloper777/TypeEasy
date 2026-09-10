@@ -66,6 +66,15 @@ bench de referencia (clínica, `--workers 2`, ~1.010 rps) no puede bajar.
 Siguiente deuda medida (no bloqueante): sustituir los `strcmp(type, TE_T_X)` por `nk_of(node) == NK_X`
 donde el nodo ya tiene `NodeKind` cacheado (hoy ~25 % de los sitios usan el enum).
 
+### Lenguaje profesional 0.1.2 (2026-09-10) — valor unificado + scoping real
+
+| Ítem | Antes | Ahora | Guardia |
+|------|-------|-------|---------|
+| **Un solo modelo de valores** (Fase E) | declaración, asignación, return, args, `json()`, `print` con tablas de tipos propias (bugs reales: `0.1m`→0, `json([true,false])`=`[, ]`, `.map` perdía bool, `x ?? "null"`=`""`) | `te_eval_value(node, out)` (`te_value.c`) es la única evaluación a valor; `te_bind_args/te_bind_param/te_declare_value/te_set_ret_value/te_val_to_leaf` son la API que consumen todos | `tests/lang/13_gotchas/value_unified.te` + bc-diff |
+| **Scoping real** (Fase F1) | métodos/ctors sin frame: recursión rota (`fib(10)`=-80), params/locales pisaban globales, `this` no se restauraba, fuga de locales, args ligados uno a uno; symtab reconstruida entera en cada retorno | `TeFrame` en toda llamada (método/ctor/lambda), dueño de sus slots; sombras por append con restauración de symtab; `this` registro de la VM; `te_sym_remove_idx` incremental (500k objetos 5.9 s → 0.5 s); `BCGuard` valida identidad por symtab | `tests/lang/13_gotchas/scope_frames.te`, ERP A/B 35/35 |
+| **Closures léxicas** (Fase F2) | resolución dinámica al llamar; captura by-value solo al retornar un lambda | `te_closure_make`: upvalues abiertos/cerrados (Lua-style), `this` capturado, write-back tras la llamada | `tests/lang/13_gotchas/closures_upvalues.te` |
+| **Gramática** | `this.m(args)` no existía; sin atributos `dynamic`/clase; sin param `dynamic` | agregados; `obj.cb(args)` invoca lambda en atributo | lang suite |
+
 ### Features en espera (el congelamiento de sintaxis terminó con la Fase 2; priorizar en 0.1.x)
 - `switch`/`match`; `for (a, b in map)`; spread `...`; string multilinea.
 - Registrar aquí cualquier pedido de sintaxis con el caso de uso que lo motiva.

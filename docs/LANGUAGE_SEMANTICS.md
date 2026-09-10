@@ -182,6 +182,27 @@ se ejecuta directamente desde Windows.
 
 ## 6. Historial de decisiones de diseño
 
+- **Scoping real (0.1.2, Fase F)**: cada llamada a método, constructor o lambda
+  corre en un `TeFrame` dueño de sus variables. Params y locales mueren al salir;
+  un nombre que ya existía afuera (global de módulo, local del llamador) **nunca se
+  pisa**: la llamada crea un slot nuevo que lo sombrea y al retornar el nombre vuelve
+  a resolver al de afuera. `this` es un registro de la VM salvado/restaurado por
+  frame (una llamada a un método de otro objeto no lo cambia para el llamador).
+  Todos los argumentos se evalúan en el scope del llamador **antes** de ligar el
+  primero. Consecuencias: recursión en métodos correcta, sin fuga de locales, y
+  el bytecode valida sus `Variable*` cacheados contra la symtab (identidad = el slot
+  visible con ese nombre), no por comparación de nombre.
+- **Closures léxicas por referencia (0.1.2)**: un `fn` que se convierte en valor
+  dentro de una llamada captura sus variables libres como *upvalues*: mientras el
+  frame definidor vive comparte el slot (mutaciones visibles en ambos lados); al
+  morir el frame el valor se cierra dentro de la closure. Captura también `this`.
+  Los lambdas pasados inline a builtins (`xs.map(fn(x) => x * k)`) no necesitan
+  captura (el frame definidor sigue vivo) y resuelven directo.
+- **Modelo de valores único (0.1.1→0.1.2, Fase E)**: `te_eval_value(node, out)` es la
+  única evaluación a valor (literales, identificadores, `new`, ternario, `??`,
+  aritmética con `decimal`, comparaciones, accesos, llamadas, lambdas);
+  declaración, asignación, return, binding de args, `json()` y `print` lo consumen.
+  Antes cada uno tenía su propia tabla de tipos y divergían en los bordes.
 - **`let` = inmutable, `var` = mutable, `const` = literal**: unificar con
   TypeScript/Swift/Dart. Antes `let` y `var` eran sinónimos.
 - **`: <tipo>` obligatorio en métodos**: prevenir bugs silenciosos con métodos
