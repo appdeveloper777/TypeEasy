@@ -7663,24 +7663,25 @@ static int te_cm_bridge(ASTNode *node, ObjectNode *obj, Variable *v) {
 static int te_cm_bind_this(ASTNode *node, ObjectNode *obj, Variable *v) {
     /* ====================================================================
      * Ola 3 Fase D (perf): FAST `this` setup.
-     * Cached: persistent Variable* "this" + single reusable wrapper.
+     * Cached: persistent Variable* "this" + single reusable wrapper, POR VM
+     * (g_vm.this_var / g_vm.this_wrap). Eran statics de función: un global de
+     * proceso invisible al audit que apuntaba al vars[] de OTRA VM ya destruida
+     * (heap-use-after-free bajo ASan en --selftest-vm con 2 hilos).
      * Hot path patches both pointers (no calloc/strdup/add_or_update).
      * Switch: TYPEEASY_NO_FASTTHIS=1.
      * ==================================================================== */
     static int      ft_init        = 0;
     static int      ft_enabled     = 1;
-    static Variable *g_this_var    = NULL;
-    static ASTNode  *g_this_wrap   = NULL;
     if (!ft_init) {
         const char *e = getenv("TYPEEASY_NO_FASTTHIS");
         if (e && e[0] && e[0] != '0') ft_enabled = 0;
         ft_init = 1;
     }
-    if (ft_enabled && g_this_var && g_this_wrap) {
+    if (ft_enabled && g_vm.this_var && g_vm.this_wrap) {
         /* Hot path: just patch the cached objects. */
-        g_this_var->vtype              = VAL_OBJECT;
-        g_this_var->value.object_value = obj;
-        g_this_wrap->extra             = (struct ASTNode*)obj;
+        g_vm.this_var->vtype              = VAL_OBJECT;
+        g_vm.this_var->value.object_value = obj;
+        g_vm.this_wrap->extra             = (struct ASTNode*)obj;
     } else {
         /* Cold path: original setup, plus capture the cache. */
         ASTNode *thisNode = calloc(1, sizeof(ASTNode));
@@ -7691,8 +7692,8 @@ static int te_cm_bind_this(ASTNode *node, ObjectNode *obj, Variable *v) {
         thisNode->value = 0;
         add_or_update_variable(TE_SYM_THIS, thisNode);
         if (ft_enabled) {
-            g_this_var  = find_variable_for(TE_SYM_THIS);
-            g_this_wrap = thisNode;
+            g_vm.this_var  = find_variable_for(TE_SYM_THIS);
+            g_vm.this_wrap = thisNode;
         }
     }
     return 0;

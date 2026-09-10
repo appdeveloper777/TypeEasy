@@ -3,3 +3,5 @@
 global src/te_vm.c g_vm_main_storage
 global src/typeeasy_api_server.c g_reload_requested
 global src/typeeasy_api_server.c g_stop_requested
+global src/te_bytecode.c table
+global src/te_http.c g_ssl_ctx

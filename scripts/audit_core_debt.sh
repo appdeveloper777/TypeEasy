@@ -57,7 +57,20 @@ scan_globals() {
   done | sort -u
 }
 
-# Funciones: cabecera en columna 0 que termina en ")" + "{" y cierre "}" en columna 0.
+# Punteros `static` DENTRO de funciones: globales de proceso camuflados (no los ve el escaneo
+# de columna 0). Caso real (0.1.1): el cache FAST `this` de te_cm_bind_this guardaba en dos
+# statics locales un Variable* del vars[] de otra VM ya destruida -> heap-use-after-free bajo
+# ASan con 2 hilos. Se reportan como `global` (misma allowlist); los `static int` de flags
+# leidos una vez de getenv y los `const char *` no cuentan.
+scan_local_static_ptrs() {
+  for f in "${FILES[@]}"; do
+    [ -f "$f" ] || continue
+    grep -nE '^[[:space:]]+static[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]]+[A-Za-z_][A-Za-z0-9_]*)*[[:space:]]*\*+[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(\[[^]]*\])*[[:space:]]*(=|;)' "$f" \
+      | grep -vE 'static[[:space:]]+const[[:space:]]+char' \
+      | sed -E 's/^[0-9]+://; s/.*\*+[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*(\[[^]]*\])*[[:space:]]*(=|;).*/\1/' \
+      | sed "s|^|global $f |"
+  done | sort -u
+}
 scan_long_functions() {
   for f in "${FILES[@]}"; do
     [ -f "$f" ] || continue
@@ -75,7 +88,7 @@ scan_long_functions() {
   done | sort
 }
 
-current="$( { scan_globals; scan_long_functions; } )"
+current="$( { scan_globals; scan_local_static_ptrs; scan_long_functions; } )"
 
 if [ "${1:-}" = "--update-baseline" ]; then
   {

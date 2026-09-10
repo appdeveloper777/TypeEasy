@@ -6,3 +6,5 @@
 src/te_vm.c g_vm_main_storage             # LA VM principal: contenedor de todo el estado; te_vm_cur (TLS) apunta aquí por defecto
 src/typeeasy_api_server.c g_stop_requested   # escrito por el signal handler (SIGINT/SIGTERM): async-signal-safe, no puede tocar TLS ni la VM
 src/typeeasy_api_server.c g_reload_requested # idem: flag de hot-reload consultado por el loop del servidor tras la señal
+src/te_http.c g_ssl_ctx                      # SSL_CTX de cliente compartido por el proceso (inmutable tras crearse; OpenSSL lo permite entre hilos)
+src/te_bytecode.c table                      # tabla de despacho computed-goto (direcciones de label, inmutable; solo lectura)

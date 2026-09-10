@@ -56,6 +56,7 @@ entre los paréntesis de parámetros y la llave `{` del cuerpo.
 | `int`     | Debe retornar un entero. |
 | `string`  | Debe retornar un string. |
 | `float`   | Debe retornar un float. Acepta widening de `int` → `float`. |
+| `decimal` | Debe retornar un decimal (exacto). Acepta widening de `int` → `decimal`. |
 | `void`    | NO debe retornar valor. Si retorna algo, error en runtime. |
 | `dynamic` | Acepta cualquier tipo. Estilo C# `dynamic`. La validación de tipo se difiere al sitio de llamada. |
 
@@ -126,9 +127,29 @@ Todos los atributos deben declarar tipo:
 class Producto {
     id     : int;
     nombre : string;
-    precio : float;
+    precio : decimal;
 }
 ```
+
+### `decimal` (0.1.1): dinero exacto
+
+`float` es IEEE-754 (`0.1 + 0.2` → `0.30000000000000004`). `decimal` guarda una mantisa entera
+de 128 bits con escala (hasta 18 decimales): la aritmética y las comparaciones son exactas.
+
+```dart
+let precio = 33.33m;                       // sufijo m = literal decimal
+decimal iva = (precio * 0.07m).round(2);   // 2.33 — half away from zero, rellena a n decimales
+let total = precio + iva;                  // 35.66 (+ - * / % y == != < > <= >= exactos)
+let d = decimal("12.5");                   // decimal(x) desde string / int / float
+d.to_float(); d.to_string(); d.scale(); d.abs();
+json({ total: total })                     // {"total":35.66}  (número JSON, sin comillas)
+```
+
+Reglas: `decimal op float` convierte el float por su **texto** (`decimal(21.69) * 1.0000m` →
+`21.690000`); la división conserva `max(escala_a, escala_b)` y recorta ceros sobrantes hasta 18
+dígitos (`1m / 3m` → `0.333333333333333333`); en contexto string se imprime el texto canónico
+(`2.50`, no `2.5`). Un atributo `decimal` arranca en `0`. En `@params` SQL viaja como texto
+numérico sin comillas (una columna `DECIMAL` lo recibe intacto). Implementación: `src/te_decimal.c`.
 
 ---
 

@@ -4,8 +4,12 @@
  * Paso B: `g_vm` es una MACRO sobre la VM actual (`*te_vm_cur`). Se pueden crear varias VMs
  *         (te_vm_create) y conmutarlas (te_vm_set_current); el código existente que escribe
  *         `g_vm.x` sigue compilando sin cambios. `--selftest-vm` verifica el aislamiento.
- * Paso C (pendiente, no bloqueante): hilos con una VM por hilo (te_vm_cur thread-local) y
- *         parser/lexer reentrantes; hoy la concurrencia sigue siendo por prefork (--workers).
+ * Paso C (0.1.1, hecho): `te_vm_cur` es `__thread` y flex/bison son reentrantes (TeParseCtx,
+ *         te_parse.h), así que cada hilo puede parsear y ejecutar su propia VM en paralelo
+ *         (`--selftest-vm` lo prueba con 2 hilos). Solo quedan 3 globales de proceso, todos
+ *         justificados en scripts/core_debt_allow.txt (almacenamiento de la VM principal y
+ *         2 flags de signal handler); `scripts/audit_core_debt.sh` exige que no aparezcan más.
+ *         El servidor HTTP sigue usando prefork (--workers); el modelo por hilo ya es posible.
  * Regla: NO agregar globales nuevos al intérprete; el estado nuevo va aquí. */
 #ifndef TE_VM_H
 #define TE_VM_H
@@ -60,6 +64,7 @@ typedef struct TeVM {
     MethodNode **bc_methods; int bc_methods_n, bc_methods_cap;
     ObjectNode *bc_this;                                     /* `this` del cuerpo de método en ejecución */
     ObjectNode *bc_this_stack[16]; int bc_this_sp;           /* llamadas inline anidadas */
+    Variable *this_var; ASTNode *this_wrap;                  /* cache FAST `this` (te_cm_bind_this): slot + wrapper reutilizable, por VM */
     /* --- posición del lexer (antes yylineno/g_vm.lex_file_id/g_decl_stmt_line globales) --- */
     int lex_line;              /* línea del último token (la actualiza el wrapper yylex) */
     int lex_file_id;           /* archivo que se está lexeando (0 = principal) */
