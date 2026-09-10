@@ -68,6 +68,23 @@ jobs:
           VER: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
+          # Solo la corrida que llega cuando los 4 builds YA terminaron hace el trabajo. Las
+          # anteriores salen limpias (v0.1.2: una corrida intermedia dio 404 al subir porque
+          # otro workflow de release recreaba la release en ese instante).
+          pending=0
+          for wf in "Release - Linux Installer" "Release - Windows Installer" "Release - Linux ARM64 Installer" "Release - Android ARM64 (Bionic)"; do
+            st="$(gh run list --repo "${REPO}" --workflow "${wf}" --branch "${TAG}" --event push --limit 1 --json status,conclusion --jq '.[0] | "\(.status)/\(.conclusion)"' 2>/dev/null || echo "none/none")"
+            echo "${wf}: ${st}"
+            case "${st}" in
+              completed/success) : ;;
+              completed/*) echo "::warning::${wf} termino con ${st}; se consolida con los assets presentes" ;;
+              *) pending=1 ;;
+            esac
+          done
+          if [[ "${pending}" == "1" ]]; then
+            echo "Aun hay builds en curso para ${TAG}; la ultima corrida consolidara."
+            exit 0
+          fi
           # Esperar (best-effort) a que el release exista: los builds pueden
           # seguir subiendo assets cuando esto arranca.
           for i in $(seq 1 12); do
@@ -91,8 +108,13 @@ jobs:
           sort -k2 "${out}" -o "${out}"
           echo "----- ${out} -----"
           cat "${out}"
-          # Publicar el unico SHA256SUMS completo (clobber = idempotente).
-          gh release upload "${TAG}" "${out}" --repo "${REPO}" --clobber
+          # Publicar el unico SHA256SUMS completo (clobber = idempotente). Reintenta si la
+          # release fue recreada entre el download y el upload (404 transitorio).
+          for i in 1 2 3; do
+            if gh release upload "${TAG}" "${out}" --repo "${REPO}" --clobber; then break; fi
+            echo "upload fallo (intento ${i}/3); reintento en 20s"; sleep 20
+            [[ "${i}" == "3" ]] && exit 1
+          done
           # Eliminar fragmentos por-plataforma para dejar una sola fuente de verdad.
           for a in $(gh release view "${TAG}" --repo "${REPO}" --json assets --jq '.assets[].name'); do
             case "${a}" in
