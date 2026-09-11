@@ -854,6 +854,14 @@ println($"El doble es {edad * 2}");        // El doble es 60`)}
   <tr><td><code>"hello".contains("ell")</code></td><td><code>true</code></td></tr>
   <tr><td><code>"a,b,c".split(",")</code></td><td><code>["a","b","c"]</code></td></tr>
   <tr><td><code>"hello".length</code></td><td><code>5</code></td></tr>
+  <tr><td><code>"hello".find("l")</code> / <code>.index_of("l")</code></td><td><code>2</code> (<code>-1</code> si no está)</td></tr>
+  <tr><td><code>"hello".substr(1, 3)</code></td><td><code>"ell"</code> (inicio, largo)</td></tr>
+  <tr><td><code>"hello".substring(1, 3)</code></td><td><code>"el"</code> (inicio, fin exclusivo)</td></tr>
+  <tr><td><code>"7".pad_left(3, "0")</code> / <code>"ab".pad_right(4)</code></td><td><code>"007"</code> / <code>"ab  "</code></td></tr>
+  <tr><td><code>"hello".starts_with("he")</code> / <code>.ends_with("lo")</code></td><td><code>true</code></td></tr>
+  <tr><td><code>"a-b".replace("-", "+")</code></td><td><code>"a+b"</code> (todas las ocurrencias)</td></tr>
+  <tr><td><code>"ab".repeat(3)</code> / <code>"hello".char_at(1)</code></td><td><code>"ababab"</code> / <code>"e"</code></td></tr>
+  <tr><td><code>"42".parse_int()</code> / <code>"3.5".parse_float()</code></td><td><code>42</code> / <code>3.5</code></td></tr>
 </table>
 
 ${te(`let csv = "rojo,verde,azul";

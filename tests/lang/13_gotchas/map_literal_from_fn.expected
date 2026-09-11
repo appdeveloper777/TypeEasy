@@ -1,0 +1,15 @@
+tableros,crm,boletos
+web,tactil web,tactil!
+1 0 []
+duplicado 0
+1
+1
+5 6 k5
+235 x5
+{"ok":true,"edicion":"web,tactil","modulos":"tableros,crm,boletos","q":"web,tactil!"}
+push: 7 2 v
+inline: 15 tableros,crm,boletos
+calls: 2 121
+4 -1 world hello [007] [ab  ]
+Ana Torres! c01
+desde-mapa

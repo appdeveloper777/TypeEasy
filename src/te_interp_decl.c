@@ -230,39 +230,26 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
     if (strcmp(declared, TE_DT_STRING) == 0 || strcmp(declared, TE_DT_STRING_OPT) == 0 ||
         strcmp(declared, TE_DT_UUID) == 0 || strcmp(declared, TE_DT_UUID_OPT) == 0 ||
         strcmp(declared, TE_DT_DATETIME) == 0 || strcmp(declared, TE_DT_DATETIME_OPT) == 0) {
-        if (value_node->type && strcmp(value_node->type, TE_T_STRING) == 0) {
-          obj->attributes[idx].value.string_value = strdup(value_node->str_value);
-          if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (STRING)\n", attr_name, value_node->str_value);
-        }
-        else if (value_node->type && (strcmp(value_node->type, TE_T_IDENTIFIER) == 0 || strcmp(value_node->type, TE_T_ID) == 0)) {
-          Variable *v2 = find_variable(value_node->id ? value_node->id : value_node->str_value);
-          if (!v2 || v2->vtype != VAL_STRING) {
+        /* Camino único (te_eval_value): antes solo aceptaba literal / variable / f(); una
+         * concatenación (`o.s = a + "x"`), un acceso (`o.s = p.nombre`, `o.s = m["k"]`) o un
+         * método (`o.s = t.trim()`) NO asignaba nada en silencio. Y el string anterior nunca se
+         * liberaba (leak por asignación, uno por request en --api). */
+        TeValue v;
+        te_eval_value(value_node, &v);
+        char *s = NULL;
+        if (v.vtype == VAL_STRING) s = strdup(v.value.string_value ? v.value.string_value : "");
+        else if (te_val_is_null(&v)) s = strdup("");
+        if (!s) {
+            te_val_free(&v);
             fprintf(stderr, "Error: expression is not a valid string or variable not found.\n");
             return;
-          }
-          obj->attributes[idx].value.string_value = strdup(v2->value.string_value);
-          if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR)\n", attr_name, v2->value.string_value);
         }
-        else if (value_node->id) {
-          Variable *v2 = find_variable(value_node->id);
-          if (!v2 || v2->vtype != VAL_STRING) {
-            fprintf(stderr, "Error: expression is not a valid string.\n");
-            return;
-          }
-          obj->attributes[idx].value.string_value = strdup(v2->value.string_value);
-          if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (VAR ID)\n", attr_name, v2->value.string_value);
-        }
-        else if (strcmp(value_node->type, TE_T_CALL_FUNC) == 0) {
-          interpret_ast(value_node);
-          Variable *r = find_variable(TE_SYM_RET);
-          if (!r || r->vtype != VAL_STRING) {
-            fprintf(stderr, "Error: function result is not a string.\n");
-            return;
-          }
-          obj->attributes[idx].value.string_value = strdup(r->value.string_value);
-          if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (CALL)\n", attr_name, r->value.string_value);
-        }
+        te_val_free(&v);
+        if (obj->attributes[idx].vtype == VAL_STRING && obj->attributes[idx].value.string_value)
+            free(obj->attributes[idx].value.string_value);
+        obj->attributes[idx].value.string_value = s;
         obj->attributes[idx].vtype = VAL_STRING;
+        if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (STRING)\n", attr_name, s);
       } else {
         double val = evaluate_expression(value_node);
         int decl_is_float = (strcmp(declared, TE_DT_FLOAT) == 0 || strcmp(declared, TE_DT_FLOAT_OPT) == 0);

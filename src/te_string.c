@@ -149,7 +149,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         add_or_update_variable(TE_SYM_RET, r);
         return 1;
     }
-    if (strcmp(m, "find") == 0) {
+    if (strcmp(m, "find") == 0 || strcmp(m, "index_of") == 0 || strcmp(m, "indexOf") == 0) {
         ASTNode *arg = node->right;
         char *t = arg ? get_node_string(arg) : NULL;
         int idx = -1;
@@ -159,6 +159,40 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
             free(t);
         }
         add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, idx, NULL, NULL));
+        return 1;
+    }
+    if (strcmp(m, "substring") == 0) {   /* JS/Java: (inicio, fin EXCLUSIVO); fin omitido = hasta el final */
+        ASTNode *arg = node->right;
+        ASTNode *arg2 = arg ? arg->next : NULL;
+        int slen = (int)strlen(s);
+        int start = arg  ? (int)evaluate_expression(arg)  : 0;
+        int end   = arg2 ? (int)evaluate_expression(arg2) : slen;
+        if (start < 0) start = 0;
+        if (end > slen) end = slen;
+        if (start > slen) start = slen;
+        if (end < start) { int t = start; start = end; end = t; }
+        char *out = strndup(s + start, (size_t)(end - start));
+        ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
+        free(out);
+        add_or_update_variable(TE_SYM_RET, r);
+        return 1;
+    }
+    if (strcmp(m, "pad_left") == 0 || strcmp(m, "pad_right") == 0) {   /* LPAD/RPAD: (ancho, relleno=" ") */
+        ASTNode *arg = node->right;
+        ASTNode *arg2 = arg ? arg->next : NULL;
+        int width = arg ? (int)evaluate_expression(arg) : 0;
+        char *fill = arg2 ? get_node_string(arg2) : NULL;
+        char fc = (fill && *fill) ? fill[0] : ' ';
+        if (fill) free(fill);
+        int slen = (int)strlen(s);
+        int pad = width > slen ? width - slen : 0;
+        char *out = (char*)malloc((size_t)slen + (size_t)pad + 1);
+        if (m[4] == 'l') { memset(out, fc, (size_t)pad); memcpy(out + pad, s, (size_t)slen); }
+        else { memcpy(out, s, (size_t)slen); memset(out + slen, fc, (size_t)pad); }
+        out[slen + pad] = 0;
+        ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
+        free(out);
+        add_or_update_variable(TE_SYM_RET, r);
         return 1;
     }
     if (strcmp(m, "starts_with") == 0) {

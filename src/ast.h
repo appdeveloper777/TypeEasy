@@ -310,6 +310,8 @@ void te_req_owned_ast_register(ASTNode *root);
 void te_req_owned_obj_register(ObjectNode *obj);
 /* Gotcha 30c: fresh per-evaluation instance of a LIST literal (see ast.c). */
 ASTNode* te_list_literal_instance(ASTNode *lit);
+ASTNode* te_map_literal_instance(ASTNode *lit);
+ASTNode* te_map_literal_owned(ASTNode *lit);
 /* Function frames (locals shadow the caller's slots; see ast.c). */
 void  te_frames_reset(void);
 void *te_frames_save(void);

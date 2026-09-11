@@ -75,6 +75,17 @@ donde el nodo ya tiene `NodeKind` cacheado (hoy ~25 % de los sitios usan el enum
 | **Closures léxicas** (Fase F2) | resolución dinámica al llamar; captura by-value solo al retornar un lambda | `te_closure_make`: upvalues abiertos/cerrados (Lua-style), `this` capturado, write-back tras la llamada | `tests/lang/13_gotchas/closures_upvalues.te` |
 | **Gramática** | `this.m(args)` no existía; sin atributos `dynamic`/clase; sin param `dynamic` | agregados; `obj.cb(args)` invoca lambda en atributo | lang suite |
 
+### Literales como valores 0.1.4 (2026-09-11) — mapas/listas materializados + atributos string
+
+| Ítem | Antes | Ahora | Guardia |
+|------|-------|-------|---------|
+| **`{ k: expr }` como valor** | el literal se aliasaba al nodo de parse con las expresiones SIN evaluar y se resolvían al leer la clave: `return { m: local }` desde una `fn` daba `0` (frame cerrado, regresión 0.1.2 que rompió el entitlement de licencias del ERP: `modulos: 0`); `var r = {}; r[k]=v` mutaba la plantilla compartida entre llamadas/requests; `{ error: res.error }` → `{"error":0}` | `te_map_literal_instance` (ast.c): instancia fresca con valores evaluados; contenedores anidados construidos por el padre (un solo dueño → sin double free en `--api`); alias a contenedores externos como copias *borrowed*; `value=1` marca dato ya materializado | `tests/lang/13_gotchas/map_literal_from_fn.te`, ASan 101 requests `--api`, ERP A/B 35/35 |
+| **`[a, f(x)]` como valor** | items identificador/expresión/llamada quedaban perezosos: `return [p, q]` → 0, `[f(), f()]` re-ejecutaba `f()` en cada lectura, `push({ a: [1,2] })` aplanaba los anidados a números | `te_list_literal_build` evalúa items escalares al construir; mapas/listas anidados materializados; `push` usa la misma instancia (`te_map_literal_owned`) | mismo test |
+| **`f(x)["k"]`** | solo `f(x)[i]` (listas) resolvía llamadas inline; sobre mapa → "indexed object is neither a list nor a Map" | `te_resolve_call_container`: una sola ejecución, mapa o lista | mismo test |
+| **`obj.s = <expr>` (atributo string)** | solo literal / variable / `f()`; concatenación, `m["k"]`, `p.attr`, `t.trim()` NO asignaban nada en silencio; el string anterior nunca se liberaba (leak por asignación, 1/request en `--api`) | camino único `te_eval_value` + `free` del valor previo | mismo test + ASan leaks |
+| **Strings** | sin `index_of`/`substring`/`pad_*` (JS/Java/SQL) | alias `index_of`/`indexOf` = `find`; `substring(ini, fin)` fin exclusivo; `pad_left(n, c)`/`pad_right(n, c)` (LPAD/RPAD) | mismo test |
+| **`map_find_pair`** | construía la tabla hash (calloc 16 slots) al primer acceso de CADA mapa | barrido lineal para mapas ≤ 8 claves sin hash | bench |
+
 ### Features en espera (el congelamiento de sintaxis terminó con la Fase 2; priorizar en 0.1.x)
 - `switch`/`match`; `for (a, b in map)`; spread `...`; string multilinea.
 - Registrar aquí cualquier pedido de sintaxis con el caso de uso que lo motiva.

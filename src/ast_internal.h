@@ -28,6 +28,8 @@ static inline NodeKind nk_of(ASTNode *n) {
  * truncado en LLP64; por eso van declarados aquí). */
 char* expand_interp_string(const char *raw);
 ASTNode* resolve_to_map(ASTNode *node);
+int  te_node_is_call(ASTNode *node);
+void te_resolve_call_container(ASTNode *node, ASTNode **map, ASTNode **list);
 ASTNode* resolve_to_list(ASTNode *node);
 int list_length(ASTNode *list);
 ASTNode* list_get_item(ASTNode *list, int idx);

@@ -253,7 +253,9 @@ static void eval_access_attr(ASTNode *n, TeValue *out) {
 }
 
 static void eval_access_expr(ASTNode *n, TeValue *out) {
-    ASTNode *map = resolve_to_map(n->left);
+    ASTNode *map = NULL, *list = NULL;
+    if (te_node_is_call(n->left)) te_resolve_call_container(n->left, &map, &list);   /* f(x)["k"] / f(x)[i]: una ejecución */
+    else map = resolve_to_map(n->left);
     if (map) {
         char keybuf[1024];
         const char *key = te_map_key_coerce(n->right, keybuf, sizeof(keybuf));
@@ -262,7 +264,7 @@ static void eval_access_expr(ASTNode *n, TeValue *out) {
         else te_val_set_string(out, "");            /* clave ausente -> "" (permite `== ""`) */
         return;
     }
-    ASTNode *list = resolve_to_list(n->left);
+    if (!list && !te_node_is_call(n->left)) list = resolve_to_list(n->left);
     if (list) {
         int idx = (int)evaluate_expression(n->right);
         if (idx < 0 || idx >= list_length(list)) { te_val_set_null(out); return; }   /* fuera de rango -> null */
@@ -339,7 +341,9 @@ int te_eval_value(ASTNode *n, TeValue *out) {
         te_list_literal_construct_objects(n);
         te_val_set_ref(out, TE_T_LIST, te_list_literal_instance(n));
         return 1;
-    case NK_OBJECT_LITERAL: te_val_set_ref(out, TE_T_MAP, n); return 1;
+    case NK_OBJECT_LITERAL:
+        if (n->value == 1) { te_val_set_ref(out, TE_T_MAP, n); return 1; }   /* mapa ya materializado (dato) */
+        te_val_set_ref(out, TE_T_MAP, te_map_literal_instance(n)); return 1;
     case NK_OBJECT:
         if (n->is_new_expr) eval_new_object(n, out); else te_leaf_to_value(n, out);   /* dato: alias */
         return 1;

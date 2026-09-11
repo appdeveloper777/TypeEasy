@@ -3039,40 +3039,154 @@ void te_list_literal_construct_objects(ASTNode *value) {
  * template; own strings are duplicated unless interned. Nested LIST items are
  * instanced recursively. Registered as request-owned so --api frees it per
  * request (no-op in script mode, where the process exit reclaims it). */
-ASTNode* te_list_literal_instance(ASTNode *lit) {
-    if (!lit || !lit->type || strcmp(lit->type, TE_T_LIST) != 0) return lit;
+static ASTNode* te_list_item_shallow_copy(ASTNode *src) {
+    ASTNode *copy = (ASTNode*)malloc(sizeof(ASTNode));
+    if (!copy) return NULL;
+    memcpy(copy, src, sizeof(ASTNode));
+    copy->from_pool = 0;
+    copy->type = src->type ? strdup(src->type) : NULL;
+    if (copy->str_value && !copy->str_interned) copy->str_value = strdup(copy->str_value);
+    if (copy->id && !copy->id_interned) copy->id = strdup(copy->id);
+    copy->bc = NULL;
+    copy->col_cache = NULL;
+    copy->is_new_expr = 0;   /* el item ya es un objeto construido (dato), no un `new` */
+    if (src->type && (strcmp(src->type, TE_T_OBJECT_LITERAL) == 0 || strcmp(src->type, TE_T_MAP) == 0 ||
+                      strcmp(src->type, TE_T_LIST) == 0))
+        copy->extra = NULL;   /* side hash/index belongs to the original (se reconstruye perezoso) */
+    copy->borrowed_children = 1;
+    return copy;
+}
+
+/* Valor ya evaluado -> nodo que puede COLGAR de un contenedor fresco. Escalares/objetos: hoja
+ * propia. Lista/mapa/lambda: el valor es un ALIAS a un nodo que ya tiene dueño (variable,
+ * registro del request, closures) -> copia superficial borrowed: comparte hijos (mismos datos)
+ * pero free_ast del contenedor padre no los toca (sin double free ni dangling). */
+static ASTNode* te_owned_leaf_from_value(TeValue *v) {
+    ASTNode *leaf = te_val_to_leaf(v);
+    if (!leaf) return NULL;
+    if (v->vtype == VAL_OBJECT && v->type &&
+        (strcmp(v->type, TE_T_LIST) == 0 || strcmp(v->type, TE_T_MAP) == 0 || strcmp(v->type, TE_T_LAMBDA) == 0 ||
+         strcmp(v->type, TE_T_LAZY_ITER) == 0)) {
+        return te_list_item_shallow_copy(leaf);
+    }
+    return leaf;
+}
+
+/* Item de literal de lista que NO es dato (hoja escalar, objeto construido, lambda): una
+ * variable, aritmética, concatenación, acceso, llamada... -> debe evaluarse al instanciar. */
+static int te_list_item_is_lazy_expr(ASTNode *src) {
+    switch (nk_of(src)) {
+    case NK_NUMBER: case NK_INT: case NK_FLOAT: case NK_DECIMAL: case NK_STRING: case NK_STRING_LITERAL:
+    case NK_NULL: case NK_OBJECT: case NK_LIST: case NK_OBJECT_LITERAL: case NK_KV_PAIR:
+        return 0;
+    default: break;
+    }
+    if (src->type && (strcmp(src->type, TE_T_LAMBDA) == 0 || strcmp(src->type, TE_T_MAP) == 0 ||
+                      strcmp(src->type, TE_T_DATETIME) == 0 || strcmp(src->type, TE_T_UUID) == 0 ||
+                      strcmp(src->type, TE_T_BOOL) == 0)) return 0;
+    return 1;
+}
+
+static ASTNode* te_map_literal_build(ASTNode *lit);
+
+/* Construye la instancia SIN registrarla (el llamador decide el dueño: registro del request
+ * para el nivel superior, o el contenedor padre para los anidados). */
+static ASTNode* te_list_literal_build(ASTNode *lit) {
     ASTNode *head = (ASTNode*)calloc(1, sizeof(ASTNode));
-    if (!head) return lit;
+    if (!head) return NULL;
     head->type = strdup(TE_T_LIST);
     head->kind = lit->kind;
     head->line = lit->line; head->file_id = lit->file_id;
     ASTNode *tail = NULL;
     for (ASTNode *src = lit->left; src; src = src->next) {
-        ASTNode *copy;
+        ASTNode *copy = NULL;
         if (src->type && strcmp(src->type, TE_T_LIST) == 0) {
-            copy = te_list_literal_instance(src);
-            if (copy == src) break;
+            copy = te_list_literal_build(src);                 /* anidada: la posee el padre */
+        } else if (src->type && strcmp(src->type, TE_T_OBJECT_LITERAL) == 0 && src->value != 1) {
+            copy = te_map_literal_build(src);                  /* `[ { k: local } ]`: valores capturados ahora */
+        } else if (te_list_item_is_lazy_expr(src)) {
+            /* `[a, b + 1, f(x)]`: evaluar AHORA (antes se resolvía al leer: locales de fn ya
+             * cerradas -> 0, llamadas repetidas por lectura). */
+            TeValue v;
+            te_eval_value(src, &v);
+            copy = te_owned_leaf_from_value(&v);
+            te_val_free(&v);
         } else {
-            copy = (ASTNode*)malloc(sizeof(ASTNode));
-            if (!copy) break;
-            memcpy(copy, src, sizeof(ASTNode));
-            copy->from_pool = 0;
-            copy->type = src->type ? strdup(src->type) : NULL;
-            if (copy->str_value && !copy->str_interned) copy->str_value = strdup(copy->str_value);
-            if (copy->id && !copy->id_interned) copy->id = strdup(copy->id);
-            copy->bc = NULL;
-            copy->col_cache = NULL;
-            copy->is_new_expr = 0;   /* el item ya es un objeto construido (dato), no un `new` */
-            if (src->type && (strcmp(src->type, TE_T_OBJECT_LITERAL) == 0 || strcmp(src->type, TE_T_MAP) == 0))
-                copy->extra = NULL;   /* side hash belongs to the template */
-            copy->borrowed_children = 1;
+            copy = te_list_item_shallow_copy(src);
         }
+        if (!copy) break;
         copy->next = NULL;
         if (!tail) head->left = copy; else tail->next = copy;
         tail = copy;
     }
+    return head;
+}
+
+ASTNode* te_list_literal_instance(ASTNode *lit) {
+    if (!lit || !lit->type || strcmp(lit->type, TE_T_LIST) != 0) return lit;
+    ASTNode *head = te_list_literal_build(lit);
+    if (!head) return lit;
     te_req_owned_ast_register(head);
     return head;
+}
+
+/* `{ k: expr, ... }` como VALOR: instancia fresca con cada valor ya EVALUADO (hoja escalar o
+ * alias a lista/mapa/objeto). Antes el literal se aliasaba tal cual (nodos de expresión sin
+ * evaluar) y se resolvía al LEER: `return { m: local }` desde una fn daba 0 porque `local` ya
+ * no existía al cerrar el frame (0.1.2+), y `var r = {}; r[k] = v` mutaba el template de
+ * parse, compartido entre llamadas y requests. */
+static ASTNode* te_map_literal_build(ASTNode *lit) {
+    ASTNode *head = (ASTNode*)calloc(1, sizeof(ASTNode));
+    if (!head) return NULL;
+    head->type = strdup(TE_T_OBJECT_LITERAL);
+    head->kind = lit->kind;
+    head->value = 1;   /* dato ya materializado: te_eval_value lo aliasa, no lo re-instancia */
+    head->line = lit->line; head->file_id = lit->file_id;
+    ASTNode *tail = NULL;
+    for (ASTNode *src = lit->left; src; src = src->right) {
+        if (!src->id) continue;
+        ASTNode *leaf;
+        if (src->left && src->left->type && strcmp(src->left->type, TE_T_OBJECT_LITERAL) == 0 && src->left->value != 1) {
+            leaf = te_map_literal_build(src->left);            /* mapa anidado: lo posee el padre */
+        } else if (src->left && src->left->type && strcmp(src->left->type, TE_T_LIST) == 0 && src->left->value != 1) {
+            te_list_literal_construct_objects(src->left);
+            leaf = te_list_literal_build(src->left);           /* lista anidada: la posee el padre */
+        } else {
+            TeValue v;
+            te_eval_value(src->left, &v);
+            leaf = te_owned_leaf_from_value(&v);
+            te_val_free(&v);
+        }
+        if (!leaf) leaf = create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
+        ASTNode *pair;
+        if (src->id_interned) {   /* clave ya internada en el template: reusar el puntero (sin lookup) */
+            pair = (ASTNode *)calloc(1, sizeof(ASTNode));
+            pair->type = strdup(TE_T_KV_PAIR);
+            pair->id = src->id; pair->id_interned = 1;
+            pair->left = leaf;
+        } else {
+            pair = create_kv_pair_node(src->id, leaf);
+        }
+        if (!tail) head->left = pair; else tail->right = pair;
+        tail = pair;
+    }
+    return head;
+}
+
+ASTNode* te_map_literal_instance(ASTNode *lit) {
+    if (!lit || !lit->type || strcmp(lit->type, TE_T_OBJECT_LITERAL) != 0) return lit;
+    if (lit->value == 1) return lit;   /* ya es dato */
+    ASTNode *head = te_map_literal_build(lit);
+    if (!head) return lit;
+    te_req_owned_ast_register(head);
+    return head;
+}
+
+/* Variante para `lista.push({...})`: la instancia pasa a ser propiedad de la lista (no se
+ * registra aparte; el registro del request libera la lista y con ella el item). */
+ASTNode* te_map_literal_owned(ASTNode *lit) {
+    if (!lit || !lit->type || strcmp(lit->type, TE_T_OBJECT_LITERAL) != 0 || lit->value == 1) return NULL;
+    return te_map_literal_build(lit);
 }
 
 /* Fase E: declaración = evaluar (camino único te_eval_value) + almacenar. Antes esta función
@@ -4231,6 +4345,27 @@ ASTNode* resolve_to_list(ASTNode *node) {
     return NULL;
 }
 
+/* Nodo de llamada (f(x), o.m(), LINQ...). Su resultado indexable vive en __ret__. */
+int te_node_is_call(ASTNode *node) {
+    return node && node->type && (strcmp(node->type, TE_T_CALL_FUNC) == 0
+                                  || strcmp(node->type, TE_T_CALL_METHOD) == 0
+                                  || strcmp(node->type, TE_T_FILTER_CALL) == 0
+                                  || strcmp(node->type, TE_T_LIST_FUNC_CALL) == 0
+                                  || strcmp(node->type, TE_T_PREDICT) == 0);
+}
+
+/* Ejecuta la llamada UNA vez y devuelve el contenedor resultante (MAP o LIST) en *map / *list.
+ * `f()["k"]` (mapa) y `f()[i]` (lista) comparten este camino para no ejecutar f() dos veces. */
+void te_resolve_call_container(ASTNode *node, ASTNode **map, ASTNode **list) {
+    if (map) *map = NULL;
+    if (list) *list = NULL;
+    interpret_ast(node);
+    Variable *r = find_variable(TE_SYM_RET);
+    if (!r || !r->type || r->vtype != VAL_OBJECT) return;
+    if (map && strcmp(r->type, TE_T_MAP) == 0) *map = (ASTNode*)(intptr_t)r->value.object_value;
+    else if (list && strcmp(r->type, TE_T_LIST) == 0) *list = (ASTNode*)(intptr_t)r->value.object_value;
+}
+
 /* --- Helpers para MAP (Fase 1c) --- */
 ASTNode* resolve_to_map(ASTNode *node) {
     if (!node) return NULL;
@@ -4246,6 +4381,12 @@ ASTNode* resolve_to_map(ASTNode *node) {
         if (item == node) return NULL; /* guard against self-loop */
         return resolve_to_map(item);
     }
+    /* `f(x)["k"]`: indexar el mapa devuelto por una llamada inline (antes solo listas). */
+    if (te_node_is_call(node)) {
+        ASTNode *m = NULL;
+        te_resolve_call_container(node, &m, NULL);
+        return m;
+    }
     return NULL;
 }
 
@@ -4255,8 +4396,10 @@ ASTNode* resolve_to_map(ASTNode *node) {
  * expression (comparisons, arithmetic, etc.), not just standalone `let`. */
 ASTNode* resolve_access_item(ASTNode *node) {
     if (!node || !node->type || strcmp(node->type, TE_T_ACCESS_EXPR) != 0) return NULL;
+    ASTNode *map = NULL, *list = NULL;
+    if (te_node_is_call(node->left)) te_resolve_call_container(node->left, &map, &list);   /* una sola ejecución */
+    else map = resolve_to_map(node->left);
     /* Try Map first (string key). */
-    ASTNode *map = resolve_to_map(node->left);
     if (map) {
         const char *key = NULL;
         if (node->right && node->right->type) {
@@ -4272,7 +4415,7 @@ ASTNode* resolve_access_item(ASTNode *node) {
         return pair ? pair->left : NULL;
     }
     /* Else List (integer index). */
-    ASTNode *list = resolve_to_list(node->left);
+    if (!list && !te_node_is_call(node->left)) list = resolve_to_list(node->left);
     if (list) {
         int idx = (int)evaluate_expression(node->right);
         int len = list_length(list);
@@ -4296,6 +4439,18 @@ int map_length(ASTNode *map) {
 /* Find a KV_PAIR by key string. Returns the pair node, or NULL. */
 ASTNode* map_find_pair(ASTNode *map, const char *key) {
     if (!map || !key) return NULL;
+    /* Mapas chicos sin hash aun (instancias frescas de `{...}`, ~4-8 claves): el barrido lineal
+     * es mas barato que construir la tabla (calloc de 16 slots) por cada instancia. */
+    if (!map->extra) {
+        int n = 0; ASTNode *cur = map->left;
+        while (cur && n <= 8) { n++; cur = cur->right; }
+        if (n <= 8) {
+            for (cur = map->left; cur; cur = cur->right) {
+                if (cur->id && (cur->id == key || strcmp(cur->id, key) == 0)) return cur;
+            }
+            return NULL;
+        }
+    }
     /* Ola 14: O(1) via side-cache hash. */
     TEMapHash *h = te_map_get_hash(map);
     if (h && h->cap > 0) {
@@ -4673,6 +4828,7 @@ static ASTNode* te_snapshot_object_literal(ASTNode *lit) {
     ASTNode *newmap = (ASTNode*)calloc(1, sizeof(ASTNode));
     if (!newmap) return NULL;
     newmap->type = strdup(TE_T_OBJECT_LITERAL);
+    newmap->value = 1;   /* dato (ver te_map_literal_instance) */
     ASTNode *tail = NULL;
     for (ASTNode *src = lit->left; src; src = src->right) {
         if (!src->id) continue;
@@ -6884,7 +7040,8 @@ static int te_cm_list_builtin(ASTNode *node, ASTNode *objNode, Variable *v) {
                  * through to evaluate_expression (-> 0), storing [0,0,...].
                  * Snapshot the literal so each push is an independent, readable
                  * map item (works with list[i]["k"], list.length, etc.). */
-                ASTNode *snap = te_snapshot_object_literal(arg);
+                ASTNode *snap = te_map_literal_owned(arg);   /* conserva listas/mapas anidados; lo posee la lista */
+                if (!snap) snap = te_snapshot_object_literal(arg);   /* dato ya materializado / MAP: copiar */
                 free(new_item);
                 if (snap) {
                     snap->next = NULL;

@@ -1,0 +1,85 @@
+// B12 (0.1.1–0.1.3): un map literal devuelto desde una fn guardaba los NODOS de expresión y
+// los resolvía al LEER; con frames reales (0.1.2) los locales ya no existían -> 0.
+// Ahora `{ ... }` se materializa al evaluarse: valores capturados, instancia fresca por llamada.
+let ent = fn(ok) => {
+    var edicion = "web,tactil";
+    var modulos = "tableros,crm,boletos";
+    if (ok == 0) { return { "ok": false, "edicion": "", "modulos": "" }; }
+    return { "ok": true, "edicion": edicion, "modulos": modulos, "q": concat(edicion, "!") };
+};
+let e = ent(1);
+let z = ent(0);
+println(e["modulos"]);
+println(e["edicion"] + " " + e["q"]);
+println("" + e["ok"] + " " + z["ok"] + " [" + z["modulos"] + "]");
+
+// { error: res.error } (patrón de los _service.te): campo de objeto capturado.
+class Res { success : bool; error : string; }
+let fallo = fn() => {
+    let res = new Res();
+    res.success = false;
+    res.error = "duplicado";
+    return { error: res.error, ok: res.success };
+};
+let f = fallo();
+println(f["error"] + " " + f["ok"]);
+
+// `var r = {}; r[k] = v` ya no muta el template de parse: cada llamada parte vacía
+// (si se compartiera, la 2a llamada vería también la clave de la 1a).
+let acum = fn(k) => {
+    var r = {};
+    r[k] = 1;
+    return "" + r["a"] + r["b"];
+};
+println(acum("a"));
+println(acum("b"));
+
+// Anidados: mapa dentro de mapa y lista dentro de mapa conservan sus valores.
+let anid = fn(x) => {
+    let inner = { "v": x };
+    return { "in": inner, "lst": [x, x + 1], "s": "k" + x };
+};
+let a = anid(5);
+println("" + a["in"]["v"] + " " + a["lst"][1] + " " + a["s"]);
+
+// Lista literal con identificadores/expresiones devuelta desde fn: valores capturados.
+let par = fn(p, q) => { let s = p + q; return [p, q, s, "x" + s]; };
+let pq = par(2, 3);
+println("" + pq[0] + pq[1] + pq[2] + " " + pq[3]);
+
+// json_stringify del mapa devuelto sale con los valores reales.
+println(json_stringify(e));
+
+// push de un literal con contenedores anidados conserva la lista y el mapa internos.
+var l = [];
+l.push({ a: [1, 2], m: { k: "v" }, n: 7 });
+println("push: " + l[0]["n"] + " " + l[0]["a"][1] + " " + l[0]["m"]["k"]);
+
+// Indexar el mapa devuelto por una llamada inline: f(x)["k"] (antes solo listas).
+let mkc = fn(base) => { return fn(d) => { return { total: base + d }; }; };
+let c10 = mkc(10);
+println("inline: " + c10(5)["total"] + " " + ent(1)["modulos"]);
+
+// Items de lista con llamadas se evaluan UNA vez al construir la lista, no en cada lectura.
+var calls = 0;
+let f2 = fn() => { calls = calls + 1; return calls; };
+let lc = [f2(), f2()];
+let a0 = lc[0]; let a1 = lc[1]; let a0b = lc[0];
+println("calls: " + calls + " " + a0 + a1 + a0b);
+
+// Alias de string: index_of/indexOf = find, substring(ini, fin), pad_left/pad_right.
+let sx = "hello world";
+println(sx.index_of("o") + " " + sx.indexOf("zz") + " " + sx.substring(6) + " " + sx.substring(0, 5) + " [" + "7".pad_left(3, "0") + "] [" + "ab".pad_right(4) + "]");
+
+// Asignar a un atributo string una concatenacion / acceso / metodo (antes: no asignaba nada).
+class Cli { nombre : string; codigo : string; }
+let c = new Cli();
+let base = "Ana";
+let t = "  c01 ";
+c.nombre = base + " Torres";
+c.codigo = t.trim();
+c.nombre = c.nombre + "!";
+println(c.nombre + " " + c.codigo);
+let m2 = { k: "desde-mapa" };
+c.codigo = m2["k"];
+println(c.codigo);

@@ -182,6 +182,21 @@ se ejecuta directamente desde Windows.
 
 ## 6. Historial de decisiones de diseño
 
+- **Literales de mapa y lista son VALORES, no plantillas (0.1.4)**: `{ k: expr }` y
+  `[a, f(x)]` se **materializan al evaluarse**: cada valor/ítem se evalúa en ese
+  momento y el resultado es una instancia fresca e independiente. Antes el literal
+  de mapa se aliasaba al nodo de parse con las expresiones sin evaluar y se resolvía
+  al *leer* la clave: `return { m: local }` desde una `fn` daba `0` (el frame ya
+  había muerto), `var r = {}; r[k] = v` mutaba la plantilla compartida entre
+  llamadas/requests, `[f(), f()]` volvía a ejecutar `f()` en cada lectura y
+  `lista.push({ a: [1, 2] })` aplanaba los contenedores anidados. Ahora: valores
+  capturados (escalares como hojas propias; listas/mapas/lambdas por referencia
+  compartida, como el resto del lenguaje), `f(x)["k"]` indexa el mapa que devuelve
+  una llamada, y la asignación a atributo `string` acepta cualquier expresión
+  (`o.s = a + "x"`, `o.s = m["k"]`, `o.s = t.trim()`) liberando el valor anterior.
+  Costo: una instancia por evaluación (igual que las listas desde 0.0.33); en
+  código que construye 100k mapas en un bucle se nota (~8 µs/mapa), en un request
+  HTTP del ERP no (bench 35 endpoints byte-idéntico, rps sin cambio).
 - **Scoping real (0.1.2, Fase F)**: cada llamada a método, constructor o lambda
   corre en un `TeFrame` dueño de sus variables. Params y locales mueren al salir;
   un nombre que ya existía afuera (global de módulo, local del llamador) **nunca se
