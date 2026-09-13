@@ -629,13 +629,18 @@ DIRECT SERVER MODE (no project required):
   typeeasy --api <file.te> [--port N] [--host H] [--hotreload]
   typeeasy --api-dir <path>  [--port N] [--host H] [--hotreload] [--workers N]
 
+INTERPRETER PASS-THROUGH (any other --flag, or a .te script, goes straight to typeeasy-bin):
+  typeeasy script.te                      # run a script
+  typeeasy --syntax-check <file.te>       # JSON {ok, errors[]} (also reports missing imports)
+  typeeasy --symbols <file.te> | --repl | --test [dir] | --strict-imports ... | --version
+
 EXAMPLES:
   typeeasy --api endpoint.te --port 9002
   typeeasy --api-dir ./apis --port 9001 --hotreload
   typeeasy serve                          # uses ./typeeasy.toml
 
 ENVIRONMENT:
-  TYPEEASY_BIN        Path to C server binary  (default: /usr/bin/typeeasy-server)
+  TYPEEASY_BIN        Path to the interpreter binary (default: /usr/bin/typeeasy-bin)
   TYPEEASY_TEMPLATES  Path to templates dir    (default: /usr/share/typeeasy/templates)
 
 QUICK START:
@@ -649,13 +654,25 @@ EOF
 # ============================================================================
 # Dispatcher
 # ============================================================================
-# If first arg starts with `--` and is NOT a known global flag, treat the whole
-# invocation as a direct pass-through to the C binary. Enables:
+# Pass-through to the interpreter (parity with typeeasy.cmd on Windows): any
+# `--flag` that is not a CLI verb (--api, --syntax-check, --symbols, --repl,
+# --test, --emit-wat, --strict-imports, --version, ...) or a `.te` script goes
+# straight to $TYPEEASY_BIN with ALL its args. Only help/-h/--help and the
+# Rails-style verbs below are handled by this script.
 #   typeeasy --api endpoint.te --port 9002
-#   typeeasy --api-dir ./apis --port 9001 --hotreload
+#   typeeasy --syntax-check apis/main.te
+#   typeeasy script.te
 case "${1:-help}" in
-  --api|--api-file|--api-dir|--api-folder|--port|--host|--workers|--hotreload)
-    [[ -x "$TYPEEASY_BIN" ]] || die "Server binary not found at $TYPEEASY_BIN. Set TYPEEASY_BIN."
+  help|-h|--help|"") ;;
+  version|-v|--version)
+    # Real interpreter version (CI injects it into the binary); the CLI's own
+    # version goes on a second line so nobody mistakes it for the runtime's.
+    if [[ -x "$TYPEEASY_BIN" ]]; then "$TYPEEASY_BIN" --version; fi
+    echo "typeeasy-cli $VERSION"
+    exit 0
+    ;;
+  --*|*.te)
+    [[ -x "$TYPEEASY_BIN" ]] || die "Interpreter binary not found at '${TYPEEASY_BIN:-typeeasy-bin}'. Set TYPEEASY_BIN."
     exec "$TYPEEASY_BIN" "$@"
     ;;
 esac
@@ -673,7 +690,6 @@ case "${1:-help}" in
   start)      cmd_service start ;;
   stop)       cmd_service stop ;;
   restart)    cmd_service restart ;;
-  version|-v|--version) echo "typeeasy $VERSION" ;;
   help|-h|--help|"")    cmd_help ;;
   *) die "Unknown command: $1 (try: typeeasy help)" ;;
 esac

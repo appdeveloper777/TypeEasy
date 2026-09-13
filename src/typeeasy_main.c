@@ -589,6 +589,17 @@ static int te_main_imports_failed(const char *script_path) {
     return 0;
 }
 
+/* B11 (ERP): el tope MAX_VARS es por request e INCLUYE los globales del script
+ * (cada `let Repo_x = fn` cuenta). En --api se informa el margen al arrancar
+ * para que el limite deje de ser una sorpresa en runtime. */
+static void te_main_report_vars(int api_mode) {
+    if (!api_mode) return;
+    int g = g_vm.initial_var_count, free_slots = MAX_VARS - g;
+    fprintf(stderr, "[typeeasy --api] vars: %d script globals / %d slots (%d free per request)\n", g, MAX_VARS, free_slots);
+    if (free_slots < MAX_VARS / 4)
+        fprintf(stderr, "[typeeasy --api] WARNING: only %d variable slots free per request; big handlers may hit 'too many declared variables'.\n", free_slots);
+}
+
 int main(int argc, char *argv[]) {
 
     const char* debug_env = getenv("TYPEEASY_DEBUG");
@@ -844,6 +855,7 @@ int main(int argc, char *argv[]) {
     // a runtime_reset_vars_to_initial_state() entre requests HTTP.
     // (Mismo patrón que usa servidor_agent.c línea ~472.)
     runtime_save_initial_var_count();
+    te_main_report_vars(api_mode);
 
     /* Fase 2: si quedó un throw sin capturar, imprimir y salir con código de error */
     {

@@ -1,0 +1,11 @@
+// B6 (gotcha ERP): sql_last_error() devuelve "" si la ultima operacion SQL fue
+// OK y el mensaje del bridge/plugin si fallo, sin parsear el dato devuelto ni
+// depender del envelope opt-in. Se usa una conexion invalida (no requiere
+// servidor): el bridge MySQL devuelve {"error":"invalid_connection"}.
+// expect: before=|facade=invalid_connection|direct=invalid_connection|raw={"error":"invalid_connection"}
+let a = sql_last_error();
+let r = sql_query(-1, "SELECT 1", "mysql");
+let b = sql_last_error();
+let r2 = mysql_query(-1, "SELECT 1");
+let c = sql_last_error();
+println("before=" + a + "|facade=" + b + "|direct=" + c + "|raw=" + r);

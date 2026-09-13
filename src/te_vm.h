@@ -97,6 +97,7 @@ typedef struct TeVM {
     /* --- estado menor de módulos --- */
     int db_cleanup_count;              /* te_stdlib.c */
     int http_last_status;              /* te_http.c */
+    char sql_last_err[512];            /* sql_last_error(): ultimo fallo SQL ("" si la ultima op fue OK) */
     char mssql_last_err[1024], mssql_last_msg[1024];   /* sqlserver_bridge.c */
     struct TeAsyncState *async;        /* te_async.c: pool de tasks (alloc perezoso) */
     struct TeBuiltins *builtins;       /* te_builtins.c: registro de nativas (alloc perezoso) */

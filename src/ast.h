@@ -333,6 +333,10 @@ void te_profile_report(const char *title);
 void te_profile_reset(void);
 /* --syntax-check error sink (strong def in typeeasy_main.c, weak in ast.c). */
 void te_capture_error(int line, const char *msg, const char *near);
+/* sql_last_error(): mensaje del ultimo fallo SQL ("" si OK). te_sql_note_call
+ * lo actualiza tras cada builtin SQL despachado por nombre (te_stdlib.c). */
+const char *te_sql_last_error(void);
+void te_sql_note_call(const char *fn);
 ASTNode *append_to_list(ASTNode *list, ASTNode *item);
 /* Internal helpers exposed for module extraction (te_linq, etc.). */
 void te_list_append(ASTNode *list, ASTNode *item);

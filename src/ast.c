@@ -1446,6 +1446,43 @@ static void te_sql_strict_check_ret(void) {
     if (strstr(s, "\"error\"")) typeeasy_http_set_status(500);
 }
 
+/* B6 (ERP): sql_last_error(). Registra el mensaje del ULTIMO fallo SQL ("" si la
+ * ultima operacion fue OK) inspeccionando el __ret__ que dejo el bridge/plugin:
+ * los bridges devuelven '{"error":"..."}' como STRING y sqlite_exec devuelve -1.
+ * Se corre en la fachada ANTES del envelope opt-in (si el __ret__ ya es un MAP
+ * no se toca), asi una app detecta el fallo sin parsear el dato. */
+static void te_sql_track_last_error(void) {
+    Variable *r = find_variable(TE_SYM_RET);
+    if (!r) return;
+    if (r->vtype == VAL_INT) {
+        if (r->value.int_value == -1) snprintf(g_vm.sql_last_err, sizeof(g_vm.sql_last_err), "exec failed (-1)");
+        else g_vm.sql_last_err[0] = '\0';
+        return;
+    }
+    if (r->vtype != VAL_STRING || !r->value.string_value) return;
+    const char *s = r->value.string_value;
+    while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
+    if (strncmp(s, "{\"error\":", 9) != 0) { g_vm.sql_last_err[0] = '\0'; return; }
+    const char *p = s + 9;
+    while (*p == ' ') p++;
+    if (*p == '"') p++;
+    size_t n = 0;
+    while (*p && *p != '"' && n < sizeof(g_vm.sql_last_err) - 1) {
+        if (*p == '\\' && p[1]) p++;   /* des-escapa \" y \\ del JSON */
+        g_vm.sql_last_err[n++] = *p++;
+    }
+    g_vm.sql_last_err[n] = '\0';
+    if (n == 0) snprintf(g_vm.sql_last_err, sizeof(g_vm.sql_last_err), "db_error");
+}
+const char *te_sql_last_error(void) { return g_vm.sql_last_err; }
+void te_sql_note_call(const char *fn) {
+    if (!fn) return;
+    if (strcmp(fn, "sql_query") == 0 || strcmp(fn, "sql_exec") == 0 ||
+        strcmp(fn, "mysql_query") == 0 || strcmp(fn, "postgres_query") == 0 ||
+        strcmp(fn, "sqlserver_query") == 0 || strcmp(fn, "sqlite_query") == 0 ||
+        strcmp(fn, "sqlite_exec") == 0) te_sql_track_last_error();
+}
+
 /* Estandar opt-in (sql_set_envelope(true) / env TYPEEASY_SQL_ENVELOPE=1):
  * envuelve el resultado CRUDO de cualquier motor con un campo booleano `success`
  * uniforme, SIN reestructurar el payload (el resultado se queda IGUAL bajo
@@ -1591,6 +1628,7 @@ static void native_sql_query(ASTNode *arg) {
         case TE_SQL_SQLITE: if (!te_call_registry("sqlite_query", arg)) te_set_ret_string(""); else te_sql_strict_check_ret(); break;
         default: fprintf(stderr, "[sql_query] unknown engine\n"); te_set_ret_string(""); break;
     }
+    te_sql_track_last_error();
     te_sql_reattach(prev, tail, un);
     te_sql_reattach(ovp, ovt, ovu);
     te_sql_envelope_wrap(force);   /* opt-in: { success, data | error }; override por-llamada gana */
@@ -1610,6 +1648,7 @@ static void native_sql_exec(ASTNode *arg) {
         case TE_SQL_SQLITE: if (!te_call_registry("sqlite_exec", arg)) te_set_ret_int(-1); else te_sql_strict_check_ret(); break;
         default: fprintf(stderr, "[sql_exec] unknown engine\n"); te_set_ret_int(-1); break;
     }
+    te_sql_track_last_error();
     te_sql_reattach(prev, tail, un);
     te_sql_reattach(ovp, ovt, ovu);
     te_sql_envelope_wrap(force);   /* opt-in: { success, data | error }; override por-llamada gana */
@@ -1740,6 +1779,7 @@ int call_native_function(const char *name, ASTNode *arg) {
     }
     if (strcmp(name, "mysql_query") == 0) {
         native_mysql_query(arg);
+        te_sql_note_call(name);
         return 1;
     }
     if (strcmp(name, "mysql_close") == 0) {
@@ -1747,16 +1787,17 @@ int call_native_function(const char *name, ASTNode *arg) {
         return 1;
     }
     if (strcmp(name, "postgres_connect") == 0) { native_postgres_connect(arg); return 1; }
-    if (strcmp(name, "postgres_query") == 0)   { native_postgres_query(arg);   return 1; }
+    if (strcmp(name, "postgres_query") == 0)   { native_postgres_query(arg);   te_sql_note_call(name); return 1; }
     if (strcmp(name, "postgres_close") == 0)   { native_postgres_close(arg);   return 1; }
     if (strcmp(name, "sqlserver_connect") == 0) { native_sqlserver_connect(arg); return 1; }
-    if (strcmp(name, "sqlserver_query") == 0)   { native_sqlserver_query(arg);   return 1; }
+    if (strcmp(name, "sqlserver_query") == 0)   { native_sqlserver_query(arg);   te_sql_note_call(name); return 1; }
     if (strcmp(name, "sqlserver_close") == 0)   { native_sqlserver_close(arg);   return 1; }
     /* Facade SQL genérico (delega según el engine final; no altera los de arriba) */
     if (strcmp(name, "sql_connect") == 0) { native_sql_connect(arg); return 1; }
     if (strcmp(name, "sql_query") == 0)   { native_sql_query(arg);   return 1; }
     if (strcmp(name, "sql_exec") == 0)    { native_sql_exec(arg);    return 1; }
     if (strcmp(name, "sql_close") == 0)   { native_sql_close(arg);   return 1; }
+    if (strcmp(name, "sql_last_error") == 0) { te_set_ret_string(g_vm.sql_last_err); return 1; }
     if (strcmp(name, "sql_set_empty_as_null") == 0) { native_sql_set_empty_as_null(arg); return 1; }
     if (strcmp(name, "sql_set_strict_errors") == 0) { native_sql_set_strict_errors(arg); return 1; }
     if (strcmp(name, "sql_set_envelope") == 0) { native_sql_set_envelope(arg); return 1; }
@@ -2973,7 +3014,7 @@ void te_bind_param(const char *name, TeValue *v) {
     Variable *slot = te_decl_slot(name);
     if (!slot) {
         te_val_free(v);
-        te_runtime_fatalf("Error: too many declared variables (limit %d).", MAX_VARS);
+        te_runtime_fatalf("Error: too many declared variables (limit %d, %d of them script globals).", MAX_VARS, g_vm.initial_var_count);
         return;
     }
     te_val_move_into(slot, v);
@@ -3203,7 +3244,7 @@ void te_declare_value(const char *id, TeValue *v, int is_const) {
     Variable *slot = te_decl_slot(id);
     if (!slot) {
         te_val_free(v);
-        te_runtime_fatalf("Error: too many declared variables (limit %d).", MAX_VARS);
+        te_runtime_fatalf("Error: too many declared variables (limit %d, %d of them script globals).", MAX_VARS, g_vm.initial_var_count);
         return;
     }
     slot->is_const = is_const;
@@ -3334,7 +3375,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
         te_value_to_variable(var, value);
     } else {
         if (g_vm.var_count >= MAX_VARS) {
-            te_runtime_fatalf("Error: too many declared variables (limit %d).", MAX_VARS);
+            te_runtime_fatalf("Error: too many declared variables (limit %d, %d of them script globals).", MAX_VARS, g_vm.initial_var_count);
             return;
         }
         g_vm.vars[g_vm.var_count].id = strdup(id);

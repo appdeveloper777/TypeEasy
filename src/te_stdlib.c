@@ -796,7 +796,7 @@ int te_builtin_dispatch(ASTNode *node) {
     /* Fase 1: registry first. New builtins (and plugins loaded via
      * load_native) live in the hash table; the legacy if-chain below
      * remains as transparent fallback for builtins not yet migrated. */
-    if (te_builtin_dispatch_registry(node, a0)) return 1;
+    if (te_builtin_dispatch_registry(node, a0)) { te_sql_note_call(fn); return 1; }
     if (te_dec_builtin(fn, a0)) return 1;          /* decimal(x) (te_decimal.c) */
 
     if (te_bi_core(fn, node, a0, a1)) return 1;
@@ -836,6 +836,14 @@ TE_WRAP_EVAL(postgres_close,    native_postgres_close)
 TE_WRAP_EVAL(sqlserver_connect, native_sqlserver_connect)
 TE_WRAP_EVAL(sqlserver_query,   native_sqlserver_query)
 TE_WRAP_EVAL(sqlserver_close,   native_sqlserver_close)
+
+/* sql_last_error(): "" si la ultima operacion SQL fue OK, si no el mensaje del
+ * bridge/plugin (B6 ERP: detectar fallos sin parsear el dato ni usar envelope). */
+static int adapt_sql_last_error(ASTNode *node, ASTNode *args) {
+    (void)node; (void)args;
+    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, (char*)te_sql_last_error(), NULL));
+    return 1;
+}
 
 /* Fase 3: load_native("name") — dynamically load a `.so` plugin which
  * registers its own builtins via te_module_register(host_api). */
@@ -1152,6 +1160,7 @@ void te_register_ast_builtins(void) {
     te_builtin_register("sqlserver_connect", adapt_sqlserver_connect);
     te_builtin_register("sqlserver_query",   adapt_sqlserver_query);
     te_builtin_register("sqlserver_close",   adapt_sqlserver_close);
+    te_builtin_register("sql_last_error",    adapt_sql_last_error);
     te_builtin_register("load_native",       adapt_load_native);
     te_builtin_register("env",               adapt_env);
     te_builtin_register("env_required",      adapt_env_required);

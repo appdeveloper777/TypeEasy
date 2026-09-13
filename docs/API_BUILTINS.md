@@ -157,6 +157,27 @@ no devuelve `[]` en silencio.
 > Gotcha: pasá SQL concatenado **en una variable**, no inline:
 > `let sql = "a" + "b"; sqlite_exec(db, sql);`
 
+### `sql_last_error() -> string`
+Mensaje del **último fallo SQL** (`""` si la última operación fue OK). Lo
+actualiza cada `sql_query`/`sql_exec`/`mysql_query`/`postgres_query`/
+`sqlserver_query`/`sqlite_query`/`sqlite_exec`. Sirve para detectar el fallo sin
+parsear el dato devuelto (los bridges devuelven `{"error":"..."}` como string y
+`sqlite_exec` devuelve `-1`) y sin activar el envelope `sql_set_envelope(true)`.
+
+```ts
+let rows = sql_query(db, "SELECT * FROM t", "mysql");
+if (sql_last_error() != "") { response_status(500); return json({ error: sql_last_error() }); }
+```
+
+### `import` estricto (`--strict-imports` / `TYPEEASY_STRICT_IMPORTS=1`)
+Un `import "x.te"` que no se puede abrir **no** aborta por defecto: se loguea
+`[IMPORT] Error: Cannot open import file ...` más una línea resumen
+`[IMPORT] WARNING: N import(s) could not be opened ...` y el programa sigue sin
+esas clases/endpoints (en `--api`: sus rutas dan 404). `--syntax-check` lo
+reporta como error (`ok:false`). Con `--strict-imports` o la variable de entorno
+`TYPEEASY_STRICT_IMPORTS=1` el arranque termina con **exit 1** (fail-fast,
+recomendado en servicios systemd).
+
 ---
 
 ## Cheat sheet
@@ -177,3 +198,4 @@ no devuelve `[]` en silencio.
 | `current_claims()` | auth | string (payload) |
 | `env(name)` | entorno | string |
 | `sqlite_connect/exec/query/last_id/close` | datos | handle / filas |
+| `sql_last_error()` | datos | string (`""` si la última op SQL fue OK) |
