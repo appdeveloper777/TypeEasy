@@ -131,6 +131,77 @@ static int te_mongo_close(ASTNode *node, ASTNode *args) {
     return 1;
 }
 
+/* Un nombre de campo/operador BSON es "peligroso" si empieza con '$' (todos
+ * los operadores de query/update de Mongo: $ne, $gt, $where, $regex, ...) o
+ * contiene un '.' (permite navegar/reescribir subcampos anidados). Si el
+ * filtro llega desde datos de la petición del cliente (p.ej.
+ * `mongo_query(conn, "usuarios", json_parse(request_body()), "json")`), un
+ * atacante podría inyectar `{"password": {"$ne": null}}` para saltarse
+ * comprobaciones de autenticación; por eso estos nombres se descartan por
+ * defecto en cualquier profundidad del documento/array del filtro. */
+static int te_mongo_key_is_dangerous(const char *key) {
+    if (!key || !*key) return 0;
+    if (key[0] == '$') return 1;
+    if (strchr(key, '.')) return 1;
+    return 0;
+}
+
+/* Copia recursivamente `iter` en `out`, omitiendo claves peligrosas de
+ * cualquier documento embebido (los índices de array no se filtran, ya que
+ * "0", "1", ... nunca son operadores). */
+static void te_mongo_sanitize_copy(bson_iter_t *iter, bson_t *out, int is_array) {
+    uint32_t idx = 0;
+    while (bson_iter_next(iter)) {
+        const char *key = bson_iter_key(iter);
+        char idxbuf[16];
+        const char *use_key = key;
+        if (is_array) {
+            snprintf(idxbuf, sizeof idxbuf, "%u", idx++);
+            use_key = idxbuf;
+        } else if (te_mongo_key_is_dangerous(key)) {
+            continue;
+        }
+        bson_type_t t = bson_iter_type(iter);
+        if (t == BSON_TYPE_DOCUMENT || t == BSON_TYPE_ARRAY) {
+            const uint8_t *cdata = NULL;
+            uint32_t clen = 0;
+            if (t == BSON_TYPE_DOCUMENT) bson_iter_document(iter, &clen, &cdata);
+            else bson_iter_array(iter, &clen, &cdata);
+            bson_t child_src;
+            if (bson_init_static(&child_src, cdata, clen)) {
+                bson_iter_t child_iter;
+                if (bson_iter_init(&child_iter, &child_src)) {
+                    bson_t child_out;
+                    if (t == BSON_TYPE_DOCUMENT) {
+                        bson_append_document_begin(out, use_key, -1, &child_out);
+                        te_mongo_sanitize_copy(&child_iter, &child_out, 0);
+                        bson_append_document_end(out, &child_out);
+                    } else {
+                        bson_append_array_begin(out, use_key, -1, &child_out);
+                        te_mongo_sanitize_copy(&child_iter, &child_out, 1);
+                        bson_append_array_end(out, &child_out);
+                    }
+                }
+                bson_destroy(&child_src);
+            }
+        } else {
+            const bson_value_t *v = bson_iter_value(iter);
+            bson_append_value(out, use_key, -1, v);
+        }
+    }
+}
+
+/* Reemplaza `filter` por una copia saneada (sin operadores `$`/claves con
+ * '.') y libera el original. Siempre devuelve un bson_t* válido. */
+static bson_t *te_mongo_sanitize_filter(bson_t *filter) {
+    bson_iter_t iter;
+    if (!filter || !bson_iter_init(&iter, filter)) return filter ? filter : bson_new();
+    bson_t *out = bson_new();
+    te_mongo_sanitize_copy(&iter, out, 0);
+    bson_destroy(filter);
+    return out;
+}
+
 static int te_mongo_query(ASTNode *node, ASTNode *args) {
     (void)node;
     int slot = H->arg_int(arg_at(args, 0), -1);
@@ -166,6 +237,7 @@ static int te_mongo_query(ASTNode *node, ASTNode *args) {
     } else {
         filter = bson_new();
     }
+    filter = te_mongo_sanitize_filter(filter);
 
     const char *db_name = g_pool_db[slot] ? g_pool_db[slot] : "test";
     mongoc_collection_t *coll = mongoc_client_get_collection(g_pool[slot], db_name, coll_name);
@@ -206,7 +278,20 @@ static int te_mongo_query(ASTNode *node, ASTNode *args) {
         fprintf(stderr, "[mongo_query] cursor error: %s\n", berr.message);
     }
 
-    if (len + 2 >= cap) { cap = len + 2; buf = (char *)realloc(buf, cap); }
+    if (len + 2 >= cap) {
+        cap = len + 2;
+        char *nb = (char *)realloc(buf, cap);
+        if (!nb) {
+            free(buf);
+            bson_destroy(filter);
+            mongoc_cursor_destroy(cursor);
+            mongoc_collection_destroy(coll);
+            free(coll_name); if (filter_json) free(filter_json); if (fmt) free(fmt);
+            H->set_ret_str("[]");
+            return 1;
+        }
+        buf = nb;
+    }
     buf[len++] = ']';
     buf[len]   = '\0';
 
@@ -215,9 +300,13 @@ static int te_mongo_query(ASTNode *node, ASTNode *args) {
         /* Por simplicidad devolvemos el JSON dentro de <result> */
         size_t xn = len + 64;
         char *x = (char *)malloc(xn);
-        snprintf(x, xn, "<result>%s</result>", buf);
-        H->set_ret_str(x);
-        free(x);
+        if (!x) {
+            H->set_ret_str(buf);
+        } else {
+            snprintf(x, xn, "<result>%s</result>", buf);
+            H->set_ret_str(x);
+            free(x);
+        }
     } else {
         H->set_ret_str(buf);
     }

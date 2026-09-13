@@ -81,5 +81,9 @@ set "POSIX_INTERP=%INTERP::=%"
 set "POSIX_INTERP=/!POSIX_INTERP:\=/!"
 
 REM --- Invoke with env vars + all args ---
-"%GITBASH%" -c "TYPEEASY_BIN='%POSIX_INTERP%' TYPEEASY_TEMPLATES='%POSIX_TEMPLATES%' '%POSIX_SCRIPT%' %*"
+REM Arguments are passed as separate argv entries after the -c script
+REM (becoming bash's $0, $1, ...) rather than spliced into the script text
+REM via %*, so a filename/argument containing $(...) or `...` can never be
+REM interpreted as shell command substitution (command injection).
+"%GITBASH%" -c "TYPEEASY_BIN='%POSIX_INTERP%' TYPEEASY_TEMPLATES='%POSIX_TEMPLATES%' '%POSIX_SCRIPT%' \"$@\"" typeeasy %*
 exit /b %ERRORLEVEL%

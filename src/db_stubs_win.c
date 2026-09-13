@@ -23,8 +23,21 @@ static void warn_unsupported(const char* name) {
         name);
 }
 
-void native_postgres_connect(ASTNode* args) { (void)args; warn_unsupported("postgres_connect"); }
-void native_postgres_query  (ASTNode* args) { (void)args; warn_unsupported("postgres_query");   }
+void native_postgres_connect(ASTNode* args) {
+    (void)args;
+    warn_unsupported("postgres_connect");
+    /* Devolver -1 (no conectado) para que `if (conn < 0)` funcione como en
+     * Linux; sin esto __ret__ quedaba con lo que hubiera antes de la llamada. */
+    ASTNode* r = create_ast_leaf(TE_T_NUMBER, -1, NULL, NULL);
+    add_or_update_variable(TE_SYM_RET, r); free_ast(r);
+}
+void native_postgres_query  (ASTNode* args) {
+    (void)args;
+    warn_unsupported("postgres_query");
+    ASTNode* r = create_ast_leaf(TE_T_STRING, 0,
+        strdup("{\"error\":\"postgres_unavailable_windows_build\"}"), NULL);
+    add_or_update_variable(TE_SYM_RET, r); free_ast(r);
+}
 void native_postgres_close  (ASTNode* args) { (void)args; warn_unsupported("postgres_close");   }
 
 #ifndef TE_WIN_HAVE_FREETDS

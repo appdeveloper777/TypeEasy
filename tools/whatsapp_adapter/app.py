@@ -18,7 +18,17 @@ META_PHONE_ID = os.environ.get('META_WHATSAPP_PHONE_ID')
 
 # WAHA Configuration
 WAHA_API_URL = os.environ.get('WAHA_API_URL', 'http://waha:3000')
-WAHA_API_KEY = os.environ.get('WAHA_API_KEY', 'typeeasy_waha_key_2024')
+WAHA_API_KEY = os.environ.get('WAHA_API_KEY')
+if not WAHA_API_KEY:
+    app.logger.warning('WAHA_API_KEY is not set — outbound WAHA API calls will be unauthenticated')
+
+# Shared secret WAHA is configured to append as a `?secret=` query param on
+# its webhook URL (see WAHA_WEBHOOK_URL in docker-compose.yml). WAHA Core
+# doesn't sign its webhooks with HMAC, so without this check anyone who can
+# reach /waha_webhook could forge inbound WhatsApp messages.
+WAHA_WEBHOOK_SECRET = os.environ.get('WAHA_WEBHOOK_SECRET')
+if not WAHA_WEBHOOK_SECRET:
+    app.logger.warning('WAHA_WEBHOOK_SECRET is not set — /waha_webhook will reject all requests')
 
 # Agent webhook configuration
 AGENT_WEBHOOK = os.environ.get('AGENT_WEBHOOK', 'http://agent_gemini:8081/whatsapp_hook')
@@ -33,9 +43,15 @@ last_sender = None
 def waha_webhook():
     """Handle incoming webhooks from WAHA (WhatsApp HTTP API)"""
     global last_sender
+
+    provided_secret = request.args.get('secret', '')
+    if not WAHA_WEBHOOK_SECRET or not hmac.compare_digest(provided_secret, WAHA_WEBHOOK_SECRET):
+        app.logger.warning('Rejected /waha_webhook request with invalid or missing secret')
+        return jsonify({'error': 'forbidden'}), 403
+
     try:
         print("🔍 DEBUG PRINT: WAHA Webhook received:", request.get_json())
-        
+
         data = request.get_json()
         if not data:
             return jsonify({'status': 'no_data'}), 200
@@ -209,10 +225,9 @@ def send_message():
     if provider == 'waha' and WAHA_API_URL:
         try:
             url = f'{WAHA_API_URL}/api/sendText'
-            headers = {
-                'Content-Type': 'application/json',
-                'X-Api-Key': WAHA_API_KEY
-            }
+            headers = {'Content-Type': 'application/json'}
+            if WAHA_API_KEY:
+                headers['X-Api-Key'] = WAHA_API_KEY
             payload = {
                 'chatId': to,
                 'text': message,

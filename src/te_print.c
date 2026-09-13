@@ -218,6 +218,7 @@ void interpret_print(ASTNode *node) {
             return;
         }
         ObjectNode *obj = v->value.object_value;
+        if (!obj) { dbg_printf("null"); append_to_stdout("null"); return; }
         int idx = -1;
         for (int i = 0; i < obj->class->attr_count; i++) {
             if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
@@ -453,6 +454,7 @@ static int te_println_access_attr(ASTNode *arg) {
             return 1;
         }
         ObjectNode *obj = v->value.object_value;
+        if (!obj) { dbg_printf("null\n"); append_to_stdout("null\n"); return 1; }
         int idx = -1;
         for (int i = 0; i < obj->class->attr_count; i++) {
             if (strcmp(obj->class->attributes[i].id, a->id) == 0) {

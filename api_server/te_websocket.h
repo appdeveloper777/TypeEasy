@@ -36,6 +36,14 @@ int  te_ws_current_id_str(char *out, int cap);
 void te_ws_init(void);
 void te_ws_shutdown(void);
 
+/* Shared interpreter-invoke lock (recursive). Any code that touches shared
+ * interpreter/request state (g_vm.req_*, resp_headers, a request/response
+ * cache, ...) around a call into the TypeEasy runtime must hold this lock,
+ * so HTTP handlers (servidor_api.c) and WebSocket callbacks (this file)
+ * never run interpreter code concurrently against the same global VM. */
+void te_ws_invoke_lock(void);
+void te_ws_invoke_unlock(void);
+
 #ifdef __cplusplus
 }
 #endif

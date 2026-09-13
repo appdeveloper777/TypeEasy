@@ -156,7 +156,8 @@ services:
       - AGENT_WEBHOOK=http://agent_gemini:8081/whatsapp_hook
       - WHATSAPP_PROVIDER=${WHATSAPP_PROVIDER:-waha} # waha, meta, or twilio
       - WAHA_API_URL=http://waha:3000
-      - WAHA_API_KEY=${WAHA_API_KEY:-typeeasy_waha_key_2024}
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_WEBHOOK_SECRET=${WAHA_WEBHOOK_SECRET}
       # Meta WhatsApp Cloud API
       - META_VERIFY_TOKEN=${META_VERIFY_TOKEN}
       - META_APP_SECRET=${META_APP_SECRET}
@@ -180,11 +181,13 @@ services:
     environment:
       - WHATSAPP_DEFAULT_ENGINE=WEBJS
       - WHATSAPP_RESTART_ON_FAIL=True
-      - WAHA_API_KEY=typeeasy_waha_key_2024
+      - WAHA_API_KEY=${WAHA_API_KEY}
       - WAHA_DASHBOARD_USERNAME=admin
       - WAHA_DASHBOARD_PASSWORD=typeeasy
-      # Configurar webhook automáticamente al iniciar
-      - WAHA_WEBHOOK_URL=http://whatsapp_adapter:5002/waha_webhook
+      # Configurar webhook automáticamente al iniciar. El secreto en la query
+      # string autentica el webhook en whatsapp_adapter (ver WAHA_WEBHOOK_SECRET
+      # en app.py) ya que WAHA Core no firma sus webhooks con HMAC.
+      - WAHA_WEBHOOK_URL=http://whatsapp_adapter:5002/waha_webhook?secret=${WAHA_WEBHOOK_SECRET}
       - WAHA_WEBHOOK_EVENTS=message
     volumes:
       - ./waha_sessions:/app/.sessions

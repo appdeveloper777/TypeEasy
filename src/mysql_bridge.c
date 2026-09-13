@@ -196,12 +196,10 @@ ASTNode* mysql_query_to_objects_fast(int conn_id, const char* query, ClassNode* 
     int nattr = cls->attr_count;
 
     int *attr_kind = (int*)malloc((size_t)nattr * sizeof(int));
-    int *attr_nullable = (int*)malloc((size_t)nattr * sizeof(int));
     char **shared_id   = (char**)te_orm_arena_alloc((size_t)nattr * sizeof(char*));
     char **shared_type = (char**)te_orm_arena_alloc((size_t)nattr * sizeof(char*));
     for (int a = 0; a < nattr; a++) {
         attr_kind[a]     = te_orm_attr_kind(cls->attributes[a].type);
-        attr_nullable[a] = te_orm_attr_is_nullable(cls->attributes[a].type);
         shared_id[a]     = te_orm_arena_strdup(cls->attributes[a].id ? cls->attributes[a].id : "");
         shared_type[a]   = te_orm_arena_strdup(cls->attributes[a].type ? cls->attributes[a].type : TE_DT_DYNAMIC);
     }
@@ -304,7 +302,6 @@ ASTNode* mysql_query_to_objects_fast(int conn_id, const char* query, ClassNode* 
     mysql_free_result(res);
     free(col_to_attr);
     free(attr_kind);
-    free(attr_nullable);
 
     if (te_timing) {
         clock_gettime(CLOCK_MONOTONIC, &t1);

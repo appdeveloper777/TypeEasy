@@ -73,9 +73,15 @@ GEMINI_API_KEY=tu_api_key_de_gemini_aqui
 # ==========================================
 # WAHA Configuration
 # ==========================================
-# No cambiar estos valores
-WAHA_API_KEY=typeeasy_waha_key_2024
+# Genera un valor propio y único por despliegue, ej: `openssl rand -hex 32`.
+# No reutilices el valor de ejemplo — controla el acceso a tu sesión de WhatsApp.
+WAHA_API_KEY=cambia-esto-por-una-clave-aleatoria-unica
 WAHA_API_URL=http://waha:3000
+# Secreto compartido que WAHA reenvía en la URL del webhook para que
+# whatsapp_adapter pueda verificar que un mensaje entrante realmente viene de
+# WAHA y no de un tercero que alcance /waha_webhook. También único por
+# despliegue, ej: `openssl rand -hex 32`.
+WAHA_WEBHOOK_SECRET=cambia-esto-por-un-secreto-largo-y-aleatorio
 
 # ==========================================
 # WhatsApp Provider
@@ -151,7 +157,7 @@ Deberías ver el dashboard de WAHA.
    |-------|-------|
    | **Name** | `default` |
    | **API URL** | `http://localhost:3000` |
-   | **API Key** | `typeeasy_waha_key_2024` |
+   | **API Key** | el mismo valor que pusiste en `WAHA_API_KEY` en tu `.env` |
 
 3. **Guardar la configuración:**
    - Haz clic en **"Save"** o **"Create"**
@@ -759,8 +765,9 @@ GEMINI_MODEL=gemini-2.0-flash      # Modelo a usar
 # ==========================================
 # WAHA
 # ==========================================
-WAHA_API_KEY=typeeasy_waha_key_2024
+WAHA_API_KEY=cambia-esto-por-una-clave-aleatoria-unica
 WAHA_API_URL=http://waha:3000
+WAHA_WEBHOOK_SECRET=cambia-esto-por-un-secreto-largo-y-aleatorio
 
 # ==========================================
 # WHATSAPP PROVIDER

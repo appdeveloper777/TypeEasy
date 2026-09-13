@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <signal.h>
+#include <setjmp.h>
 #include <ctype.h>
 #include <time.h>
 #include <sys/stat.h>
@@ -26,6 +27,7 @@
 #include "../src/typeeasy_http.h"
 #include "../src/typeeasy_api.h"
 #include "../src/ast.h"
+#include "../src/te_vm.h"
 #include "../src/debugger.h"
 
 // Estructura para la tabla de rutas dinámica
@@ -573,6 +575,10 @@ static char *strip_leading_garbage(char *result, const char **content_type_out) 
     return result;
 }
 
+/* Definida en src/typeeasy_api.c; no expuesta en un header compartido (mismo
+ * patron que src/typeeasy_api_server.c usa para declararla localmente). */
+extern void te_req_abort_cleanup(void);
+
 static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
     (void)cbdata;
 
@@ -585,30 +591,37 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
      * multi-hilo) y medimos su duración para el log de acceso estructurado. */
     __atomic_add_fetch(&g_inflight,  1, __ATOMIC_SEQ_CST);
     __atomic_add_fetch(&g_req_total, 1, __ATOMIC_SEQ_CST);
-    clock_t req_t0 = clock();
+    struct timespec req_t0; clock_gettime(CLOCK_MONOTONIC, &req_t0);
 #define TE_REQ_DONE(st, cache_tag) do { \
-        double _dur = (double)(clock() - req_t0) * 1000.0 / CLOCKS_PER_SEC; \
+        struct timespec _t1; clock_gettime(CLOCK_MONOTONIC, &_t1); \
+        double _dur = (double)(_t1.tv_sec - req_t0.tv_sec) * 1000.0 \
+                    + (double)(_t1.tv_nsec - req_t0.tv_nsec) / 1e6; \
         __atomic_sub_fetch(&g_inflight, 1, __ATOMIC_SEQ_CST); \
         te_log_request(method, uri, (st), _dur, (cache_tag)); \
     } while (0)
 
-    /* Reset HTTP state. We always reset before matching: params get added
-     * during the match attempt and we need a clean slate per try. */
-    typeeasy_http_reset();
-    typeeasy_http_set_method(method);
-    typeeasy_http_set_path(uri);
+    /* Serializa el acceso al estado global del interprete (g_vm.req_*,
+     * resp_headers, y de aqui en mas tambien g_cache) contra cualquier otro
+     * request HTTP concurrente y contra los callbacks de WebSocket (mismo
+     * lock que te_websocket.c). civetweb corre este handler en un pool
+     * multi-hilo (num_threads por defecto ~50); sin este lock, dos requests
+     * concurrentes comparten y corrompen el mismo estado global (use-after-
+     * free en typeeasy_http_reset() liberando lo que otro hilo aun lee). */
+    te_ws_invoke_lock();
 
-    /* Find a matching route (exact first, then pattern). Also enforce method. */
+    /* Reset HTTP state. We always reset before every match attempt (exact or
+     * pattern): match_route_pattern() can add path params and still fail the
+     * full match, so a stale param from one attempt must never leak into a
+     * later, unrelated route's request state. */
     RouteEntry *match = NULL;
     for (RouteEntry *entry = global_routes; entry && !match; entry = entry->next) {
         if (entry->http_method && strcmp(entry->http_method, method) != 0) continue;
+        typeeasy_http_reset();
+        typeeasy_http_set_method(method);
+        typeeasy_http_set_path(uri);
         if (strchr(entry->route_path, '{') == NULL) {
             if (strcmp(uri, entry->route_path) == 0) match = entry;
         } else {
-            /* Pattern match. Params get added inside; if it fails we clear them. */
-            typeeasy_http_reset();
-            typeeasy_http_set_method(method);
-            typeeasy_http_set_path(uri);
             if (match_route_pattern(entry->route_path, uri)) match = entry;
         }
     }
@@ -616,6 +629,7 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
         typeeasy_http_reset();
         mg_send_http_error(conn, 404, "Endpoint not found");
         TE_REQ_DONE(404, "none");
+        te_ws_invoke_unlock();
         return 1;
     }
 
@@ -665,7 +679,7 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
     char cache_key[1024];
     snprintf(cache_key, sizeof(cache_key), "%s %s%s%s", method, uri,
              qs ? "?" : "", qs ? qs : "");
-    if (match->cache_ttl > 0 && !g_debug_enabled) {
+    if (match->cache_ttl > 0 && !g_vm.debug_enabled) {
         CacheEntry *hit = cache_lookup(cache_key);
         if (hit) {
             fprintf(stderr, "[CACHE] HIT %s\n", cache_key);
@@ -678,12 +692,32 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
                       hit->status, hit->content_type,
                       (int)strlen(hit->body), hit->body);
             TE_REQ_DONE(hit->status, "HIT");
+            te_ws_invoke_unlock();
             return 1;
         }
     }
 
+    /* Punto de recuperacion: si el handler dispara un error fatal de runtime
+     * (funcion indefinida, reasignacion de const, etc.) el interprete hace
+     * longjmp aqui en vez de exit()ar y tumbar el proceso entero (mismo
+     * mecanismo que src/typeeasy_api_server.c). Sin esto, CUALQUIER handler
+     * con un bug de runtime corriente mataba todo el servidor para todos los
+     * clientes, no solo la request que fallo. */
+    jmp_buf recovery;
+    if (setjmp(recovery) != 0) {
+        g_vm.runtime_recovery = NULL;
+        runtime_reset_vars_to_initial_state();
+        te_req_abort_cleanup();
+        typeeasy_http_reset();
+        mg_send_http_error(conn, 500, "Internal error executing TypeEasy function");
+        TE_REQ_DONE(500, "none");
+        te_ws_invoke_unlock();
+        return 1;
+    }
+    g_vm.runtime_recovery = &recovery;
+
     /* Invoke (fast path: cached MethodNode*) */
-    clock_t start_time = clock();
+    struct timespec start_time; clock_gettime(CLOCK_MONOTONIC, &start_time);
     char *result = NULL;
     if (match->method_node) {
         result = typeeasy_embedded_invoke_method((MethodNode*)match->method_node);
@@ -691,13 +725,16 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
         result = typeeasy_invoke_with_script(g_typeeasy_ctx, match->script_path,
                                              match->function_name, NULL);
     }
-    clock_t end_time = clock();
-    double time_taken = ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
+    g_vm.runtime_recovery = NULL;
+    struct timespec end_time; clock_gettime(CLOCK_MONOTONIC, &end_time);
+    double time_taken = (double)(end_time.tv_sec - start_time.tv_sec)
+                       + (double)(end_time.tv_nsec - start_time.tv_nsec) / 1e9;
 
     if (!result) {
         typeeasy_http_reset();
         mg_send_http_error(conn, 500, "Internal error executing TypeEasy function");
         TE_REQ_DONE(500, "none");
+        te_ws_invoke_unlock();
         return 1;
     }
 
@@ -738,6 +775,7 @@ static int manejadorApiDinamico(struct mg_connection *conn, void *cbdata) {
     typeeasy_http_reset();
     free(result);
     TE_REQ_DONE(status, "MISS");
+    te_ws_invoke_unlock();
     return 1;
 }
 #undef TE_REQ_DONE

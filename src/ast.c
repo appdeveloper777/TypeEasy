@@ -1136,12 +1136,16 @@ static void native_request_cookie(ASTNode *arg) {
             const char *val = eq + 1;
             const char *end = val;
             while (*end && *end != ';') end++;               /* value until ';' */
-            char buf[1024];
+            /* Heap, no un buffer fijo: un session/JWT cookie legitimo supera
+             * comunmente 1KB (SSO/enterprise) y se truncaba en silencio,
+             * dando un valor incorrecto sin ningun aviso. */
             size_t vlen = (size_t)(end - val);
-            if (vlen >= sizeof(buf)) vlen = sizeof(buf) - 1;
+            char *buf = (char*)malloc(vlen + 1);
+            if (!buf) { te_set_ret_string(""); return; }
             memcpy(buf, val, vlen);
             buf[vlen] = '\0';
             te_set_ret_string(buf);
+            free(buf);
             return;
         }
         /* advance past this pair */
@@ -1177,34 +1181,54 @@ void native_debug_log(ASTNode *arg) {
     te_set_ret_int(0);
 }
 
-/* JSON-encode a TeKV list as { "k": "v", ... } into out (truncates safely). */
+/* Longitud que ocupara `s` una vez JSON-escapado (comillas/backslash/\n\r\t). */
+static size_t te_kv_json_esclen(const char *s) {
+    size_t n = 0;
+    for (const char *p = s; *p; ++p) {
+        n += (*p == '"' || *p == '\\' || *p == '\n' || *p == '\r' || *p == '\t') ? 2 : 1;
+    }
+    return n;
+}
+/* Escribe `s` JSON-escapado en out+*o, avanzando *o. Llamar solo cuando ya se
+ * verifico que hay espacio suficiente (te_kv_json_esclen(s) bytes). */
+static void te_kv_json_escape_into(char *out, size_t *o, const char *s) {
+    for (const char *p = s; *p; ++p) {
+        if (*p == '"' || *p == '\\') { out[(*o)++] = '\\'; out[(*o)++] = *p; }
+        else if (*p == '\n') { out[(*o)++] = '\\'; out[(*o)++] = 'n'; }
+        else if (*p == '\r') { out[(*o)++] = '\\'; out[(*o)++] = 'r'; }
+        else if (*p == '\t') { out[(*o)++] = '\\'; out[(*o)++] = 't'; }
+        else { out[(*o)++] = *p; }
+    }
+}
+
+/* JSON-encode a TeKV list as { "k": "v", ... } into out (truncates safely).
+ * Un par que no entra completo (por ejemplo, un header/cookie largo empujando
+ * el buffer fijo del caller) se descarta entero -- junto con todos los que le
+ * siguen -- en vez de emitirse a medias, así el resultado siempre es JSON
+ * válido (nunca una comilla sin cerrar ni un '}' faltante). */
 static void te_kv_to_json(TeKV *head, char *out, size_t cap) {
     size_t o = 0;
     if (cap < 3) { if (cap) out[0] = 0; return; }
     out[o++] = '{';
     int first = 1;
-    for (TeKV *c = head; c && o + 8 < cap; c = c->next) {
+    for (TeKV *c = head; c; c = c->next) {
         const char *k = c->k ? c->k : "";
         const char *v = c->v ? c->v : "";
-        if (!first) { if (o + 1 < cap) out[o++] = ','; }
+        size_t klen = te_kv_json_esclen(k);
+        size_t vlen = te_kv_json_esclen(v);
+        /* [','] '"' k '"' ':' '"' v '"'  +  reserva para '}' final + NUL */
+        size_t need = (first ? 0 : 1) + 1 + klen + 1 + 1 + 1 + vlen + 1 + 2;
+        if (o + need > cap) break;
+        if (!first) out[o++] = ',';
         first = 0;
-        if (o + 1 < cap) out[o++] = '"';
-        for (const char *p = k; *p && o + 2 < cap; ++p) {
-            if (*p == '"' || *p == '\\') { if (o + 2 < cap) out[o++] = '\\'; }
-            out[o++] = *p;
-        }
-        if (o + 3 < cap) { out[o++] = '"'; out[o++] = ':'; out[o++] = '"'; }
-        for (const char *p = v; *p && o + 2 < cap; ++p) {
-            if (*p == '"' || *p == '\\') { if (o + 2 < cap) out[o++] = '\\'; }
-            else if (*p == '\n') { if (o + 2 < cap) { out[o++] = '\\'; out[o++] = 'n'; } continue; }
-            else if (*p == '\r') { if (o + 2 < cap) { out[o++] = '\\'; out[o++] = 'r'; } continue; }
-            else if (*p == '\t') { if (o + 2 < cap) { out[o++] = '\\'; out[o++] = 't'; } continue; }
-            out[o++] = *p;
-        }
-        if (o + 1 < cap) out[o++] = '"';
+        out[o++] = '"';
+        te_kv_json_escape_into(out, &o, k);
+        out[o++] = '"'; out[o++] = ':'; out[o++] = '"';
+        te_kv_json_escape_into(out, &o, v);
+        out[o++] = '"';
     }
-    if (o + 1 < cap) out[o++] = '}';
-    out[o < cap ? o : cap - 1] = 0;
+    out[o++] = '}';
+    out[o] = 0;
 }
 
 static void native_request_headers(ASTNode *arg) {
@@ -1224,6 +1248,25 @@ static void native_request_params_all(ASTNode *arg) {
 }
 
 static void native_response_status(ASTNode *arg) { g_vm.resp_status = te_arg_int(arg, 200); te_set_ret_int(g_vm.resp_status); }
+
+/* Quita CR/LF y otros caracteres de control de un valor de cabecera HTTP para
+ * evitar header/response injection (CWE-113) cuando el nombre o valor
+ * proviene, directa o indirectamente, de datos de la petición del cliente. */
+static char *te_sanitize_header_part(const char *s) {
+    if (!s) return NULL;
+    size_t n = strlen(s);
+    char *out = (char*)malloc(n + 1);
+    if (!out) return NULL;
+    size_t j = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '\r' || c == '\n' || c < 0x20) continue;
+        out[j++] = (char)c;
+    }
+    out[j] = '\0';
+    return out;
+}
+
 static void native_response_header(ASTNode *arg) {
     const char *k = te_arg_string(arg);
     ASTNode *vnode = (arg && arg->next) ? arg->next : NULL; /* gotcha #1: 2nd arg via ->next */
@@ -1233,7 +1276,13 @@ static void native_response_header(ASTNode *arg) {
      * NULL y la cabecera salía vacía. get_node_string evalúa esos nodos. */
     char *vheap = NULL;
     if (!v && vnode) { vheap = get_node_string(vnode); v = vheap; }
-    if (k) te_kv_add(&g_vm.resp_headers, k, v ? v : "");
+    if (k) {
+        char *ksafe = te_sanitize_header_part(k);
+        char *vsafe = te_sanitize_header_part(v ? v : "");
+        te_kv_add(&g_vm.resp_headers, ksafe ? ksafe : k, vsafe ? vsafe : "");
+        free(ksafe);
+        free(vsafe);
+    }
     if (vheap) free(vheap);
     te_set_ret_int(0);
 }
@@ -5907,6 +5956,10 @@ static void te_stmt_index_assign(ASTNode *node) {
             ASTNode *new_val = build_item_from_value(value);
             ASTNode *pair = map_find_pair(map, key);
             if (pair) {
+                /* Libera el valor reemplazado si era propio (escalar); los
+                 * LIST/MAP/OBJECT_LITERAL/OBJECT/LAMBDA son alias compartidos
+                 * y no se liberan aquí (mismo criterio que te_free_lambda_result). */
+                te_free_lambda_result(pair->left);
                 pair->left = new_val;  /* same key, value changed: hash entry still valid */
             } else {
                 ASTNode *new_pair = create_kv_pair_node((char*)key, new_val);
@@ -5939,6 +5992,10 @@ static void te_stmt_index_assign(ASTNode *node) {
         for (int k = 0; k < idx && cur; k++) { prev = cur; cur = cur->next; }
         new_item->next = cur ? cur->next : NULL;
         if (prev) prev->next = new_item; else list->left = new_item;
+        /* Libera el item reemplazado si era propio (escalar); los alias
+         * compartidos (LIST/MAP/OBJECT_LITERAL/OBJECT/LAMBDA) no se liberan
+         * aquí (mismo criterio que te_free_lambda_result). */
+        if (cur) { cur->next = NULL; te_free_lambda_result(cur); }
         te_invalidate_list_cache(list);  /* Ola 14: item replaced */
         te_colcache_invalidate(list);    /* v0.0.13 (perf) */
 }
@@ -6226,11 +6283,19 @@ int evaluate_condition(ASTNode* condition) {
 
 void generate_plot(double *values, int count) {
     FILE *fp = fopen("plot_data.txt", "w");
+    if (!fp) {
+        fprintf(stderr, "Error: no se pudo abrir 'plot_data.txt' para escribir el plot.\n");
+        return;
+    }
     for (int i = 0; i < count; i++) {
         fprintf(fp, "%d %f\n", i, values[i]);
     }
     fclose(fp);
     FILE *gnuplot = popen("gnuplot -persistent", "w");
+    if (!gnuplot) {
+        fprintf(stderr, "Error: no se pudo iniciar 'gnuplot' (¿está instalado?).\n");
+        return;
+    }
     fprintf(gnuplot, "set title 'Gráfico generado por TypeEasy'\n");
     fprintf(gnuplot, "plot 'plot_data.txt' with linespoints\n");
     pclose(gnuplot);
@@ -7765,7 +7830,11 @@ ObjectNode* clone_object(ObjectNode *original) {
         } else if (clone->attributes[i].vtype == VAL_FLOAT) {
             clone->attributes[i].value.float_value = original->attributes[i].value.float_value;
         } else {
-            // (Manejar otros tipos como float si es necesario)
+            /* VAL_OBJECT: campos opcionales (T?) sin valor son un puntero
+             * NULL en el original (ver create_object). `clone->attributes`
+             * viene de malloc, no calloc, así que sin esta rama el puntero
+             * quedaba con basura en vez de copiar NULL/el objeto real. */
+            clone->attributes[i].value.object_value = original->attributes[i].value.object_value;
         }
     }
     return clone;
@@ -8220,7 +8289,7 @@ static void interpret_fprintln(ASTNode *node) {
         if (attr->vtype == VAL_STRING)
             dbg_eprintf( "%s\n", attr->value.string_value);
         else
-            dbg_eprintf( "%d\n", attr->value.int_value);
+            dbg_eprintf( "%lld\n", (long long)attr->value.int_value);
         return;
     }
 
@@ -8249,7 +8318,7 @@ static void interpret_fprintln(ASTNode *node) {
         if (v->vtype == VAL_STRING)
             dbg_eprintf( "%s\n", v->value.string_value);
         else if (v->vtype == VAL_INT)
-            dbg_eprintf( "%d\n", v->value.int_value);
+            dbg_eprintf( "%lld\n", (long long)v->value.int_value);
         else if (v->vtype == VAL_FLOAT)
             { char b[64]; te_fmt_double(b, sizeof(b), v->value.float_value); dbg_eprintf("%s\n", b); }
         else
@@ -8730,6 +8799,23 @@ void te_syntax_check_semantics(ASTNode *root) {
 }
 
 // Serializa un objeto a XML string dado su id y lo guarda en __ret__
+/* Garantiza que `buf` (longitud actual `strlen(buf)`, capacidad `*cap`) tenga
+ * espacio para `needed_extra` bytes adicionales + el terminador nulo, creciendo
+ * (realloc, duplicando) si hace falta. Devuelve el (posiblemente nuevo)
+ * puntero, o NULL si realloc falla (en cuyo caso `buf` ya fue liberado). Sin
+ * esto, un atributo de texto de longitud ordinaria (no maliciosa) puede
+ * desbordar el heap vía los strcat/snprintf de más abajo. */
+static char *xml_buf_ensure(char *buf, int *cap, size_t needed_extra) {
+    size_t need = strlen(buf) + needed_extra + 1;
+    if (need <= (size_t)*cap) return buf;
+    size_t new_cap = (size_t)*cap;
+    while (new_cap < need) new_cap *= 2;
+    char *nb = (char*)realloc(buf, new_cap);
+    if (!nb) { free(buf); return NULL; }
+    *cap = (int)new_cap;
+    return nb;
+}
+
 void print_object_as_xml_by_id(const char* id) {
     Variable *var = find_variable((char*)id);
     if (!var) {
@@ -8768,35 +8854,39 @@ void print_object_as_xml_by_id(const char* id) {
                 else obj = (ObjectNode *)(intptr_t)cur->value;
                 
                 if (obj && obj->class) {
-                    if (strlen(xml_buffer) + 1024 > estimated_size) {
-                        estimated_size *= 2;
-                        xml_buffer = realloc(xml_buffer, estimated_size);
-                    }
-                    
+                    if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size, 32))) return;
                     strcat(xml_buffer, "  <Item>\n");
                     for (int i = 0; i < obj->class->attr_count; i++) {
                         char temp[512];
                         snprintf(temp, sizeof(temp), "    <%s>", obj->class->attributes[i].id);
+                        if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size, strlen(temp) + 8))) return;
                         strcat(xml_buffer, temp);
-                        
+
                         Variable *attr = &obj->attributes[i];
                         if (attr->vtype == VAL_STRING) {
-                            strcat(xml_buffer, attr->value.string_value ? attr->value.string_value : "");
+                            const char *sv = attr->value.string_value ? attr->value.string_value : "";
+                            if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size, strlen(sv) + 8))) return;
+                            strcat(xml_buffer, sv);
                         } else if (attr->vtype == VAL_FLOAT) {
                             te_fmt_double(temp, sizeof(temp), attr->value.float_value);
+                            if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size, strlen(temp) + 8))) return;
                             strcat(xml_buffer, temp);
                         } else {
                             snprintf(temp, sizeof(temp), "%lld", (long long)attr->value.int_value);
+                            if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size, strlen(temp) + 8))) return;
                             strcat(xml_buffer, temp);
                         }
                         snprintf(temp, sizeof(temp), "</%s>\n", obj->class->attributes[i].id);
+                        if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size, strlen(temp) + 8))) return;
                         strcat(xml_buffer, temp);
                     }
+                    if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size, 32))) return;
                     strcat(xml_buffer, "  </Item>\n");
                 }
             }
             cur = cur->next;
         }
+        if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size, 16))) return;
         strcat(xml_buffer, "</Items>");
         
         ASTNode *result_node = create_ast_leaf(TE_T_STRING, 0, xml_buffer, NULL);
@@ -8812,28 +8902,38 @@ void print_object_as_xml_by_id(const char* id) {
     }
 
     ObjectNode *obj = var->value.object_value;
-    char *xml_buffer = malloc(4096);
-    snprintf(xml_buffer, 4096, "<%s>\n", obj->class->name);
+    int estimated_size2 = 4096;
+    char *xml_buffer = malloc(estimated_size2);
+    if (!xml_buffer) return;
+    snprintf(xml_buffer, estimated_size2, "<%s>\n", obj->class->name);
     for (int i = 0; i < obj->class->attr_count; i++) {
         char temp[512];
         snprintf(temp, sizeof(temp), "  <%s>", obj->attributes[i].id);
+        if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size2, strlen(temp) + 8))) return;
         strcat(xml_buffer, temp);
         if (obj->attributes[i].vtype == VAL_STRING) {
-            strcat(xml_buffer, obj->attributes[i].value.string_value ? obj->attributes[i].value.string_value : "");
+            const char *sv = obj->attributes[i].value.string_value ? obj->attributes[i].value.string_value : "";
+            if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size2, strlen(sv) + 8))) return;
+            strcat(xml_buffer, sv);
         } else if (obj->attributes[i].vtype == VAL_INT) {
             snprintf(temp, sizeof(temp), "%lld", (long long)obj->attributes[i].value.int_value);
+            if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size2, strlen(temp) + 8))) return;
             strcat(xml_buffer, temp);
         } else if (obj->attributes[i].vtype == VAL_FLOAT) {
             te_fmt_double(temp, sizeof(temp), obj->attributes[i].value.float_value);
+            if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size2, strlen(temp) + 8))) return;
             strcat(xml_buffer, temp);
         } else {
+            if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size2, 8))) return;
             strcat(xml_buffer, "null");
         }
         snprintf(temp, sizeof(temp), "</%s>\n", obj->attributes[i].id);
+        if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size2, strlen(temp) + 8))) return;
         strcat(xml_buffer, temp);
     }
     char end_tag[256];
     snprintf(end_tag, sizeof(end_tag), "</%s>", obj->class->name);
+    if (!(xml_buffer = xml_buf_ensure(xml_buffer, &estimated_size2, strlen(end_tag) + 8))) return;
     strcat(xml_buffer, end_tag);
     
     ASTNode *result_node = create_ast_leaf(TE_T_STRING, 0, xml_buffer, NULL);

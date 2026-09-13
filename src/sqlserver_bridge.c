@@ -409,6 +409,16 @@ void native_sqlserver_connect(ASTNode* args) {
 
     DBPROCESS* dbproc = dbopen(login, server);
     dbloginfree(login);
+    if (has_opts) {
+        /* FreeTDS ya leyo el .conf temporal dentro de dbopen(); nada lo
+         * borraba despues, asi que un servidor de larga vida (o cada proceso/
+         * PID que reinicia) acumulaba un archivo por conexion TLS para
+         * siempre en el directorio temporal. */
+        char tmp_conf_path[1024];
+        snprintf(tmp_conf_path, sizeof(tmp_conf_path), "%s/.typeeasy_freetds_%d_%d.conf",
+                 mssql_tmpdir(), (int)TE_GETPID(), slot);
+        unlink(tmp_conf_path);
+    }
     if (!dbproc) {
         char where[160];
         snprintf(where, sizeof(where), "dbopen() failed (host=%s:%d, encrypt=%s)",
