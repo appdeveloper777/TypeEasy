@@ -7465,16 +7465,32 @@ static void interpret_call_method_impl(ASTNode *node) {
     /* v0.0.11: chained method/function call — `a.foo().bar()` or `foo().bar()`.
      * Evaluate the inner call first, bind result to a unique temp variable,
      * and rewrite node->left to an ID node so the rest of this function
-     * (which assumes objNode is an identifier) works unchanged. */
-    if (objNode && objNode->type &&
-        (strcmp(objNode->type, TE_T_CALL_METHOD) == 0 || strcmp(objNode->type, TE_T_CALL_FUNC) == 0)) {
-        if (strcmp(objNode->type, TE_T_CALL_METHOD) == 0) interpret_call_method(objNode);
-        else interpret_call_func(objNode);
+     * (which assumes objNode is an identifier) works unchanged.
+     *
+     * 2026-09-12 (re-entrancia): el receptor original se guarda en
+     * node->chain_recv y se RE-EVALUA en cada ejecucion, re-ligando el temporal
+     * en el frame actual. Antes la reescritura era permanente y la 2a ejecucion
+     * del mismo nodo (otra llamada a la fn, otra iteracion del for, otro request
+     * --api) buscaba un temporal de un frame ya muerto -> "'__chain_s_0__' is
+     * not a valid object" / resultado vacio (`uuid_v4().upper()` solo servia la
+     * primera vez). El nombre del temporal es estable por nodo. */
+    ASTNode *chainRecv = NULL;
+    if (node->chain_recv) chainRecv = node->chain_recv;
+    else if (objNode && objNode->type &&
+        (strcmp(objNode->type, TE_T_CALL_METHOD) == 0 || strcmp(objNode->type, TE_T_CALL_FUNC) == 0))
+        chainRecv = objNode;
+    if (chainRecv) {
+        if (strcmp(chainRecv->type, TE_T_CALL_METHOD) == 0) interpret_call_method(chainRecv);
+        else interpret_call_func(chainRecv);
         Variable *rv = find_variable(TE_SYM_RET);
+        const char *tmpName = (node->chain_recv && node->left && node->left->id) ? node->left->id : NULL;
+        char tmp[40];
         if (rv && rv->vtype == VAL_OBJECT && rv->value.object_value) {
-            static int _chain_seq = 0;
-            char tmp[40];
-            snprintf(tmp, sizeof(tmp), "__chain_%d__", _chain_seq++);
+            if (!tmpName) {
+                static int _chain_seq = 0;
+                snprintf(tmp, sizeof(tmp), "__chain_%d__", _chain_seq++);
+                tmpName = tmp;
+            }
             ASTNode *holder = (ASTNode*)calloc(1, sizeof(ASTNode));
             holder->type = strdup(rv->type ? rv->type : TE_T_LIST);
             /* For LIST/MAP, add_or_update_variable stores value as ASTNode*
@@ -7484,12 +7500,15 @@ static void interpret_call_method_impl(ASTNode *node) {
             holder->right = inner ? inner->right : NULL;  /* v0.0.12 #8: preserve LAZY_ITER op chain */
             holder->str_value = inner ? inner->str_value : NULL;
             holder->value = inner ? inner->value : 0;
-            add_or_update_variable(tmp, holder);
-            ASTNode *id = (ASTNode*)calloc(1, sizeof(ASTNode));
-            id->type = strdup(TE_T_ID);
-            id->id = strdup(tmp);
-            node->left = id;
-            objNode = id;
+            add_or_update_variable(tmpName, holder);
+            if (!node->chain_recv) {
+                ASTNode *id = (ASTNode*)calloc(1, sizeof(ASTNode));
+                id->type = strdup(TE_T_ID);
+                id->id = strdup(tmpName);
+                node->chain_recv = chainRecv;
+                node->left = id;
+            }
+            objNode = node->left;
         } else if (rv && rv->vtype == VAL_STRING) {
             /* v0.0.30: el call interno devolvió un STRING; materialízalo en una
              * var temporal para que los métodos de string (.trim/.upper/.lower/
@@ -7497,17 +7516,27 @@ static void interpret_call_method_impl(ASTNode *node) {
              * cadena. Sin esto, `x.trim().upper()`, `f().trim()` o
              * `request_query("q").trim()` fallan con
              * "'<interno>' is not a valid object" (gotcha .trim en --api). */
-            static int _chain_str_seq = 0;
-            char tmp[40];
-            snprintf(tmp, sizeof(tmp), "__chain_s_%d__", _chain_str_seq++);
+            if (!tmpName) {
+                static int _chain_str_seq = 0;
+                snprintf(tmp, sizeof(tmp), "__chain_s_%d__", _chain_str_seq++);
+                tmpName = tmp;
+            }
             ASTNode *sid = create_ast_leaf(TE_T_STRING, 0,
                 rv->value.string_value ? rv->value.string_value : "", NULL);
-            add_or_update_variable(tmp, sid);
-            ASTNode *id = (ASTNode*)calloc(1, sizeof(ASTNode));
-            id->type = strdup(TE_T_ID);
-            id->id = strdup(tmp);
-            node->left = id;
-            objNode = id;
+            add_or_update_variable(tmpName, sid);
+            free_ast(sid);   /* add_or_update_variable COPIA los escalares (cf. te_ret_scalar) */
+            if (!node->chain_recv) {
+                ASTNode *id = (ASTNode*)calloc(1, sizeof(ASTNode));
+                id->type = strdup(TE_T_ID);
+                id->id = strdup(tmpName);
+                node->chain_recv = chainRecv;
+                node->left = id;
+            }
+            objNode = node->left;
+        } else if (node->chain_recv) {
+            /* Receptor re-evaluado sin valor util (null/numero): el ID temporal
+             * queda sin ligar y el flujo normal reporta el error como siempre. */
+            objNode = node->left;
         }
     }
 
@@ -7522,10 +7551,15 @@ static void interpret_call_method_impl(ASTNode *node) {
      * Materializamos el string en una Variable de STACK y despachamos directo
      * (sin reescribir node->left: el AST queda intacto y la expresión se
      * re-evalúa en cada llamada). Si no era un método de string, seguimos por
-     * el flujo normal. */
+     * el flujo normal.
+     * 2026-09-12: tambien para receptores ACCESS_ATTR / ACCESS_EXPR cuyo valor
+     * es string (`this.n.trim()`, `obj.nombre.upper()`, `m["k"].trim()`): antes
+     * abortaban con "'(null)' is not a valid object". */
     if (objNode && objNode->type && !objNode->id &&
         (strcmp(objNode->type, TE_T_ADD) == 0 ||
-         strcmp(objNode->type, TE_T_STRING_INTERP) == 0) &&
+         strcmp(objNode->type, TE_T_STRING_INTERP) == 0 ||
+         strcmp(objNode->type, TE_T_ACCESS_ATTR) == 0 ||
+         strcmp(objNode->type, TE_T_ACCESS_EXPR) == 0) &&
         is_string_type(objNode)) {
         char *s = get_node_string(objNode);
         Variable sv;
@@ -8350,9 +8384,12 @@ void free_ast(ASTNode *node) {
             /* Gotcha 30c: item copy of a LIST instance; left/right are the template's. */
             int borrowed = n->borrowed_children;
             ASTNode *l = n->left, *r = n->right;   /* leer antes de free(n) */
+            /* 2026-09-12: receptor original de una cadena `a.f().g()` (node->left
+             * fue reescrito al ID temporal); se libera como un hijo mas. */
+            ASTNode *cr = n->chain_recv;
             free(n);
-            if (!borrowed && (l || r)) {                    /* apilar hijos: liberacion sin recursion */
-                if (sp + 2 > cap) {
+            if (!borrowed && (l || r || cr)) {              /* apilar hijos: liberacion sin recursion */
+                if (sp + 3 > cap) {
                     int ncap = cap * 2;
                     ASTNode **grown = (ASTNode **)malloc((size_t)ncap * sizeof(ASTNode *));
                     if (grown) {
@@ -8361,12 +8398,14 @@ void free_ast(ASTNode *node) {
                         stack = grown; cap = ncap;
                     }
                 }
-                if (sp + 2 <= cap) {
+                if (sp + 3 <= cap) {
                     if (l) stack[sp++] = l;
                     if (r) stack[sp++] = r;
+                    if (cr) stack[sp++] = cr;
                 } else {                     /* OOM al crecer: fallback recursivo (raro) */
                     free_ast(l);
                     free_ast(r);
+                    free_ast(cr);
                 }
             }
             n = next;

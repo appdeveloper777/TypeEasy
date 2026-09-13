@@ -118,6 +118,12 @@ typedef struct ASTNode {
     /* Fase F: entorno capturado de un LAMBDA que es CLOSURE (instancia creada dentro de una
      * llamada con variables libres de los frames activos). NULL en el template de parse. */
     struct TeClosureEnv *closure;
+    /* 2026-09-12 (re-entrancia de cadenas): en un CALL_METHOD cuyo receptor era
+     * OTRA llamada (`a.f().g()`, `f().g()`), node->left se reescribe a un ID
+     * temporal y aqui se conserva el receptor ORIGINAL para re-evaluarlo en cada
+     * ejecucion (antes se perdia y la 2a ejecucion fallaba con
+     * "'__chain_s_0__' is not a valid object"). NULL si no es una cadena. */
+    struct ASTNode *chain_recv;
     /* v0.0.13 (perf): columnar cache attached to LIST head when items are
      * homogeneous OBJECTs from a CSV load. NULL on all non-LIST nodes and on
      * LIST nodes that don't qualify. Owned by the LIST node; freed when the

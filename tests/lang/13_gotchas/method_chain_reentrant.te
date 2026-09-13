@@ -1,0 +1,30 @@
+// Gotcha 2026-09-12: una cadena de metodos `a.f().g()` / `f().g()` debe funcionar
+// en CADA ejecucion del mismo nodo (2a llamada a la fn, iteraciones de un for,
+// requests --api), no solo la primera. Y los metodos de string deben poder
+// despacharse sobre atributos (`this.n.trim()`) e indices (`m["k"].trim()`).
+let f = fn(a) => { let k = a.replace("x", "").trim(); return k; };
+println(concat("f1=[", f(" xhola "), "]"));
+println(concat("f2=[", f(" xmundo "), "]"));
+let g = fn() => { let u = uuid_v4().upper(); return ("" + u.length); };
+println(concat("g1=", g()));
+println(concat("g2=", g()));
+var i = 0;
+for (i = 0; 3; 1) {
+    let s = "  Ab  ".trim().lower();
+    println(concat("loop", ("" + i), "=[", s, "]"));
+}
+class K {
+    n : string;
+    __constructor(n : string) { this.n = n; }
+    t1() : string { return this.n.trim(); }
+    norm() : string { return this.n.trim().upper(); }
+}
+let k1 = new K("  q1 "); let k2 = new K(" q2  ");
+println(concat("t1=[", k1.t1(), "]"));
+println(concat("k1=[", k1.norm(), "] k2=[", k2.norm(), "] k1b=[", k1.norm(), "]"));
+println(concat("ext=[", k2.n.trim(), "]"));
+let m = { s: "  mapa " };
+println(concat("map=[", m["s"].trim(), "] map2=[", m.s.trim(), "]"));
+// cadena de listas: where().select() dos veces (no debe romperse la 2a vez)
+let h = fn(xs) => { return xs.where(fn(n) => n > 1).select(fn(n) => n * 10).length; };
+println(concat("h1=", ("" + h([1, 2, 3])), " h2=", ("" + h([5, 6]))));
