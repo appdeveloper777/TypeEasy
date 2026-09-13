@@ -6,6 +6,20 @@
  *   mongo_query(slot, "collection", { filter }, "json"|"xml")  -> string en __ret__
  *   mongo_close(slot)                                  -> int 0
  *
+ * mongo_query()'s `filter` es whitelist, no blacklist: solo acepta pares
+ * campo=escalar planos (string/int/float/bool/null/fecha/ObjectId). Una
+ * clave `$`-prefijada o con '.', o un valor documento/array/regex/code
+ * (incluido el Extended JSON legacy {"$regex":...}) hace fallar la query
+ * ENTERA (devuelve "[]") en vez de ejecutarse con un filtro parcial. Esto
+ * es deliberado: si `filter` viene de datos de la petición del cliente
+ * (p.ej. `mongo_query(conn, "usuarios", json_parse(request_body()), "json")`),
+ * un blacklist tendría que enumerar cada forma en que BSON puede codificar
+ * un operador — ejercicio que ya falló tres veces ($ne, $regex/$options,
+ * un valor-tipo-peligroso borrando un campo entero). Si un script legítimo
+ * necesita operadores ($gt, $in, ...), debe construir/ejecutar ese filtro
+ * por una vía separada que elija explícitamente, nunca aceptarlos gratis
+ * desde JSON controlado por el cliente.
+ *
  * Carga desde un script .te:
  *   load_native("mongo");
  *   let conn = mongo_connect("mongodb://localhost:27017/meri");
@@ -131,120 +145,66 @@ static int te_mongo_close(ASTNode *node, ASTNode *args) {
     return 1;
 }
 
-/* Un nombre de campo/operador BSON es "peligroso" si empieza con '$' (todos
- * los operadores de query/update de Mongo: $ne, $gt, $where, $regex, ...) o
- * contiene un '.' (permite navegar/reescribir subcampos anidados). Si el
- * filtro llega desde datos de la petición del cliente (p.ej.
- * `mongo_query(conn, "usuarios", json_parse(request_body()), "json")`), un
- * atacante podría inyectar `{"password": {"$ne": null}}` para saltarse
- * comprobaciones de autenticación; por eso estos nombres se descartan por
- * defecto en cualquier profundidad del documento/array del filtro. */
-static int te_mongo_key_is_dangerous(const char *key) {
-    if (!key || !*key) return 0;
-    if (key[0] == '$') return 1;
-    if (strchr(key, '.')) return 1;
-    return 0;
-}
+/* mongo_query()'s default filter is built by WHITELIST, not by blacklist.
+ *
+ * Three rounds of trying to enumerate every *dangerous* shape a client-
+ * controlled JSON document can take once parsed into BSON ($ne as a key,
+ * $regex/$options as Extended JSON decoding straight into a native
+ * BSON_TYPE_REGEX value, a type-dangerous value silently deleting an
+ * unrelated field's constraint...) kept finding a new bypass, because BSON
+ * has many ways to encode "this is actually an operator, not data" and a
+ * blacklist has to know all of them. A whitelist only has to know what a
+ * SAFE filter looks like: a flat map of plain field names to scalar values,
+ * exactly what the plugin's own documented example uses
+ * (`mongo_query(conn, "usuarios", { "activo": 1 }, "json")`). Anything that
+ * doesn't fit that shape — a nested document/array, a regex, code, an
+ * operator-like `$`-prefixed or dotted key — is refused outright rather than
+ * partially accepted, and the WHOLE query is rejected (returns "[]") rather
+ * than run with a partial filter: a script that genuinely needs range
+ * queries, $in, or other operators should build/execute those with a
+ * dedicated raw-filter path it explicitly opts into, not get them for free
+ * from client-controlled JSON. */
 
-/* Un valor puede ser un operador peligroso sin que su CLAVE lo delate:
- * bson_new_from_json() convierte el Extended JSON legacy
- * {"$regex": "...", "$options": "..."} (y $code/$code+$scope) directamente
- * en un valor BSON_TYPE_REGEX/CODE/CODEWSCOPE *nativo* en el momento del
- * parseo -- nunca sobrevive como un sub-documento con una clave "$regex"
- * literal, así que el filtro por nombre de clave nunca lo ve. $regex permite
- * el mismo bypass de autenticación que $ne (además de extracción de datos
- * carácter a carácter); $code/$code+$scope ejecutan JavaScript si $where
- * está habilitado en el servidor. Se descartan por tipo, en cualquier
- * profundidad, sea cual sea la clave que los contenga. */
-static int te_mongo_type_is_dangerous(bson_type_t t) {
-    return t == BSON_TYPE_REGEX || t == BSON_TYPE_CODE || t == BSON_TYPE_CODEWSCOPE;
-}
-
-/* Copia recursivamente `iter` en `out`, omitiendo claves/valores peligrosos
- * de cualquier documento embebido (los índices de array no se filtran, ya
- * que "0", "1", ... nunca son operadores). Marca `*dropped` en 1 si se
- * omitió algo, para que el llamador pueda distinguir "filtro vacío porque el
- * cliente mandó {}" de "filtro vacío porque le vaciamos todo el contenido". */
-static void te_mongo_sanitize_copy(bson_iter_t *iter, bson_t *out, int is_array, int *dropped) {
-    uint32_t idx = 0;
-    while (bson_iter_next(iter)) {
-        const char *key = bson_iter_key(iter);
-        char idxbuf[16];
-        const char *use_key = key;
-        if (is_array) {
-            snprintf(idxbuf, sizeof idxbuf, "%u", idx++);
-            use_key = idxbuf;
-        } else if (te_mongo_key_is_dangerous(key)) {
-            if (dropped) *dropped = 1;
-            continue;
-        }
-        bson_type_t t = bson_iter_type(iter);
-        if (te_mongo_type_is_dangerous(t)) {
-            if (dropped) *dropped = 1;
-            /* A diferencia de una clave peligrosa (nunca es un campo que la
-             * app haya elegido filtrar por si misma -- descartarla no quita
-             * ninguna restriccion real), un valor de tipo peligroso puede
-             * colgar de una clave perfectamente legitima elegida por la app,
-             * p.ej. {"username":"admin","password":{"$regex":".*"}}. Si
-             * simplemente saltamos el par, "password" desaparece del filtro
-             * entero -- el chequeo de contraseña se esfuma aunque "username"
-             * sobreviva, y el chequeo de "todo quedo vacio" de
-             * te_mongo_sanitize_filter no lo detecta porque el documento NO
-             * queda vacio. En vez de descartar el par, dejamos la clave con
-             * un sub-documento vacio: el campo sigue siendo exigido, pero
-             * como valor `{}` jamas matchea un dato real (string/numero/...),
-             * asi que la restriccion se vuelve mas estricta, nunca mas laxa. */
-            bson_t empty_child;
-            bson_append_document_begin(out, use_key, -1, &empty_child);
-            bson_append_document_end(out, &empty_child);
-            continue;
-        }
-        if (t == BSON_TYPE_DOCUMENT || t == BSON_TYPE_ARRAY) {
-            const uint8_t *cdata = NULL;
-            uint32_t clen = 0;
-            if (t == BSON_TYPE_DOCUMENT) bson_iter_document(iter, &clen, &cdata);
-            else bson_iter_array(iter, &clen, &cdata);
-            bson_t child_src;
-            if (bson_init_static(&child_src, cdata, clen)) {
-                bson_iter_t child_iter;
-                if (bson_iter_init(&child_iter, &child_src)) {
-                    bson_t child_out;
-                    if (t == BSON_TYPE_DOCUMENT) {
-                        bson_append_document_begin(out, use_key, -1, &child_out);
-                        te_mongo_sanitize_copy(&child_iter, &child_out, 0, dropped);
-                        bson_append_document_end(out, &child_out);
-                    } else {
-                        bson_append_array_begin(out, use_key, -1, &child_out);
-                        te_mongo_sanitize_copy(&child_iter, &child_out, 1, dropped);
-                        bson_append_array_end(out, &child_out);
-                    }
-                }
-                bson_destroy(&child_src);
-            }
-        } else {
-            const bson_value_t *v = bson_iter_value(iter);
-            bson_append_value(out, use_key, -1, v);
-        }
+/* Los únicos tipos BSON que una comparación de igualdad simple puede tomar
+ * sin acarrear semántica de operador o ejecución de código. */
+static int te_mongo_bson_type_is_safe_scalar(bson_type_t t) {
+    switch (t) {
+        case BSON_TYPE_UTF8:
+        case BSON_TYPE_INT32:
+        case BSON_TYPE_INT64:
+        case BSON_TYPE_DOUBLE:
+        case BSON_TYPE_BOOL:
+        case BSON_TYPE_NULL:
+        case BSON_TYPE_DATE_TIME:
+        case BSON_TYPE_OID:
+            return 1;
+        default:
+            return 0;
     }
 }
 
-/* Reemplaza `filter` por una copia saneada (sin operadores `$`/claves con
- * '.'/valores regex-o-code) y libera el original. Siempre devuelve un
- * bson_t* válido. Si el filtro original traía contenido pero TODO terminó
- * descartado por peligroso, un `{}` resultante en el nivel superior
- * matchearía la colección entera (fail-open) -- en ese caso deja `*rejected`
- * en 1 para que el llamador corte la query en vez de ejecutarla. */
-static bson_t *te_mongo_sanitize_filter(bson_t *filter, int *rejected) {
-    if (rejected) *rejected = 0;
-    bson_iter_t iter;
-    if (!filter || !bson_iter_init(&iter, filter)) return filter ? filter : bson_new();
-    int had_keys = bson_count_keys(filter) > 0;
-    int dropped = 0;
+/* Construye el filtro final tomando SOLO los pares de `filter_in` cuya
+ * clave es un nombre de campo simple (no `$`-prefijada, sin '.') y cuyo
+ * valor es uno de los escalares seguros de arriba. Cualquier otro par deja
+ * `*rejected` en 1: el llamador debe entonces descartar la query completa
+ * en vez de ejecutarla con un filtro parcial. Un filtro de entrada vacío
+ * (`{}`, "traer todo" intencional) sigue produciendo `{}` sin rechazo. */
+static bson_t *te_mongo_build_whitelisted_filter(const bson_t *filter_in, int *rejected) {
+    *rejected = 0;
     bson_t *out = bson_new();
-    te_mongo_sanitize_copy(&iter, out, 0, &dropped);
-    bson_destroy(filter);
-    if (had_keys && dropped && bson_count_keys(out) == 0 && rejected) {
-        *rejected = 1;
+    if (!filter_in) return out;
+    bson_iter_t iter;
+    if (!bson_iter_init(&iter, filter_in)) return out;
+    while (bson_iter_next(&iter)) {
+        const char *key = bson_iter_key(&iter);
+        int key_ok = key && *key && key[0] != '$' && !strchr(key, '.');
+        bson_type_t t = bson_iter_type(&iter);
+        if (!key_ok || !te_mongo_bson_type_is_safe_scalar(t)) {
+            *rejected = 1;
+            continue;
+        }
+        const bson_value_t *v = bson_iter_value(&iter);
+        bson_append_value(out, key, -1, v);
     }
     return out;
 }
@@ -273,24 +233,27 @@ static int te_mongo_query(ASTNode *node, ASTNode *args) {
         return 1;
     }
 
-    bson_t *filter = NULL;
+    bson_t *raw_filter = NULL;
     bson_error_t berr;
     if (filter_json && *filter_json && strcmp(filter_json, "null") != 0) {
-        filter = bson_new_from_json((const uint8_t *)filter_json, -1, &berr);
-        if (!filter) {
+        raw_filter = bson_new_from_json((const uint8_t *)filter_json, -1, &berr);
+        if (!raw_filter) {
             fprintf(stderr, "[mongo_query] bad filter JSON: %s\n", berr.message);
-            filter = bson_new();
+            raw_filter = bson_new();
         }
     } else {
-        filter = bson_new();
+        raw_filter = bson_new();
     }
     int filter_rejected = 0;
-    filter = te_mongo_sanitize_filter(filter, &filter_rejected);
+    bson_t *filter = te_mongo_build_whitelisted_filter(raw_filter, &filter_rejected);
+    bson_destroy(raw_filter);
     if (filter_rejected) {
-        /* El filtro traia solo operadores peligrosos: si los hubieramos
-         * dejado pasar como {} el query matchearia la coleccion entera.
-         * Preferimos devolver vacio a arriesgar un dump completo. */
-        fprintf(stderr, "[mongo_query] filter rejected: only dangerous operators/keys present\n");
+        /* El filtro traia una clave operador ($.../con '.') o un valor no
+         * escalar (documento/array/regex/code/...). En vez de intentar
+         * adivinar que tan peligroso es y sanear parcialmente, rechazamos
+         * la query completa: mas seguro que arriesgar un filtro debilitado
+         * o un dump completo de la coleccion. */
+        fprintf(stderr, "[mongo_query] filter rejected: contains a non-scalar value or operator-like key (mongo_query only accepts flat field=scalar filters)\n");
         bson_destroy(filter);
         free(coll_name); if (filter_json) free(filter_json); if (fmt) free(fmt);
         H->set_ret_str("[]");

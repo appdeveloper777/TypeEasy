@@ -38,6 +38,13 @@ mongo_close(conn);
 | `mongo_query(slot, coll, filter, fmt)` | int, string, object/JSON, "json"\|"xml" | string (JSON array o XML) |
 | `mongo_close(slot)` | int | 0 |
 
+`filter` solo acepta pares `campo: valor_escalar` (string/número/bool/null)
+planos. Cualquier operador (`$ne`, `$regex`, `$where`, ...), clave con `.`,
+o valor anidado (documento/array) hace que la query entera se rechace
+(devuelve `[]`) en vez de ejecutarse parcialmente — así es seguro pasarle
+un `filter` construido a partir de datos de la petición del cliente
+(p.ej. `json_parse(request_body())`).
+
 ## Publicar (futuro registry)
 
 1. CI compila `libte_mongo.so` en GitHub Actions.
