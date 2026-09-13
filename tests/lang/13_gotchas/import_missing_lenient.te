@@ -1,0 +1,10 @@
+// Gotcha ERP B13 (2026-09-13): un `import` a un archivo inexistente NO abortaba
+// ni avisaba mas alla de una linea [IMPORT] Error por archivo; el programa
+// seguia "sano" sin ese modulo (en --api: endpoints ausentes = 404 silencioso).
+// Comportamiento por defecto (compat): sigue ejecutando, pero ahora imprime un
+// WARNING resumen en stderr con el conteo y como hacerlo fatal.
+// expect: after-missing-import
+// expect-stderr-contains: Cannot open import file
+// expect-stderr-contains: [IMPORT] WARNING: 1 import(s) could not be opened
+import "does_not_exist_b13_xyz.te";
+println("after-missing-import");

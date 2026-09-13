@@ -1037,6 +1037,7 @@ ASTNode* parse_file(FILE* file) {
     yyset_lineno(1, scanner);
     g_vm.lex_line = 1;
     g_vm.decl_stmt_line = 0;
+    g_vm.import_errors = 0;
     g_vm.parse_scanner = scanner;
 
     int parse_result = yyparse(scanner, ctx);

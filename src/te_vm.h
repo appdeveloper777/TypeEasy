@@ -87,6 +87,8 @@ typedef struct TeVM {
     int test_failed, test_assertions;
     int capture_errors;                 /* yyerror acumula en syntax_errors[] en vez de imprimir */
     TeErr syntax_errors[64]; int syntax_error_count;
+    int import_errors;                  /* imports no abiertos en el parse actual (parser.l); main avisa o aborta */
+    int strict_imports;                 /* --strict-imports / TYPEEASY_STRICT_IMPORTS=1: import ausente = exit 1 */
     /* --- flags de la capa DB (db_params.c), configurables por env --- */
     int db_empty_as_null, db_strict_errors, db_envelope;
     /* --- hooks de evaluación para te_json.c (los registra interpret_ast) --- */

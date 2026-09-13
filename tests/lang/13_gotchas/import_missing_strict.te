@@ -1,0 +1,8 @@
+// Gotcha ERP B13: con TYPEEASY_STRICT_IMPORTS=1 (o --strict-imports) un
+// `import` que no se puede abrir es FATAL: exit 1 antes de ejecutar nada.
+// env: TYPEEASY_STRICT_IMPORTS=1
+// expect-exit: 1
+// expect:
+// expect-stderr-contains: import(s) could not be opened (strict imports); aborting
+import "does_not_exist_b13_xyz.te";
+println("must-not-run");

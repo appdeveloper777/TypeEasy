@@ -108,13 +108,22 @@
         FILE *f = fopen(path, "r");
         if (!f) {
             fprintf(stderr, "[IMPORT] Error: Cannot open import file %s\n", path);
-            // Don't exit, just continue (maybe warn)
+            /* No se aborta desde el lexer: se cuenta y main() decide (warning por
+             * defecto, exit 1 con --strict-imports); --syntax-check lo reporta. */
+            g_vm.import_errors++;
+            if (g_vm.capture_errors) {
+                char imsg[256];
+                snprintf(imsg, sizeof(imsg), "cannot open import file '%.200s'", path);
+                te_capture_error(yylineno, imsg, "import");
+            }
         } else {
             fprintf(stderr, "[IMPORT] Lexer including: %s\n", path);
             te_mark_as_imported(ctx, path);
             
             if (ctx->include_stack_ptr >= TE_MAX_INCLUDE_DEPTH) {
                 fprintf(stderr, "[IMPORT] Error: Includes nested too deeply\n");
+                g_vm.import_errors++;
+                if (g_vm.capture_errors) te_capture_error(yylineno, "import nested too deeply", "import");
                 fclose(f);
             } else {
                 int sp = ctx->include_stack_ptr;

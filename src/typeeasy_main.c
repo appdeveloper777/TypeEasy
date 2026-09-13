@@ -434,6 +434,7 @@ for (int vi = 1; vi < argc; vi++) {
         printf("  --host <h>             Bind host for --api (default 0.0.0.0)\n");
         printf("  --workers <n>          Prefork n worker processes for --api (default 1)\n");
         printf("  --cors-origin <url>    Allowed CORS origin (default *)\n");
+        printf("  --strict-imports       Abort (exit 1) if an `import` file cannot be opened (env TYPEEASY_STRICT_IMPORTS=1)\n");
         printf("  --profile              Per-fn timings (self/incl ms, calls); per request in --api\n");
         return 0;
     }
@@ -571,6 +572,23 @@ static int te_main_invoke(const char *invoke_func) {
     return 0;
 }
 
+/* Imports que no se pudieron abrir (g_vm.import_errors, parser.l). Por defecto
+ * el programa sigue sin esos archivos (compat) con UNA linea resumen de aviso;
+ * con --strict-imports / TYPEEASY_STRICT_IMPORTS=1 devuelve 1 para abortar: un
+ * typo de ruta o un modulo no copiado no debe arrancar "sano" con sus
+ * endpoints ausentes (404 silencioso, gotcha ERP B13). */
+static int te_main_imports_failed(const char *script_path) {
+    if (g_vm.import_errors <= 0) return 0;
+    if (g_vm.strict_imports) {
+        fprintf(stderr, "%s: error: %d import(s) could not be opened (strict imports); aborting\n",
+                script_path, g_vm.import_errors);
+        return 1;
+    }
+    fprintf(stderr, "[IMPORT] WARNING: %d import(s) could not be opened; their classes/endpoints are NOT loaded. "
+                    "Use --strict-imports (or TYPEEASY_STRICT_IMPORTS=1) to fail fast.\n", g_vm.import_errors);
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
 
     const char* debug_env = getenv("TYPEEASY_DEBUG");
@@ -590,6 +608,10 @@ int main(int argc, char *argv[]) {
         if (e2 && (!strcmp(e2, "1") || !strcmp(e2, "true") || !strcmp(e2, "yes"))) g_vm.db_strict_errors = 1;
         const char* e3 = getenv("TYPEEASY_SQL_ENVELOPE");
         if (e3 && (!strcmp(e3, "1") || !strcmp(e3, "true") || !strcmp(e3, "yes"))) g_vm.db_envelope = 1;
+        /* TYPEEASY_STRICT_IMPORTS=1: un `import` que no se puede abrir aborta el
+         * arranque (exit 1) en vez de solo loguearse y seguir sin ese modulo. */
+        const char* e4 = getenv("TYPEEASY_STRICT_IMPORTS");
+        if (e4 && (!strcmp(e4, "1") || !strcmp(e4, "true") || !strcmp(e4, "yes"))) g_vm.strict_imports = 1;
     }
 
     /* --version / -v / --help / -h: respondidos antes de parsear nada mas. */
@@ -648,6 +670,8 @@ int main(int argc, char *argv[]) {
             api_mode = 1;
         } else if (strcmp(argv[i], "--dev") == 0) {
             dev_mode = 1;
+        } else if (strcmp(argv[i], "--strict-imports") == 0) {
+            g_vm.strict_imports = 1;
         } else if (strcmp(argv[i], "--profile") == 0) {
 #ifdef _WIN32
             _putenv("TYPEEASY_PROFILE=1"); _putenv("TYPEEASY_PROF_FN=1");
@@ -772,6 +796,9 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "%s: error: could not parse file (see syntax errors above)\n", script_path);
         return 1;
     }
+
+    /* Imports que no se pudieron abrir (parser.l los cuenta). */
+    if (te_main_imports_failed(script_path)) return 1;
 
     if (emit_wat_mode || emit_wasm_mode) return te_main_emit(script_ast, emit_wat_mode, emit_wasm_mode, output_path);
 
