@@ -146,10 +146,26 @@ static int te_mongo_key_is_dangerous(const char *key) {
     return 0;
 }
 
-/* Copia recursivamente `iter` en `out`, omitiendo claves peligrosas de
- * cualquier documento embebido (los índices de array no se filtran, ya que
- * "0", "1", ... nunca son operadores). */
-static void te_mongo_sanitize_copy(bson_iter_t *iter, bson_t *out, int is_array) {
+/* Un valor puede ser un operador peligroso sin que su CLAVE lo delate:
+ * bson_new_from_json() convierte el Extended JSON legacy
+ * {"$regex": "...", "$options": "..."} (y $code/$code+$scope) directamente
+ * en un valor BSON_TYPE_REGEX/CODE/CODEWSCOPE *nativo* en el momento del
+ * parseo -- nunca sobrevive como un sub-documento con una clave "$regex"
+ * literal, así que el filtro por nombre de clave nunca lo ve. $regex permite
+ * el mismo bypass de autenticación que $ne (además de extracción de datos
+ * carácter a carácter); $code/$code+$scope ejecutan JavaScript si $where
+ * está habilitado en el servidor. Se descartan por tipo, en cualquier
+ * profundidad, sea cual sea la clave que los contenga. */
+static int te_mongo_type_is_dangerous(bson_type_t t) {
+    return t == BSON_TYPE_REGEX || t == BSON_TYPE_CODE || t == BSON_TYPE_CODEWSCOPE;
+}
+
+/* Copia recursivamente `iter` en `out`, omitiendo claves/valores peligrosos
+ * de cualquier documento embebido (los índices de array no se filtran, ya
+ * que "0", "1", ... nunca son operadores). Marca `*dropped` en 1 si se
+ * omitió algo, para que el llamador pueda distinguir "filtro vacío porque el
+ * cliente mandó {}" de "filtro vacío porque le vaciamos todo el contenido". */
+static void te_mongo_sanitize_copy(bson_iter_t *iter, bson_t *out, int is_array, int *dropped) {
     uint32_t idx = 0;
     while (bson_iter_next(iter)) {
         const char *key = bson_iter_key(iter);
@@ -159,9 +175,14 @@ static void te_mongo_sanitize_copy(bson_iter_t *iter, bson_t *out, int is_array)
             snprintf(idxbuf, sizeof idxbuf, "%u", idx++);
             use_key = idxbuf;
         } else if (te_mongo_key_is_dangerous(key)) {
+            if (dropped) *dropped = 1;
             continue;
         }
         bson_type_t t = bson_iter_type(iter);
+        if (te_mongo_type_is_dangerous(t)) {
+            if (dropped) *dropped = 1;
+            continue;
+        }
         if (t == BSON_TYPE_DOCUMENT || t == BSON_TYPE_ARRAY) {
             const uint8_t *cdata = NULL;
             uint32_t clen = 0;
@@ -174,11 +195,11 @@ static void te_mongo_sanitize_copy(bson_iter_t *iter, bson_t *out, int is_array)
                     bson_t child_out;
                     if (t == BSON_TYPE_DOCUMENT) {
                         bson_append_document_begin(out, use_key, -1, &child_out);
-                        te_mongo_sanitize_copy(&child_iter, &child_out, 0);
+                        te_mongo_sanitize_copy(&child_iter, &child_out, 0, dropped);
                         bson_append_document_end(out, &child_out);
                     } else {
                         bson_append_array_begin(out, use_key, -1, &child_out);
-                        te_mongo_sanitize_copy(&child_iter, &child_out, 1);
+                        te_mongo_sanitize_copy(&child_iter, &child_out, 1, dropped);
                         bson_append_array_end(out, &child_out);
                     }
                 }
@@ -192,13 +213,23 @@ static void te_mongo_sanitize_copy(bson_iter_t *iter, bson_t *out, int is_array)
 }
 
 /* Reemplaza `filter` por una copia saneada (sin operadores `$`/claves con
- * '.') y libera el original. Siempre devuelve un bson_t* válido. */
-static bson_t *te_mongo_sanitize_filter(bson_t *filter) {
+ * '.'/valores regex-o-code) y libera el original. Siempre devuelve un
+ * bson_t* válido. Si el filtro original traía contenido pero TODO terminó
+ * descartado por peligroso, un `{}` resultante en el nivel superior
+ * matchearía la colección entera (fail-open) -- en ese caso deja `*rejected`
+ * en 1 para que el llamador corte la query en vez de ejecutarla. */
+static bson_t *te_mongo_sanitize_filter(bson_t *filter, int *rejected) {
+    if (rejected) *rejected = 0;
     bson_iter_t iter;
     if (!filter || !bson_iter_init(&iter, filter)) return filter ? filter : bson_new();
+    int had_keys = bson_count_keys(filter) > 0;
+    int dropped = 0;
     bson_t *out = bson_new();
-    te_mongo_sanitize_copy(&iter, out, 0);
+    te_mongo_sanitize_copy(&iter, out, 0, &dropped);
     bson_destroy(filter);
+    if (had_keys && dropped && bson_count_keys(out) == 0 && rejected) {
+        *rejected = 1;
+    }
     return out;
 }
 
@@ -237,7 +268,18 @@ static int te_mongo_query(ASTNode *node, ASTNode *args) {
     } else {
         filter = bson_new();
     }
-    filter = te_mongo_sanitize_filter(filter);
+    int filter_rejected = 0;
+    filter = te_mongo_sanitize_filter(filter, &filter_rejected);
+    if (filter_rejected) {
+        /* El filtro traia solo operadores peligrosos: si los hubieramos
+         * dejado pasar como {} el query matchearia la coleccion entera.
+         * Preferimos devolver vacio a arriesgar un dump completo. */
+        fprintf(stderr, "[mongo_query] filter rejected: only dangerous operators/keys present\n");
+        bson_destroy(filter);
+        free(coll_name); if (filter_json) free(filter_json); if (fmt) free(fmt);
+        H->set_ret_str("[]");
+        return 1;
+    }
 
     const char *db_name = g_pool_db[slot] ? g_pool_db[slot] : "test";
     mongoc_collection_t *coll = mongoc_client_get_collection(g_pool[slot], db_name, coll_name);
