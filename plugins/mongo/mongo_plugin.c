@@ -181,6 +181,22 @@ static void te_mongo_sanitize_copy(bson_iter_t *iter, bson_t *out, int is_array,
         bson_type_t t = bson_iter_type(iter);
         if (te_mongo_type_is_dangerous(t)) {
             if (dropped) *dropped = 1;
+            /* A diferencia de una clave peligrosa (nunca es un campo que la
+             * app haya elegido filtrar por si misma -- descartarla no quita
+             * ninguna restriccion real), un valor de tipo peligroso puede
+             * colgar de una clave perfectamente legitima elegida por la app,
+             * p.ej. {"username":"admin","password":{"$regex":".*"}}. Si
+             * simplemente saltamos el par, "password" desaparece del filtro
+             * entero -- el chequeo de contraseña se esfuma aunque "username"
+             * sobreviva, y el chequeo de "todo quedo vacio" de
+             * te_mongo_sanitize_filter no lo detecta porque el documento NO
+             * queda vacio. En vez de descartar el par, dejamos la clave con
+             * un sub-documento vacio: el campo sigue siendo exigido, pero
+             * como valor `{}` jamas matchea un dato real (string/numero/...),
+             * asi que la restriccion se vuelve mas estricta, nunca mas laxa. */
+            bson_t empty_child;
+            bson_append_document_begin(out, use_key, -1, &empty_child);
+            bson_append_document_end(out, &empty_child);
             continue;
         }
         if (t == BSON_TYPE_DOCUMENT || t == BSON_TYPE_ARRAY) {
