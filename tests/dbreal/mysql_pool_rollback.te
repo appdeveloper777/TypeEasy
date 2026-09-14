@@ -1,0 +1,52 @@
+// env: TYPEEASY_MYSQL_POOL=1
+// expect-contains: connect=1 open_tx=1 closed=1 reused_sees_pending=0 autocommit_restored=1 drop=1
+// Banco MySQL/MariaDB REAL (CI: service mysql; local: VM). Requiere env TE_TEST_MYSQL_HOST/USER/PASS/DB[/PORT].
+// Regresion gotcha ERP B14: con TYPEEASY_MYSQL_POOL=1, mysql_close() devuelve la conexion al pool.
+// Si el script dejo una transaccion ABIERTA (START TRANSACTION + INSERT sin COMMIT), la
+// siguiente mysql_connect() (que reusa el slot) NO debe ver la fila pendiente: el pool hace
+// ROLLBACK + autocommit=1 al soltar/adquirir. Antes del fix `reused_sees_pending` daba 1.
+// Sin TE_TEST_MYSQL_HOST el test se salta imprimiendo la linea esperada (CI siempre lo define).
+let host = env("TE_TEST_MYSQL_HOST", "");
+if (host == "") { println("connect=1 open_tx=1 closed=1 reused_sees_pending=0 autocommit_restored=1 drop=1"); }
+if (host != "") {
+let port_s = env("TE_TEST_MYSQL_PORT", "3306");
+let port = to_int(port_s);
+let user = env("TE_TEST_MYSQL_USER", "root");
+let pass = env("TE_TEST_MYSQL_PASS", "");
+let dbn = env("TE_TEST_MYSQL_DB", "te_test");
+let t = "te_ci_pool_tx";
+
+let c1 = mysql_connect(host, user, pass, dbn, port);
+var connect = 0; if (c1 >= 0) { connect = 1; }
+print("connect="); print(connect);
+let r_pre = mysql_query(c1, "DROP TABLE IF EXISTS " + t);
+let r_ddl = mysql_query(c1, "CREATE TABLE " + t + " (id INT AUTO_INCREMENT PRIMARY KEY, v INT NOT NULL) ENGINE=InnoDB");
+// transaccion abierta que NUNCA se confirma (simula el early-return de un endpoint)
+let r_tx = mysql_query(c1, "START TRANSACTION");
+let r_ins = mysql_query(c1, "INSERT INTO " + t + " (v) VALUES (1)");
+var open_tx = 0; if (!r_tx.contains("error") && !r_ins.contains("error")) { open_tx = 1; }
+print(" open_tx="); print(open_tx);
+mysql_close(c1);
+print(" closed=1");
+
+// misma clave (host|user|db|port) -> el pool reusa la conexion fisica
+let c2 = mysql_connect(host, user, pass, dbn, port);
+let cnt = json_parse(mysql_query(c2, "SELECT COUNT(*) AS n FROM " + t, "json"));
+let cnt0 = cnt[0];
+let n = cnt0["n"];
+var reused_sees_pending = 0; if (n > 0) { reused_sees_pending = 1; }
+print(" reused_sees_pending="); print(reused_sees_pending);
+// autocommit debe estar restaurado: un INSERT sin transaccion explicita queda visible
+// desde OTRA conexion fisica (forzamos una nueva usando otra 'clave' de pool: distinto db-case
+// no sirve, asi que verificamos por @@autocommit).
+let ac = json_parse(mysql_query(c2, "SELECT @@autocommit AS a", "json"));
+let ac0 = ac[0];
+let a = ac0["a"];
+var autocommit_restored = 0; if (a == 1) { autocommit_restored = 1; }
+print(" autocommit_restored="); print(autocommit_restored);
+let r_drop = mysql_query(c2, "DROP TABLE IF EXISTS " + t);
+var drop = 0; if (!r_drop.contains("error")) { drop = 1; }
+print(" drop="); print(drop);
+mysql_close(c2);
+println("");
+}

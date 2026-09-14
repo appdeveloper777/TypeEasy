@@ -47,6 +47,17 @@ static char *pool_keys[MYSQL_POOL_SIZE] = {NULL};
 static int   pool_in_use[MYSQL_POOL_SIZE] = {0};
 static int pool_enabled_cached = -1;
 
+/* Al devolver una conexión al pool hay que dejarla "limpia": una transacción
+ * abierta por un script que hizo START TRANSACTION y retornó sin COMMIT (early
+ * return / error) heredaría sus escrituras pendientes y locks al siguiente
+ * request que reuse el slot. ROLLBACK + autocommit=1 lo evita; sin pool
+ * mysql_close() ya descarta la transacción. */
+static void pool_reset_session(MYSQL *c) {
+    if (!c) return;
+    mysql_rollback(c);
+    mysql_autocommit(c, 1);
+}
+
 static int pool_enabled(void) {
     if (pool_enabled_cached < 0) {
         const char *v = getenv("TYPEEASY_MYSQL_POOL");
@@ -66,6 +77,7 @@ static int pool_acquire(const char *key) {
                 free(pool_keys[i]); pool_keys[i] = NULL;
                 continue;
             }
+            pool_reset_session(connections[i]); /* defensa: nunca entregar una tx abierta */
             pool_in_use[i] = 1;
             return i;
         }
@@ -83,6 +95,7 @@ static void pool_register(int conn_id, const char *key) {
 static int pool_release(int conn_id) {
     if (!pool_enabled() || conn_id < 0 || conn_id >= MYSQL_POOL_SIZE) return 0;
     if (pool_keys[conn_id]) {
+        pool_reset_session(connections[conn_id]);
         pool_in_use[conn_id] = 0; /* mantén viva la conexión */
         return 1; /* indica al caller "NO cierres" */
     }
@@ -1326,6 +1339,7 @@ void mysql_close_request_conns(void) {
     for (int i = 0; i < MYSQL_POOL_SIZE; i++) {
         if (!connections[i] || !conn_req_scoped[i]) continue;
         if (pool_enabled() && pool_keys[i]) {
+            pool_reset_session(connections[i]);
             pool_in_use[i] = 0;   /* devolver al pool para reuso */
         } else {
             mysql_close(connections[i]);

@@ -169,6 +169,16 @@ let rows = sql_query(db, "SELECT * FROM t", "mysql");
 if (sql_last_error() != "") { response_status(500); return json({ error: sql_last_error() }); }
 ```
 
+### Pool de conexiones MySQL (`TYPEEASY_MYSQL_POOL=1`, opt-in)
+Con la variable activa, `mysql_close()` (y el cierre automático al final de cada
+request) **devuelve la conexión al pool** en vez de cerrarla, y `mysql_connect()`
+con la misma clave `host|user|db|port` la reutiliza (validada con `mysql_ping`).
+Al soltar o adquirir un slot el runtime hace **`ROLLBACK` + `autocommit=1`**:
+una transacción que el script dejó abierta (`START TRANSACTION` + escrituras y un
+`return` sin `COMMIT`) se descarta y nunca la hereda el siguiente request. Sin pool
+(default) `mysql_close()` cierra el socket y el servidor descarta la transacción
+igual. Test: `tests/dbreal/mysql_pool_rollback.te`.
+
 ### `import` estricto (`--strict-imports` / `TYPEEASY_STRICT_IMPORTS=1`)
 Un `import "x.te"` que no se puede abrir **no** aborta por defecto: se loguea
 `[IMPORT] Error: Cannot open import file ...` más una línea resumen
