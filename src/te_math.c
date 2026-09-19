@@ -53,7 +53,8 @@ int te_math_method_dispatch(ASTNode *node, ASTNode *objNode) {
     else { printf("Error: Math.%s not supported.\n", m); return 1; }
 
     ASTNode *r;
-    if (res == (int)res) {
+    /* INT solo si es integral y cabe en 64 bits; el cast a int de 32 bits devolvia FLOAT desde 2^31. */
+    if (res == floor(res) && fabs(res) < 9223372036854775808.0) {
         r = create_ast_leaf_number(TE_T_INT, (long long)res, NULL, NULL);
     } else {
         char buf[64];

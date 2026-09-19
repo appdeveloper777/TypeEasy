@@ -1,0 +1,14 @@
+// Math.* devuelve INT cuando el resultado es integral, tambien mas alla de 2^31 (antes: cast a int de 32 bits -> FLOAT).
+let total = 35; let size = 20;
+let pages : int = Math.ceil(total / size);
+println(pages);
+let big : int = Math.ceil(5000000000 / 2);
+println(big);
+let fl : int = Math.floor(3000000000 / 1);
+println(fl);
+let tr : int = Math.trunc(4000000000 / 1);
+println(tr);
+println(Math.floor(7 / 2));
+println(Math.ceil(1.0 / 4.0));
+println(Math.round(2.5));
+println(Math.floor(7 / 2) + 0.5);
