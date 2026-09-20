@@ -7,8 +7,8 @@ que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 ## 0.1.8 — 2026-09-19
 
 ### Cambios de comportamiento
-- `println` de una lista (literal o variable) imprime `[1, 2]` en vez de `0`;
-  `null` dentro de listas se imprime `null` (`tests/lang/17_collections/lst01*`, `nul01*`).
+- `println([1, 2])` (lista **literal**) imprime `[1, 2]` en vez de `0` (la variable ya
+  funcionaba); `null` dentro de listas se imprime `null` (`tests/lang/17_collections/lst01*`, `nul01*`).
 - `println` de un map (variable) imprime JSON en vez de fallar con segfault
   (`17_collections/map01*`).
 - `println` de una expresión `decimal` imprime el texto canónico (`3.30`) en vez de
