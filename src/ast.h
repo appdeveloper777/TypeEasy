@@ -296,6 +296,13 @@ void  te_reqstate_restore(void *st);
 void  te_coop_register_lock(void (*acq)(void), void (*rel)(void));
 void *te_coop_yield_begin(void);
 void  te_coop_yield_end(void *st);
+/* Serialize .te execution from non-HTTP threads (WebSocket callbacks) behind the
+ * SAME invoke lock as HTTP handlers. Without it a WS handler's per-request reset
+ * closed the MySQL slot an in-flight HTTP handler was using (SIGSEGV in
+ * mysql_stmt_prepare, demo-restaurante 2026-09-20). */
+int   te_coop_lock_registered(void);
+int   te_interp_lock_enter(void);
+void  te_interp_lock_leave(int entered);
 extern __thread int g_te_lock_held;
 /* Set by the server to the current handler's MethodNode.is_async before running
  * its body. te_coop_yield_begin() only releases the invoke lock when this is

@@ -625,18 +625,43 @@ int typeeasy_ws_is_lifecycle(MethodNode *m) {
     return (m && m->ws_lifecycle) ? 1 : 0;
 }
 
+/* Runs a WS handler body with its own fatal-recovery point. Outside an HTTP
+ * request g_vm.runtime_recovery is NULL, so te_runtime_fatalf() would exit(1)
+ * and take the whole worker down; here a runtime error only aborts the WS
+ * handler, cleans per-request state and keeps the connection/process alive. */
+static char *ws_invoke_guarded(MethodNode *m) {
+    jmp_buf recovery;
+    jmp_buf *saved = g_vm.runtime_recovery;
+#if defined(_WIN64) && defined(__MINGW32__)
+    if (_setjmp(recovery, NULL) != 0) {
+#else
+    if (setjmp(recovery) != 0) {
+#endif
+        g_vm.runtime_recovery = saved;
+        runtime_reset_vars_to_initial_state();
+        te_req_abort_cleanup();
+        fprintf(stderr, "[WS] handler %s aborted by a runtime error; connection kept\n",
+                (m && m->name) ? m->name : "?");
+        return NULL;
+    }
+    g_vm.runtime_recovery = &recovery;
+    char *r = typeeasy_embedded_invoke_method(m);
+    g_vm.runtime_recovery = saved;
+    return r;
+}
+
 char *typeeasy_ws_invoke_open(MethodNode *m) {
     if (!m) return NULL;
     if (m->ws_lifecycle) {
         if (!m->ws_on_open) return NULL;       /* on_open is optional */
         ASTNode *saved = m->body;
         m->body = m->ws_on_open;
-        char *r = typeeasy_embedded_invoke_method(m);
+        char *r = ws_invoke_guarded(m);
         m->body = saved;
         return r;
     }
     /* Legacy: the single-shot connect handler is m->body. */
-    return typeeasy_embedded_invoke_method(m);
+    return ws_invoke_guarded(m);
 }
 
 char *typeeasy_ws_invoke_message(MethodNode *m) {
@@ -650,14 +675,14 @@ char *typeeasy_ws_invoke_message(MethodNode *m) {
         add_or_update_variable(m->ws_msg_param, n);
         free_ast(n);
     }
-    return typeeasy_embedded_invoke_method(m);
+    return ws_invoke_guarded(m);
 }
 
 char *typeeasy_ws_invoke_close(MethodNode *m) {
     if (!m || !m->ws_lifecycle || !m->ws_on_close) return NULL;
     ASTNode *saved = m->body;
     m->body = m->ws_on_close;
-    char *r = typeeasy_embedded_invoke_method(m);
+    char *r = ws_invoke_guarded(m);
     m->body = saved;
     return r;
 }

@@ -1,0 +1,40 @@
+// Regression fixture: WebSocket callbacks vs HTTP handlers must be serialized
+// behind the SAME interpreter lock (0.1.9). Until 0.1.8 te_websocket.c ran the
+// .te handler under its own mutex, concurrently with an in-flight HTTP handler:
+// its end-of-request reset wiped the HTTP handler's variables and closed its
+// request-scoped DB connections (production SIGSEGV in mysql_stmt_prepare,
+// demo-restaurante 2026-09-20).
+//
+// /slow holds the interpreter lock ~700 ms (blocking sleep in a sync handler)
+// and then reads a local declared BEFORE the sleep. If a WS handler ran in the
+// middle, `marker` is gone -> 500 (or a crash). /ws/boom hits a runtime fatal
+// inside a WS handler: without a recovery point that was exit(1).
+
+endpoint {
+
+    [HttpGet("/ok")]
+    ok() {
+        return json("{\"ok\":1}");
+    }
+
+    [HttpGet("/slow")]
+    slow() {
+        let marker = concat("ALIVE-", request_query("id"));
+        sleep_async(700);
+        return json(concat("{\"marker\":\"", marker, "\"}"));
+    }
+
+    [WebSocket("/ws/test")]
+    ws_test() {
+        ws_subscribe("t");
+        // literal a proposito: ws_send() solo resuelve literal/identificador (te_arg_string)
+        ws_send("hello");
+    }
+
+    [WebSocket("/ws/boom")]
+    ws_boom() {
+        let x = funcion_que_no_existe(1);
+        ws_subscribe("b");
+    }
+
+}

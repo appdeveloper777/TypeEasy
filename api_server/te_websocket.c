@@ -14,12 +14,17 @@
  *   - HTTP request handlers (or any code in the interpreter) can call
  *     ws_broadcast("topic", payload) at any time; we walk the conn list, send
  *     to those subscribed, and prune dead ones.
- *   - We hold a global interpreter lock (g_lock) around any invocation of
- *     typeeasy_embedded_invoke_method() because the AST runtime is not
- *     thread-safe. HTTP requests are already serialized through the same lock.
- *     (Reviewer note: this trades concurrency for correctness; the chess use
- *     case is fine — TypeEasy's runtime can't safely run two handlers at once
- *     anyway due to globals like g_req_query.)
+ *   - g_lock protects ONLY the connection registry (g_conns/channels). It is NOT
+ *     the interpreter lock: HTTP handlers are serialized by the server's invoke
+ *     lock (typeeasy_api_server.c). Every callback that touches interpreter state
+ *     (typeeasy_http_*, typeeasy_embedded_invoke_method) must first take that
+ *     invoke lock via te_interp_lock_enter(). Until 0.1.9 the WS thread ran .te
+ *     code under g_lock alone, concurrently with an HTTP handler: its per-request
+ *     reset closed the MySQL slot the HTTP handler was using -> SIGSEGV inside
+ *     mysql_stmt_prepare (demo-restaurante, 2026-09-20).
+ *   - Lock order is ALWAYS invoke lock -> g_lock. ws_broadcast() (called from HTTP
+ *     handlers that already hold the invoke lock) only takes g_lock, so that order
+ *     is consistent and deadlock-free.
  */
 #include "te_websocket.h"
 
@@ -44,6 +49,10 @@ int   typeeasy_ws_is_lifecycle(struct MethodNode *m);
 char *typeeasy_ws_invoke_open(struct MethodNode *m);
 char *typeeasy_ws_invoke_message(struct MethodNode *m);
 char *typeeasy_ws_invoke_close(struct MethodNode *m);
+
+/* Server invoke lock (defined in src/ast.c, registered by the API server). */
+int  te_interp_lock_enter(void);
+void te_interp_lock_leave(int entered);
 
 /* HTTP state setters (defined in src/ast.c) — we reuse the same machinery for
  * passing path params and query string into the .te handler. */
@@ -242,6 +251,7 @@ static int cb_connect(const struct mg_connection *conn, void *cbdata) {
 
     /* Reset shared HTTP state and re-populate so the handler invocation in
      * cb_ready can see request_param/request_query. */
+    int held = te_interp_lock_enter();
     pthread_mutex_lock(&g_lock);
     typeeasy_http_reset();
     typeeasy_http_set_method("WS");
@@ -252,6 +262,7 @@ static int cb_connect(const struct mg_connection *conn, void *cbdata) {
         fprintf(stderr, "[WS] reject: pattern %s != uri %s\n", handler->route_path, uri);
         typeeasy_http_reset();
         pthread_mutex_unlock(&g_lock);
+        te_interp_lock_leave(held);
         return 1;
     }
     ws_populate_query(req->query_string);
@@ -262,6 +273,7 @@ static int cb_connect(const struct mg_connection *conn, void *cbdata) {
     /* leave lock held? No — we'll re-lock in cb_ready. Other handlers may run
      * between cb_connect and cb_ready; this isn't a hot path. */
     pthread_mutex_unlock(&g_lock);
+    te_interp_lock_leave(held);
     fprintf(stderr, "[WS] accept %s\n", uri);
     return 0;
 }
@@ -271,10 +283,12 @@ static int cb_connect(const struct mg_connection *conn, void *cbdata) {
 static void cb_ready(struct mg_connection *conn, void *cbdata) {
     MN *handler = (MN*)cbdata;
 
+    int held = te_interp_lock_enter();
     pthread_mutex_lock(&g_lock);
     TeWsConn *c = conn_new(conn, handler);
     if (!c) {
         pthread_mutex_unlock(&g_lock);
+        te_interp_lock_leave(held);
         return;
     }
     /* Re-populate HTTP state for the handler invocation (cb_connect's state
@@ -297,6 +311,7 @@ static void cb_ready(struct mg_connection *conn, void *cbdata) {
     if (result) free(result);
     typeeasy_http_reset();
     pthread_mutex_unlock(&g_lock);
+    te_interp_lock_leave(held);
 }
 
 /* data: invoked when the client sends a frame. For lifecycle handlers we run
@@ -311,12 +326,13 @@ static int cb_data(struct mg_connection *conn, int bits, char *data, size_t len,
     if (opcode != 0x0 && opcode != 0x1 && opcode != 0x2) return 1; /* ignore ping/pong */
     if (!handler || !typeeasy_ws_is_lifecycle((struct MethodNode*)handler)) return 1;
 
+    int held = te_interp_lock_enter();
     pthread_mutex_lock(&g_lock);
     TeWsConn *c = NULL;
     for (TeWsConn *it = g_conns; it; it = it->next) {
         if (it->mg_conn == conn) { c = it; break; }
     }
-    if (!c) { pthread_mutex_unlock(&g_lock); return 1; }
+    if (!c) { pthread_mutex_unlock(&g_lock); te_interp_lock_leave(held); return 1; }
 
     /* Re-populate HTTP state so request_param/request_query/request_body work
      * inside the on_message body (state is shared and may have been clobbered
@@ -351,6 +367,7 @@ static int cb_data(struct mg_connection *conn, int bits, char *data, size_t len,
     if (result) free(result);
     typeeasy_http_reset();
     pthread_mutex_unlock(&g_lock);
+    te_interp_lock_leave(held);
     return 1;
 }
 
@@ -358,6 +375,7 @@ static int cb_data(struct mg_connection *conn, int bits, char *data, size_t len,
  * remove the connection from the registry. */
 static void cb_close(const struct mg_connection *conn, void *cbdata) {
     MN *handler = (MN*)cbdata;
+    int held = te_interp_lock_enter();
     pthread_mutex_lock(&g_lock);
     for (TeWsConn *c = g_conns; c; c = c->next) {
         if (c->mg_conn == conn) {
@@ -383,6 +401,7 @@ static void cb_close(const struct mg_connection *conn, void *cbdata) {
         }
     }
     pthread_mutex_unlock(&g_lock);
+    te_interp_lock_leave(held);
 }
 
 /* ===== Public API ===== */

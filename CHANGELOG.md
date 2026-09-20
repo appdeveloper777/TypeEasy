@@ -4,9 +4,36 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
-## 0.1.8 — 2026-09-19
+## 0.1.8 — 2026-09-19 (re-tag 2026-09-20 con el fix WebSocket)
+
+> El tag `v0.1.8` se movió el 2026-09-20 (3fa67c6 → commit del fix) porque el build
+> original crasheaba en producción con WebSocket + HTTP concurrentes. Los assets del
+> release se regeneraron; si descargaste 0.1.8 antes de esa fecha, verificá el SHA.
 
 ### Cambios de comportamiento
+- **WebSocket y HTTP comparten UN solo lock de intérprete.** Hasta el primer build de
+  0.1.8 los callbacks WS (`connect/ready/data/close`) ejecutaban el handler `.te` bajo
+  un mutex propio, en paralelo con un handler HTTP en curso: el reset de fin de request
+  del hilo WS borraba las variables del handler HTTP y cerraba sus conexiones DB
+  request-scoped (**SIGSEGV en `mysql_stmt_prepare`**, demo-restaurante 2026-09-20; el
+  bug existía desde que hay WebSocket nativo, 0.0.2x). Ahora los callbacks WS toman el
+  invoke lock del servidor (orden `invoke → g_lock`, sin deadlock con `ws_broadcast`).
+  Consecuencia observable: un handler WS espera su turno FIFO detrás de los HTTP en
+  curso (`tests/regress/run_ws_http_lock.py`).
+- Un error fatal de runtime dentro de un handler WS ya **no termina el proceso**
+  (`exit(1)`): se aborta solo ese handler, se limpia el estado por request y la
+  conexión/proceso siguen vivos (mismo test, fase 2).
+
+### Interno
+- `te_interp_lock_enter/leave` (`src/ast.c`) para hilos no-HTTP que ejecutan `.te`;
+  `ws_invoke_guarded` (`src/typeeasy_api.c`) instala el `setjmp` de recuperación en
+  la ruta WS. Test bloqueante en `scripts/run_asan_tests.sh` y `scripts/_regress_full.sh`.
+
+### Limitaciones conocidas
+- `ws_send(expr)` solo resuelve un **literal o identificador** (`te_arg_string`);
+  `ws_send(concat(...))` no envía nada en silencio (pre-existente, sin corregir aquí).
+
+### Cambios de comportamiento (build original 2026-09-19)
 - `println([1, 2])` (lista **literal**) imprime `[1, 2]` en vez de `0` (la variable ya
   funcionaba); `null` dentro de listas se imprime `null` (`tests/lang/17_collections/lst01*`, `nul01*`).
 - `println` de un map (variable) imprime JSON en vez de fallar con segfault

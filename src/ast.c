@@ -2764,6 +2764,25 @@ void te_coop_register_lock(void (*acq)(void), void (*rel)(void)) {
     g_coop_lock_rel = rel;
 }
 
+int te_coop_lock_registered(void) {
+    return (g_coop_lock_acq && g_coop_lock_rel) ? 1 : 0;
+}
+
+/* Entry point for NON-HTTP threads that must run .te code (WebSocket callbacks):
+ * take the same invoke lock the HTTP handlers hold, so two interpreters never run
+ * at once over the shared VM/DB-slot state. Returns 1 when this call took the lock
+ * (pass it to te_interp_lock_leave); 0 when no server lock is registered (CLI) or
+ * this thread already holds it. */
+int te_interp_lock_enter(void) {
+    if (!g_coop_lock_acq || g_te_lock_held) return 0;
+    g_coop_lock_acq();
+    return 1;
+}
+
+void te_interp_lock_leave(int entered) {
+    if (entered && g_coop_lock_rel) g_coop_lock_rel();
+}
+
 /* Begin a cooperative yield: if we currently hold the server invoke lock, save
  * our request state and release it (letting another request run). Returns an
  * opaque stash to pass to te_coop_yield_end(), or NULL when not under the
