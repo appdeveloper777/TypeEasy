@@ -1,0 +1,32 @@
+// args: --fmt
+// expect-exit: 0
+// Entrada DESORDENADA: --fmt debe producir exactamente fmt_messy.expected (mismo programa, solo whitespace).
+let nombre = "  espacios   dentro  ";
+var total : int = 0;
+class Linea {
+    cantidad : int;
+    __constructor(_c : int) {
+        this.cantidad = _c;
+    }
+    Total() : int {
+        return this.cantidad * 2;
+    }
+}
+let f = fn(a, b) => {
+    if (a > b && b != 0) {
+        return a - b;
+    } else {
+        return -a;
+    }
+};
+for (i = 0; 3; 1) {
+    total = total + i; // acumula
+}
+for (var j = 10; j >= 0; j -= 5) {
+    total += j;
+}
+let m = { "from": 1, "n": total >= 0 ? "pos" : "neg" };
+let t = total > 0 ? f(total, 1) : f(1, total);
+let s = $"total={total}";
+let z = m?.nope ?? "default";
+println(s + " " + z + " " + (1 << 4) + " " + Math.ceil(35 / 20));

@@ -1,0 +1,8 @@
+// spec: SCP-2
+// args: --syntax-check
+// expect-contains: "ok":false
+// expect-contains: "near":"{"
+// Un bloque { } suelto no es una sentencia; los bloques solo existen como cuerpo de if/while/for/fn/try.
+let x = 5;
+{ let y = 9; println(y); }
+println(x);

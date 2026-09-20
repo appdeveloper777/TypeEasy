@@ -1,3 +1,4 @@
+// spec: FN-1
 // expect: 2 4 6
 let nums = [1, 2, 3];
 let doubled = nums.map(fn(x) => x * 2);

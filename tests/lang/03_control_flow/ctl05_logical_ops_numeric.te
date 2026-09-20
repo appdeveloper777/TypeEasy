@@ -1,0 +1,7 @@
+// spec: CTL-5
+// && || ! evaluan sus operandos como NUMEROS: un string no numerico vale 0 (a diferencia de if).
+// Usar comparaciones explicitas (s != "").
+println(1 && 0); println(1 || 0); println(!1); println(!0);
+println(true && "x"); println(0 || "x"); println(!"x"); println(!"");
+let s = "x";
+println(true && s != "");

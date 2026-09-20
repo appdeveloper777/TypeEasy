@@ -1,3 +1,4 @@
+// spec: FN-1
 // expect: 25
 let sq = fn(x) => x * x;
 println(sq(5));

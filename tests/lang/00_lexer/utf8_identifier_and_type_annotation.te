@@ -1,0 +1,9 @@
+// spec: LEX-1, DECL-4
+// expect-exit: 1
+// expect-contains: configuración=5
+// expect-stderr-contains: cannot assign a value of type 'STRING' to a variable of type 'INT'
+// UTF-8 en comentarios e identificadores (ñ, acentos) es válido; la anotación de tipo se valida en runtime.
+let configuración = 5;
+println("configuración=" + configuración);
+let n : int = "x";
+println(n);

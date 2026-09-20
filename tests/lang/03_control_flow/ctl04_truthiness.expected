@@ -1,0 +1,10 @@
+0 false
+vacio false
+str false
+cmp true
+float true
+neg true
+null false
+lista false
+map false
+length ok

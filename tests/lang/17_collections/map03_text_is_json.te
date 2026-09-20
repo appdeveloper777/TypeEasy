@@ -1,0 +1,8 @@
+// spec: MAP-3
+// println(map) == "" + map == json(map) (texto JSON). {} vacio tiene length 0.
+let empty = {};
+println(empty); println(empty.length); println(json(empty));
+let m = { "a": 1, "b": [1, 2], "c": { "d": null } };
+println(m);
+println("" + m);
+println(json(m));

@@ -13,11 +13,11 @@ from __future__ import annotations
 import argparse, os, re, subprocess, sys
 from pathlib import Path
 
-DIRECTIVE_RE = re.compile(r"^\s*//\s*(skip|skip-on|env|timeout|nondeterministic)\s*:\s*(.*)$")
+DIRECTIVE_RE = re.compile(r"^\s*//\s*(skip|skip-on|env|timeout|nondeterministic|args)\s*:\s*(.*)$")
 
 
 def directives(p: Path):
-    out = {"skip": None, "skip-on": None, "env": [], "timeout": None, "nondeterministic": None}
+    out = {"skip": None, "skip-on": None, "env": [], "timeout": None, "nondeterministic": None, "args": []}
     try:
         for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines()):
             if i > 40:
@@ -28,6 +28,8 @@ def directives(p: Path):
             k, v = m.group(1), m.group(2).strip()
             if k == "env":
                 out["env"].append(v)
+            elif k == "args":
+                out["args"].extend(v.split())
             else:
                 out[k] = v
     except OSError:
@@ -35,9 +37,9 @@ def directives(p: Path):
     return out
 
 
-def run(bin_path, te, env, timeout, cwd):
+def run(bin_path, te, env, timeout, cwd, args=()):
     try:
-        r = subprocess.run([bin_path, te.name], cwd=cwd, env=env, capture_output=True,
+        r = subprocess.run([bin_path, *args, te.name], cwd=cwd, env=env, capture_output=True,
                            timeout=timeout)
         return r.returncode, r.stdout
     except subprocess.TimeoutExpired:
@@ -67,8 +69,8 @@ def main():
         timeout = int(d["timeout"]) if d["timeout"] else a.timeout
         env_bc = dict(env); env_bc.pop("TYPEEASY_NO_BC", None)
         env_nobc = dict(env); env_nobc["TYPEEASY_NO_BC"] = "1"
-        rc1, out1 = run(bin_path, te, env_bc, timeout, str(te.parent))
-        rc2, out2 = run(bin_path, te, env_nobc, timeout, str(te.parent))
+        rc1, out1 = run(bin_path, te, env_bc, timeout, str(te.parent), d["args"])
+        rc2, out2 = run(bin_path, te, env_nobc, timeout, str(te.parent), d["args"])
         ran += 1
         if rc1 != rc2 or out1 != out2:
             diffs.append((te, rc1, rc2, out1, out2))

@@ -1,3 +1,4 @@
+// spec: CLS-1
 // Regression: method returns that produce a STRING (concatenation with a
 // field) and a BOOL (comparison) must be typed correctly, not collapsed to
 // int. Also covers fields set externally (p.name=...) read via this inside a

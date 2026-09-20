@@ -1,0 +1,10 @@
+// spec: FN-2
+var counter = 0;
+let inc = fn() => { counter = counter + 1; return counter; };
+inc(); inc();
+println(counter);
+let mk = fn(k) => { return fn(x) => x + k; };
+let add10 = mk(10);
+println(add10(5));
+let hof = fn(g, v) => g(v);
+println(hof(fn(x) => x * 3, 7));

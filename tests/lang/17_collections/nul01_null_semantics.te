@@ -1,0 +1,9 @@
+// spec: NUL-1
+var v = null;
+println(v == null); println(null == null); println(v == 0); println("" == null);
+println(v ?? "def");
+let q = v ?? 5; println(q);
+println("" + v);
+println(v?.campo);
+let w = v?.campo; println("" + w);
+println(v);

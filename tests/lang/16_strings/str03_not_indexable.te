@@ -1,0 +1,8 @@
+// spec: STR-3
+// Los strings NO se indexan con []: el acceso s[i] no es una lista (imprime el error y sigue).
+// Para un caracter usar substring/substr.
+let s = "hola";
+println(s.substr(0, 1));
+println(s.substring(3, 4));
+println(s[0]);
+println("fin");

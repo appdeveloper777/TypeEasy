@@ -1,0 +1,6 @@
+// spec: STR-1
+let s = "  Hola Mundo  ";
+println(s.length);
+println("abc".length);
+println("".length);
+println(s.trim().length);

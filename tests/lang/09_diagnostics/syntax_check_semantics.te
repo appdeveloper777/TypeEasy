@@ -1,7 +1,13 @@
-// xfail: --syntax-check debe reportar 5 errores semanticos en este archivo (ver tests/lang/09_diagnostics/README)
-// Este archivo NO se ejecuta como test de runtime (marcado xfail); su proposito es
-// servir de fixture para: typeeasy --syntax-check syntax_check_semantics.te
-// Esperado: ok=false con S1 (L6, L13), S2 (L23), S3 (L24), S4 (L26).
+// spec: DECL-2, CTL-1, CTL-3
+// args: --syntax-check
+// expect-contains: "ok":false
+// expect-contains: cannot assign to constant variable 'total'
+// expect-contains: cannot assign to constant variable 'acc'
+// expect-contains: the 2nd field is an exclusive LIMIT, not a condition
+// expect-contains: the 3rd field is the STEP to add
+// expect-contains: for-in expects a list
+// --syntax-check debe reportar 5 errores semanticos en este archivo (ver tests/lang/09_diagnostics/README).
+// Esperado: ok=false con S1 (L11, L18), S2 (L28), S3 (L29), S4 (L31).
 let total = 0;
 total = total + 1;                 // S1: let reasignado
 

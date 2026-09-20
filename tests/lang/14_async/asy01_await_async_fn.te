@@ -1,0 +1,7 @@
+// spec: ASY-1
+// `async fn` crea una tarea; `await <variable>` la ejecuta y devuelve su valor.
+var a = async fn() => { sleep_async(5); return "A"; };
+let r = await a;
+println(r);
+let slow = async fn() => { return "listo"; };
+println(await slow);

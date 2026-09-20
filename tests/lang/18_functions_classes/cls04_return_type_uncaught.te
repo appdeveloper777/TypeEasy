@@ -1,0 +1,7 @@
+// spec: CLS-4
+// expect-exit: 1
+// expect-stderr-contains: Uncaught: TypeError: method 'M' is declared as 'int'
+class T { M() : int { return "texto"; } }
+let t = new T();
+let v = t.M();
+println("no");

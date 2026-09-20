@@ -1,3 +1,4 @@
+// spec: LNQ-1, LNQ-4
 // Matriz LINQ: cada método x contexto (println directo, variable, concat).
 // Regresión de los bugs de stringify de listas (concat y println de método).
 let xs = [3, 1, 4, 1, 5, 9, 2, 6];

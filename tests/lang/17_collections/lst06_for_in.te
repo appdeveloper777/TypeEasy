@@ -1,0 +1,10 @@
+// spec: LST-6, CTL-3
+let nums = [1, 2, 3, 4];
+var acc = 0;
+for (let x in nums) { acc = acc + x; }
+println(acc);
+var seen = "";
+for (let s in ["a", "b"]) { seen = seen + s; }
+println(seen);
+let arr = json_parse("[{\"n\":1},{\"n\":2}]");
+for (let it in arr) { println(it["n"]); }

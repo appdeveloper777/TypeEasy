@@ -1,3 +1,4 @@
+// spec: STR-5
 // expect: a=9 b=11 c=12 d=2.5 e=1 f=-5 g=60 h=Hola Ana
 // v0.0.15: interpolación con expresiones reales dentro de ${...} y {...}:
 // aritmética, precedencia, paréntesis, módulo, unario, acceso a miembros y concat.

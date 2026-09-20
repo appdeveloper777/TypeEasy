@@ -1,0 +1,6 @@
+// spec: FN-3
+// expect-exit: 1
+// expect-stderr-contains: expects 2 arguments but 1 was passed
+// Llamar con otra cantidad de argumentos es TypeError fatal (exit 1). --syntax-check lo reporta estaticamente.
+let add = fn(a, b) => a + b;
+println(add(1));

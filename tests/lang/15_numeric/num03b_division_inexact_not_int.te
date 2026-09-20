@@ -1,0 +1,5 @@
+// spec: NUM-3
+// expect-exit: 1
+// expect-stderr-contains: cannot assign a value of type 'FLOAT' to a variable of type 'INT'
+let a : int = 7 / 2;
+println(a);

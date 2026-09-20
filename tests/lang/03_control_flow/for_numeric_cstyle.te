@@ -1,3 +1,4 @@
+// spec: CTL-1
 // expect: a=0 a=1 a=2 b=0 b=2 b=4 lim=0 lim=1 lim=2 lim=3 multi=A0|B0|A1|B1|A2|B2| sum=10
 // C-style numeric for: for(i = START; LIMIT; STEP) { ... }
 //  - LIMIT is an exclusive upper bound (NOT a condition).

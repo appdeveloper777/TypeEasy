@@ -1,3 +1,4 @@
+// spec: CLS-1
 // expect: 5
 // Regression: a method declared with a non-void return type that returns a
 // call expression directly (e.g. `return Math.sqrt(...)`) must NOT raise

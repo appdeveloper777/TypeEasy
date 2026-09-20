@@ -1,3 +1,4 @@
+// spec: CTL-3
 // `for (let i in lst)` introduces a fresh scope; we use indexed iteration to
 // mutate the outer accumulator deterministically across platforms.
 // expect: 6

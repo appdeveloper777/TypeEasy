@@ -286,6 +286,10 @@ void te_capture_error(int line, const char *msg, const char *near) __attribute__
 void te_capture_error(int line, const char *msg, const char *near) {
     (void)line; (void)msg; (void)near;
 }
+void te_capture_warning(int line, const char *msg, const char *near) __attribute__((weak));
+void te_capture_warning(int line, const char *msg, const char *near) {
+    (void)line; (void)msg; (void)near;
+}
 #define TE_JIT_AVAILABLE 1
 #define TE_HAS_MMAP 1
 #define TE_HAS_PTHREAD 1
@@ -307,6 +311,10 @@ void te_capture_error(int line, const char *msg, const char *near) {
  * trata como ERROR duro. typeeasy_main.c provee la def STRONG. */
 void te_capture_error(int line, const char *msg, const char *near) __attribute__((weak));
 void te_capture_error(int line, const char *msg, const char *near) {
+    (void)line; (void)msg; (void)near;
+}
+void te_capture_warning(int line, const char *msg, const char *near) __attribute__((weak));
+void te_capture_warning(int line, const char *msg, const char *near) {
     (void)line; (void)msg; (void)near;
 }
 #endif
@@ -743,6 +751,10 @@ char* te_list_node_to_string(ASTNode *listNode) {
             if (jb.p) free(jb.p);
         } else if (cur->type && strcmp(cur->type, TE_T_OBJECT) == 0) {
             TE_LS_APPEND("object");
+        } else if (cur->type && strcmp(cur->type, TE_T_NULL) == 0) {
+            TE_LS_APPEND("null");   /* igual que "" + null (antes: 0) */
+        } else if (cur->type && strcmp(cur->type, TE_T_DECIMAL) == 0 && cur->str_value) {
+            TE_LS_APPEND(cur->str_value);
         } else {
             snprintf(buf, sizeof(buf), "%lld", (long long)cur->value);
             TE_LS_APPEND(buf);
@@ -8616,6 +8628,9 @@ void te_syntax_check_arity(ASTNode *root) {
  *   S2  `for (i = 0; i < n; 1)`         -> el 2o campo es LIMITE, no condicion
  *   S3  `for (i = 0; n; i < 5)` etc.    -> el 3o campo es PASO, no condicion
  *   S4  `for (let x in 5)` / in "str"   -> el operando debe ser una lista
+ *   S5  `super.m()` / `super`           -> TypeEasy no tiene super (error)
+ *   S6  mysql_query(c, "INSERT ...", {}, "json") -> "json" solo aplica a SELECT (warning)
+ *   S7  `x && "txt"` / `!"txt"`             -> los logicos evaluan numericamente: "txt" vale 0 (warning)
  * Ambitos: cada LAMBDA y cada cuerpo de bloque abre un scope; una `let x` dentro
  * de una fn no bloquea un `x = ...` externo. Conservador: si el nombre no fue
  * declarado en un scope visible, no se marca (puede venir de otro archivo).
@@ -8643,6 +8658,42 @@ static int te_node_is_comparison(ASTNode *n) {
 static void te_sem_error(ASTNode *n, int fallbackLine, const char *msg) {
     g_vm.lex_file_id = n->file_id;
     te_capture_error(n->line > 0 ? n->line : fallbackLine, msg, n->id ? n->id : "");
+}
+static void te_sem_warning(ASTNode *n, int fallbackLine, const char *msg) {
+    g_vm.lex_file_id = n->file_id;
+    te_capture_warning(n->line > 0 ? n->line : fallbackLine, msg, n->id ? n->id : "");
+}
+
+/* S6: llamada a un builtin SQL cuyo SQL literal es una escritura y trae el formato "json". */
+static int te_sem_is_sql_builtin(const char *id) {
+    static const char *names[] = { "mysql_query", "sqlite_query", "postgres_query", "sqlserver_query", "sql_query", "db_query", NULL };
+    for (int i = 0; names[i]; i++) if (strcmp(id, names[i]) == 0) return 1;
+    return 0;
+}
+static int te_sem_sql_is_write(const char *sql) {
+    static const char *kw[] = { "INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "ALTER", "DROP", "TRUNCATE", NULL };
+    while (*sql == ' ' || *sql == '\n' || *sql == '\r' || *sql == '\t') sql++;
+    for (int i = 0; kw[i]; i++) {
+        size_t n = strlen(kw[i]), j = 0;
+        while (j < n && toupper((unsigned char)sql[j]) == kw[i][j]) j++;   /* sin strncasecmp: no existe en MSVC */
+        if (j == n && !isalnum((unsigned char)sql[n]) && sql[n] != '_') return 1;
+    }
+    return 0;
+}
+static void te_sem_check_sql_json(ASTNode *call, ASTNode *args, int *lastLine) {
+    if (!call->id || !te_sem_is_sql_builtin(call->id)) return;
+    const char *sql = NULL; int has_json = 0;
+    for (ASTNode *a = args; a; a = a->next) {
+        if (!a->type || strcmp(a->type, TE_T_STRING) != 0 || !a->str_value) continue;
+        if (strcmp(a->str_value, "json") == 0) has_json = 1;
+        else if (!sql && te_sem_sql_is_write(a->str_value)) sql = a->str_value;
+    }
+    if (sql && has_json) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+            "Warning: %s(...): the \"json\" format only applies to SELECT; on INSERT/UPDATE/DELETE the call fails at runtime. Remove the \"json\" argument.", call->id);
+        te_sem_warning(call, *lastLine, msg);
+    }
 }
 
 static void te_sem_walk(ASTNode *n, TeScope *scope, int *lastLine) {
@@ -8756,6 +8807,27 @@ static void te_sem_walk(ASTNode *n, TeScope *scope, int *lastLine) {
             n = n->next; continue;                           /* else chain lives in ->next */
         }
 
+        /* S5: `super` no existe en TypeEasy (en runtime: "'super' is not a valid object"). */
+        if (n->id && strcmp(n->id, "super") == 0 &&
+            (strcmp(n->type, TE_T_IDENTIFIER) == 0 || strcmp(n->type, TE_T_ID) == 0)) {
+            te_sem_error(n, *lastLine,
+                "Error: TypeEasy has no 'super': call the parent method on 'this' (it is inherited) or duplicate the logic.");
+        }
+        if (strcmp(n->type, TE_T_CALL_FUNC) == 0) te_sem_check_sql_json(n, n->left, lastLine);
+        else if (strcmp(n->type, TE_T_METHOD_CALL_ALONE) == 0 && n->left == NULL) te_sem_check_sql_json(n, n->right, lastLine);
+        /* S7: string literal como operando de && || ! (se evalua como numero: no numerico = 0). */
+        if (strcmp(n->type, TE_T_AND) == 0 || strcmp(n->type, TE_T_OR) == 0 || strcmp(n->type, TE_T_NOT) == 0) {
+            ASTNode *ops[2] = { n->left, n->right };
+            for (int k = 0; k < 2; k++) {
+                ASTNode *op = ops[k];
+                if (op && op->type && (strcmp(op->type, TE_T_STRING) == 0 || strcmp(op->type, TE_T_STRING_LITERAL) == 0)) {
+                    te_sem_warning(n, *lastLine,
+                        "Warning: a string operand of && / || / ! is evaluated as a number (a non-numeric string counts as 0). Compare explicitly (s != \"\").");
+                    break;
+                }
+            }
+        }
+
         te_sem_walk(n->left,  scope, lastLine);
         te_sem_walk(n->right, scope, lastLine);
         if (strcmp(n->type, TE_T_TERNARY) == 0) te_sem_walk(n->extra, scope, lastLine);
@@ -8768,6 +8840,17 @@ void te_syntax_check_semantics(ASTNode *root) {
     TeScope top = { .n = 0, .up = NULL };
     int lastLine = 0;
     te_sem_walk(root, &top, &lastLine);
+    /* Los cuerpos de metodos/constructores/endpoints no cuelgan del root: viven en
+     * g_vm.classes[]. Cada metodo abre un scope con sus params (mutables). */
+    for (int i = 0; i < g_vm.class_count; i++) {
+        ClassNode *c = g_vm.classes[i];
+        if (!c) continue;
+        for (MethodNode *m = c->methods; m; m = m->next) {
+            TeScope ms = { .n = 0, .up = &top };
+            for (ParameterNode *p = m->params; p; p = p->next) if (p->name) te_scope_declare(&ms, p->name, 0);
+            te_sem_walk(m->body, &ms, &lastLine);
+        }
+    }
 }
 
 // Serializa un objeto a XML string dado su id y lo guarda en __ret__

@@ -1,0 +1,8 @@
+// args: --syntax-check
+// expect: {"ok":true,"errors":[],"warnings":[]}
+// El JSON de --syntax-check siempre trae `warnings` (vacio cuando no hay lint que reportar):
+// los consumidores (build-modules, LSP) pueden leerlo sin chequear existencia.
+let rango = { "from": 1, "to": 5 };
+var total = rango["from"] + rango["to"];
+for (i = 0; 3; 1) { total = total + i; }
+println(total);

@@ -1,0 +1,7 @@
+// spec: STR-6
+// Escapes soportados: \t \n \" \\ . La secuencia \uXXXX NO se interpreta (queda literal).
+println("tab\tfin");
+println("linea1\nlinea2");
+println("comillas \"x\"");
+println("back\\slash");
+println("uni: \u00e9");

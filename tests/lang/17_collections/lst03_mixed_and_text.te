@@ -1,0 +1,8 @@
+// spec: LST-3
+// Una lista admite tipos mixtos; su texto (println, "" + l) muestra strings sin comillas,
+// bool como 1/0, null como null y anidados en JSON. json(l) es JSON estricto.
+let l = [1, "a", 2.5, true, null, [1], { "k": 1 }];
+println(l.length);
+println(l);
+println("" + l);
+println(json(l));

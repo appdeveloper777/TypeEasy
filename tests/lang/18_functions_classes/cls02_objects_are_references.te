@@ -1,0 +1,13 @@
+// spec: CLS-3
+class P { x : int; __constructor(_x : int) { this.x = _x; } Get() : int { return this.x; } }
+let p = new P(5);
+let q = p;
+q.x = 9;
+println(p.Get());
+let ps = [new P(1), new P(2)];
+println(ps.map(fn(z) => z.x));
+println(ps.where(fn(z) => z.x > 1).length);
+println(ps[1].x);
+class A { v : int; __constructor() { this.v = 1; } Inc() : int { this.v = this.v + 1; return this.v; } }
+let o = new A(); o.Inc(); o.Inc();
+println(o.v); println(o.Inc());

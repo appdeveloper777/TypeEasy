@@ -1,3 +1,4 @@
+// spec: FN-1
 // expect: t=15
 // Closure: a lambda captures an outer variable (`factor`) and uses it when
 // called later. 5 * 3 = 15.

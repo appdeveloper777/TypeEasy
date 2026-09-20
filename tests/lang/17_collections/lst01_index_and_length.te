@@ -1,0 +1,7 @@
+// spec: LST-1
+let l = [3, 1, 2];
+println(l.length); println(l[0]); println(l[2]);
+println("" + l[5]); println("" + l[-1]);
+println(l[5] == null);
+let nested = [[1, 2], [3, 4]];
+println(nested[1][0]); println(nested.length); println(nested[0].length);

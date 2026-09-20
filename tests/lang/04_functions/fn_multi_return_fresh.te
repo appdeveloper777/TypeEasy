@@ -1,3 +1,4 @@
+// spec: FN-1
 // (salida esperada en fn_multi_return_fresh.expected)
 // Bug ERP 2026-08-27 (Bug A "stale return"): una fn con MULTIPLES `return`
 // (early return dentro de un if + return final) devolvia el valor de la

@@ -1,0 +1,9 @@
+// spec: FN-1
+let add = fn(a, b) => a + b;
+println(add(2, 3));
+let block = fn(a) => { let t = a * 2; return t + 1; };
+println(block(5));
+let noret = fn() => { let x = 1; };
+println("" + noret());
+let rec = fn(n) => { if (n <= 1) { return 1; } return n * rec(n - 1); };
+println(rec(5));

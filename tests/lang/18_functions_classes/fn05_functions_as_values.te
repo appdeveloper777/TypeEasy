@@ -1,0 +1,12 @@
+// spec: FN-5
+// Las funciones son valores (se asignan, se guardan en listas/maps, se pasan y devuelven).
+// Llamar directamente una expresion indexada (fs[1](5)) no esta soportado: asignar primero.
+let f = fn(a, b) => a + b;
+let g = f;
+println(g(1, 2));
+let fs = [fn(x) => x + 1, fn(x) => x * 2];
+let dob = fs[1];
+println(dob(5));
+let ret = fn() => fn(x) => x - 1;
+let dec = ret();
+println(dec(5));

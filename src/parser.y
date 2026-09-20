@@ -967,15 +967,34 @@ static void yyerror(yyscan_t scanner, TeParseCtx *ctx, const char *s) {
     const char *text = yyget_text(scanner);
     int line = yyget_lineno(scanner);
     if (g_vm.quiet_parse_errors) return;
+    /* Palabras reservadas del lexer que la gente usa como identificador / clave de map
+     * (gotcha A3 del ERP: `from`, `as`, `xml`...). El "syntax error near 'from'" pelado
+     * no dice por que; aqui se agrega la pista. */
+    static const char *reserved[] = { "from", "as", "xml", "json", "print", "println", "fprint", "fprintln",
+        "node", "state", "match", "case", "agent", "listener", "bridge", "endpoint", "dataset", "model",
+        "train", "predict", "layer", "plot", "async", "await", "on_open", "on_message", "on_close", "in", NULL };
+    char hint[320];
+    const char *msg = s;
+    if (text && text[0] && s && strcmp(s, "syntax error") == 0) {
+        for (int i = 0; reserved[i]; i++) {
+            if (strcmp(text, reserved[i]) == 0) {
+                snprintf(hint, sizeof(hint), "syntax error: '%s' is a reserved word in TypeEasy; rename the identifier "
+                         "(e.g. v%s) or, as a map key, quote it (\"%s\": ...).", text, text, text);
+                msg = hint;
+                break;
+            }
+        }
+    }
     if (g_vm.capture_errors) {
-        te_capture_error(line, s, text);
+        te_capture_error(line, msg, text);
         return;
     }
     /* Diagnostics go to stderr in an English, editor-jumpable file:line: form. */
     const char *src = g_vm.lex_file_id > 0 ? te_src_file_name(g_vm.lex_file_id)
                       : (g_vm.debug_source_file && g_vm.debug_source_file[0])
                       ? g_vm.debug_source_file : "<stdin>";
-    fprintf(stderr, "%s:%d: syntax error: %s\n", src, line, s);
+    if (msg != s) fprintf(stderr, "%s:%d: %s\n", src, line, msg);
+    else fprintf(stderr, "%s:%d: syntax error: %s\n", src, line, s);
     if (text && text[0]) {
         fprintf(stderr, "%s:%d: near '%s'\n", src, line, text);
     }

@@ -1,0 +1,7 @@
+// spec: JSN-2
+// json_parse: true/false llegan como int 1/0 (y se re-serializan como 1/0); null -> null;
+// numeros con decimales conservan su texto al re-serializar; strings numericos se conservan.
+let p = json_parse("{\"a\":1,\"b\":[1,2],\"c\":{\"d\":\"x\"},\"e\":true,\"f\":null,\"g\":1.50,\"h\":\"007\"}");
+println(p["a"]); println(p["b"]); println(p["b"][1]); println(p["c"]["d"]);
+println(p["e"]); println(p["e"] == 1); println("" + p["f"]); println(p["g"]); println(p["h"]);
+println(json(p));

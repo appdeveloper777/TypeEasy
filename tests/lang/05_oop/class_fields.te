@@ -1,3 +1,4 @@
+// spec: CLS-1
 // expect: tot=10 name=contador total=0 tag=x
 // C#-style class fields: access modifiers (public/private) + type-first +
 // default value. The classic `name : type;` property form keeps working,

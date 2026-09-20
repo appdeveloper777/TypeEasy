@@ -1,0 +1,5 @@
+// spec: STR-7
+// == y != comparan por valor; < > entre strings NO ordenan (siempre false).
+println("a" == "a"); println("a" != "b"); println("" == "");
+println("10" == "10.0");
+println("a" < "b"); println("b" > "a");

@@ -1,0 +1,5 @@
+// spec: JSN-1
+println(json({ ok: true, n: 1, s: "x", l: [1, 2], m: { k: null }, f: 1.5, i: 0 }));
+println(json_stringify({ "a": "x", "b": [1, "y", true, null], "c": { "d": 1.5 } }));
+println(json([1, "a"]));
+println(json({ c: 1.50 }));

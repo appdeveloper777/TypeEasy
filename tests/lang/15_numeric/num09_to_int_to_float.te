@@ -1,0 +1,10 @@
+// spec: NUM-9
+println(to_int(1.75));
+println(to_int(-1.75));
+println(to_int("42"));
+println(to_int("4.9"));
+println(to_int("x"));
+println(to_int(""));
+println(to_float("1.5"));
+println(to_float(2));
+println(to_float("abc"));

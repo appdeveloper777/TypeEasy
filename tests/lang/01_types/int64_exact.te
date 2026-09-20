@@ -1,3 +1,4 @@
+// spec: NUM-1, NUM-3, NUM-7
 // int64 exacto mas alla de 2^53 (Fase 1b, te_eval_i64): literales, + - * / exacta, comparacion, fn, loop, lista[i]; 10/4 sigue siendo float.
 let a = 9007199254740993;
 let b = a + 2;

@@ -1,0 +1,5 @@
+// spec: ERR-3
+// expect-exit: 1
+// expect-stderr-contains: function 'undefined_fn' not defined
+// Llamar a una funcion inexistente es un error fatal (exit 1) que try/catch NO intercepta.
+try { let n = undefined_fn(1); println("no"); } catch (e) { println("tampoco"); }

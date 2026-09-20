@@ -1,0 +1,15 @@
+// spec: NUM-2
+// Mixto int/float va en double; un resultado integral se almacena como int. El literal 3.0 sigue siendo float.
+println(1 + 2.5);
+println(1.5 + 1.5);
+let u : int = 1.5 + 1.5;
+println(u);
+println(2.0 * 3);
+println(0.1 + 0.2);
+var x = 1;
+x = 3.0;
+println(x);
+x = 2.5;
+println(x);
+let f : float = 3;
+println(f);

@@ -1,0 +1,14 @@
+// args: --syntax-check
+// expect-contains: "ok":true
+// expect-contains: "warnings":[{
+// expect-contains: mysql_query(...): the \"json\" format only applies to SELECT
+// expect-contains: sqlite_query(...): the \"json\" format only applies to SELECT
+// expect-contains: "line":12
+// S6: "json" como formato en una escritura SQL es un warning (no cambia ok): en runtime la llamada falla.
+// El SELECT con "json" (L10) y el INSERT sin "json" (L11) NO deben avisar; L12 (expresion) y L13 (statement suelto) si.
+let conn = mysql_connect("127.0.0.1", "u", "p", "db");
+let rows = mysql_query(conn, "SELECT id FROM t", {}, "json");
+let w1 = mysql_query(conn, "INSERT INTO t (a) VALUES (@a)", { "@a": 1 });
+let w2 = mysql_query(conn, "  update t set a = 2 where id = @i", { "@i": 1 }, "json");
+sqlite_query(conn, "DELETE FROM t WHERE id = 1", "json");
+println(rows);

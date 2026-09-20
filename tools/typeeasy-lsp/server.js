@@ -102,17 +102,19 @@ function runSyntaxCheck(text, onDiags) {
       }
     } catch (_e) {}
     const diagnostics = [];
-    if (json && Array.isArray(json.errors)) {
-      for (const e of json.errors) {
+    const push = (list, severity) => {
+      for (const e of list) {
         const line = Math.max(0, (e.line || 1) - 1);
         diagnostics.push({
-          severity: DiagnosticSeverity.Error,
+          severity,
           range: { start: { line, character: 0 }, end: { line, character: 200 } },
           message: e.msg + (e.near ? ` (near '${e.near}')` : ''),
           source: 'typeeasy'
         });
       }
-    }
+    };
+    if (json && Array.isArray(json.errors)) push(json.errors, DiagnosticSeverity.Error);
+    if (json && Array.isArray(json.warnings)) push(json.warnings, DiagnosticSeverity.Warning);
     onDiags(diagnostics);
   });
 }

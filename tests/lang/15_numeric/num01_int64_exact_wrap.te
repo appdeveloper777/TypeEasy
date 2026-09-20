@@ -1,0 +1,8 @@
+// spec: NUM-1
+// int op int exacto en 64 bits; el desborde envuelve (complemento a dos) sin error.
+println(9007199254740993 + 2);
+println(4611686018427387904 * 2 - 1);
+println(9223372036854775807 + 1);
+println(-9223372036854775807 - 1);
+println(4611686018427387904 * 4);
+println(7 - 10);

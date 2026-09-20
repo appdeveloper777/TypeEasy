@@ -1,0 +1,12 @@
+// spec: LST-2
+// push/pop mutan la lista; asignar una lista a otra variable crea un ALIAS (misma lista).
+var m = [1, 2];
+m.push(3); println(m); println(m.length);
+println(m.pop()); println(m);
+let nums = [1, 2, 3, 4];
+var copy = nums;
+copy.push(5);
+println(nums.length); println(copy.length);
+let sub = nums.map(fn(x) => x);
+sub.push(9);
+println(nums.length); println(sub.length);

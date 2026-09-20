@@ -1,3 +1,4 @@
+// spec: DECL-1
 // Float values print with shortest round-trip formatting (Python/JS style).
 // expect: 3.1416
 const PI = 3.1416;

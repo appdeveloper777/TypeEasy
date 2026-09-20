@@ -1,0 +1,8 @@
+// spec: ERR-1
+// throw acepta string o numero; catch lo recibe COMO STRING (42 + 1 -> "421"); finally corre siempre.
+try { throw "boom"; } catch (e) { println("catch: " + e); } finally { println("finally"); }
+try { throw 42; } catch (e) { println(e + 1); }
+try { try { throw "inner"; } finally { println("inner finally"); } } catch (e) { println("outer: " + e); }
+let f = fn(x) => { if (x < 0) { throw "negativo"; } return x; };
+try { let v = f(-1); println("no llega"); } catch (e) { println("fn: " + e); }
+println("sigue");

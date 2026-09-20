@@ -95,6 +95,9 @@ jobs:
           docker compose build typeeasy
           docker images typeeasy-typeeasy:latest --format '{{.Repository}}:{{.Tag}}  {{.Size}}'
 
+      - name: Spec <-> tests coverage (every [ID] rule in docs/SPEC.md has a test; no unknown ids)
+        run: python tools/te-test/spec_coverage.py --strict
+
       - name: Run language test suite
         run: |
           python tools/te-test/run_tests.py tests/lang \

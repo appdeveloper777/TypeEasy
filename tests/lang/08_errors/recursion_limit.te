@@ -1,3 +1,4 @@
+// spec: ERR-1
 // expect-stderr-contains: maximum call depth
 // expect-exit: 1
 // item #7 (limits): unbounded recursion is stopped by the call-depth guard

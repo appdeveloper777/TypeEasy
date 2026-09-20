@@ -1,0 +1,11 @@
+// spec: CTL-5
+// args: --syntax-check
+// expect-contains: "ok":true
+// expect-contains: a string operand of && / || / ! is evaluated as a number
+// expect-contains: "line":8
+// S7: un literal string como operando de un logico es un warning (no cambia ok).
+let s = "x";
+let a = true && "x";
+let b = !s;
+let c = s != "" && true;
+println(a); println(b); println(c);

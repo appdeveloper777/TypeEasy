@@ -1,0 +1,15 @@
+// spec: CTL-4
+// La condicion de if se evalua como NUMERO: 0, null, listas, maps y CUALQUIER string (incluso "x") son FALSE;
+// solo un numero != 0 es TRUE. Para strings usar s != ""; para contenedores .length > 0.
+if (0) { println("0 true"); } else { println("0 false"); }
+if ("") { println("vacio true"); } else { println("vacio false"); }
+if ("x") { println("str true"); } else { println("str false"); }
+let s = "x";
+if (s != "") { println("cmp true"); }
+if (2.5) { println("float true"); }
+if (-1) { println("neg true"); }
+if (null) { println("null true"); } else { println("null false"); }
+if ([1]) { println("lista true"); } else { println("lista false"); }
+if ({ "a": 1 }) { println("map true"); } else { println("map false"); }
+let l = [1];
+if (l.length > 0) { println("length ok"); }

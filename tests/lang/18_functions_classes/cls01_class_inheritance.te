@@ -1,0 +1,21 @@
+// spec: CLS-1, CLS-2
+class Animal {
+    nombre : string;
+    patas : int;
+    __constructor(_n : string) { this.nombre = _n; this.patas = 4; }
+    Describe() : string { return this.nombre + " con " + this.patas + " patas"; }
+    Patas() : int { return this.patas; }
+}
+class Pajaro extends Animal {
+    __constructor(_n : string) { this.nombre = _n; this.patas = 2; }
+    Vuela() : string { return this.nombre + " vuela"; }
+}
+let a = new Animal("Perro");
+let p = new Pajaro("Loro");
+println(a.Describe()); println(p.Describe()); println(p.Vuela()); println(p.Patas());
+println(a.nombre); println(p.patas);
+a.patas = 3; println(a.Patas());
+class Caja { valor : int; nombre : string; }
+let c = new Caja();
+println(c.valor); println("[" + c.nombre + "]");
+c.valor = 7; println(c.valor);

@@ -1,0 +1,9 @@
+// spec: NUM-6, NUM-11
+// println de un literal de lista/mapa y de un decimal usa el mismo texto que `"" + x`
+// (antes: lista literal -> 0; decimal -> 16 digitos). Fix 0.1.8.
+println([1, 2, 1 / 4]);
+println({ "a": 1, "b": [1, 2] });
+let d = 1m / 3m;
+println(d);
+println(1m / 3m);
+println(2.50m);

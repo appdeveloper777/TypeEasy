@@ -1,3 +1,4 @@
+// spec: DECL-3
 // expect: 3
 var x = 1;
 x = x + 2;

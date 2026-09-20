@@ -1,0 +1,10 @@
+// spec: LEX-2
+// args: --syntax-check
+// expect-contains: "ok":false
+// expect-contains: 'from' is a reserved word in TypeEasy
+// expect-contains: quote it (\"from\": ...)
+// expect-contains: "near":"from"
+// A3: `from`/`as`/`xml`... son palabras reservadas del lexer (LINQ/ML/xml); como identificador o
+// clave de map sin comillas dan "syntax error near 'from'" — ahora con la pista de como resolverlo.
+let rango = { from: 1, to: 5 };
+println(rango["from"]);

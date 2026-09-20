@@ -1,0 +1,9 @@
+// spec: LST-5
+// expect-stderr-contains: unknown method 'max' on LIST value
+// Un metodo inexistente sobre una lista NO lanza: avisa en stderr y el resultado es null.
+// (max/min/indexOf no existen: usar orderBy/reduce/filter.)
+let nums = [1, 2, 3];
+let r = nums.max();
+println("" + r);
+println(r == null);
+println("sigue");

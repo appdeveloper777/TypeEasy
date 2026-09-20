@@ -1,0 +1,9 @@
+// spec: STR-4
+println("a" + 1 + 2);
+println(1 + 2 + "a");
+println("x" + null);
+println("x" + true);
+println("x" + 1.5);
+println("x" + [1, 2]);
+println("x" + { "k": 1 });
+println("s=" + (10 + 20));

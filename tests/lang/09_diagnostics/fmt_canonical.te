@@ -1,0 +1,55 @@
+// args: --fmt
+// Fixture del formateador: este archivo YA esta en formato canonico, asi que
+// `typeeasy --fmt fmt_canonical.te` debe imprimirlo byte a byte (ver .expected).
+import "no_existe_fmt_fixture.te";
+const PI = 3.1416;
+let nombre = "  espacios   dentro  de  strings   se respetan  ";
+var total : int = 0;
+let precio = 33.33m;
+
+class Linea {
+    cantidad : int;
+    precio : decimal;
+    nota : string?;
+    __constructor(_c : int, _p : decimal) {
+        this.cantidad = _c;
+        this.precio = _p;
+    }
+    Total() : decimal {
+        return this.precio * this.cantidad;
+    }
+}
+
+let f = fn(a, b) => {
+    if (a > b && b != 0) {
+        return a - b;
+    } else {
+        return -a;
+    }
+};
+
+for (i = 0; 3; 1) {
+    total = total + i; // acumula
+}
+for (var j = 10; j >= 0; j -= 5) {
+    total += j;
+}
+for (let x in [1, 2, 3]) {
+    total = total * x;
+}
+while (total > 100) {
+    total = total / 2;
+}
+let m = { "from": 1, "to": 5, "n": total >= 0 ? "pos" : "neg" };
+let t = total > 0 ? f(total, 1) : f(1, total);
+let s = $"total={total} m={m["from"]}";
+let z = m?.nope ?? "default";
+let l = [
+    1,
+    2,
+    3
+];
+println(s + " " + z + " " + l.length + " " + (1 << 4) + " " + Math.ceil(35 / 20));
+/* bloque
+   con   espacios   internos */
+println(precio.round(2));

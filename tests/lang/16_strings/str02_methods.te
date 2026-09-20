@@ -1,0 +1,10 @@
+// spec: STR-2
+let s = "  Hola Mundo  ";
+println(s.trim()); println(s.upper()); println(s.lower());
+println("hola mundo".contains("mun")); println("hola".contains("x"));
+println("hola".starts_with("ho")); println("hola".ends_with("la"));
+println("hola".index_of("l")); println("hola".index_of("z"));
+println("hola hola".replace("hola", "x"));
+println("hola".substring(1, 3)); println("hola".substring(2)); println("hola".substr(1, 2));
+println("7".pad_left(3, "0")); println("7".pad_right(3, "*"));
+println("a,b,,c".split(",")); println("a,b,,c".split(",").length); println("abc".split(""));

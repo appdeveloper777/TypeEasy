@@ -1,3 +1,4 @@
+// spec: ERR-1
 // expect: ok
 // expect-stderr-contains: cannot assign int to attribute
 // Assigning a value whose type does not match the declared attribute type

@@ -1,3 +1,4 @@
+// spec: STR-2
 // expect: len=11 up=HELLO WORLD low=hello world trim=hi has=1 no=0
 // Core string methods: length, upper, lower, trim, contains.
 var s = "Hello World";

@@ -54,7 +54,7 @@ from xml.etree import ElementTree as ET
 # ---------- expectations ----------
 
 DIRECTIVE_RE = re.compile(r"^\s*//\s*(expect|expect-exit|expect-contains|"
-                          r"expect-stderr-contains|xfail|skip|skip-on|timeout|env)\s*:\s*(.*)$")
+                          r"expect-stderr-contains|xfail|skip|skip-on|timeout|env|args)\s*:\s*(.*)$")
 
 
 @dataclass
@@ -68,6 +68,7 @@ class Expect:
     skip_on: list[str] = field(default_factory=list)
     timeout_s: float = 30.0
     env: dict = field(default_factory=dict)      # `// env: KEY=VALUE` (repeatable)
+    args: list[str] = field(default_factory=list)   # `// args: --syntax-check` (flags before the file)
     has_any_assertion: bool = False             # False ⇒ smoke (exit 0 only)
 
 
@@ -123,6 +124,8 @@ def parse_expect(te_path: Path) -> Expect:
             elif key == "env" and "=" in val:
                 k, v = val.split("=", 1)
                 e.env[k.strip()] = v.strip()
+            elif key == "args":
+                e.args.extend(val.split())
     return e
 
 
@@ -186,12 +189,13 @@ def run_test(te_path: Path, expect: Expect, bin_path: Optional[Path],
             *[a for k, v in expect.env.items() for a in ("-e", f"{k}={v}")],
             "--entrypoint", "/typeeasy/typeeasy",
             docker_image,
+            *expect.args,
             f"/work/{rel.as_posix()}",
         ]
     else:
         if not bin_path:
             return Result(te_path, "FAIL", 0.0, "No TypeEasy binary found (use --docker or set TYPEEASY_BIN)")
-        cmd = [str(bin_path), str(te_path)]
+        cmd = [str(bin_path), *expect.args, str(te_path)]
 
     t0 = time.time()
     try:

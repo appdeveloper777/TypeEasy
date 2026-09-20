@@ -1,0 +1,6 @@
+// spec: CTL-6
+var i = 0; var s = "";
+while (i < 5) { i = i + 1; if (i == 2) { continue; } if (i == 4) { break; } s = s + i; }
+println(s);
+let t = 5 > 3 ? "si" : "no"; println(t);
+let nested = 1 > 2 ? "a" : 2 > 1 ? "b" : "c"; println(nested);

@@ -1,0 +1,9 @@
+// spec: JSN-3
+// json_parse("") -> null; texto invalido -> 0 (falsy, no lanza); escalares JSON se parsean.
+println("" + json_parse(""));
+println("" + json_parse("no json"));
+println(json_parse("[1,2]"));
+println(json_parse("\"str\""));
+println(json_parse("42"));
+let arr = json_parse("[{\"n\":1},{\"n\":2}]");
+println(arr.length); println(arr[1]["n"]); println(json(arr));

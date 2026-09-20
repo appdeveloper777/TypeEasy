@@ -1,3 +1,4 @@
+// spec: DECL-2
 // xfail: let is immutable, reassignment must fail
 let x = 1;
 x = 2;

@@ -1,3 +1,4 @@
+// spec: ASY-1
 // expect: A B C done
 // Stage 4: async/await keyword sugar over the real event-loop runtime.
 //   `async fn() => {...}` spawns a task; `await <task>` drives the loop until

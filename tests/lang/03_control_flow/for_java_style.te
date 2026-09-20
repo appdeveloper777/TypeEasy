@@ -1,3 +1,4 @@
+// spec: CTL-2
 // Java/C-style for: init; condition; update. Coexists with the classic
 // for(init; LIMIT; STEP) and the range-style for(START; STOP; STEP).
 var s = 0;

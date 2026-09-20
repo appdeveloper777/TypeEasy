@@ -1,3 +1,4 @@
+// spec: NUM-1
 // int64: literales, +=, listas, maps, JSON, args de fn y division no se truncan a 32 bits (v0.0.35).
 let a = 3000000000;
 println("lit: " + a);

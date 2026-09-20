@@ -1,0 +1,14 @@
+// spec: LST-4
+let nums = [1, 2, 3, 4];
+println(nums.map(fn(x) => x * 2));
+println(nums.filter(fn(x) => x % 2 == 0));
+println(nums.reduce(fn(a, b) => a + b, 0));
+println(nums.where(fn(x) => x > 2));
+println(nums.select(fn(x) => x + 10));
+println(nums.sum()); println(nums.count()); println(nums.first()); println(nums.last());
+println(nums.any(fn(x) => x > 3)); println(nums.all(fn(x) => x > 0));
+println(nums.contains(3)); println(3 in nums); println(9 in nums);
+println(nums.join("-"));
+println([3, 1, 2].orderBy(fn(x) => x));
+println(nums.take(2)); println(nums.skip(2));
+println(nums.avg()); println([1, 1, 2].distinct());

@@ -1,3 +1,4 @@
+// spec: CLS-1
 // expect: 42 Ana
 class Person {
     age : int;

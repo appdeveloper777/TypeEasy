@@ -1,0 +1,7 @@
+// spec: CLS-4
+// El tipo de retorno declarado se valida en runtime: TypeError capturable con try/catch.
+class T { M() : int { return "texto"; } Ok() : int { return 1; } }
+let t = new T();
+println(t.Ok());
+try { let v = t.M(); println("no"); } catch (e) { println("" + e); }
+println("sigue");

@@ -1,0 +1,9 @@
+// spec: STR-5
+// $"..." interpola variables y aritmetica; \{ \} son llaves literales; {null} -> vacio.
+// Una llamada a metodo dentro de {} NO esta soportada (usar variable intermedia).
+let n = 3;
+let s = "  x  ";
+let t = s.trim();
+println($"n={n} doble={n * 2} t={t} lit=\{x\}");
+println($"[{null}]");
+println($"suma={n + 0.5}");

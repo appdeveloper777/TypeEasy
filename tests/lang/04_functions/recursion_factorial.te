@@ -1,3 +1,4 @@
+// spec: FN-2
 // expect: fact5=120
 // Recursion: a lambda that calls itself. 5! = 120.
 var fact = fn(n) => {

@@ -1,0 +1,8 @@
+// spec: NUM-4
+// % sobre la parte entera truncada de ambos operandos; signo del dividendo (C).
+println(7 % 2);
+println(-7 % 3);
+println(7 % -3);
+println(7.5 % 2);
+println(7 % 2.5);
+println(10 % 3.7);

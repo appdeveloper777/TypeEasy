@@ -7,6 +7,7 @@
 #include "ast.h"
 #include "te_vm.h"
 #include "ast_internal.h"
+#include "te_decimal.h"
 
 /* Render a LIST node. Object lists keep the legacy multi-line Mostrar
  * rendering; scalar lists (INT/NUMBER/STRING/FLOAT) render inline as
@@ -197,12 +198,16 @@ void interpret_print(ASTNode *node) {
             ASTNode *map = resolve_to_map(o);
             if (map) { dbg_printf("%d", map_length(map)); return; }
             /* str.length — mayo 2026 */
-            if (o && o->id) {
+            if (o && o->id && (nk_of(o) == NK_IDENTIFIER || nk_of(o) == NK_ID)) {
                 Variable *sv = find_variable(o->id);
                 if (sv && sv->vtype == VAL_STRING) {
                     dbg_printf("%zu", sv->value.string_value ? strlen(sv->value.string_value) : 0);
                     return;
                 }
+            } else if (o && o->type && strcmp(o->type, TE_T_ACCESS_EXPR) != 0) {
+                TeValue tv; te_eval_value(o, &tv);
+                if (tv.vtype == VAL_STRING) { dbg_printf("%zu", tv.value.string_value ? strlen(tv.value.string_value) : 0); te_val_free(&tv); return; }
+                te_val_free(&tv);
             }
         }
         Variable *v = find_variable(o->id);
@@ -217,6 +222,8 @@ void interpret_print(ASTNode *node) {
             if (s) { dbg_printf("%s", s); append_to_stdout(s); free(s); }
             return;
         }
+        /* v es null (`var v = null; print(v?.campo)`): imprimir null, no derreferenciar obj->class. */
+        if (te_val_is_null(v)) { dbg_printf("null\n"); append_to_stdout("null\n"); return; }
         ObjectNode *obj = v->value.object_value;
         int idx = -1;
         for (int i = 0; i < obj->class->attr_count; i++) {
@@ -259,8 +266,12 @@ void interpret_print(ASTNode *node) {
             dbg_printf("%lld", v->value.int_value);
         else if (v->vtype == VAL_FLOAT)
             { char b[64]; te_fmt_double(b, sizeof(b), v->value.float_value); dbg_printf("%s", b); }
-        else
+        else if (te_val_is_null(v))
+            dbg_printf("null");
+        else if (v->type && strcmp(v->type, TE_T_OBJECT) == 0 && v->value.object_value && v->value.object_value->class)
             dbg_printf("Object of class: %s\n", v->value.object_value->class->name);
+        else
+            { char *s = te_var_to_string(v); dbg_printf("%s", s); free(s); }   /* lista/map: mismo texto que "" + x */
     } else {
         long long i64v; double val;
         if (te_eval_num(arg, &i64v, &val)) {   /* Fase 1b */
@@ -278,6 +289,17 @@ void interpret_print(ASTNode *node) {
         // __ret_var_active = 0;  // COMMENTED: Keep active for embedded API
     }
 }
+/* Texto de println para un valor ya evaluado: bool -> true/false (historico de println),
+ * el resto igual que `"" + x` (listas/maps anidados en JSON, decimal con su escala). */
+static void te_println_value(Variable *v) {
+    if (v->vtype == VAL_INT && v->type && strcmp(v->type, TE_T_BOOL) == 0) {
+        const char *s = v->value.int_value ? "true" : "false";
+        dbg_printf("%s\n", s); append_to_stdout(s); append_to_stdout("\n"); return;
+    }
+    char *s = te_var_to_string(v);
+    dbg_printf("%s\n", s); append_to_stdout(s); append_to_stdout("\n");
+    free(s);
+}
 /* Extraído de interpret_println (Fase 2). Devuelve 1 si manejó la llamada. */
 static int te_println_access_expr(ASTNode *arg) {
     if (arg->type && strcmp(arg->type, TE_T_ACCESS_EXPR) == 0) {
@@ -288,11 +310,10 @@ static int te_println_access_expr(ASTNode *arg) {
             const char *key = te_map_key_coerce(arg->right, keybuf, sizeof(keybuf));
             if (!key) { dbg_printf("Error: Map key must be a string.\n"); return 1; }
             ASTNode *pair = map_find_pair(map, key);
-            if (!pair) { dbg_printf("Error: key '%s' not found.\n", key); return 1; }
-            ASTNode *val = pair->left;
-            if (val && val->type && strcmp(val->type, TE_T_STRING) == 0) dbg_printf("%s\n", val->str_value);
-            else if (val && val->type && strcmp(val->type, TE_T_FLOAT) == 0) { char b[64]; te_fmt_double(b, sizeof(b), atof(val->str_value)); dbg_printf("%s\n", b); }
-            else { double v_ = evaluate_expression(val); char b[64]; te_fmt_double(b, sizeof(b), v_); dbg_printf("%s\n", b); }
+            /* clave ausente: null (igual que `let v = m["zz"]`); antes "Error: key not found" */
+            if (!pair) { dbg_printf("null\n"); append_to_stdout("null\n"); return 1; }
+            TeValue tv; te_leaf_to_value(pair->left, &tv);
+            te_println_value(&tv); te_val_free(&tv);
             return 1;
         }
         ASTNode *list = resolve_to_list(arg->left);
@@ -308,14 +329,8 @@ static int te_println_access_expr(ASTNode *arg) {
         }
         ASTNode *item = list_get_item(list, idx);
         if (!item) return 1;
-        if (item->type && strcmp(item->type, TE_T_STRING) == 0) {
-            dbg_printf("%s\n", item->str_value);
-        } else if (item->type && strcmp(item->type, TE_T_FLOAT) == 0) {
-            char b[64]; te_fmt_double(b, sizeof(b), atof(item->str_value)); dbg_printf("%s\n", b);
-        } else {
-            double v = evaluate_expression(item);
-            char b[64]; te_fmt_double(b, sizeof(b), v); dbg_printf("%s\n", b);
-        }
+        TeValue tv; te_leaf_to_value(item, &tv);
+        te_println_value(&tv); te_val_free(&tv);
         return 1;
     }
     return 0;
@@ -345,7 +360,7 @@ static int te_println_access_attr(ASTNode *arg) {
                 return 1;
             }
             /* str.length — mayo 2026 */
-            if (o && o->id) {
+            if (o && o->id && (nk_of(o) == NK_IDENTIFIER || nk_of(o) == NK_ID)) {
                 Variable *sv = find_variable(o->id);
                 if (sv && sv->vtype == VAL_STRING) {
                     size_t n = sv->value.string_value ? strlen(sv->value.string_value) : 0;
@@ -354,6 +369,18 @@ static int te_println_access_attr(ASTNode *arg) {
                     append_to_stdout(tmp);
                     return 1;
                 }
+            } else if (o && o->type && strcmp(o->type, TE_T_ACCESS_EXPR) != 0) {
+                /* "abc".length / f().length: cualquier expresion string */
+                TeValue tv; te_eval_value(o, &tv);
+                if (tv.vtype == VAL_STRING) {
+                    size_t n = tv.value.string_value ? strlen(tv.value.string_value) : 0;
+                    dbg_printf("%zu\n", n);
+                    char tmp[32]; snprintf(tmp, 32, "%zu\n", n);
+                    append_to_stdout(tmp);
+                    te_val_free(&tv);
+                    return 1;
+                }
+                te_val_free(&tv);
             }
         }
         /* Bug fix: println(arr[i].attr) — o es ACCESS_EXPR.
@@ -452,6 +479,8 @@ static int te_println_access_attr(ASTNode *arg) {
             else { dbg_printf("null\n"); append_to_stdout("null\n"); }
             return 1;
         }
+        /* v es null (`var v = null; println(v?.campo)`): imprimir null, no derreferenciar obj->class. */
+        if (te_val_is_null(v)) { dbg_printf("null\n"); append_to_stdout("null\n"); return 1; }
         ObjectNode *obj = v->value.object_value;
         int idx = -1;
         for (int i = 0; i < obj->class->attr_count; i++) {
@@ -591,6 +620,25 @@ void interpret_println(ASTNode *node) {
     if (te_println_access_expr(arg)) return;
     if (te_println_access_attr(arg)) return;
 
+    /* Literal de lista/mapa o expresion con decimal: mismo camino que `"" + x`
+     * (te_eval_value materializa el literal; te_var_to_string conserva los 18
+     * decimales del decimal). Antes caia al fallback numerico e imprimia 0 / 16 digitos. */
+    if (arg->type && (strcmp(arg->type, TE_T_LIST) == 0 || strcmp(arg->type, TE_T_OBJECT_LITERAL) == 0 ||
+                      strcmp(arg->type, TE_T_DECIMAL) == 0 || te_dec_expr_has_decimal(arg))) {
+        TeValue tv; te_eval_value(arg, &tv);
+        char *s = te_var_to_string(&tv);
+        dbg_printf("%s\n", s); append_to_stdout(s); append_to_stdout("\n");
+        free(s); te_val_free(&tv);
+        return;
+    }
+    if (arg->id && !arg->left && !arg->right) {
+        Variable *dv = find_variable(arg->id);
+        if (dv && dv->vtype == VAL_STRING && dv->type && strcmp(dv->type, TE_T_DECIMAL) == 0) {
+            dbg_printf("%s\n", dv->value.string_value); append_to_stdout(dv->value.string_value); append_to_stdout("\n");
+            return;
+        }
+    }
+
     if (arg->id) {
         Variable *v = find_variable(arg->id);
         if (!v) {
@@ -600,9 +648,15 @@ void interpret_println(ASTNode *node) {
         if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, TE_T_LIST) == 0) {
             ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
             if (listNode && strcmp(listNode->type, TE_T_LIST) == 0) {
-                te_print_list_node(listNode, 1);
+                ASTNode *first = listNode->left;
+                if (first && first->type && strcmp(first->type, TE_T_OBJECT) == 0) { te_print_list_node(listNode, 1); return; }   /* objetos: Mostrar() */
+                te_println_value(v);   /* escalares/anidados: mismo texto que "" + lista */
                 return;
             }
+        }
+        if (v->vtype == VAL_OBJECT && v->type && (strcmp(v->type, TE_T_MAP) == 0 || strcmp(v->type, TE_T_OBJECT_LITERAL) == 0)) {
+            te_println_value(v);   /* map -> JSON (antes: cast a ObjectNode y segfault) */
+            return;
         }
         if (v->vtype == VAL_STRING) {
             dbg_printf("%s\n", v->value.string_value);
@@ -620,7 +674,10 @@ void interpret_println(ASTNode *node) {
             append_to_stdout(b); append_to_stdout("\n");
         }
         else {
-            dbg_printf("Object of class: %s\n", v->value.object_value->class->name);
+            if (te_val_is_null(v)) { dbg_printf("null\n"); append_to_stdout("null\n"); }
+            else if (v->type && strcmp(v->type, TE_T_OBJECT) == 0 && v->value.object_value && v->value.object_value->class)
+                dbg_printf("Object of class: %s\n", v->value.object_value->class->name);
+            else te_println_value(v);   /* LAMBDA/otros: texto del modelo de valores ("" si no aplica) */
             // Don't append object description to stdout for API response usually
         }
     } else {

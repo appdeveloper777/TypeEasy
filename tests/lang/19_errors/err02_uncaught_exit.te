@@ -1,0 +1,7 @@
+// spec: ERR-2
+// expect-exit: 1
+// expect-stderr-contains: Uncaught: sin catch
+// Un throw sin catch termina el programa con "Uncaught: <valor>" y exit 1.
+println("antes");
+throw "sin catch";
+println("no");

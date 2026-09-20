@@ -1,0 +1,8 @@
+// spec: NUM-8
+println(true == 1);
+println(true + 1);
+println(!0);
+println(!!5);
+println(null == 0);
+println("3" == 3);
+println(true == 1.0);

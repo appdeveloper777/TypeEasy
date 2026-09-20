@@ -1,0 +1,11 @@
+// args: --syntax-check
+// expect-contains: "ok":false
+// expect-contains: TypeEasy has no 'super'
+// expect-contains: "near":"super"
+// S5: `super` no existe; en runtime da "'super' is not a valid object" y el metodo devuelve basura.
+class Base { total() : int { return 1; } }
+class Hija extends Base {
+    total() : int { return super.total() + 1; }
+}
+let h = new Hija();
+println(h.total());

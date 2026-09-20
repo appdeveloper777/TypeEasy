@@ -217,6 +217,15 @@ void te_capture_error(int line, const char *msg, const char *near) {
     snprintf(e->near_tok, sizeof(e->near_tok), "%s", near ? near : "");
 }
 
+void te_capture_warning(int line, const char *msg, const char *near) {
+    if (g_vm.syntax_warning_count >= 64) return;
+    TeErr *e = &g_vm.syntax_warnings[g_vm.syntax_warning_count++];
+    e->line = line;
+    e->file_id = g_vm.lex_file_id;
+    snprintf(e->msg, sizeof(e->msg), "%s", msg ? msg : "");
+    snprintf(e->near_tok, sizeof(e->near_tok), "%s", near ? near : "");
+}
+
 static void json_emit_str(FILE *fp, const char *s) {
     fputc('"', fp);
     for (const unsigned char *p = (const unsigned char*)(s ? s : ""); *p; p++) {
@@ -234,12 +243,26 @@ static void json_emit_str(FILE *fp, const char *s) {
     fputc('"', fp);
 }
 
-/* --syntax-check <file>: parse only, emit JSON {ok, errors:[{line,msg,near,file}]} */
+/* --syntax-check <file>: parse only, emit JSON {ok, errors:[{line,msg,near,file}], warnings:[...]} */
 /* Residual B (ERP): validación estática de aridad (definida en ast.c). */
 extern void te_syntax_check_arity(ASTNode *root);
+static void json_emit_str(FILE *fp, const char *s);
+static void emit_err_list(const TeErr *list, int count, const char *path) {
+    for (int i = 0; i < count; i++) {
+        if (i) fputc(',', stdout);
+        printf("{\"line\":%d,\"msg\":", list[i].line);
+        json_emit_str(stdout, list[i].msg);
+        printf(",\"near\":");
+        json_emit_str(stdout, list[i].near_tok);
+        printf(",\"file\":");
+        json_emit_str(stdout, list[i].file_id > 0 ? te_src_file_name(list[i].file_id) : path);
+        fputc('}', stdout);
+    }
+}
 static int run_syntax_check(const char *path) {
     g_vm.capture_errors = 1;
     g_vm.syntax_error_count = 0;
+    g_vm.syntax_warning_count = 0;
     FILE *fp = fopen(path, "r");
     if (!fp) {
         printf("{\"ok\":false,\"errors\":[{\"line\":0,\"msg\":\"cannot open file\",\"near\":\"\",\"file\":");
@@ -255,16 +278,9 @@ static int run_syntax_check(const char *path) {
     extern void te_syntax_check_semantics(ASTNode *root);
     if (g_vm.syntax_error_count == 0) te_syntax_check_semantics(ast);
     printf("{\"ok\":%s,\"errors\":[", g_vm.syntax_error_count == 0 ? "true" : "false");
-    for (int i = 0; i < g_vm.syntax_error_count; i++) {
-        if (i) fputc(',', stdout);
-        printf("{\"line\":%d,\"msg\":", g_vm.syntax_errors[i].line);
-        json_emit_str(stdout, g_vm.syntax_errors[i].msg);
-        printf(",\"near\":");
-        json_emit_str(stdout, g_vm.syntax_errors[i].near_tok);
-        printf(",\"file\":");
-        json_emit_str(stdout, g_vm.syntax_errors[i].file_id > 0 ? te_src_file_name(g_vm.syntax_errors[i].file_id) : path);
-        fputc('}', stdout);
-    }
+    emit_err_list(g_vm.syntax_errors, g_vm.syntax_error_count, path);
+    printf("],\"warnings\":[");
+    emit_err_list(g_vm.syntax_warnings, g_vm.syntax_warning_count, path);
     printf("]}\n");
     return 0;
 }
@@ -424,6 +440,7 @@ for (int vi = 1; vi < argc; vi++) {
         printf("  --syntax-check <f>     Validate syntax (JSON output)\n");
         printf("  --selftest-vm          Self-test: two isolated VMs in one process (JSON)\n");
         printf("  --symbols <f>          List symbols (JSON output)\n");
+        printf("  --fmt <f> [--write|--check]  Format source (whitespace only; --check exits 1 if it would change)\n");
         printf("  --emit-wat <f> [-o]    Generate WebAssembly text\n");
         printf("  --emit-wasm <f> [-o]   Generate WebAssembly binary\n");
         printf("  --debug                Enable debug logs\n");
@@ -653,6 +670,7 @@ int main(int argc, char *argv[]) {
     const char *test_dir = NULL;
     int syntax_check_mode = 0;
     int symbols_mode = 0;
+    int fmt_mode = 0, fmt_write = 0, fmt_check = 0;
     int api_mode = 0;
     int api_port = 8080;
     const char *api_host = "0.0.0.0";
@@ -677,6 +695,12 @@ int main(int argc, char *argv[]) {
             return te_vm_selftest();
         } else if (strcmp(argv[i], "--symbols") == 0) {
             symbols_mode = 1;
+        } else if (strcmp(argv[i], "--fmt") == 0) {
+            fmt_mode = 1;
+        } else if (strcmp(argv[i], "--write") == 0) {
+            fmt_write = 1;
+        } else if (strcmp(argv[i], "--check") == 0) {
+            fmt_check = 1;
         } else if (strcmp(argv[i], "--api") == 0) {
             api_mode = 1;
         } else if (strcmp(argv[i], "--dev") == 0) {
@@ -753,10 +777,11 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Error: --api requires a .te file (e.g.: typeeasy --api endpoint.te)\n");
         return 1;
     }
-    if ((syntax_check_mode || symbols_mode) && !script_path) {
-        fprintf(stderr, "Error: --syntax-check / --symbols require a file.\n");
+    if ((syntax_check_mode || symbols_mode || fmt_mode) && !script_path) {
+        fprintf(stderr, "Error: --syntax-check / --symbols / --fmt require a file.\n");
         return 1;
     }
+    if (fmt_mode) { extern int te_fmt_main(const char *path, int write, int check); return te_fmt_main(script_path, fmt_write, fmt_check); }
 
     if (emit_wat_mode && emit_wasm_mode) {
         fprintf(stderr, "Error: use --emit-wat or --emit-wasm, not both.\n");

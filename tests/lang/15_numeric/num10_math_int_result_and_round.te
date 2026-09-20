@@ -1,0 +1,14 @@
+// spec: NUM-10
+let k : int = Math.ceil(5000000000 / 2);
+println(k);
+println(Math.floor(-1.5));
+println(Math.ceil(-1.5));
+println(Math.round(2.5));
+println(Math.round(-2.5));
+println(Math.trunc(-1.9));
+println(Math.abs(-3.5));
+println(Math.pow(2, 10));
+println(Math.pow(2, 0.5));
+println(Math.max(1, 2.5));
+println(Math.floor(9007199254740993));
+println((1.25m).round(1));

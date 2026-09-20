@@ -333,6 +333,7 @@ void te_profile_report(const char *title);
 void te_profile_reset(void);
 /* --syntax-check error sink (strong def in typeeasy_main.c, weak in ast.c). */
 void te_capture_error(int line, const char *msg, const char *near);
+void te_capture_warning(int line, const char *msg, const char *near);
 /* sql_last_error(): mensaje del ultimo fallo SQL ("" si OK). te_sql_note_call
  * lo actualiza tras cada builtin SQL despachado por nombre (te_stdlib.c). */
 const char *te_sql_last_error(void);

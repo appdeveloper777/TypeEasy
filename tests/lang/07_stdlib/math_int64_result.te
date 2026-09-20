@@ -1,3 +1,4 @@
+// spec: NUM-10
 // Math.* devuelve INT cuando el resultado es integral, tambien mas alla de 2^31 (antes: cast a int de 32 bits -> FLOAT).
 let total = 35; let size = 20;
 let pages : int = Math.ceil(total / size);

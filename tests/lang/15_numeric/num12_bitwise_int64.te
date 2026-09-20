@@ -1,0 +1,9 @@
+// spec: NUM-12
+println(1 << 40);
+println(-8 >> 1);
+println(~0);
+println(5 & 3);
+println(5 | 3);
+println(5 ^ 3);
+println(1 << 63);
+println(0xFF & 0b1010);

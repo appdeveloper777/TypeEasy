@@ -1,3 +1,4 @@
+// spec: LNQ-2
 // expect-contains: U 6
 let a = [1, 2, 3, 4, 2, 3];
 let b = [3, 4, 5, 6];

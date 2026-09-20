@@ -1,3 +1,4 @@
+// spec: CLS-1
 // Matriz de retorno de métodos: cada tipo de retorno x cada FORMA de return,
 // y cada método consumido en varios CONTEXTOS (statement, let, concat, suma).
 // Históricamente esta combinatoria escondió bugs (return <call> directo,

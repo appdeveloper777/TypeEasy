@@ -87,6 +87,7 @@ typedef struct TeVM {
     int test_failed, test_assertions;
     int capture_errors;                 /* yyerror acumula en syntax_errors[] en vez de imprimir */
     TeErr syntax_errors[64]; int syntax_error_count;
+    TeErr syntax_warnings[64]; int syntax_warning_count;   /* lint (no cambia ok) */
     int import_errors;                  /* imports no abiertos en el parse actual (parser.l); main avisa o aborta */
     int strict_imports;                 /* --strict-imports / TYPEEASY_STRICT_IMPORTS=1: import ausente = exit 1 */
     /* --- flags de la capa DB (db_params.c), configurables por env --- */

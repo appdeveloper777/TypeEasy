@@ -1,0 +1,7 @@
+catch: boom
+finally
+421
+inner finally
+outer: inner
+fn: negativo
+sigue

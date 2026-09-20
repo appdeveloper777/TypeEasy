@@ -1,3 +1,4 @@
+// spec: FN-1
 // (salida esperada en fn_paren_expr_method.expected)
 // Bug ERP 2026-08-27 (Bug B): metodo encadenado a una expresion PARENTIZADA
 // de string dentro de una fn — `("" + x).lower()` — fallaba con

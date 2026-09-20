@@ -1,3 +1,4 @@
+// spec: LNQ-4
 // Regression: LINQ boolean predicates all/none/any must return a BOOL value
 // so println prints true/false, not 1/0. (Previously collapsed to INT.)
 // Expected output is in the sibling linq_bool_predicates.expected file.

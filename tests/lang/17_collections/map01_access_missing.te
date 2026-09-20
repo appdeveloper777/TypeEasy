@@ -1,0 +1,6 @@
+// spec: MAP-1
+// Acceso m["k"] y m.k; clave ausente -> null (== null es true) pero su texto es "" (no "null").
+var mp = { "a": 1, "b": "dos", "c": [1, 2], "d": { "e": true } };
+println(mp["a"]); println(mp.b); println(mp["c"][1]); println(mp["d"]["e"]);
+println(mp["zz"] == null); println("[" + mp["zz"] + "]");
+println(mp["zz"]);

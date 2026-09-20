@@ -1,0 +1,9 @@
+// spec: NUM-6
+println(0.1m + 0.2m == 0.3m);
+println((0.1 + 0.2) == 0.3);
+println(1.10m + 2.20m);
+println(1.10m * 3);
+println(2.5m + 0.1);
+println("" + (1m / 3m));
+println((2.50m).to_string());
+println(json({ q: 10m / 4m, d: 2.50m }));

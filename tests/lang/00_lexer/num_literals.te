@@ -1,3 +1,4 @@
+// spec: LEX-3
 // expect: 255 10 1000000
 let hex = 0xFF;
 let bin = 0b1010;

@@ -1,0 +1,9 @@
+// spec: MAP-2
+var mp = { "a": 1 };
+mp["f"] = 3.5; mp["a"] = 9; mp["s"] = "v";
+println(mp["f"]); println(mp["a"]);
+println("a" in mp); println("zz" in mp); println(mp.has("a"));
+println(mp.length); println(mp.keys()); println(mp.values());
+var built = {};
+built["k1"] = 1; built["k2"] = "v";
+println(json(built));

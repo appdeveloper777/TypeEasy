@@ -1,0 +1,11 @@
+// spec: FN-4, SCP-1
+// Un parametro sombrea la variable externa sin pisarla; los locales de una fn no se filtran afuera.
+let shadow = 1;
+let sh = fn(shadow) => shadow + 1;
+println(sh(41)); println(shadow);
+let f = fn() => { let inner = 7; return inner; };
+println(f());
+println("[" + inner + "]");
+var g = 1;
+let h = fn() => { g = g + 1; return g; };
+println(h()); println(g);

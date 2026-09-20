@@ -1,3 +1,4 @@
+// spec: CLS-1
 // expect: name=Ana saldo=150 secret=7
 // Access modifiers (public/private) happy path:
 //  - public fields can be read AND written from outside the class
