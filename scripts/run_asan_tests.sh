@@ -74,3 +74,6 @@ bash tests/regress/run_api_fatal_recovery.sh ./src/typeeasy 8089
 
 echo "=== [asan] WebSocket y HTTP bajo el MISMO lock de interprete (regresion 0.1.9) ==="
 python3 tests/regress/run_ws_http_lock.py --bin ./src/typeeasy
+
+echo "=== [asan] WebSockets ociosos/muertos no agotan el pool de workers (ping/pong + TYPEEASY_NUM_THREADS) ==="
+python3 tests/regress/run_ws_idle_starvation.py --bin ./src/typeeasy

@@ -6,12 +6,25 @@ que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
 ## 0.1.8 — 2026-09-19 (re-tag 2026-09-20 con los fixes WebSocket)
 
-> El tag `v0.1.8` se movió el 2026-09-20 (3fa67c6 → 01db86d → commit del fix de
-> `ws_send`) porque el build original crasheaba en producción con WebSocket + HTTP
-> concurrentes. Los assets del release se regeneraron; si descargaste 0.1.8 antes de
-> esa fecha, verificá el SHA.
+> El tag `v0.1.8` se movió el 2026-09-20 tres veces (3fa67c6 → 01db86d → eeb4894 → fix
+> del pool de workers) porque el build original crasheaba en producción con WebSocket +
+> HTTP concurrentes y los siguientes aún permitían que WebSockets zombis colgaran el
+> servidor. Los assets del release se regeneraron; si descargaste 0.1.8 antes de esa
+> fecha, verificá el SHA.
 
 ### Cambios de comportamiento
+- **WebSockets ociosos o muertos ya no agotan el pool de workers.** Cada WebSocket
+  abierto ocupa un hilo worker de civetweb durante toda su vida. Hasta ahora el servidor
+  arrancaba con `num_threads=8` fijo y sin `websocket_timeout_ms` ni ping/pong: bastaban
+  8 sockets medio muertos (el navegador desapareció detrás de un proxy con `read_timeout`
+  de 24 h) para que el proceso siguiera vivo pero **no atendiera ninguna petición HTTP**
+  (caída del ajedrez en JunX, 2026-09-20: 8 conexiones ESTABLISHED de 73–116 min y cero
+  requests). Ahora: `TYPEEASY_NUM_THREADS` (default **64**, hilos perezosos), PING cada
+  `TYPEEASY_WS_TIMEOUT_MS` (default 30000) de inactividad y cierre del socket tras 5 PINGs
+  sin PONG (`TYPEEASY_WS_PING_PONG=0` lo desactiva). Los navegadores contestan PONG solos;
+  un handler `.te` no ve los frames de control. Test `tests/regress/run_ws_idle_starvation.py`
+  (0.1.8: 9.º handshake falla y `/ok` se cuelga; fix: 12 WS ociosos + `/ok` 200, sockets
+  muertos cerrados en ~6×timeout, un WS vivo sobrevive).
 - **WebSocket y HTTP comparten UN solo lock de intérprete.** Hasta el primer build de
   0.1.8 los callbacks WS (`connect/ready/data/close`) ejecutaban el handler `.te` bajo
   un mutex propio, en paralelo con un handler HTTP en curso: el reset de fin de request

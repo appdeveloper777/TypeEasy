@@ -1,0 +1,21 @@
+// Regression fixture (0.1.9): idle/dead WebSocket connections must not starve
+// the civetweb worker pool. Each open WS pins a worker thread; with the old
+// fixed num_threads=8 and no ping/pong, 8 half-dead sockets (client gone behind
+// a proxy with a 24h read timeout) left the process alive but answering NOTHING
+// (chess/JunX outage 2026-09-20). Now: TYPEEASY_NUM_THREADS (default 64) and
+// websocket_timeout_ms + enable_websocket_ping_pong drop dead sockets.
+
+endpoint {
+
+    [HttpGet("/ok")]
+    ok() {
+        return json("{\"ok\":1}");
+    }
+
+    [WebSocket("/ws/idle")]
+    ws_idle() {
+        ws_subscribe("idle");
+        ws_send("hi");
+    }
+
+}

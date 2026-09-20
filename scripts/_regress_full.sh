@@ -135,6 +135,17 @@ else
 fi
 
 echo "==================================================================="
+echo " STAGE 6d  Idle/dead WebSockets must not starve the worker pool"
+echo "==================================================================="
+WSIDLE_OUT="$( python3 /app/tests/regress/run_ws_idle_starvation.py --bin /app/src/typeeasy 2>&1 )"
+echo "$WSIDLE_OUT"
+if echo "$WSIDLE_OUT" | grep -q "WS_IDLE_STARVATION_RESULT: PASS"; then
+  WSIDLE_OK=0; echo "ws-idle-starvation: PASS"
+else
+  WSIDLE_OK=1; echo "ws-idle-starvation: FAIL"
+fi
+
+echo "==================================================================="
 echo " STAGE 7   Valgrind leak-check (key scripts)"
 echo "==================================================================="
 VG="valgrind --error-exitcode=99 --leak-check=full --show-leak-kinds=definite,indirect --errors-for-leak-kinds=definite --track-origins=yes -q"
@@ -172,13 +183,14 @@ if [ "${JSONFNCALL_OK:-1}" = "0" ]; then echo " json-fn-call-object:   PASS"; el
 if [ "${APIBLEED_OK:-1}" = "0" ]; then echo " api-bleed (--api):     PASS"; else echo " api-bleed (--api):     FAIL"; fi
 if [ "${WSATTACH_OK:-1}" = "0" ]; then echo " ws-attach (--api):     PASS"; else echo " ws-attach (--api):     FAIL"; fi
 if [ "${WSLOCK_OK:-1}" = "0" ]; then echo " ws-http-lock (--api):  PASS"; else echo " ws-http-lock (--api):  FAIL"; fi
+if [ "${WSIDLE_OK:-1}" = "0" ]; then echo " ws-idle-starvation:    PASS"; else echo " ws-idle-starvation:    FAIL"; fi
 if [ "$RC_TOTAL" = "0" ]; then
   echo " valgrind leaks:        no runtime (envelope/sql) leaks"
 else
   echo " valgrind leaks:        runtime leak detected (see above)"
 fi
 echo "==================================================================="
-if [ "${CLANG_OK:-2}" != "1" ] && [ "${DBSTD_OK:-1}" = "0" ] && [ "${BARELAMBDA_OK:-1}" = "0" ] && [ "${JSONATTR_OK:-1}" = "0" ] && [ "${JSONFNCALL_OK:-1}" = "0" ] && [ "${APIBLEED_OK:-1}" = "0" ] && [ "${WSATTACH_OK:-1}" = "0" ] && [ "${WSLOCK_OK:-1}" = "0" ] && [ "$RC_TOTAL" = "0" ]; then
+if [ "${CLANG_OK:-2}" != "1" ] && [ "${DBSTD_OK:-1}" = "0" ] && [ "${BARELAMBDA_OK:-1}" = "0" ] && [ "${JSONATTR_OK:-1}" = "0" ] && [ "${JSONFNCALL_OK:-1}" = "0" ] && [ "${APIBLEED_OK:-1}" = "0" ] && [ "${WSATTACH_OK:-1}" = "0" ] && [ "${WSLOCK_OK:-1}" = "0" ] && [ "${WSIDLE_OK:-1}" = "0" ] && [ "$RC_TOTAL" = "0" ]; then
   echo " RESULT: GREEN"; exit 0
 else
   echo " RESULT: RED"; exit 1

@@ -1124,10 +1124,42 @@ static int run_single_server(const char *host, int port, int worker_index) {
         snprintf(timeout_spec, sizeof(timeout_spec), "%ld", (v > 0) ? v : 30000L);
     }
 
+    /* Worker pool + WebSocket liveness (0.1.9, chess/JunX outage 2026-09-20).
+     * Every open WebSocket pins one civetweb worker thread for its whole life.
+     * With the old fixed "num_threads=8" and no ping/pong, 8 half-dead WS
+     * connections (client vanished behind a proxy with a 24h read timeout)
+     * starved the pool: the process stayed alive but answered NO request.
+     *  - TYPEEASY_NUM_THREADS   (default 64; threads are spawned lazily)
+     *  - TYPEEASY_WS_TIMEOUT_MS (default 30000): idle time before a PING
+     *  - TYPEEASY_WS_PING_PONG  ("0"/"no" disables; default on): after
+     *    MG_MAX_UNANSWERED_PING (5) unanswered PINGs the dead WS is dropped
+     *    and its thread returns to the pool. Browsers answer PONG themselves. */
+    char threads_spec[32];
+    {
+        const char *e = getenv("TYPEEASY_NUM_THREADS");
+        long v = e ? strtol(e, NULL, 10) : 0;
+        snprintf(threads_spec, sizeof(threads_spec), "%ld", (v > 0) ? v : 64L);
+    }
+    char ws_timeout_spec[32];
+    {
+        const char *e = getenv("TYPEEASY_WS_TIMEOUT_MS");
+        long v = e ? strtol(e, NULL, 10) : 0;
+        snprintf(ws_timeout_spec, sizeof(ws_timeout_spec), "%ld", (v > 0) ? v : 30000L);
+    }
+    const char *ws_ping_pong = "yes";
+    {
+        const char *e = getenv("TYPEEASY_WS_PING_PONG");
+        if (e && (strcmp(e, "0") == 0 || te_strcasecmp(e, "no") == 0 || te_strcasecmp(e, "off") == 0)) {
+            ws_ping_pong = "no";
+        }
+    }
+
     const char *options[] = {
         "listening_ports", port_spec,
-        "num_threads", "8",
+        "num_threads", threads_spec,
         "request_timeout_ms", timeout_spec,
+        "websocket_timeout_ms", ws_timeout_spec,
+        "enable_websocket_ping_pong", ws_ping_pong,
         /* CORS is handled entirely by request_handler (see cors_resolve_origin)
          * so a comma-separated origin list can be matched against the request's
          * Origin header. We force access_control_allow_methods to "" so
