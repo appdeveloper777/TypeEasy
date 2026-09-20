@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "te_types.h"
 
 typedef struct { char *buf; size_t len, cap; } FmtBuf;
 
@@ -43,7 +44,7 @@ static const char *prev_word(const FmtBuf *o, char *out, size_t cap) {
 }
 static int word_in(const char *w, const char **set) { for (int i = 0; set[i]; i++) if (strcmp(w, set[i]) == 0) return 1; return 0; }
 static const char *KW_NO_OPERAND[] = { "return", "in", "else", "case", "throw", "await", "print", "println", NULL };
-static const char *TYPE_WORDS[] = { "int", "string", "float", "bool", "datetime", "uuid", "decimal", "dynamic", "void", NULL };
+static const char *TYPE_WORDS[] = { TE_DT_INT, TE_DT_STRING, TE_DT_FLOAT, TE_DT_BOOL, TE_DT_DATETIME, TE_DT_UUID, TE_DT_DECIMAL, TE_DT_DYNAMIC, TE_DT_VOID, NULL };
 static const char *KW_SAME_LINE_AFTER_BRACE[] = { "else", "catch", "finally", NULL };
 /* Un `{` abre un BLOQUE si sigue a `)`, a `=>` o a una palabra (class X, else, fn...); tras
  * `return`/`in`/`throw`/`case` o cualquier operador/puntuacion es un MAP literal. */

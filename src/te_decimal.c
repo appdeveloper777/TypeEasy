@@ -185,7 +185,7 @@ static Variable *dec_attr_of(ASTNode *n) {
 }
 
 static int is_decimal_call(ASTNode *n) {
-    return n && n->type && strcmp(n->type, TE_T_CALL_FUNC) == 0 && n->id && strcmp(n->id, TE_DT_DECIMAL) == 0;
+    return n && n->type && nk_of(n) == NK_CALL_FUNC && n->id && strcmp(n->id, TE_DT_DECIMAL) == 0;
 }
 
 int te_dec_expr_has_decimal(ASTNode *n) {
@@ -198,7 +198,7 @@ int te_dec_expr_has_decimal(ASTNode *n) {
         return te_dec_expr_has_decimal(n->left) || te_dec_expr_has_decimal(n->right);
     case NK_NEG: return te_dec_expr_has_decimal(n->left);
     default:
-        if (n->type && strcmp(n->type, TE_T_DECIMAL) == 0) return 1;
+        if (n->type && nk_of(n) == NK_DECIMAL) return 1;
         return is_decimal_call(n);
     }
 }
@@ -207,7 +207,7 @@ int te_dec_expr_has_decimal(ASTNode *n) {
  * string numérico, llamada decimal(...), o subexpresión exacta. */
 static int dec_operand(ASTNode *n, TeDec *out) {
     if (!n) return 0;
-    if (n->type && strcmp(n->type, TE_T_DECIMAL) == 0) return te_dec_parse(n->str_value, out);
+    if (n->type && nk_of(n) == NK_DECIMAL) return te_dec_parse(n->str_value, out);
     NodeKind k = nk_of(n);
     switch (k) {
     case NK_NUMBER: case NK_INT: out->m = n->value; out->scale = 0; return 1;
@@ -237,7 +237,7 @@ static int dec_operand(ASTNode *n, TeDec *out) {
         return te_dec_binop(k, &a, &b, out);
     }
     default:
-        if (is_decimal_call(n) || (n->type && strcmp(n->type, TE_T_CALL_FUNC) == 0) || (n->type && strcmp(n->type, TE_T_CALL_METHOD) == 0)) {
+        if (is_decimal_call(n) || (n->type && nk_of(n) == NK_CALL_FUNC) || (n->type && nk_of(n) == NK_CALL_METHOD)) {
             /* evaluar la llamada y leer __ret__ */
             interpret_ast(n);
             Variable *r = find_variable(TE_SYM_RET);

@@ -152,7 +152,7 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
         size_t dl = strlen(declared);
         if (dl > 0 && declared[dl - 1] == '?') decl_nullable = 1;
     }
-    if (value_node && value_node->type && strcmp(value_node->type, TE_T_NULL) == 0) {
+    if (value_node && value_node->type && nk_of(value_node) == NK_NULL) {
         if (!decl_nullable) {
             int ln = node->line ? node->line : (access->line ? access->line : 0);
             const char *fname = g_vm.script_path ? g_vm.script_path : "<script>";
@@ -197,14 +197,14 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
         /* val_kind: 0 = desconocido, 1 = string, 2 = numérico */
         int val_kind = 0;
         if (value_node->type) {
-            if (strcmp(value_node->type, TE_T_STRING) == 0) {
+            if (nk_of(value_node) == NK_STRING) {
                 val_kind = 1;
-            } else if (strcmp(value_node->type, TE_T_NUMBER) == 0 ||
-                       strcmp(value_node->type, TE_T_INT) == 0 ||
-                       strcmp(value_node->type, TE_T_FLOAT) == 0) {
+            } else if (nk_of(value_node) == NK_NUMBER ||
+                       nk_of(value_node) == NK_INT ||
+                       nk_of(value_node) == NK_FLOAT) {
                 val_kind = 2;
-            } else if (strcmp(value_node->type, TE_T_IDENTIFIER) == 0 ||
-                       strcmp(value_node->type, TE_T_ID) == 0) {
+            } else if (nk_of(value_node) == NK_IDENTIFIER ||
+                       nk_of(value_node) == NK_ID) {
                 Variable *vv = find_variable(value_node->id ? value_node->id : value_node->str_value);
                 if (vv) {
                     if (vv->vtype == VAL_STRING) val_kind = 1;
@@ -320,7 +320,7 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
      * condición). Loop para ternarios anidados (right-assoc). Espejo de
      * interpret_var_decl; sin esto el nodo TERNARY caía al catch-all de
      * te_value_to_variable y se guardaba 0 SIEMPRE. */
-    while (value_node && value_node->type && strcmp(value_node->type, TE_T_TERNARY) == 0) {
+    while (value_node && value_node->type && nk_of(value_node) == NK_TERNARY) {
         int cond = (evaluate_expression(value_node->left) != 0.0);
         value_node = cond ? value_node->right : value_node->extra;
     }

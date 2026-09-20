@@ -486,8 +486,8 @@ void native_json(ASTNode *arg) {
     }
 
     /* Literales de objeto/lista inline: `return json({...})` / `json([...])`. */
-    if (arg->type && (strcmp(arg->type, TE_T_OBJECT_LITERAL) == 0 || strcmp(arg->type, TE_T_MAP) == 0 ||
-                      (strcmp(arg->type, TE_T_LIST) == 0 && !arg->id))) {
+    if (arg->type && (nk_of(arg) == NK_OBJECT_LITERAL || strcmp(arg->type, TE_T_MAP) == 0 ||
+                      (nk_of(arg) == NK_LIST && !arg->id))) {
         TeBuf b; tebuf_init(&b);
         te_json_emit_node(&b, arg);
         te_set_ret_string(b.p ? b.p : "{}");
@@ -513,7 +513,7 @@ void native_json(ASTNode *arg) {
         ASTNode *listNode = (ASTNode *)(intptr_t)v.value.object_value;
         int all_objects = listNode->left != NULL;
         for (ASTNode *cur = listNode->left; cur && all_objects; cur = cur->next)
-            if (!cur->type || strcmp(cur->type, TE_T_OBJECT) != 0) all_objects = 0;
+            if (!cur->type || nk_of(cur) != NK_OBJECT) all_objects = 0;
         if (all_objects) {
             tebuf_putc(&b, '[');
             int first = 1;
@@ -545,7 +545,7 @@ void native_xml(ASTNode *arg) {
     /* Bug fix (v0.0.30): xml(fnCall()) — invoke nested function, same CALL_FUNC
      * pattern as native_json. Handles all return types so that
      * `return xml(RepoObj())` works just like `let o = RepoObj(); xml(o)`. */
-    if (arg && arg->type && strcmp(arg->type, TE_T_CALL_FUNC) == 0) {
+    if (arg && arg->type && nk_of(arg) == NK_CALL_FUNC) {
         interpret_call_func(arg);
         Variable *r = find_variable(TE_SYM_RET);
         if (r && r->vtype == VAL_STRING) {
@@ -619,7 +619,7 @@ void native_xml(ASTNode *arg) {
      * key/value pair as <key>value</key> wrapped in <root>. Must run before
      * the var_id resolution below (which would mistake the first KV key for a
      * variable name via arg->left->id). */
-    if (arg->type && (strcmp(arg->type, TE_T_OBJECT_LITERAL) == 0 || strcmp(arg->type, TE_T_MAP) == 0)) {
+    if (arg->type && (nk_of(arg) == NK_OBJECT_LITERAL || strcmp(arg->type, TE_T_MAP) == 0)) {
         TeBuf b; tebuf_init(&b);
         tebuf_puts(&b, "<root>");
         for (ASTNode *kv = arg->left; kv; kv = kv->right) {
@@ -641,7 +641,7 @@ void native_xml(ASTNode *arg) {
     const char *var_id = NULL;
     if (arg->id) {
         var_id = arg->id;
-    } else if (arg->type && (strcmp(arg->type, TE_T_IDENTIFIER) == 0 || strcmp(arg->type, TE_T_ID) == 0)) {
+    } else if (arg->type && (nk_of(arg) == NK_IDENTIFIER || nk_of(arg) == NK_ID)) {
         var_id = arg->str_value ? arg->str_value : arg->id;
     } else if (arg->left && arg->left->id) {
         var_id = arg->left->id;
@@ -652,7 +652,7 @@ void native_xml(ASTNode *arg) {
         return;
     }
     
-    if (arg->type && strcmp(arg->type, TE_T_STRING) == 0) {
+    if (arg->type && nk_of(arg) == NK_STRING) {
          ASTNode *result_node = create_ast_leaf(TE_T_STRING, 0, arg->str_value, NULL);
          add_or_update_variable(TE_SYM_RET, result_node);
          free_ast(result_node);
@@ -734,14 +734,14 @@ char* te_list_node_to_string(ASTNode *listNode) {
     while (cur) {
         if (!first) TE_LS_APPEND(", ");
         first = 0;
-        if (cur->type && strcmp(cur->type, TE_T_STRING) == 0) {
+        if (cur->type && nk_of(cur) == NK_STRING) {
             TE_LS_APPEND(cur->str_value ? cur->str_value : "");
-        } else if (cur->type && strcmp(cur->type, TE_T_FLOAT) == 0) {
+        } else if (cur->type && nk_of(cur) == NK_FLOAT) {
             te_fmt_double(buf, sizeof(buf), cur->str_value ? atof(cur->str_value) : 0.0);
             TE_LS_APPEND(buf);
-        } else if (cur->type && (strcmp(cur->type, TE_T_OBJECT_LITERAL) == 0 ||
+        } else if (cur->type && (nk_of(cur) == NK_OBJECT_LITERAL ||
                                  strcmp(cur->type, TE_T_MAP) == 0 ||
-                                 strcmp(cur->type, TE_T_LIST) == 0)) {
+                                 nk_of(cur) == NK_LIST)) {
             /* Elemento anidado (objeto/array de json_parse): serializar a JSON
              * en vez de "%d" de cur->value (=0), que producia "[0, 0]" para un
              * array de objetos y rompia guards tipo ("" + arr) != "". */
@@ -749,11 +749,11 @@ char* te_list_node_to_string(ASTNode *listNode) {
             te_json_emit_node(&jb, cur);
             TE_LS_APPEND(jb.p ? jb.p : "");
             if (jb.p) free(jb.p);
-        } else if (cur->type && strcmp(cur->type, TE_T_OBJECT) == 0) {
+        } else if (cur->type && nk_of(cur) == NK_OBJECT) {
             TE_LS_APPEND("object");
-        } else if (cur->type && strcmp(cur->type, TE_T_NULL) == 0) {
+        } else if (cur->type && nk_of(cur) == NK_NULL) {
             TE_LS_APPEND("null");   /* igual que "" + null (antes: 0) */
-        } else if (cur->type && strcmp(cur->type, TE_T_DECIMAL) == 0 && cur->str_value) {
+        } else if (cur->type && nk_of(cur) == NK_DECIMAL && cur->str_value) {
             TE_LS_APPEND(cur->str_value);
         } else {
             snprintf(buf, sizeof(buf), "%lld", (long long)cur->value);
@@ -789,7 +789,7 @@ char* get_node_string(ASTNode* node) {
         return out;
     }
 
-    if (node->type && strcmp(node->type, TE_T_ACCESS_ATTR) == 0) {
+    if (node->type && nk_of(node) == NK_ACCESS_ATTR) {
         ASTNode *o = node->left;
         ASTNode *a = node->right;
         if (!o || !a) return strdup("");
@@ -824,16 +824,16 @@ char* get_node_string(ASTNode* node) {
                 if (!val || !val->type) return strdup("");
                 if (strcmp(val->type, TE_T_BOOL) == 0)
                     return strdup(val->value ? "true" : "false");
-                if (strcmp(val->type, TE_T_NULL) == 0)
+                if (nk_of(val) == NK_NULL)
                     return strdup("null");
-                if (strcmp(val->type, TE_T_STRING) == 0 || strcmp(val->type, TE_T_DATETIME) == 0 ||
+                if (nk_of(val) == NK_STRING || strcmp(val->type, TE_T_DATETIME) == 0 ||
                     strcmp(val->type, TE_T_UUID) == 0)
                     return strdup(val->str_value ? val->str_value : "");
-                if (strcmp(val->type, TE_T_NUMBER) == 0 || strcmp(val->type, TE_T_INT) == 0) {
+                if (nk_of(val) == NK_NUMBER || nk_of(val) == NK_INT) {
                     snprintf(temp, sizeof(temp), "%lld", (long long)val->value);
                     return strdup(temp);
                 }
-                if (strcmp(val->type, TE_T_FLOAT) == 0) {
+                if (nk_of(val) == NK_FLOAT) {
                     te_fmt_double(temp, sizeof(temp), val->str_value ? atof(val->str_value) : 0.0);
                     return strdup(temp);
                 }
@@ -843,13 +843,13 @@ char* get_node_string(ASTNode* node) {
             if (v && v->vtype == VAL_OBJECT && v->type && strcmp(v->type, TE_T_OBJECT) == 0) obj = v->value.object_value;
         }
         /* Caso 2: arr[i].attr — o es ACCESS_EXPR sobre LIST. */
-        if (!obj && o->type && strcmp(o->type, TE_T_ACCESS_EXPR) == 0) {
+        if (!obj && o->type && nk_of(o) == NK_ACCESS_EXPR) {
             ASTNode *list = resolve_to_list(o->left);
             if (list && o->right) {
                 int idx = (int)evaluate_expression(o->right);
                 if (idx >= 0 && idx < list_length(list)) {
                     ASTNode *item = list_get_item(list, idx);
-                    if (item && item->type && strcmp(item->type, TE_T_OBJECT) == 0) {
+                    if (item && item->type && nk_of(item) == NK_OBJECT) {
                         obj = item->extra ? (ObjectNode*)item->extra
                                           : (ObjectNode*)(intptr_t)item->value;
                     }
@@ -868,7 +868,7 @@ char* get_node_string(ASTNode* node) {
                     if (key) {
                         ASTNode *pair = map_find_pair(map, key);
                         ASTNode *val  = pair ? pair->left : NULL;
-                        if (val && val->type && strcmp(val->type, TE_T_OBJECT) == 0) {
+                        if (val && val->type && nk_of(val) == NK_OBJECT) {
                             obj = val->extra ? (ObjectNode*)val->extra
                                              : (ObjectNode*)(intptr_t)val->value;
                         }
@@ -1087,9 +1087,9 @@ int typeeasy_http_iter_header(int idx, const char **k, const char **v) { return 
 const char *te_arg_string(ASTNode *arg) {
     if (!arg) return NULL;
     if (arg->type) {
-        if (strcmp(arg->type, TE_T_STRING) == 0 || strcmp(arg->type, TE_T_STRING_LITERAL) == 0)
+        if (nk_of(arg) == NK_STRING || nk_of(arg) == NK_STRING_LITERAL)
             return arg->str_value;
-        if (strcmp(arg->type, TE_T_IDENTIFIER) == 0 || strcmp(arg->type, TE_T_ID) == 0) {
+        if (nk_of(arg) == NK_IDENTIFIER || nk_of(arg) == NK_ID) {
             Variable *v = find_variable(arg->id);
             if (v && v->vtype == VAL_STRING) return v->value.string_value;
         }
@@ -1099,8 +1099,8 @@ const char *te_arg_string(ASTNode *arg) {
 int te_arg_int(ASTNode *arg, int dflt) {
     if (!arg) return dflt;
     if (arg->type) {
-        if (strcmp(arg->type, TE_T_NUMBER) == 0 || strcmp(arg->type, TE_T_INT) == 0) return arg->value;
-        if (strcmp(arg->type, TE_T_IDENTIFIER) == 0 || strcmp(arg->type, TE_T_ID) == 0) {
+        if (nk_of(arg) == NK_NUMBER || nk_of(arg) == NK_INT) return arg->value;
+        if (nk_of(arg) == NK_IDENTIFIER || nk_of(arg) == NK_ID) {
             Variable *v = find_variable(arg->id);
             if (v && v->vtype == VAL_INT) return v->value.int_value;
         }
@@ -1702,9 +1702,9 @@ static void native_sql_close(ASTNode *arg) {
  * estado nuevo del flag (0/1). */
 static int te_arg_is_truthy(ASTNode *a) {
     if (!a || !a->type) return 0;
-    if (strcmp(a->type, TE_T_NUMBER) == 0 || strcmp(a->type, TE_T_INT) == 0) return a->value != 0;
+    if (nk_of(a) == NK_NUMBER || nk_of(a) == NK_INT) return a->value != 0;
     if (strcmp(a->type, TE_T_BOOL) == 0) return a->value != 0;
-    if (strcmp(a->type, TE_T_STRING) == 0) {
+    if (nk_of(a) == NK_STRING) {
         const char *s = a->str_value ? a->str_value : "";
         /* te_ascii_casecmp esta definido arriba en este mismo archivo; usar
          * strcasecmp() de <strings.h> aqui rompe el build en Windows/MSVC
@@ -1712,7 +1712,7 @@ static int te_arg_is_truthy(ASTNode *a) {
          * propio para no depender de POSIX en ninguna ruta de build. */
         return !strcmp(s, "1") || !te_ascii_casecmp(s, "true") || !te_ascii_casecmp(s, "yes") || !te_ascii_casecmp(s, "on");
     }
-    if (strcmp(a->type, TE_T_IDENTIFIER) == 0 || strcmp(a->type, TE_T_ID) == 0) {
+    if (nk_of(a) == NK_IDENTIFIER || nk_of(a) == NK_ID) {
         Variable *v = a->id ? find_variable(a->id) : NULL;
         if (!v) return 0;
         if (v->vtype == VAL_INT) return v->value.int_value != 0;
@@ -3041,7 +3041,7 @@ void te_list_literal_construct_objects(ASTNode *value) {
     while (cur) {
         list_count++;
         /* debug print removed */
-        if (strcmp(cur->type, TE_T_OBJECT) != 0) {
+        if (nk_of(cur) != NK_OBJECT) {
             return;
         }
 
@@ -3103,8 +3103,8 @@ static ASTNode* te_list_item_shallow_copy(ASTNode *src) {
     copy->bc = NULL;
     copy->col_cache = NULL;
     copy->is_new_expr = 0;   /* el item ya es un objeto construido (dato), no un `new` */
-    if (src->type && (strcmp(src->type, TE_T_OBJECT_LITERAL) == 0 || strcmp(src->type, TE_T_MAP) == 0 ||
-                      strcmp(src->type, TE_T_LIST) == 0))
+    if (src->type && (nk_of(src) == NK_OBJECT_LITERAL || strcmp(src->type, TE_T_MAP) == 0 ||
+                      nk_of(src) == NK_LIST))
         copy->extra = NULL;   /* side hash/index belongs to the original (se reconstruye perezoso) */
     copy->borrowed_children = 1;
     return copy;
@@ -3153,9 +3153,9 @@ static ASTNode* te_list_literal_build(ASTNode *lit) {
     ASTNode *tail = NULL;
     for (ASTNode *src = lit->left; src; src = src->next) {
         ASTNode *copy = NULL;
-        if (src->type && strcmp(src->type, TE_T_LIST) == 0) {
+        if (src->type && nk_of(src) == NK_LIST) {
             copy = te_list_literal_build(src);                 /* anidada: la posee el padre */
-        } else if (src->type && strcmp(src->type, TE_T_OBJECT_LITERAL) == 0 && src->value != 1) {
+        } else if (src->type && nk_of(src) == NK_OBJECT_LITERAL && src->value != 1) {
             copy = te_map_literal_build(src);                  /* `[ { k: local } ]`: valores capturados ahora */
         } else if (te_list_item_is_lazy_expr(src)) {
             /* `[a, b + 1, f(x)]`: evaluar AHORA (antes se resolvía al leer: locales de fn ya
@@ -3176,7 +3176,7 @@ static ASTNode* te_list_literal_build(ASTNode *lit) {
 }
 
 ASTNode* te_list_literal_instance(ASTNode *lit) {
-    if (!lit || !lit->type || strcmp(lit->type, TE_T_LIST) != 0) return lit;
+    if (!lit || !lit->type || nk_of(lit) != NK_LIST) return lit;
     ASTNode *head = te_list_literal_build(lit);
     if (!head) return lit;
     te_req_owned_ast_register(head);
@@ -3227,7 +3227,7 @@ static ASTNode* te_map_literal_build(ASTNode *lit) {
 }
 
 ASTNode* te_map_literal_instance(ASTNode *lit) {
-    if (!lit || !lit->type || strcmp(lit->type, TE_T_OBJECT_LITERAL) != 0) return lit;
+    if (!lit || !lit->type || nk_of(lit) != NK_OBJECT_LITERAL) return lit;
     if (lit->value == 1) return lit;   /* ya es dato */
     ASTNode *head = te_map_literal_build(lit);
     if (!head) return lit;
@@ -3238,7 +3238,7 @@ ASTNode* te_map_literal_instance(ASTNode *lit) {
 /* Variante para `lista.push({...})`: la instancia pasa a ser propiedad de la lista (no se
  * registra aparte; el registro del request libera la lista y con ella el item). */
 ASTNode* te_map_literal_owned(ASTNode *lit) {
-    if (!lit || !lit->type || strcmp(lit->type, TE_T_OBJECT_LITERAL) != 0 || lit->value == 1) return NULL;
+    if (!lit || !lit->type || nk_of(lit) != NK_OBJECT_LITERAL || lit->value == 1) return NULL;
     return te_map_literal_build(lit);
 }
 
@@ -3355,7 +3355,7 @@ void add_or_update_variable(char *id, ASTNode *value) {
     if (!value) return;
     /* Fase 3a: si es STRING_INTERP, expandir a STRING antes de almacenar */
     ASTNode *expanded_holder = NULL;
-    if (value->type && strcmp(value->type, TE_T_STRING_INTERP) == 0) {
+    if (value->type && nk_of(value) == NK_STRING_INTERP) {
         char *s = expand_interp_string(value->str_value);
         expanded_holder = create_ast_leaf(TE_T_STRING, 0, s, NULL);
         free(s);
@@ -4032,12 +4032,12 @@ ParameterNode *add_parameter(ParameterNode *list, char *name, char *type) {
 // Helper to check if node resolves to a string
 int is_string_type(ASTNode *node) {
     if (!node) return 0;
-    if (node->type && (strcmp(node->type, TE_T_STRING) == 0 || strcmp(node->type, TE_T_STRING_LITERAL) == 0 || strcmp(node->type, TE_T_STRING_INTERP) == 0)) return 1;
-    if (node->type && (strcmp(node->type, TE_T_IDENTIFIER) == 0 || strcmp(node->type, TE_T_ID) == 0)) {
+    if (node->type && (nk_of(node) == NK_STRING || nk_of(node) == NK_STRING_LITERAL || nk_of(node) == NK_STRING_INTERP)) return 1;
+    if (node->type && (nk_of(node) == NK_IDENTIFIER || nk_of(node) == NK_ID)) {
         Variable *v = find_variable(node->id);
         if (v && v->vtype == VAL_STRING && !te_var_is_decimal(v)) return 1;   /* decimal: numérico, no concatena */
     }
-    if (node->type && strcmp(node->type, TE_T_ACCESS_ATTR) == 0) {
+    if (node->type && nk_of(node) == NK_ACCESS_ATTR) {
         ASTNode *o = node->left;
         ASTNode *a = node->right;
         if (!o || !a) return 0;
@@ -4071,13 +4071,13 @@ int is_string_type(ASTNode *node) {
             }
         }
         /* Caso 2: arr[i].attr — o es ACCESS_EXPR. Resolvemos el item OBJECT. */
-        if (!obj && o->type && strcmp(o->type, TE_T_ACCESS_EXPR) == 0) {
+        if (!obj && o->type && nk_of(o) == NK_ACCESS_EXPR) {
             ASTNode *list = resolve_to_list(o->left);
             if (list && o->right) {
                 int idx = (int)evaluate_expression(o->right);
                 if (idx >= 0 && idx < list_length(list)) {
                     ASTNode *item = list_get_item(list, idx);
-                    if (item && item->type && strcmp(item->type, TE_T_OBJECT) == 0) {
+                    if (item && item->type && nk_of(item) == NK_OBJECT) {
                         obj = item->extra ? (ObjectNode*)item->extra
                                           : (ObjectNode*)(intptr_t)item->value;
                     }
@@ -4092,14 +4092,14 @@ int is_string_type(ASTNode *node) {
             }
         }
     }
-    if (node->type && strcmp(node->type, TE_T_ADD) == 0) {
+    if (node->type && nk_of(node) == NK_ADD) {
         if (is_string_type(node->left) || is_string_type(node->right)) return 1;
     }
     /* Bracket access m["key"] / arr[i] cuyo valor es string. ACCESS_ATTR
      * (punto) ya estaba cubierto arriba; sin esto, `return obj["k"]` y los
      * contextos string que dependen de is_string_type no reconocian el corchete
      * y caian a la ruta numerica (que devuelve 0 con error). */
-    if (node->type && strcmp(node->type, TE_T_ACCESS_EXPR) == 0) {
+    if (node->type && nk_of(node) == NK_ACCESS_EXPR) {
         ASTNode *map = resolve_to_map(node->left);
         if (map) {
             char keybuf[1024];
@@ -4119,11 +4119,11 @@ int is_string_type(ASTNode *node) {
             int idx = (int)evaluate_expression(node->right);
             if (idx >= 0 && idx < list_length(list)) {
                 ASTNode *item = list_get_item(list, idx);
-                if (item && item->type && strcmp(item->type, TE_T_STRING) == 0) return 1;
+                if (item && item->type && nk_of(item) == NK_STRING) return 1;
             }
         }
     }
-    if (node->type && strcmp(node->type, TE_T_STRING_INTERP) == 0) return 1;
+    if (node->type && nk_of(node) == NK_STRING_INTERP) return 1;
     return 0;
 }
 
@@ -4191,9 +4191,9 @@ void te_invalidate_list_cache(ASTNode *root) {
 static void te_json_strip_side_index(ASTNode *n) {
     while (n) {
         if (n->type) {
-            if (strcmp(n->type, TE_T_LIST) == 0) {
+            if (nk_of(n) == NK_LIST) {
                 te_list_idx_free((TEListIdx*)n->extra); n->extra = NULL;
-            } else if (strcmp(n->type, TE_T_OBJECT_LITERAL) == 0 || strcmp(n->type, TE_T_MAP) == 0) {
+            } else if (nk_of(n) == NK_OBJECT_LITERAL || strcmp(n->type, TE_T_MAP) == 0) {
                 te_map_hash_free((TEMapHash*)n->extra); n->extra = NULL;
             }
         }
@@ -4325,7 +4325,7 @@ static TEMapHash* te_map_get_hash(ASTNode *map) {
 }
 
 ASTNode* list_get_item(ASTNode *list, int idx) {
-    if (!list || !list->type || strcmp(list->type, TE_T_LIST) != 0) return NULL;
+    if (!list || !list->type || nk_of(list) != NK_LIST) return NULL;
     if (idx < 0) return NULL;
     te_df_materialize_inplace(list);   /* DataFrame (TE_CSV_DATAFRAME=1): indexar exige filas reales */
     /* Ola 14: O(1) via side-cache index. */
@@ -4342,7 +4342,7 @@ ASTNode* list_get_item(ASTNode *list, int idx) {
 }
 
 int list_length(ASTNode *list) {
-    if (!list || !list->type || strcmp(list->type, TE_T_LIST) != 0) return 0;
+    if (!list || !list->type || nk_of(list) != NK_LIST) return 0;
     /* v0.0.14: columnar puro — col_cache es la fuente de verdad cuando
      * la lista no tiene wrappers (TE_CSV_COLUMNAR=1). */
     if (!list->left && list->col_cache) {
@@ -4362,8 +4362,8 @@ int list_length(ASTNode *list) {
 /* Resolve an expression node to the underlying LIST ASTNode, or NULL. */
 ASTNode* resolve_to_list(ASTNode *node) {
     if (!node) return NULL;
-    if (node->type && strcmp(node->type, TE_T_LIST) == 0) return node;
-    if (node->type && (strcmp(node->type, TE_T_IDENTIFIER) == 0 || strcmp(node->type, TE_T_ID) == 0)) {
+    if (node->type && nk_of(node) == NK_LIST) return node;
+    if (node->type && (nk_of(node) == NK_IDENTIFIER || nk_of(node) == NK_ID)) {
         Variable *v = find_variable(node->id);
         if (!v || !v->type || strcmp(v->type, TE_T_LIST) != 0) return NULL;
         return (ASTNode*)(intptr_t)v->value.object_value;
@@ -4373,7 +4373,7 @@ ASTNode* resolve_to_list(ASTNode *node) {
      * ACCESS_EXPR; resolve it to the element it points at, then resolve that
      * element to a list. Without this the outer index threw "indexed object
      * is neither a list nor a Map" even though the standalone `let` form worked. */
-    if (node->type && strcmp(node->type, TE_T_ACCESS_EXPR) == 0) {
+    if (node->type && nk_of(node) == NK_ACCESS_EXPR) {
         ASTNode *item = resolve_access_item(node);
         if (item == node) return NULL; /* guard against self-loop */
         return resolve_to_list(item);
@@ -4383,11 +4383,11 @@ ASTNode* resolve_to_list(ASTNode *node) {
      * literales LIST y variables; una llamada (CALL_FUNC/CALL_METHOD/...) que
      * retorna lista no se resolvía -> "Error: no es lista" o 0. Ejecutamos la
      * llamada y leemos el resultado tipado LIST desde __ret__. */
-    if (node->type && (strcmp(node->type, TE_T_CALL_FUNC) == 0
-                       || strcmp(node->type, TE_T_CALL_METHOD) == 0
-                       || strcmp(node->type, TE_T_FILTER_CALL) == 0
-                       || strcmp(node->type, TE_T_LIST_FUNC_CALL) == 0
-                       || strcmp(node->type, TE_T_PREDICT) == 0)) {
+    if (node->type && (nk_of(node) == NK_CALL_FUNC
+                       || nk_of(node) == NK_CALL_METHOD
+                       || nk_of(node) == NK_FILTER_CALL
+                       || nk_of(node) == NK_LIST_FUNC_CALL
+                       || nk_of(node) == NK_PREDICT)) {
         interpret_ast(node);
         Variable *r = find_variable(TE_SYM_RET);
         if (r && r->type && strcmp(r->type, TE_T_LIST) == 0 && r->vtype == VAL_OBJECT) {
@@ -4400,11 +4400,11 @@ ASTNode* resolve_to_list(ASTNode *node) {
 
 /* Nodo de llamada (f(x), o.m(), LINQ...). Su resultado indexable vive en __ret__. */
 int te_node_is_call(ASTNode *node) {
-    return node && node->type && (strcmp(node->type, TE_T_CALL_FUNC) == 0
-                                  || strcmp(node->type, TE_T_CALL_METHOD) == 0
-                                  || strcmp(node->type, TE_T_FILTER_CALL) == 0
-                                  || strcmp(node->type, TE_T_LIST_FUNC_CALL) == 0
-                                  || strcmp(node->type, TE_T_PREDICT) == 0);
+    return node && node->type && (nk_of(node) == NK_CALL_FUNC
+                                  || nk_of(node) == NK_CALL_METHOD
+                                  || nk_of(node) == NK_FILTER_CALL
+                                  || nk_of(node) == NK_LIST_FUNC_CALL
+                                  || nk_of(node) == NK_PREDICT);
 }
 
 /* Ejecuta la llamada UNA vez y devuelve el contenedor resultante (MAP o LIST) en *map / *list.
@@ -4422,14 +4422,14 @@ void te_resolve_call_container(ASTNode *node, ASTNode **map, ASTNode **list) {
 /* --- Helpers para MAP (Fase 1c) --- */
 ASTNode* resolve_to_map(ASTNode *node) {
     if (!node) return NULL;
-    if (node->type && strcmp(node->type, TE_T_OBJECT_LITERAL) == 0) return node;
-    if (node->type && (strcmp(node->type, TE_T_IDENTIFIER) == 0 || strcmp(node->type, TE_T_ID) == 0)) {
+    if (node->type && nk_of(node) == NK_OBJECT_LITERAL) return node;
+    if (node->type && (nk_of(node) == NK_IDENTIFIER || nk_of(node) == NK_ID)) {
         Variable *v = find_variable(node->id);
         if (!v || !v->type || strcmp(v->type, TE_T_MAP) != 0) return NULL;
         return (ASTNode*)(intptr_t)v->value.object_value;
     }
     /* gotcha #22: chained indexing `parsed[0]["col"]` resolving to a Map. */
-    if (node->type && strcmp(node->type, TE_T_ACCESS_EXPR) == 0) {
+    if (node->type && nk_of(node) == NK_ACCESS_EXPR) {
         ASTNode *item = resolve_access_item(node);
         if (item == node) return NULL; /* guard against self-loop */
         return resolve_to_map(item);
@@ -4448,7 +4448,7 @@ ASTNode* resolve_to_map(ASTNode *node) {
  * by resolve_to_list/resolve_to_map so chained indexing works inside any
  * expression (comparisons, arithmetic, etc.), not just standalone `let`. */
 ASTNode* resolve_access_item(ASTNode *node) {
-    if (!node || !node->type || strcmp(node->type, TE_T_ACCESS_EXPR) != 0) return NULL;
+    if (!node || !node->type || nk_of(node) != NK_ACCESS_EXPR) return NULL;
     ASTNode *map = NULL, *list = NULL;
     if (te_node_is_call(node->left)) te_resolve_call_container(node->left, &map, &list);   /* una sola ejecución */
     else map = resolve_to_map(node->left);
@@ -4542,9 +4542,9 @@ ASTNode* map_find_pair(ASTNode *map, const char *key) {
  * Returns the key string (never NULL for a non-NULL node). */
 const char* te_map_key_coerce(ASTNode *keyNode, char *buf, size_t cap) {
     if (!keyNode || !keyNode->type) return NULL;
-    if (strcmp(keyNode->type, TE_T_STRING) == 0)
+    if (nk_of(keyNode) == NK_STRING)
         return keyNode->str_value ? keyNode->str_value : "";
-    if (strcmp(keyNode->type, TE_T_IDENTIFIER) == 0 || strcmp(keyNode->type, TE_T_ID) == 0) {
+    if (nk_of(keyNode) == NK_IDENTIFIER || nk_of(keyNode) == NK_ID) {
         Variable *kv = find_variable(keyNode->id);
         if (kv && kv->vtype == VAL_STRING)
             return kv->value.string_value ? kv->value.string_value : "";
@@ -4814,7 +4814,7 @@ char* expand_interp_string(const char *raw) {
  * the value isn't a plain OBJECT (caller must fall back to build_item_from_value). */
 /* Non-static (declared in te_csv.h) so te_linq_ops.c can call directly. */
 ASTNode* build_object_wrapper_pooled(ASTNode *value) {
-    if (!value || !value->type || strcmp(value->type, TE_T_OBJECT) != 0) return NULL;
+    if (!value || !value->type || nk_of(value) != NK_OBJECT) return NULL;
     if (!te_csv_state()->wrapper_obj_type) te_csv_state()->wrapper_obj_type = strdup(TE_T_OBJECT);
     ASTNode *w = ast_pool_alloc();  /* slot is calloc'd → zero-initialised */
     w->type = te_csv_state()->wrapper_obj_type;
@@ -4842,7 +4842,7 @@ ASTNode* build_item_from_value(ASTNode *value) {
      * materializers (orderBy/groupBy/where/...), strdup("OBJECT") and
      * strdup(value->id) dominate. Share the sentinel "OBJECT" string (free_ast
      * already skips g_csv_wrapper_obj_type) and reuse interned class-name id. */
-    if (value->type && strcmp(value->type, TE_T_OBJECT) == 0 && !value->is_new_expr) {
+    if (value->type && nk_of(value) == NK_OBJECT && !value->is_new_expr) {
         ASTNode *new_item = (ASTNode*)calloc(1, sizeof(ASTNode));
         if (!te_csv_state()->wrapper_obj_type) te_csv_state()->wrapper_obj_type = strdup(TE_T_OBJECT);
         new_item->type = te_csv_state()->wrapper_obj_type;
@@ -4855,9 +4855,9 @@ ASTNode* build_item_from_value(ASTNode *value) {
         new_item->extra = value->extra;  /* ObjectNode* */
         return new_item;
     }
-    if (value->type && (strcmp(value->type, TE_T_LIST) == 0 ||
+    if (value->type && (nk_of(value) == NK_LIST ||
                         strcmp(value->type, TE_T_MAP) == 0 ||
-                        strcmp(value->type, TE_T_OBJECT_LITERAL) == 0)) {
+                        nk_of(value) == NK_OBJECT_LITERAL)) {
         /* Return the original list/map directly — they're shared by design. */
         return value;
     }
@@ -4877,7 +4877,7 @@ ASTNode* build_item_from_value(ASTNode *value) {
  * fixes both: list.push({...}) stores a usable, independent object. */
 static ASTNode* te_snapshot_object_literal(ASTNode *lit) {
     if (!lit || !lit->type) return NULL;
-    if (strcmp(lit->type, TE_T_OBJECT_LITERAL) != 0 && strcmp(lit->type, TE_T_MAP) != 0) return NULL;
+    if (nk_of(lit) != NK_OBJECT_LITERAL && strcmp(lit->type, TE_T_MAP) != 0) return NULL;
     ASTNode *newmap = (ASTNode*)calloc(1, sizeof(ASTNode));
     if (!newmap) return NULL;
     newmap->type = strdup(TE_T_OBJECT_LITERAL);
@@ -4887,7 +4887,7 @@ static ASTNode* te_snapshot_object_literal(ASTNode *lit) {
         if (!src->id) continue;
         ASTNode *valNode = src->left;
         ASTNode *leaf = NULL;
-        if (!valNode || (valNode->type && strcmp(valNode->type, TE_T_NULL) == 0)) {
+        if (!valNode || (valNode->type && nk_of(valNode) == NK_NULL)) {
             leaf = create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
         } else if (valNode->type && strcmp(valNode->type, TE_T_BOOL) == 0) {
             leaf = create_ast_leaf_number(TE_T_BOOL, valNode->value, NULL, NULL);
@@ -4921,14 +4921,14 @@ static ASTNode* te_snapshot_object_literal(ASTNode *lit) {
  * cannot resolve is treated as non-null. */
 int te_expr_is_null(ASTNode *l) {
     if (!l || !l->type) return 0;
-    if (strcmp(l->type, TE_T_NULL) == 0) return 1;
+    if (nk_of(l) == NK_NULL) return 1;
     /* gotcha #12: `env("X") ?? def` y demás `fn() ?? def`. Evaluamos la
      * llamada y miramos si __ret__ quedó null (p.ej. env() de una variable
      * no definida). Solo se usa en contextos `??`, así que la doble
      * evaluación del lado no-null afecta únicamente a builtins idempotentes
      * como env(). */
-    if (strcmp(l->type, TE_T_CALL_FUNC) == 0 || strcmp(l->type, TE_T_CALL_METHOD) == 0) {
-        if (strcmp(l->type, TE_T_CALL_FUNC) == 0) interpret_call_func(l);
+    if (nk_of(l) == NK_CALL_FUNC || nk_of(l) == NK_CALL_METHOD) {
+        if (nk_of(l) == NK_CALL_FUNC) interpret_call_func(l);
         else interpret_call_method(l);
         Variable *r = find_variable(TE_SYM_RET);
         if (!r) return 1;
@@ -4936,12 +4936,12 @@ int te_expr_is_null(ASTNode *l) {
         if (r->vtype == VAL_OBJECT && r->value.object_value == NULL) return 1;
         return 0;
     }
-    if (strcmp(l->type, TE_T_IDENTIFIER) == 0) {
+    if (nk_of(l) == NK_IDENTIFIER) {
         Variable *vv = find_variable(l->id);
         if (!vv || (vv->type && strcmp(vv->type, TE_T_NULL) == 0)) return 1;
         return 0;
     }
-    if (strcmp(l->type, TE_T_ACCESS_ATTR) == 0) {
+    if (nk_of(l) == NK_ACCESS_ATTR) {
         ASTNode *obj_ref  = l->left;
         ASTNode *attr_ref = l->right;
         if (!obj_ref || !obj_ref->id || !attr_ref || !attr_ref->id) return 0;
@@ -4961,7 +4961,7 @@ int te_expr_is_null(ASTNode *l) {
             if (!pair) return 1;
             ASTNode *val = pair->left;
             if (!val || !val->type) return 1;
-            if (strcmp(val->type, TE_T_NULL) == 0) return 1;
+            if (nk_of(val) == NK_NULL) return 1;
             return 0;
         }
         /* ROOT FIX (ASan-confirmed heap-buffer-overflow at ast.c te_expr_is_null,
@@ -4998,7 +4998,7 @@ int te_expr_is_null(ASTNode *l) {
         }
         return 0;
     }
-    if (strcmp(l->type, TE_T_ACCESS_EXPR) == 0) {
+    if (nk_of(l) == NK_ACCESS_EXPR) {
         /* `xs[i] ?? default` / `m["k"] ?? default`: an out-of-range list index
          * or a missing map key evaluates to null. Also handles a stored null
          * element/value. Conservative: anything resolvable to a concrete value
@@ -5018,7 +5018,7 @@ int te_expr_is_null(ASTNode *l) {
             ASTNode *pair = map_find_pair(map, key);
             if (!pair) return 1;                 /* missing key -> null */
             ASTNode *val = pair->left;
-            if (val && val->type && strcmp(val->type, TE_T_NULL) == 0) return 1;
+            if (val && val->type && nk_of(val) == NK_NULL) return 1;
             return 0;
         }
         ASTNode *list = resolve_to_list(l->left);
@@ -5026,7 +5026,7 @@ int te_expr_is_null(ASTNode *l) {
             int idx = (int)evaluate_expression(l->right);
             if (idx < 0 || idx >= list_length(list)) return 1;  /* out-of-range -> null */
             ASTNode *item = list_get_item(list, idx);
-            if (item && item->type && strcmp(item->type, TE_T_NULL) == 0) return 1;
+            if (item && item->type && nk_of(item) == NK_NULL) return 1;
             return 0;
         }
         return 0;
@@ -5277,7 +5277,7 @@ static double te_ev_access_attr(ASTNode *node) {
                 }
                 ASTNode *item = list_get_item(list, idx);
                 ObjectNode *iobj = NULL;
-                if (item && item->type && strcmp(item->type, TE_T_OBJECT) == 0) {
+                if (item && item->type && nk_of(item) == NK_OBJECT) {
                     if (item->extra) iobj = (ObjectNode*)item->extra;
                     else iobj = (ObjectNode*)(intptr_t)item->value;
                 }
@@ -5308,7 +5308,7 @@ static double te_ev_access_attr(ASTNode *node) {
                     ASTNode *pair = map_find_pair(map, key);
                     ASTNode *val  = pair ? pair->left : NULL;
                     ObjectNode *iobj = NULL;
-                    if (val && val->type && strcmp(val->type, TE_T_OBJECT) == 0) {
+                    if (val && val->type && nk_of(val) == NK_OBJECT) {
                         if (val->extra) iobj = (ObjectNode*)val->extra;
                         else iobj = (ObjectNode*)(intptr_t)val->value;
                     }
@@ -5349,10 +5349,10 @@ static double te_ev_access_attr(ASTNode *node) {
                 ASTNode *val = pair->left;
                 if (!val || !val->type) return 0;
                 if (strcmp(val->type, TE_T_BOOL) == 0) return (double)val->value;
-                if (strcmp(val->type, TE_T_NUMBER) == 0 || strcmp(val->type, TE_T_INT) == 0) return (double)val->value;
-                if (strcmp(val->type, TE_T_FLOAT) == 0) return val->str_value ? atof(val->str_value) : 0;
-                if (strcmp(val->type, TE_T_NULL) == 0) return 0;
-                if (strcmp(val->type, TE_T_STRING) == 0 || strcmp(val->type, TE_T_DATETIME) == 0 ||
+                if (nk_of(val) == NK_NUMBER || nk_of(val) == NK_INT) return (double)val->value;
+                if (nk_of(val) == NK_FLOAT) return val->str_value ? atof(val->str_value) : 0;
+                if (nk_of(val) == NK_NULL) return 0;
+                if (nk_of(val) == NK_STRING || strcmp(val->type, TE_T_DATETIME) == 0 ||
                     strcmp(val->type, TE_T_UUID) == 0) {
                     const char *s = val->str_value;
                     if (!s || !*s) return 0;
@@ -6235,11 +6235,11 @@ void interpret_ast(ASTNode *node) {
 
 double evaluate_number(ASTNode *node) {
     if (node == NULL) return 0;
-    if (strcmp(node->type, TE_T_NUMBER) == 0) return node->value;
-    if (strcmp(node->type, TE_T_FLOAT) == 0) {
+    if (nk_of(node) == NK_NUMBER) return node->value;
+    if (nk_of(node) == NK_FLOAT) {
         return atof(node->str_value);
     }
-    if (strcmp(node->type, TE_T_EXPRESSION) == 0) {
+    if (nk_of(node) == NK_EXPRESSION) {
         return evaluate_number(node->left); // simplificado
     }
     fprintf(stderr, "Error: unsupported type in evaluate_number: %s\n", node->type);
@@ -6393,7 +6393,7 @@ char *te_validate_body_against_class(ClassNode *cls, const char *json) {
     }
     const char *pp = json;
     ASTNode *root = te_json_parse_value(&pp);
-    if (!root || !root->type || strcmp(root->type, TE_T_OBJECT_LITERAL) != 0) {
+    if (!root || !root->type || nk_of(root) != NK_OBJECT_LITERAL) {
         if (root) free_ast(root);
         TE_ADD_ERR("body", "request body must be a JSON object");
         n += snprintf(errbuf + n, sizeof(errbuf) - n, "]}");
@@ -6491,7 +6491,7 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
     const char *p = json;
     /* Skip leading whitespace (te_json_parse_value also does this). */
     ASTNode *root = te_json_parse_value(&p);
-    if (!root || !root->type || strcmp(root->type, TE_T_OBJECT_LITERAL) != 0) {
+    if (!root || !root->type || nk_of(root) != NK_OBJECT_LITERAL) {
         return obj; /* Not a JSON object; keep defaults. */
     }
     for (ASTNode *pair = root->left; pair; pair = pair->right) {
@@ -6520,7 +6520,7 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
              * de @params lo interpola como SQL NULL en vez de coercerlo a "0"
              * (string-attr) o 0 (int/float), que rompía columnas DATE/DATETIME/
              * ENUM bajo STRICT_TRANS_TABLES con ERROR 1292. */
-            if (val->type && strcmp(val->type, TE_T_NULL) == 0) {
+            if (val->type && nk_of(val) == NK_NULL) {
                 if (dst->vtype == VAL_STRING && dst->value.string_value) free(dst->value.string_value);
                 dst->vtype = VAL_OBJECT;
                 dst->value.object_value = NULL;
@@ -6529,7 +6529,7 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
             /* "" en un campo opcional (o bajo el flag global) -> NULL, igual que
              * el null JSON: evita coercer "" a 0 / '' en columnas numericas. */
             if ((field_optional || g_vm.db_empty_as_null) && val->type &&
-                strcmp(val->type, TE_T_STRING) == 0 && (!val->str_value || !*val->str_value)) {
+                nk_of(val) == NK_STRING && (!val->str_value || !*val->str_value)) {
                 if (dst->vtype == VAL_STRING && dst->value.string_value) free(dst->value.string_value);
                 dst->vtype = VAL_OBJECT;
                 dst->value.object_value = NULL;
@@ -6537,12 +6537,12 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
             }
             if (strcmp(atype, TE_DT_STRING) == 0) {
                 if (dst->vtype == VAL_STRING && dst->value.string_value) free(dst->value.string_value);
-                if (strcmp(val->type, TE_T_STRING) == 0) {
+                if (nk_of(val) == NK_STRING) {
                     dst->value.string_value = strdup(val->str_value ? val->str_value : "");
-                } else if (strcmp(val->type, TE_T_INT) == 0) {
+                } else if (nk_of(val) == NK_INT) {
                     char buf[32]; snprintf(buf, sizeof buf, "%lld", (long long)val->value);
                     dst->value.string_value = strdup(buf);
-                } else if (strcmp(val->type, TE_T_FLOAT) == 0) {
+                } else if (nk_of(val) == NK_FLOAT) {
                     dst->value.string_value = strdup(val->str_value ? val->str_value : "0");
                 } else {
                     dst->value.string_value = strdup("");
@@ -6550,15 +6550,15 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
                 dst->vtype = VAL_STRING;
             } else if (strcmp(atype, TE_DT_FLOAT) == 0) {
                 double d = 0;
-                if (strcmp(val->type, TE_T_FLOAT) == 0)      d = atof(val->str_value ? val->str_value : "0");
-                else if (strcmp(val->type, TE_T_INT) == 0)   d = (double)val->value;
-                else if (strcmp(val->type, TE_T_STRING) == 0) d = atof(val->str_value ? val->str_value : "0");
+                if (nk_of(val) == NK_FLOAT)      d = atof(val->str_value ? val->str_value : "0");
+                else if (nk_of(val) == NK_INT)   d = (double)val->value;
+                else if (nk_of(val) == NK_STRING) d = atof(val->str_value ? val->str_value : "0");
                 dst->value.float_value = d;
                 dst->vtype = VAL_FLOAT;
             } else if (strcmp(atype, TE_DT_DECIMAL) == 0) {
                 /* texto numérico exacto tal como vino en el JSON (número o string) */
                 char nb[32]; const char *src = "0";
-                if (strcmp(val->type, TE_T_INT) == 0) { snprintf(nb, sizeof nb, "%lld", (long long)val->value); src = nb; }
+                if (nk_of(val) == NK_INT) { snprintf(nb, sizeof nb, "%lld", (long long)val->value); src = nb; }
                 else if (val->str_value && *val->str_value) src = val->str_value;
                 TeDec d; char dec[TE_DEC_TEXT_MAX];
                 if (te_dec_parse(src, &d)) te_dec_format(&d, dec, sizeof dec); else snprintf(dec, sizeof dec, "0");
@@ -6568,9 +6568,9 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
             } else {
                 /* int / default */
                 int iv = 0;
-                if (strcmp(val->type, TE_T_INT) == 0)         iv = val->value;
-                else if (strcmp(val->type, TE_T_FLOAT) == 0)  iv = (int)atof(val->str_value ? val->str_value : "0");
-                else if (strcmp(val->type, TE_T_STRING) == 0) iv = atoi(val->str_value ? val->str_value : "0");
+                if (nk_of(val) == NK_INT)         iv = val->value;
+                else if (nk_of(val) == NK_FLOAT)  iv = (int)atof(val->str_value ? val->str_value : "0");
+                else if (nk_of(val) == NK_STRING) iv = atoi(val->str_value ? val->str_value : "0");
                 dst->value.int_value = iv;
                 dst->vtype = VAL_INT;
             }
@@ -6789,7 +6789,7 @@ void interpret_call_method(ASTNode *node) {
 
 /* Extraído de interpret_call_method_impl (Fase 2): devuelve 1 si manejó la llamada. */
 static int te_cm_fusion_where_chain(ASTNode *node, ASTNode *objNode) {
-    if (objNode && objNode->type && strcmp(objNode->type, TE_T_CALL_METHOD) == 0 &&
+    if (objNode && objNode->type && nk_of(objNode) == NK_CALL_METHOD &&
         objNode->id && node->id) {
         const char *inner_m = objNode->id;
         const char *outer_m = node->id;
@@ -6908,7 +6908,7 @@ static int te_cm_fusion_where_chain(ASTNode *node, ASTNode *objNode) {
 
 /* Extraído de interpret_call_method_impl (Fase 2): devuelve 1 si manejó la llamada. */
 static int te_cm_fusion_where_aggregate(ASTNode *node, ASTNode *objNode) {
-    if (objNode && objNode->type && strcmp(objNode->type, TE_T_CALL_METHOD) == 0 &&
+    if (objNode && objNode->type && nk_of(objNode) == NK_CALL_METHOD &&
         objNode->id && node->id) {
         const char *inner_m = objNode->id;
         const char *outer_m = node->id;
@@ -7087,7 +7087,7 @@ static int te_cm_list_builtin(ASTNode *node, ASTNode *objNode, Variable *v) {
             if (!arg) return 1;
             ASTNode *new_item = (ASTNode*)calloc(1, sizeof(ASTNode));
             memset(new_item, 0, sizeof(ASTNode));
-            if (arg->type && (strcmp(arg->type, TE_T_OBJECT_LITERAL) == 0 ||
+            if (arg->type && (nk_of(arg) == NK_OBJECT_LITERAL ||
                               strcmp(arg->type, TE_T_MAP) == 0)) {
                 /* gotcha #18: push of a `{...}` object literal. Previously fell
                  * through to evaluate_expression (-> 0), storing [0,0,...].
@@ -7103,7 +7103,7 @@ static int te_cm_list_builtin(ASTNode *node, ASTNode *objNode, Variable *v) {
                 }
                 return 1;
             }
-            if (arg->type && strcmp(arg->type, TE_T_OBJECT) == 0) {
+            if (arg->type && nk_of(arg) == NK_OBJECT) {
                 /* Fix: empujar objetos creados con `new ClaseX(args)`.
                  * El parser eager-construye un OBJECT ASTNode con extra=ObjectNode*
                  * y left=args, pero no corre el constructor. Para que cada push
@@ -7460,14 +7460,14 @@ static void interpret_call_method_impl(ASTNode *node) {
      * en una variable temporal y reescribimos node->left a un ID, igual que el
      * manejador de llamadas encadenadas más abajo. ===== */
     if (objNode && objNode->type && !objNode->id &&
-        (strcmp(objNode->type, TE_T_LIST) == 0 || strcmp(objNode->type, TE_T_OBJECT_LITERAL) == 0)) {
+        (nk_of(objNode) == NK_LIST || nk_of(objNode) == NK_OBJECT_LITERAL)) {
         static int _lit_seq = 0;
         char tmp[40];
         snprintf(tmp, sizeof(tmp), "__lit_%d__", _lit_seq++);
         add_or_update_variable(tmp, objNode);
         /* add_or_update_variable guarda OBJECT_LITERAL con type "OBJECT_LITERAL",
          * pero los dispatchers de MAP exigen type "MAP" (igual que declare_variable). */
-        if (strcmp(objNode->type, TE_T_OBJECT_LITERAL) == 0) {
+        if (nk_of(objNode) == NK_OBJECT_LITERAL) {
             Variable *tv = find_variable(tmp);
             if (tv && tv->type) { free(tv->type); tv->type = strdup(TE_T_MAP); }
         }
@@ -7486,9 +7486,9 @@ static void interpret_call_method_impl(ASTNode *node) {
     {
         ASTNode *recv_list = NULL;
         if (objNode && objNode->type) {
-            if (strcmp(objNode->type, TE_T_LIST) == 0) {
+            if (nk_of(objNode) == NK_LIST) {
                 recv_list = objNode;
-            } else if (strcmp(objNode->type, TE_T_ID) == 0 || strcmp(objNode->type, TE_T_IDENTIFIER) == 0) {
+            } else if (nk_of(objNode) == NK_ID || nk_of(objNode) == NK_IDENTIFIER) {
                 Variable *lv = find_variable(objNode->id);
                 if (lv && lv->type && strcmp(lv->type, TE_T_LIST) == 0)
                     recv_list = (ASTNode*)(intptr_t)lv->value.object_value;
@@ -7530,7 +7530,7 @@ static void interpret_call_method_impl(ASTNode *node) {
     ASTNode *chainRecv = NULL;
     if (node->chain_recv) chainRecv = node->chain_recv;
     else if (objNode && objNode->type &&
-        (strcmp(objNode->type, TE_T_CALL_METHOD) == 0 || strcmp(objNode->type, TE_T_CALL_FUNC) == 0))
+        (nk_of(objNode) == NK_CALL_METHOD || nk_of(objNode) == NK_CALL_FUNC))
         chainRecv = objNode;
     if (chainRecv) {
         if (strcmp(chainRecv->type, TE_T_CALL_METHOD) == 0) interpret_call_method(chainRecv);
@@ -7609,10 +7609,10 @@ static void interpret_call_method_impl(ASTNode *node) {
      * es string (`this.n.trim()`, `obj.nombre.upper()`, `m["k"].trim()`): antes
      * abortaban con "'(null)' is not a valid object". */
     if (objNode && objNode->type && !objNode->id &&
-        (strcmp(objNode->type, TE_T_ADD) == 0 ||
-         strcmp(objNode->type, TE_T_STRING_INTERP) == 0 ||
-         strcmp(objNode->type, TE_T_ACCESS_ATTR) == 0 ||
-         strcmp(objNode->type, TE_T_ACCESS_EXPR) == 0) &&
+        (nk_of(objNode) == NK_ADD ||
+         nk_of(objNode) == NK_STRING_INTERP ||
+         nk_of(objNode) == NK_ACCESS_ATTR ||
+         nk_of(objNode) == NK_ACCESS_EXPR) &&
         is_string_type(objNode)) {
         char *s = get_node_string(objNode);
         Variable sv;
@@ -7900,7 +7900,7 @@ ASTNode *append_argument_raw(ASTNode *list, ASTNode *arg) {
 
 ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
     if (!item) return list;
-    if (strcmp(item->type, TE_T_LIST) == 0) {
+    if (nk_of(item) == NK_LIST) {
         fprintf(stderr, "Error: cannot insert a LIST node inside a list.\n");
         return list;
     }
@@ -7909,7 +7909,7 @@ ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
         return list;
     }
     if (!list) {
-        if (strcmp(item->type, TE_T_LIST) == 0) {
+        if (nk_of(item) == NK_LIST) {
             fprintf(stderr, "Error: cannot create a list with a LIST node as item.\n");
             return NULL;
         }
@@ -7924,7 +7924,7 @@ ASTNode* append_to_list(ASTNode* list, ASTNode* item) {
         listNode->value = 0;
         return listNode;
     }
-    if (strcmp(list->type, TE_T_LIST) != 0) {
+    if (nk_of(list) != NK_LIST) {
         return NULL;
     }
     ASTNode* current = list->left;
@@ -8098,7 +8098,7 @@ static ASTNode* call_lambda_result_node(ASTNode *ret) {
 static ASTNode* call_lambda_exec_body(ASTNode *lambda) {
     ASTNode *body = lambda->left;
     if (!body) return create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
-    if (body->type && strcmp(body->type, TE_T_STATEMENT_LIST) == 0) {
+    if (body->type && nk_of(body) == NK_STATEMENT_LIST) {
         int saved_return_flag = g_vm.return_flag;
         ASTNode *saved_return_node = g_vm.return_node;
         g_vm.return_flag = 0;
@@ -8108,7 +8108,7 @@ static ASTNode* call_lambda_exec_body(ASTNode *lambda) {
         g_vm.return_flag = saved_return_flag;
         g_vm.return_node = saved_return_node;
         if (!ret) return create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
-        if (ret->type && strcmp(ret->type, TE_T_RETURN) == 0 && ret->left) ret = ret->left;
+        if (ret->type && nk_of(ret) == NK_RETURN && ret->left) ret = ret->left;
         /* `return f(...)` / `return obj.m(...)` ya corrió durante interpret_ast(body) y dejó su
          * valor en __ret__: NO re-ejecutar la llamada (efectos secundarios, await). */
         NodeKind rk = nk_of(ret);
@@ -8123,12 +8123,12 @@ static ASTNode* call_lambda_exec_body(ASTNode *lambda) {
     /* body es expresión */
     if (body->type && strcmp(body->type, TE_T_LAMBDA) == 0) return te_capture_lambda(body);
     /* Un literal LIST como cuerpo: cada item se evalúa (pueden ser expresiones sobre los params). */
-    if (body->type && strcmp(body->type, TE_T_LIST) == 0) {
+    if (body->type && nk_of(body) == NK_LIST) {
         ASTNode *result = create_list_node(NULL);
         for (ASTNode *it = body->left; it; it = it->next) {
-            if (it->type && (strcmp(it->type, TE_T_LIST) == 0 || strcmp(it->type, TE_T_MAP) == 0 ||
-                             strcmp(it->type, TE_T_OBJECT_LITERAL) == 0 || strcmp(it->type, TE_T_STRING) == 0 ||
-                             strcmp(it->type, TE_T_NULL) == 0)) {
+            if (it->type && (nk_of(it) == NK_LIST || strcmp(it->type, TE_T_MAP) == 0 ||
+                             nk_of(it) == NK_OBJECT_LITERAL || nk_of(it) == NK_STRING ||
+                             nk_of(it) == NK_NULL)) {
                 te_list_append(result, it);
             } else {
                 te_list_append(result, call_lambda_result_node(it));
@@ -8136,7 +8136,7 @@ static ASTNode* call_lambda_exec_body(ASTNode *lambda) {
         }
         return result;
     }
-    if (body->type && (strcmp(body->type, TE_T_MAP) == 0 || strcmp(body->type, TE_T_OBJECT_LITERAL) == 0)) return body;
+    if (body->type && (strcmp(body->type, TE_T_MAP) == 0 || nk_of(body) == NK_OBJECT_LITERAL)) return body;
     return call_lambda_result_node(body);
 }
 
@@ -8157,11 +8157,11 @@ static void interpret_fprint(ASTNode *node) {
         dbg_printf( "Error: print without argument\n");
         return;
     }
-    if (arg->type && strcmp(arg->type, TE_T_STRING) == 0) {
+    if (arg->type && nk_of(arg) == NK_STRING) {
         dbg_eprintf( "%s", arg->str_value);
         return;
     }
-    if (arg->type && strcmp(arg->type, TE_T_ACCESS_ATTR) == 0) {
+    if (arg->type && nk_of(arg) == NK_ACCESS_ATTR) {
         ASTNode *o = arg->left;
         ASTNode *a = arg->right;
         Variable *v = find_variable(o->id);
@@ -8198,11 +8198,11 @@ static void interpret_fprint(ASTNode *node) {
         }
         if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, TE_T_LIST) == 0) {
             ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
-            if (listNode && strcmp(listNode->type, TE_T_LIST) == 0) {
+            if (listNode && nk_of(listNode) == NK_LIST) {
                 ASTNode *cur = listNode->left;
                 dbg_eprintf( "[\n");
                 while (cur) {
-                    if (cur->type && strcmp(cur->type, TE_T_OBJECT) == 0) {
+                    if (cur->type && nk_of(cur) == NK_OBJECT) {
                         ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
                         { TeFrame fr; te_frame_push(&fr); call_method(obj, "Mostrar"); te_frame_pop(&fr); }
                     }
@@ -8244,11 +8244,11 @@ static void interpret_fprintln(ASTNode *node) {
         dbg_eprintf( "Error: print without argument\n");
         return;
     }
-    if (arg->type && strcmp(arg->type, TE_T_STRING) == 0) {
+    if (arg->type && nk_of(arg) == NK_STRING) {
         dbg_eprintf( "%s\n", arg->str_value);
         return;
     }
-    if (arg->type && strcmp(arg->type, TE_T_ACCESS_ATTR) == 0) {
+    if (arg->type && nk_of(arg) == NK_ACCESS_ATTR) {
         ASTNode *o = arg->left;
         ASTNode *a = arg->right;
         Variable *v = find_variable(o->id);
@@ -8285,11 +8285,11 @@ static void interpret_fprintln(ASTNode *node) {
         }
         if (v->vtype == VAL_OBJECT && v->type && strcmp(v->type, TE_T_LIST) == 0) {
             ASTNode *listNode = (ASTNode *)(intptr_t)v->value.object_value;
-            if (listNode && strcmp(listNode->type, TE_T_LIST) == 0) {
+            if (listNode && nk_of(listNode) == NK_LIST) {
                 ASTNode *cur = listNode->left;
                 dbg_eprintf( "[\n");
                 while (cur) {
-                    if (cur->type && strcmp(cur->type, TE_T_OBJECT) == 0) {
+                    if (cur->type && nk_of(cur) == NK_OBJECT) {
                         ObjectNode *obj = (ObjectNode *)(intptr_t)cur->value;
                         { TeFrame fr; te_frame_push(&fr); call_method(obj, "Mostrar"); te_frame_pop(&fr); }
                     }
@@ -8494,7 +8494,7 @@ static int te_arity_of_lambda(ASTNode *lam) {
 
 /* Registra (o marca ambiguo) un `let NAME = fn(...)` de nivel superior. */
 static void te_arity_record(ASTNode *stmt, TeArityFn *tbl, int *count, int cap) {
-    if (!stmt || !stmt->type || strcmp(stmt->type, TE_T_VAR_DECL) != 0 || !stmt->id) return;
+    if (!stmt || !stmt->type || nk_of(stmt) != NK_VAR_DECL || !stmt->id) return;
     ASTNode *val = stmt->left;
     int is_lambda = (val && val->type && strcmp(val->type, TE_T_LAMBDA) == 0);
     int np = is_lambda ? te_arity_of_lambda(val) : -1;
@@ -8515,7 +8515,7 @@ static void te_arity_record(ASTNode *stmt, TeArityFn *tbl, int *count, int cap) 
 /* Recolecta solo statements de NIVEL SUPERIOR (espinazo ->left del program). */
 static void te_arity_collect_toplevel(ASTNode *root, TeArityFn *tbl, int *count, int cap) {
     ASTNode *cur = root;
-    while (cur && cur->type && strcmp(cur->type, TE_T_STATEMENT_LIST) == 0) {
+    while (cur && cur->type && nk_of(cur) == NK_STATEMENT_LIST) {
         te_arity_record(cur->right, tbl, count, cap);   /* statement actual */
         cur = cur->left;                                /* sublista mas antigua */
     }
@@ -8531,9 +8531,9 @@ static void te_arity_walk(ASTNode *n, TeArityFn *tbl, int count,
         if (!n->type) { n = n->next; continue; }
         if (n->line > 0) *lastLine = n->line;
 
-        if (strcmp(n->type, TE_T_STATEMENT_LIST) == 0) {
+        if (nk_of(n) == NK_STATEMENT_LIST) {
             ASTNode *cur = n;
-            while (cur && cur->type && strcmp(cur->type, TE_T_STATEMENT_LIST) == 0) {
+            while (cur && cur->type && nk_of(cur) == NK_STATEMENT_LIST) {
                 te_arity_walk(cur->right, tbl, count, shadow, lastLine);
                 cur = cur->left;
             }
@@ -8550,9 +8550,9 @@ static void te_arity_walk(ASTNode *n, TeArityFn *tbl, int count,
          *                           validaba la primera forma.) */
         {
             ASTNode *ca_args = NULL; int is_direct_call = 0;
-            if (strcmp(n->type, TE_T_CALL_FUNC) == 0) {
+            if (nk_of(n) == NK_CALL_FUNC) {
                 ca_args = n->left; is_direct_call = 1;
-            } else if (strcmp(n->type, TE_T_METHOD_CALL_ALONE) == 0 && n->left == NULL) {
+            } else if (nk_of(n) == NK_METHOD_CALL_ALONE && n->left == NULL) {
                 ca_args = n->right; is_direct_call = 1;
             }
             if (is_direct_call && n->id && !te_name_in_shadow(shadow, n->id)) {
@@ -8604,7 +8604,7 @@ static void te_arity_walk(ASTNode *n, TeArityFn *tbl, int count,
          * (create_if_node), asi que queda cubierto por la iteracion del bucle. */
         te_arity_walk(n->left,  tbl, count, shadow, lastLine);
         te_arity_walk(n->right, tbl, count, shadow, lastLine);
-        if (strcmp(n->type, TE_T_TERNARY) == 0 || strcmp(n->type, TE_T_FOR_C) == 0)
+        if (nk_of(n) == NK_TERNARY || nk_of(n) == NK_FOR_C)
             te_arity_walk(n->extra, tbl, count, shadow, lastLine);
         n = n->next;
     }
@@ -8651,9 +8651,9 @@ static void te_scope_declare(TeScope *s, const char *name, int is_const) {
 }
 static int te_node_is_comparison(ASTNode *n) {
     if (!n || !n->type) return 0;
-    return strcmp(n->type, TE_T_LT) == 0 || strcmp(n->type, TE_T_GT) == 0 || strcmp(n->type, TE_T_LT_EQ) == 0 ||
-           strcmp(n->type, TE_T_GT_EQ) == 0 || strcmp(n->type, TE_T_EQ) == 0 || strcmp(n->type, TE_T_DIFF) == 0 ||
-           strcmp(n->type, TE_T_AND) == 0 || strcmp(n->type, TE_T_OR) == 0 || strcmp(n->type, TE_T_NOT) == 0;
+    return nk_of(n) == NK_LT || nk_of(n) == NK_GT || nk_of(n) == NK_LT_EQ ||
+           nk_of(n) == NK_GT_EQ || nk_of(n) == NK_EQ || nk_of(n) == NK_DIFF ||
+           nk_of(n) == NK_AND || nk_of(n) == NK_OR || nk_of(n) == NK_NOT;
 }
 static void te_sem_error(ASTNode *n, int fallbackLine, const char *msg) {
     g_vm.lex_file_id = n->file_id;
@@ -8684,7 +8684,7 @@ static void te_sem_check_sql_json(ASTNode *call, ASTNode *args, int *lastLine) {
     if (!call->id || !te_sem_is_sql_builtin(call->id)) return;
     const char *sql = NULL; int has_json = 0;
     for (ASTNode *a = args; a; a = a->next) {
-        if (!a->type || strcmp(a->type, TE_T_STRING) != 0 || !a->str_value) continue;
+        if (!a->type || nk_of(a) != NK_STRING || !a->str_value) continue;
         if (strcmp(a->str_value, "json") == 0) has_json = 1;
         else if (!sql && te_sem_sql_is_write(a->str_value)) sql = a->str_value;
     }
@@ -8701,13 +8701,13 @@ static void te_sem_walk(ASTNode *n, TeScope *scope, int *lastLine) {
         if (!n->type) { n = n->next; continue; }
         if (n->line > 0) *lastLine = n->line;
 
-        if (strcmp(n->type, TE_T_STATEMENT_LIST) == 0) {
+        if (nk_of(n) == NK_STATEMENT_LIST) {
             /* The spine is left-recursive (newest statement in ->right); collect
              * and replay in PROGRAM order so declarations precede their uses. */
             int cap = 64, cnt = 0;
             ASTNode **stack = (ASTNode **)malloc((size_t)cap * sizeof(ASTNode *));
             ASTNode *cur = n;
-            while (cur && cur->type && strcmp(cur->type, TE_T_STATEMENT_LIST) == 0) {
+            while (cur && cur->type && nk_of(cur) == NK_STATEMENT_LIST) {
                 if (cnt >= cap) { cap *= 2; stack = (ASTNode **)realloc(stack, (size_t)cap * sizeof(ASTNode *)); }
                 stack[cnt++] = cur->right;
                 cur = cur->left;
@@ -8718,13 +8718,13 @@ static void te_sem_walk(ASTNode *n, TeScope *scope, int *lastLine) {
             n = n->next; continue;
         }
 
-        if (strcmp(n->type, TE_T_VAR_DECL) == 0 && n->id) {
+        if (nk_of(n) == NK_VAR_DECL && n->id) {
             te_sem_walk(n->left, scope, lastLine);          /* RHS first (may contain lambdas) */
             te_scope_declare(scope, n->id, n->value == 1);
             n = n->next; continue;
         }
 
-        if (strcmp(n->type, TE_T_ASSIGN) == 0 && n->left && n->left->id &&
+        if (nk_of(n) == NK_ASSIGN && n->left && n->left->id &&
             n->left->type && (strcmp(n->left->type, TE_T_IDENTIFIER) == 0 || strcmp(n->left->type, TE_T_ID) == 0)) {
             if (te_scope_lookup_const(scope, n->left->id) == 1) {
                 char msg[256];
@@ -8736,7 +8736,7 @@ static void te_sem_walk(ASTNode *n, TeScope *scope, int *lastLine) {
             n = n->next; continue;
         }
 
-        if (strcmp(n->type, TE_T_FOR) == 0) {
+        if (nk_of(n) == NK_FOR) {
             /* left=init, right=LIMIT (whose ->right is FOR_BODY{left=STEP,right=body}) */
             ASTNode *limit = n->right;
             ASTNode *fb = limit ? limit->right : NULL;
@@ -8759,7 +8759,7 @@ static void te_sem_walk(ASTNode *n, TeScope *scope, int *lastLine) {
             n = n->next; continue;
         }
 
-        if (strcmp(n->type, TE_T_FOR_C) == 0) {
+        if (nk_of(n) == NK_FOR_C) {
             TeScope inner = { .n = 0, .up = scope };
             ASTNode *fb = (ASTNode *)n->extra;
             te_sem_walk(n->left, &inner, lastLine);           /* init (declares in loop scope) */
@@ -8768,11 +8768,11 @@ static void te_sem_walk(ASTNode *n, TeScope *scope, int *lastLine) {
             n = n->next; continue;
         }
 
-        if (strcmp(n->type, TE_T_FOR_IN) == 0) {
+        if (nk_of(n) == NK_FOR_IN) {
             ASTNode *src = n->left;
-            if (src && src->type && (strcmp(src->type, TE_T_NUMBER) == 0 || strcmp(src->type, TE_T_INT) == 0 ||
-                                     strcmp(src->type, TE_T_FLOAT) == 0 || strcmp(src->type, TE_T_STRING) == 0 ||
-                                     strcmp(src->type, TE_T_STRING_LITERAL) == 0 || strcmp(src->type, TE_T_BOOL) == 0)) {
+            if (src && src->type && (nk_of(src) == NK_NUMBER || nk_of(src) == NK_INT ||
+                                     nk_of(src) == NK_FLOAT || nk_of(src) == NK_STRING ||
+                                     nk_of(src) == NK_STRING_LITERAL || strcmp(src->type, TE_T_BOOL) == 0)) {
                 te_sem_error(n, *lastLine, "Error: for-in expects a list; a scalar literal is not iterable.");
             }
             TeScope inner = { .n = 0, .up = scope };
@@ -8800,7 +8800,7 @@ static void te_sem_walk(ASTNode *n, TeScope *scope, int *lastLine) {
             n = n->next; continue;
         }
 
-        if (strcmp(n->type, TE_T_IF) == 0 || strcmp(n->type, TE_T_WHILE) == 0) {
+        if (nk_of(n) == NK_IF || nk_of(n) == NK_WHILE) {
             te_sem_walk(n->left, scope, lastLine);           /* condition */
             TeScope inner = { .n = 0, .up = scope };
             te_sem_walk(n->right, &inner, lastLine);         /* body */
@@ -8809,18 +8809,18 @@ static void te_sem_walk(ASTNode *n, TeScope *scope, int *lastLine) {
 
         /* S5: `super` no existe en TypeEasy (en runtime: "'super' is not a valid object"). */
         if (n->id && strcmp(n->id, "super") == 0 &&
-            (strcmp(n->type, TE_T_IDENTIFIER) == 0 || strcmp(n->type, TE_T_ID) == 0)) {
+            (nk_of(n) == NK_IDENTIFIER || nk_of(n) == NK_ID)) {
             te_sem_error(n, *lastLine,
                 "Error: TypeEasy has no 'super': call the parent method on 'this' (it is inherited) or duplicate the logic.");
         }
-        if (strcmp(n->type, TE_T_CALL_FUNC) == 0) te_sem_check_sql_json(n, n->left, lastLine);
-        else if (strcmp(n->type, TE_T_METHOD_CALL_ALONE) == 0 && n->left == NULL) te_sem_check_sql_json(n, n->right, lastLine);
+        if (nk_of(n) == NK_CALL_FUNC) te_sem_check_sql_json(n, n->left, lastLine);
+        else if (nk_of(n) == NK_METHOD_CALL_ALONE && n->left == NULL) te_sem_check_sql_json(n, n->right, lastLine);
         /* S7: string literal como operando de && || ! (se evalua como numero: no numerico = 0). */
-        if (strcmp(n->type, TE_T_AND) == 0 || strcmp(n->type, TE_T_OR) == 0 || strcmp(n->type, TE_T_NOT) == 0) {
+        if (nk_of(n) == NK_AND || nk_of(n) == NK_OR || nk_of(n) == NK_NOT) {
             ASTNode *ops[2] = { n->left, n->right };
             for (int k = 0; k < 2; k++) {
                 ASTNode *op = ops[k];
-                if (op && op->type && (strcmp(op->type, TE_T_STRING) == 0 || strcmp(op->type, TE_T_STRING_LITERAL) == 0)) {
+                if (op && op->type && (nk_of(op) == NK_STRING || nk_of(op) == NK_STRING_LITERAL)) {
                     te_sem_warning(n, *lastLine,
                         "Warning: a string operand of && / || / ! is evaluated as a number (a non-numeric string counts as 0). Compare explicitly (s != \"\").");
                     break;
@@ -8830,7 +8830,7 @@ static void te_sem_walk(ASTNode *n, TeScope *scope, int *lastLine) {
 
         te_sem_walk(n->left,  scope, lastLine);
         te_sem_walk(n->right, scope, lastLine);
-        if (strcmp(n->type, TE_T_TERNARY) == 0) te_sem_walk(n->extra, scope, lastLine);
+        if (nk_of(n) == NK_TERNARY) te_sem_walk(n->extra, scope, lastLine);
         n = n->next;
     }
 }
@@ -8886,7 +8886,7 @@ void print_object_as_xml_by_id(const char* id) {
         ASTNode *cur = listNode->left;
         
         while (cur) {
-            if (cur->type && strcmp(cur->type, TE_T_OBJECT) == 0) {
+            if (cur->type && nk_of(cur) == NK_OBJECT) {
                 ObjectNode *obj = NULL;
                 if (cur->extra) obj = (ObjectNode *)cur->extra;
                 else obj = (ObjectNode *)(intptr_t)cur->value;

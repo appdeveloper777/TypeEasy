@@ -227,7 +227,7 @@ static int bc_c_access_attr(BCC *c, ASTNode *node) {
         TEListIdx *ix = (TEListIdx *)list->extra;
         if (!ix || ix->len <= 0) return 0;
         ASTNode *first = ix->items[0];
-        if (!first || !first->type || strcmp(first->type, TE_T_OBJECT) != 0) return 0;
+        if (!first || !first->type || nk_of(first) != NK_OBJECT) return 0;
         ObjectNode *fobj = first->extra ? (ObjectNode *)first->extra : (ObjectNode *)(intptr_t)first->value;
         if (!fobj || !fobj->class) return 0;
         int slot = -1;

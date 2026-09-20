@@ -71,7 +71,7 @@ void interpret_for_in(TeVM *vm, ASTNode *node) {
             return;
         }
     }
-    if (!listNode || strcmp(listNode->type, TE_T_LIST) != 0) {
+    if (!listNode || nk_of(listNode) != NK_LIST) {
         printf("Error: node is not a valid list.\n");
         return;
     }
@@ -86,7 +86,7 @@ void interpret_for_in(TeVM *vm, ASTNode *node) {
     for (ASTNode *item = items; item; item = item->next) {
         debugger_on_loop_iteration();
         te_scope_unwind_to(te_loop_scope_mark);
-        if (item->type && strcmp(item->type, TE_T_OBJECT) == 0) {
+        if (item->type && nk_of(item) == NK_OBJECT) {
             // Get ObjectNode from extra field (where create_object_with_args stores it)
             // For backward compatibility, also check value field for objects created differently
             ObjectNode *obj = (ObjectNode *)item->extra;

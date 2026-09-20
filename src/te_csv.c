@@ -3583,7 +3583,7 @@ void te_csv_lazy_resolve_all(ASTNode *root) {
                 cd->is_dataframe = e->is_dataframe;
                 cd->columnar_decision = columnar_decision;
                 if (placeholder->type) free(placeholder->type);
-                placeholder->type = strdup(TE_T_CSV_LOAD);
+                placeholder->type = strdup(TE_T_CSV_LOAD); placeholder->kind = NK_UNKNOWN;   /* type cambia: nk_of lo recalcula */
                 placeholder->extra = (struct ASTNode*)cd;
                 /* Do NOT free filename/class_name — descriptor owns them now. */
                 continue;
