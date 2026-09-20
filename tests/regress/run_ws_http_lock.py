@@ -11,7 +11,8 @@ Qué verifica (contra tests/regress/ws_http_lock.te):
   1. Varios GET /slow (handler síncrono que retiene el lock ~700 ms y luego lee
      un local declarado ANTES de dormir) mientras se abren handshakes WS que
      ejecutan un handler .te. Todos los /slow deben responder 200 con su marker
-     intacto; cada WS debe recibir el frame "hello:" del handler.
+     intacto; cada WS debe recibir el frame "hello: <who>" construido con
+     concat() (regresión: ws_send/ws_subscribe solo aceptaban literal/identificador).
   2. Un handler WS con error fatal de runtime (/ws/boom) NO mata el proceso:
      el server sigue vivo y /ok responde 200.
 
@@ -41,7 +42,7 @@ def http_get(port: int, path: str, timeout: float = 60.0):
         return 0, f"{type(e).__name__}: {e}"
 
 
-def ws_handshake(port: int, path: str, timeout: float = 60.0) -> tuple[bool, bytes]:
+def ws_handshake(port: int, path: str, timeout: float = 60.0, expect: bytes = b"hello") -> tuple[bool, bytes]:
     """Handshake WS crudo. Devuelve (101 recibido, primeros bytes tras el 101)."""
     s = socket.create_connection(("127.0.0.1", port), timeout=timeout)
     s.settimeout(timeout)
@@ -63,7 +64,7 @@ def ws_handshake(port: int, path: str, timeout: float = 60.0) -> tuple[bool, byt
     # Con el lock compartido el handler WS espera su turno FIFO detrás de los
     # /slow en cola (hasta slow*700 ms): el frame puede tardar varios segundos.
     deadline = time.time() + min(timeout, 20.0)
-    while ok and b"hello" not in rest and time.time() < deadline:
+    while ok and expect not in rest and time.time() < deadline:
         s.settimeout(max(0.5, deadline - time.time()))
         try:
             chunk = s.recv(4096)
@@ -113,14 +114,15 @@ def main() -> int:
             time.sleep(0.05)
         time.sleep(0.2)   # los /slow ya tomaron/esperan el lock: ahora entran los WS
         ws_ok = 0
-        for _ in range(a.ws):
+        for k in range(a.ws):
             if srv.poll() is not None:
                 break
-            ok, rest = ws_handshake(port, "/ws/test")
-            if ok and b"hello" in rest:
+            want = f"hello: w{k}".encode()
+            ok, rest = ws_handshake(port, f"/ws/test?who=w{k}", expect=want)
+            if ok and want in rest:
                 ws_ok += 1
             else:
-                fails.append(f"ws handshake/frame failed: ok={ok} rest={rest[:60]!r}")
+                fails.append(f"ws frame mismatch (ws_send(concat) / ws_subscribe(expr)): ok={ok} want={want!r} rest={rest[:60]!r}")
         for t in threads:
             t.join(150.0)
         for k in range(a.slow):
@@ -133,7 +135,7 @@ def main() -> int:
 
         # --- Fase 2: fatal dentro de un handler WS no mata el proceso ----------
         if srv.poll() is None:
-            ok, _ = ws_handshake(port, "/ws/boom", 30.0)
+            ok, _ = ws_handshake(port, "/ws/boom", 5.0, expect=b"\x00never")
             time.sleep(0.5)
             alive = srv.poll() is None
             code, body = http_get(port, "/ok", 10.0)

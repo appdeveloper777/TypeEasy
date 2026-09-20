@@ -4,11 +4,12 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
-## 0.1.8 — 2026-09-19 (re-tag 2026-09-20 con el fix WebSocket)
+## 0.1.8 — 2026-09-19 (re-tag 2026-09-20 con los fixes WebSocket)
 
-> El tag `v0.1.8` se movió el 2026-09-20 (3fa67c6 → commit del fix) porque el build
-> original crasheaba en producción con WebSocket + HTTP concurrentes. Los assets del
-> release se regeneraron; si descargaste 0.1.8 antes de esa fecha, verificá el SHA.
+> El tag `v0.1.8` se movió el 2026-09-20 (3fa67c6 → 01db86d → commit del fix de
+> `ws_send`) porque el build original crasheaba en producción con WebSocket + HTTP
+> concurrentes. Los assets del release se regeneraron; si descargaste 0.1.8 antes de
+> esa fecha, verificá el SHA.
 
 ### Cambios de comportamiento
 - **WebSocket y HTTP comparten UN solo lock de intérprete.** Hasta el primer build de
@@ -23,15 +24,18 @@ que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 - Un error fatal de runtime dentro de un handler WS ya **no termina el proceso**
   (`exit(1)`): se aborta solo ese handler, se limpia el estado por request y la
   conexión/proceso siguen vivos (mismo test, fase 2).
+- `ws_send`, `ws_subscribe` y `ws_broadcast` aceptan **cualquier expresión string**
+  (`concat(...)`, `"a" + b`, ternario, `obj.attr`). Antes solo resolvían un literal o
+  un identificador y `ws_send(concat("echo: ", msg))` —el ejemplo de la propia
+  documentación— no enviaba nada en silencio (`run_ws_http_lock.py`, fase 1: frame
+  `hello: <who>` construido con `concat`, canal con `+`).
 
 ### Interno
 - `te_interp_lock_enter/leave` (`src/ast.c`) para hilos no-HTTP que ejecutan `.te`;
   `ws_invoke_guarded` (`src/typeeasy_api.c`) instala el `setjmp` de recuperación en
   la ruta WS. Test bloqueante en `scripts/run_asan_tests.sh` y `scripts/_regress_full.sh`.
-
-### Limitaciones conocidas
-- `ws_send(expr)` solo resuelve un **literal o identificador** (`te_arg_string`);
-  `ws_send(concat(...))` no envía nada en silencio (pre-existente, sin corregir aquí).
+- Los builtins WS usan `get_node_string()` (camino único de evaluación) en vez de
+  `te_arg_string()`; el resto de builtins HTTP (`request_query`, …) no cambia.
 
 ### Cambios de comportamiento (build original 2026-09-19)
 - `println([1, 2])` (lista **literal**) imprime `[1, 2]` en vez de `0` (la variable ya

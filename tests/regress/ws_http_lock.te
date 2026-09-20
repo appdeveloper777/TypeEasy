@@ -26,9 +26,11 @@ endpoint {
 
     [WebSocket("/ws/test")]
     ws_test() {
-        ws_subscribe("t");
-        // literal a proposito: ws_send() solo resuelve literal/identificador (te_arg_string)
-        ws_send("hello");
+        // expresiones a proposito: hasta el primer build de 0.1.8 ws_send/ws_subscribe solo
+        // resolvian literal/identificador y ws_send(concat(...)) no enviaba nada en silencio.
+        let who = request_query("who");
+        ws_subscribe("t-" + who);
+        ws_send(concat("hello: ", who));
     }
 
     [WebSocket("/ws/boom")]

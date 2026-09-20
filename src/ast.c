@@ -1368,20 +1368,26 @@ extern int te_ws_send_current(const char *msg);
 extern int te_ws_broadcast(const char *channel, const char *msg);
 extern int te_ws_current_id_str(char *out, int cap);
 
+/* Los builtins WS aceptan cualquier expresión string (concat(), `+`, ternario,
+ * obj.attr): te_arg_string() solo resolvía literal/identificador y `ws_send(concat(...))`
+ * no enviaba nada en silencio (gotcha 0.1.8). get_node_string() devuelve heap. */
 static void native_ws_subscribe(ASTNode *arg) {
-    const char *ch = te_arg_string(arg);
-    int rc = ch ? te_ws_subscribe_current(ch) : 0;
+    char *ch = arg ? get_node_string(arg) : NULL;
+    int rc = (ch && *ch) ? te_ws_subscribe_current(ch) : 0;
+    free(ch);
     te_set_ret_int(rc);
 }
 static void native_ws_send(ASTNode *arg) {
-    const char *m = te_arg_string(arg);
+    char *m = arg ? get_node_string(arg) : NULL;
     int rc = m ? te_ws_send_current(m) : 0;
+    free(m);
     te_set_ret_int(rc);
 }
 static void native_ws_broadcast(ASTNode *arg) {
-    const char *ch = te_arg_string(arg);
-    const char *m  = arg && arg->next ? te_arg_string(arg->next) : NULL; /* gotcha #1: 2nd arg via ->next */
-    int rc = (ch && m) ? te_ws_broadcast(ch, m) : 0;
+    char *ch = arg ? get_node_string(arg) : NULL;
+    char *m  = (arg && arg->next) ? get_node_string(arg->next) : NULL; /* gotcha #1: 2nd arg via ->next */
+    int rc = (ch && *ch && m) ? te_ws_broadcast(ch, m) : 0;
+    free(ch); free(m);
     te_set_ret_int(rc);
 }
 static void native_request_ws_id(ASTNode *arg) {
