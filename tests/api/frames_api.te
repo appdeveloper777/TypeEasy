@@ -58,4 +58,26 @@ endpoint {
     async Rompe() {
         return json(Repo_Rompe(1));
     }
+
+    // 0.1.9: throw NO capturado en el handler -> 500 internal_error (antes 200 vacio).
+    [HttpGet("/api/throw")]
+    async Throw() {
+        throw "boom";
+        return json("{\"unreachable\":1}");
+    }
+
+    // 0.1.9: [NUM-5] division por cero lanza; sin catch -> 500; con catch -> 200.
+    [HttpGet("/api/div")]
+    async Div() {
+        var q = 10 / 0;
+        return json("{\"q\":" + q + "}");
+    }
+
+    [HttpGet("/api/divcatch")]
+    async DivCatch() {
+        var q = -1;
+        var msg = "";
+        try { q = 10 / 0; } catch (e) { msg = ("" + e); }
+        return json("{\"q\":" + q + ",\"msg\":\"" + msg + "\"}");
+    }
 }

@@ -276,10 +276,14 @@ verifica que ambos caminos producen la misma salida.
 - `[NUM-4]` `%` entre enteros sigue el signo del dividendo (C): `-7 % 3` → `-1`, `7 % -3` → `1`.
   Si algún operando es float el resultado es el **resto real** (`fmod`): `7.5 % 2` → `1.5`,
   `7 % 2.5` → `2` (hasta 0.1.8 se truncaban ambos operandos: `7.5 % 2` → `1`).
-- `[NUM-5]` División o módulo por cero **no lanzan**: escriben `Error: division by zero.` /
-  `Error: modulo by zero.` en **stderr** (hasta 0.1.8 iba a stdout y ensuciaba la salida del
-  programa) y el resultado es `0`; el programa continúa. (En `--api` el handler sigue; validar
-  divisores antes de dividir.)
+- `[NUM-5]` División o módulo por cero (`int`, `float` y `decimal`) **lanzan** un error de runtime
+  catcheable: `ArithmeticError: division by zero.` / `ArithmeticError: modulo by zero.` llega como
+  string al `catch (e)`; el resto de la expresión y del bucle se abortan y una variable ya existente
+  **conserva su valor** (`q = 4 / 0` no la pisa con `0`). Sin `catch`: `Uncaught: ArithmeticError: …`
+  y exit 1 (`[ERR-2]`); en `--api`, un throw no capturado en un handler responde **500**
+  `{"error":"internal_error"}` y loguea `Uncaught in handler <nombre>: …` en stderr.
+  (Hasta 0.1.8 devolvía `0`, avisaba por stderr y el programa seguía: un `0` plausible se colaba en
+  costos/promedios sin rastro.)
 - `[NUM-6]` `decimal` es exacto: `0.1m + 0.2m == 0.3m` es `true`; `decimal op int|float`
   da `decimal` (el `float` entra por su texto: `2.5m + 0.1` → `2.6`); la división conserva
   hasta 18 decimales (`"" + (1m / 3m)` → `0.333333333333333333`). El texto canónico
@@ -497,7 +501,7 @@ try {
   propaga al `try` que la llamó. Los `try` anidan.
 - `[ERR-2]` Un `throw` sin `catch` termina el programa: `Uncaught: <valor>` en stderr y exit 1.
 - `[ERR-3]` Llamar una función inexistente es un **error fatal** (`Error: function 'x' not defined.`,
-  exit 1) que `try/catch` no intercepta. La división por cero **no** es una excepción (`[NUM-5]`).
+  exit 1) que `try/catch` no intercepta. La división por cero **sí** es una excepción (`[NUM-5]`).
 - `[ERR-4]` `throw <map|lista|objeto>`: el `catch (e)` recibe el **valor** (`e["codigo"]`, `e.length`);
   si no se captura, `Uncaught:` muestra su JSON. Escalares siguen la regla `[ERR-1]` (string).
   (Hasta 0.1.8 el catch recibía `0`.)
@@ -535,7 +539,7 @@ implementación actual:
 
 Resueltas en 0.1.8 (re-tag #4, 2026-09-20): `?.`/`.` profundo sobre maps (`[MAP-1]`), `throw` de
 map/lista (`[ERR-4]`), `await_all` con `async fn` (`[ASY-2]`), `m["k"].push(x)` / `fs[1](5)`
-(`[LST-2]`, `[FN-5]`), `%` con floats (`[NUM-4]`), división por cero a stderr (`[NUM-5]`),
+(`[LST-2]`, `[FN-5]`), `%` con floats (`[NUM-4]`), división por cero a stderr (`[NUM-5]`; desde 0.1.9 **lanza**),
 `.length` sobre el resultado de una llamada (`[STR-1]`).
 
 ---

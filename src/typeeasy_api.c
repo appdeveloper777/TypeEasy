@@ -483,6 +483,8 @@ static void te_bind_param(ParameterNode *p) {
 }
 
 /* Ejecuta un MethodNode* ya resuelto. Hot path. */
+extern void te_throw_set_message(const char *msg);
+static int s_ws_invoking = 0;   /* 1 mientras corre un handler WebSocket (ws_invoke_guarded) */
 char* typeeasy_embedded_invoke_method(MethodNode* m) {
     if (!m || !m->body) return NULL;
 
@@ -589,6 +591,22 @@ char* typeeasy_embedded_invoke_method(MethodNode* m) {
     interpret_ast(m->body);
     debugger_pop_frame();
 
+    /* v0.1.9: throw NO capturado en el handler (incl. ArithmeticError de `/ 0`). Antes
+     * respondia 200 con body vacio y sin rastro en el log. Misma forma opaca que un fatal. */
+    if (g_vm.throw_flag) {
+        extern char *throw_message;
+        fprintf(stderr, "Uncaught in handler %s: %s\n", m->name ? m->name : "<endpoint>",
+                throw_message ? throw_message : "(no message)");
+        g_vm.throw_flag = 0;
+        te_throw_set_message(NULL);
+        int in_ws = s_ws_invoking;
+        if (!in_ws) typeeasy_http_set_status(500);
+        runtime_reset_vars_to_initial_state();
+        te_req_owned_free_all();
+        g_vm.te_request_active--;
+        return strdup(in_ws ? "" : "{\"error\":\"internal_error\"}");
+    }
+
     char* result = NULL;
     Variable* ret_var = find_variable(TE_SYM_RET);
     if (ret_var && ret_var->vtype == VAL_STRING && ret_var->value.string_value) {
@@ -638,6 +656,7 @@ static char *ws_invoke_guarded(MethodNode *m) {
     if (setjmp(recovery) != 0) {
 #endif
         g_vm.runtime_recovery = saved;
+        s_ws_invoking = 0;
         runtime_reset_vars_to_initial_state();
         te_req_abort_cleanup();
         fprintf(stderr, "[WS] handler %s aborted by a runtime error; connection kept\n",
@@ -645,7 +664,9 @@ static char *ws_invoke_guarded(MethodNode *m) {
         return NULL;
     }
     g_vm.runtime_recovery = &recovery;
+    s_ws_invoking = 1;
     char *r = typeeasy_embedded_invoke_method(m);
+    s_ws_invoking = 0;
     g_vm.runtime_recovery = saved;
     return r;
 }

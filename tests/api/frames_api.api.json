@@ -35,6 +35,21 @@
                   "contains": ["frames_api.te", "noExiste"] } },
 
     { "name": "el server sigue vivo despues del 500",
+      "path": "/health", "expect": { "status": 200 } },
+
+    { "name": "uncaught_throw_500: throw sin catch en handler -> 500 internal_error (antes 200 vacio)",
+      "path": "/api/throw",
+      "expect": { "status": 500, "json": { "error": "internal_error" } } },
+
+    { "name": "NUM-5 division por cero sin catch -> 500",
+      "path": "/api/div",
+      "expect": { "status": 500, "json": { "error": "internal_error" } } },
+
+    { "name": "NUM-5 division por cero con catch -> 200, q conserva -1",
+      "path": "/api/divcatch",
+      "expect": { "status": 200, "json": { "q": -1, "msg": "ArithmeticError: division by zero." } } },
+
+    { "name": "el server sigue vivo despues de los throws",
       "path": "/health", "expect": { "status": 200 } }
   ]
 }

@@ -1,0 +1,9 @@
+// spec: NUM-5
+// expect-exit: 1
+// expect-stderr-contains: Uncaught: ArithmeticError: modulo by zero.
+// Division/modulo por cero LANZAN (ver num05_div_zero_throws.te para el catch). Sin try/catch el
+// programa termina con exit 1 y "Uncaught: ..." en stderr; nada despues del error se ejecuta.
+println("antes");
+let b = 5 % 0;
+println(b);
+println("after");

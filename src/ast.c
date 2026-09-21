@@ -6053,6 +6053,12 @@ void te_throw_set_message(const char *msg) {
     throw_message = msg ? strdup(msg) : NULL;
     te_throw_value_clear();
 }
+/* [NUM-5] `a / 0`, `a % 0` (int, float y decimal): error de runtime catcheable con try/catch. */
+double te_num_zero_div(int is_mod) {
+    te_throw_set_message(is_mod ? "ArithmeticError: modulo by zero." : "ArithmeticError: division by zero.");
+    g_vm.throw_flag = 1;
+    return 0;
+}
 static void te_stmt_throw(ASTNode *node) {
         ASTNode *e = node->left;
         TeValue v; te_val_init(&v);

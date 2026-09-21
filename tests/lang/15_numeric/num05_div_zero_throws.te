@@ -1,0 +1,20 @@
+// spec: NUM-5
+// expect: catch=ArithmeticError: division by zero.|mod=ArithmeticError: modulo by zero.|dec=ArithmeticError: division by zero.|loop acc=100 i=1|q=-1|after
+// `a / 0` y `a % 0` (int, float y decimal) lanzan un error de runtime catcheable con
+// try/catch (antes: resultado 0 + mensaje en stderr y el programa seguia como si nada).
+// El throw aborta el resto de la expresion/bucle; una variable pre-existente conserva su valor.
+var out = "";
+try { let a = 10 / 0; out = out + "no"; } catch (e) { out = out + "catch=" + e; }
+try { let b = 7.5 % 0; out = out + "no"; } catch (e2) { out = out + "|mod=" + e2; }
+try { let d : decimal = 1.50m; let z : decimal = d / 0; out = out + "no"; } catch (e3) { out = out + "|dec=" + e3; }
+// Bucle (candidato a bytecode): la iteracion i=1 divide por 0 -> sale del for con el throw
+// y `acc` no se pisa con 0.
+var acc = 0; var last = -1;
+try {
+    for (i = 0; 3; 1) { last = i; acc = acc + 100 / (1 - i); }
+    out = out + "|no";
+} catch (e4) { out = out + "|loop acc=" + ("" + acc) + " i=" + ("" + last); }
+var q = -1;
+try { q = 4 / 0; } catch (e5) { var seen = 1; }
+out = out + "|q=" + ("" + q);
+println(out + "|after");

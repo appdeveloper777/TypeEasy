@@ -4,6 +4,24 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
+## 0.1.9 — 2026-09-21
+
+### Cambios de comportamiento
+- **División y módulo por cero lanzan** (`[NUM-5]`): `a / 0` y `a % 0` con `int`, `float` o
+  `decimal` producen un error de runtime catcheable —`ArithmeticError: division by zero.` /
+  `ArithmeticError: modulo by zero.` llega como string al `catch (e)`—. El resto de la
+  expresión y del bucle en curso se abortan (también en el acelerador bytecode) y una variable
+  ya existente **conserva su valor** (`q = 4 / 0` no la pisa con `0`). Sin `catch`, el
+  programa termina con `Uncaught: ArithmeticError: …` y exit 1. Hasta 0.1.8 devolvía `0`,
+  avisaba por stderr y seguía: un `0` plausible se colaba en costos/promedios sin rastro.
+  Tests `15_numeric/num05_div_zero_throws.te`, `num05_div_zero_uncaught.te`,
+  `08_errors/runtime_div_zero.te`.
+- **`--api`: un `throw` no capturado dentro de un handler responde 500**
+  `{"error":"internal_error"}` y loguea `Uncaught in handler <nombre>: <mensaje>` en stderr.
+  Hasta 0.1.8 respondía **200 con body vacío y sin rastro en el log** (cualquier `throw` sin
+  `try`, incluido el nuevo ArithmeticError, era invisible). En handlers WebSocket solo se
+  loguea (no se envía frame). Test `tests/api` caso `uncaught_throw_500`.
+
 ## 0.1.8 — 2026-09-19 (re-tag 2026-09-20 con los fixes WebSocket)
 
 > El tag `v0.1.8` se movió el 2026-09-20 cuatro veces (3fa67c6 → 01db86d → eeb4894 → 5bef7ac →

@@ -4,9 +4,8 @@
 //   1) enteros > 2^53 dentro de un bucle compilado (antes pasaban por double)
 //   2) lista[i].attr con un item de OTRA clase (antes devolvia 0 en silencio)
 //   3) variable que cambia de tipo entre ejecuciones del mismo nodo (guard -> deopt)
-//   4) division/modulo por cero dentro de bytecode (mismo mensaje que el walker)
-// expect-stderr-contains: Error: division by zero.
-// expect-contains: 9007199254740993|9007199254740993|30|A2B|1|-1|3|1.5|0|ok
+//   4) division/modulo por cero dentro de bytecode (lanza igual que el walker; q no se pisa)
+// expect-contains: 9007199254740993|9007199254740993|30|A2B|1|-1|3|1.5|5:ArithmeticError: division by zero.|ok
 
 var big = 9007199254740991;
 for (i=0; 2; 1) { big = big + 1; }
@@ -46,6 +45,7 @@ s = s + "|" + f;
 
 var z = 0;
 var q = 5;
-for (i=0; 1; 1) { q = q / z; }
-s = s + "|" + q;
+var dz = "";
+try { for (i=0; 1; 1) { q = q / z; } } catch (e) { dz = ("" + e); }
+s = s + "|" + q + ":" + dz;
 println(s + "|ok");

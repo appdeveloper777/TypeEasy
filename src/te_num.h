@@ -13,16 +13,20 @@
 #include <math.h>
 #include "ast.h"
 
+/* [NUM-5] Division/modulo por cero: lanza un error de runtime catcheable (throw_flag +
+ * mensaje) y devuelve 0 para que la expresion en curso termine; definida en ast.c. */
+double te_num_zero_div(int is_mod);
+
 static inline double te_num_binop(NodeKind k, double a, double b) {
     switch (k) {
     case NK_ADD: return a + b;
     case NK_SUB: return a - b;
     case NK_MUL: return a * b;
     case NK_DIV:
-        if (b == 0.0) { fprintf(stderr, "Error: division by zero.\n"); return 0; }
+        if (b == 0.0) return te_num_zero_div(0);
         return a / b;
     case NK_MOD: {
-        if (b == 0.0) { fprintf(stderr, "Error: modulo by zero.\n"); return 0; }
+        if (b == 0.0) return te_num_zero_div(1);
         long long lv = (long long)a, rv = (long long)b;
         if ((double)lv == a && (double)rv == b) return (double)(lv % rv);   /* enteros: C */
         return fmod(a, b);                                                 /* floats: resto real */

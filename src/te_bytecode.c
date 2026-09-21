@@ -548,7 +548,9 @@ do_var:
 do_add:  BIN(NK_ADD);
 do_sub:  BIN(NK_SUB);
 do_mul:  BIN(NK_MUL);
-do_div:  BIN(NK_DIV);
+/* [NUM-5] divisor 0: lanza (te_num_zero_div) y ABORTA el programa compilado; si siguiera,
+ * un bucle compilado iteraria completo con el throw en vuelo. El walker desenrolla despues. */
+do_div:  if (stack[sp-1] == 0.0) { te_num_zero_div(0); return 0; } BIN(NK_DIV);
 do_lt:   BIN(NK_LT);
 do_gt:   BIN(NK_GT);
 do_le:   BIN(NK_GT_EQ);   /* NK_GT_EQ evalúa <= en el walker */
@@ -557,7 +559,7 @@ do_eq:   BIN(NK_EQ);
 do_neq:  BIN(NK_DIFF);
 do_and:  BIN(NK_AND);
 do_or:   BIN(NK_OR);
-do_mod:  BIN(NK_MOD);
+do_mod:  if (stack[sp-1] == 0.0) { te_num_zero_div(1); return 0; } BIN(NK_MOD);
 do_band: BIN(NK_BIT_AND);
 do_bor:  BIN(NK_BIT_OR);
 do_bxor: BIN(NK_BIT_XOR);

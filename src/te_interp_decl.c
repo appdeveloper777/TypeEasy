@@ -54,6 +54,7 @@ void interpret_var_decl(TeVM *vm, ASTNode *node) {
      * aritmética exacta, concatenación, literales, `new X()`... */
     TeValue v;
     te_eval_value(value_node, &v);
+    if (vm->throw_flag) { te_val_free(&v); return; }   /* [NUM-5] RHS lanzo: no declarar ni re-chequear tipo */
 
     if (declared_type != NULL) {
         const char *eff = te_decl_static_type(value_node, &v);
@@ -339,7 +340,10 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
                     /* Mismas primitivas que BC_I64_STORE / BC_STORE_VAR (te_bytecode.c). */
                     long long i64v;
                     if (te_eval_i64(value_node, &i64v)) te_num_store_i64(fv, i64v);   /* Fase 1b: entero exacto */
-                    else                                te_num_store(fv, evaluate_expression(value_node));
+                    else {
+                        double d = evaluate_expression(value_node);
+                        if (!vm->throw_flag) te_num_store(fv, d);   /* [NUM-5] RHS lanzo: no pisar el valor */
+                    }
                     return;
                 }
             }
@@ -362,5 +366,6 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
     }
     TeValue v;
     te_eval_value(value_node, &v);
+    if (vm->throw_flag) { te_val_free(&v); return; }   /* [NUM-5] RHS lanzo: no pisar el valor */
     te_assign_value(var_node, &v);
 }

@@ -9,6 +9,7 @@
 
 void te_set_ret_string(const char *s);   /* ast.c */
 void te_set_ret_int(int n);
+double te_num_zero_div(int is_mod);      /* ast.c ([NUM-5]) */
 
 static __int128 pow10_128(int n) {
     __int128 p = 1;
@@ -98,7 +99,7 @@ int te_dec_binop(NodeKind k, const TeDec *pa, const TeDec *pb, TeDec *out) {
         }
         return !dec_overflow(out);
     case NK_DIV: {
-        if (b.m == 0) { printf("Error: division by zero.\n"); out->m = 0; out->scale = 0; return 0; }
+        if (b.m == 0) { te_num_zero_div(0); out->m = 0; out->scale = 0; return 0; }
         int min_scale = a.scale > b.scale ? a.scale : b.scale;
         /* q = a/b con TE_DEC_MAX_SCALE decimales: (a.m * 10^(18 + b.scale - a.scale)) / b.m */
         int shift = TE_DEC_MAX_SCALE + b.scale - a.scale;
@@ -110,7 +111,7 @@ int te_dec_binop(NodeKind k, const TeDec *pa, const TeDec *pb, TeDec *out) {
         return !dec_overflow(out);
     }
     case NK_MOD:
-        if (b.m == 0) { printf("Error: modulo by zero.\n"); out->m = 0; out->scale = 0; return 0; }
+        if (b.m == 0) { te_num_zero_div(1); out->m = 0; out->scale = 0; return 0; }
         dec_align(&a, &b);
         out->m = a.m % b.m; out->scale = a.scale;
         return 1;
