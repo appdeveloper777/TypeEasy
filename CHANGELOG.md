@@ -52,6 +52,15 @@ que fija la conducta nueva. Política: `docs/VERSIONING.md`.
   (`17_collections/lst02_indexed_method_call.te`).
 - **Envelope `sql_exec(..., true)` con sqlite**: un exec fallido que devuelve `-1` ahora produce
   `{ success:false, error:<sql_last_error> }` en vez de `success:true, data:-1`.
+- **`json_parse` conserva los booleanos** (`[JSN-2]`): `true`/`false` llegan como **bool** y
+  `json_stringify(json_parse(x))` los re-serializa como `true`/`false` (antes `1`/`0`: sin round-trip,
+  un JSON reenviado a un tercero —PAC, Yappy, Facturapi— o guardado en una columna JSON salía con
+  `1/0`). **Nada cambia para el código existente**: en contexto string valen `"1"`/`"0"`
+  (`("" + p["k"]) == "1"` y `("" + p.k)` siguen igual —este último antes daba `"true"` sobre maps
+  literales; ahora también `"1"`—), comparan igual a `1`/`0`/`true`, se bindean a SQL como `1`/`0`
+  (`TINYINT`), y el model binding los coerciona como antes (`string` → `"1"`, `int` → `1`, `bool` OK).
+  `println(p["k"])` imprime `true`/`false` (antes `1`/`0`). Tests `17_collections/jsn02_parse_types.te`,
+  `jsn03_bool_roundtrip.te`.
 
 ### Cambios de comportamiento
 - **WebSockets ociosos o muertos ya no agotan el pool de workers.** Cada WebSocket

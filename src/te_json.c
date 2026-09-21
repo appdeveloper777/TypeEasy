@@ -270,8 +270,10 @@ ASTNode *te_json_parse_value(const char **p) {
         }
         return list;
     }
-    if (c == 't' && strncmp(*p, "true", 4) == 0) { *p += 4; return create_ast_leaf_number(TE_T_INT, 1, NULL, NULL); }
-    if (c == 'f' && strncmp(*p, "false", 5) == 0) { *p += 5; return create_ast_leaf_number(TE_T_INT, 0, NULL, NULL); }
+    /* BOOL real (no INT 1/0): json_stringify(json_parse(x)) conserva true/false. En contexto
+     * string sigue dando "1"/"0" (te_var_to_string), así `("" + p["k"]) == "1"` no cambia. */
+    if (c == 't' && strncmp(*p, "true", 4) == 0) { *p += 4; return create_ast_leaf_number(TE_T_BOOL, 1, NULL, NULL); }
+    if (c == 'f' && strncmp(*p, "false", 5) == 0) { *p += 5; return create_ast_leaf_number(TE_T_BOOL, 0, NULL, NULL); }
     /* JSON null → nodo NULL propio (no INT 0). Antes se colapsaba a INT 0, lo
      * que era indistinguible de un 0 real: el model-binding de un body tipado
      * lo convertía en el string "0" y el binder de @params lo interpolaba como

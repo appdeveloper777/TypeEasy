@@ -412,9 +412,11 @@ Builtins mínimos garantizados en este nivel de la spec:
 ### JSON
 - `[JSN-1]` `json(x)` / `json_stringify(x)` serializan map, lista y objeto: `true`/`false`/`null`
   literales, strings entre comillas, floats según `[NUM-11]`.
-- `[JSN-2]` `json_parse(s)`: `true`/`false` llegan como **`int` 1/0** (y se re-serializan como `1`/`0`);
-  `null` → `null`; un número con decimales conserva su texto al re-serializar (`1.50`); los strings
-  se conservan (`"007"`). Acceso `p["k"]`, `p["l"][i]`, `p["a"]["b"]`.
+- `[JSN-2]` `json_parse(s)`: `true`/`false` llegan como **bool** y se re-serializan como `true`/`false`
+  (round-trip); en contexto string valen `"1"`/`"0"` y comparan igual a `1`/`0` (`p["e"] == 1`,
+  `("" + p["e"]) == "1"`), en `println` imprimen `true`/`false`. (Hasta 0.1.8 llegaban como `int` 1/0 y
+  se re-serializaban `1`/`0`.) `null` → `null`; un número con decimales conserva su texto al
+  re-serializar (`1.50`); los strings se conservan (`"007"`). Acceso `p["k"]`, `p["l"][i]`, `p["a"]["b"]`.
 - `[JSN-3]` `json_parse("")` → `null`; texto inválido → `0` (no lanza); escalares JSON se parsean
   (`"42"` → 42, `"\"s\""` → `s`).
 

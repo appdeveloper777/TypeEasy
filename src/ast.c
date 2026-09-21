@@ -825,8 +825,10 @@ char* get_node_string(ASTNode* node) {
                 ASTNode *pair = (map && a->id) ? map_find_pair(map, a->id) : NULL;
                 ASTNode *val  = pair ? pair->left : NULL;
                 if (!val || !val->type) return strdup("");
+                /* BOOL en contexto string = "1"/"0" (igual que `"" + p["k"]` y `"" + true`;
+                 * `println(m.k)` sigue mostrando true/false). */
                 if (strcmp(val->type, TE_T_BOOL) == 0)
-                    return strdup(val->value ? "true" : "false");
+                    return strdup(val->value ? "1" : "0");
                 if (nk_of(val) == NK_NULL)
                     return strdup("null");
                 if (nk_of(val) == NK_STRING || strcmp(val->type, TE_T_DATETIME) == 0 ||
@@ -6507,7 +6509,7 @@ char *te_validate_body_against_class(ClassNode *cls, const char *json) {
             (!val->str_value || !*val->str_value)) continue;
         int is_str = strcmp(vt, TE_T_STRING) == 0;
         int is_flt = strcmp(vt, TE_T_FLOAT) == 0;
-        int is_int = strcmp(vt, TE_T_INT) == 0;
+        int is_int = strcmp(vt, TE_T_INT) == 0 || strcmp(vt, TE_T_BOOL) == 0;   /* JSON true/false = 1/0 */
         int is_obj = strcmp(vt, TE_T_OBJECT_LITERAL) == 0;
         int is_lst = strcmp(vt, TE_T_LIST) == 0;
         if (strcmp(atype, TE_DT_STRING) == 0) {
@@ -6594,12 +6596,14 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
                 dst->value.object_value = NULL;
                 break;
             }
+            /* JSON true/false (hoja BOOL) se coerciona como 1/0 en todos los tipos declarados. */
+            int val_is_bool = val->type && strcmp(val->type, TE_T_BOOL) == 0;
             if (strcmp(atype, TE_DT_STRING) == 0) {
                 if (dst->vtype == VAL_STRING && dst->value.string_value) free(dst->value.string_value);
                 if (nk_of(val) == NK_STRING) {
                     dst->value.string_value = strdup(val->str_value ? val->str_value : "");
-                } else if (nk_of(val) == NK_INT) {
-                    char buf[32]; snprintf(buf, sizeof buf, "%lld", (long long)val->value);
+                } else if (nk_of(val) == NK_INT || val_is_bool) {
+                    char buf[32]; snprintf(buf, sizeof buf, "%lld", (long long)(val_is_bool ? (val->value ? 1 : 0) : val->value));
                     dst->value.string_value = strdup(buf);
                 } else if (nk_of(val) == NK_FLOAT) {
                     dst->value.string_value = strdup(val->str_value ? val->str_value : "0");
@@ -6610,14 +6614,15 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
             } else if (strcmp(atype, TE_DT_FLOAT) == 0) {
                 double d = 0;
                 if (nk_of(val) == NK_FLOAT)      d = atof(val->str_value ? val->str_value : "0");
-                else if (nk_of(val) == NK_INT)   d = (double)val->value;
+                else if (val_is_bool)             d = val->value ? 1.0 : 0.0;
+                else if (nk_of(val) == NK_INT)    d = (double)val->value;
                 else if (nk_of(val) == NK_STRING) d = atof(val->str_value ? val->str_value : "0");
                 dst->value.float_value = d;
                 dst->vtype = VAL_FLOAT;
             } else if (strcmp(atype, TE_DT_DECIMAL) == 0) {
                 /* texto numérico exacto tal como vino en el JSON (número o string) */
                 char nb[32]; const char *src = "0";
-                if (nk_of(val) == NK_INT) { snprintf(nb, sizeof nb, "%lld", (long long)val->value); src = nb; }
+                if (nk_of(val) == NK_INT || val_is_bool) { snprintf(nb, sizeof nb, "%lld", (long long)(val_is_bool ? (val->value ? 1 : 0) : val->value)); src = nb; }
                 else if (val->str_value && *val->str_value) src = val->str_value;
                 TeDec d; char dec[TE_DEC_TEXT_MAX];
                 if (te_dec_parse(src, &d)) te_dec_format(&d, dec, sizeof dec); else snprintf(dec, sizeof dec, "0");
@@ -6628,6 +6633,7 @@ ObjectNode *te_object_from_json(ClassNode *cls, const char *json) {
                 /* int / default */
                 int iv = 0;
                 if (nk_of(val) == NK_INT)         iv = val->value;
+                else if (val_is_bool)             iv = val->value ? 1 : 0;
                 else if (nk_of(val) == NK_FLOAT)  iv = (int)atof(val->str_value ? val->str_value : "0");
                 else if (nk_of(val) == NK_STRING) iv = atoi(val->str_value ? val->str_value : "0");
                 dst->value.int_value = iv;

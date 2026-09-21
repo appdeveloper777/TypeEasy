@@ -1,0 +1,18 @@
+// spec: JSN-2
+// expect: idiom=ok|str=1 0|cmp=ok|rt={"activo":true,"borrado":false,"n":1}|sql=[{"t":"integer","v":1},{"t":"integer","v":0}]|for=true,false
+// Booleanos de json_parse: round-trip true/false, idiom ("" + x) == "1" intacto, comparaciones
+// numericas iguales, y un bool parseado se bindea a SQL como 1/0 (TINYINT/INTEGER).
+load_native("sqlite");
+let p = json_parse("{\"activo\":true,\"borrado\":false,\"n\":1}");
+var out = "";
+if ((("" + p["activo"]) == "1") && (("" + p["borrado"]) == "0")) { out = out + "idiom=ok"; } else { out = out + "idiom=FALLA"; }
+out = out + "|str=" + ("" + p["activo"]) + " " + ("" + p["borrado"]);
+if (p["activo"] == 1 && p["borrado"] == 0 && p["activo"] == true && p["activo"]) { out = out + "|cmp=ok"; } else { out = out + "|cmp=FALLA"; }
+out = out + "|rt=" + json_stringify(p);
+let c = sqlite_connect(":memory:");
+let rows = sqlite_query(c, "SELECT typeof(@a) AS t, @a AS v UNION ALL SELECT typeof(@b), @b", { "@a": p["activo"], "@b": p["borrado"] }, "json");
+out = out + "|sql=" + rows;
+let lst = json_parse("[true,false]");
+var acc = "";
+for (let b in lst) { acc = acc + (acc == "" ? "" : ",") + (b ? "true" : "false"); }
+println(out + "|for=" + acc);
