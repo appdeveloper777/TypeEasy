@@ -1,0 +1,15 @@
+// spec: ERR-4
+// expect: codigo=E42 msg=sin stock|lista=2 primero=a|texto=plano|num=71|r2=runtime
+// `throw <map>` / `throw <lista>`: el catch recibe el valor (antes llegaba 0).
+// Strings y numeros siguen llegando como string (ERR-1); un error de runtime
+// posterior no reutiliza el valor de un throw anterior.
+let f = fn() => { throw { codigo: "E42", msg: "sin stock" }; };
+var out = "";
+try { f(); } catch (e) { out = out + "codigo=" + e["codigo"] + " msg=" + e["msg"]; }
+try { throw ["a", "b"]; } catch (e2) { out = out + "|lista=" + ("" + e2.length) + " primero=" + e2[0]; }
+try { throw "plano"; } catch (e3) { out = out + "|texto=" + e3; }
+try { throw 7; } catch (e4) { out = out + "|num=" + (e4 + 1); }
+var r2 = "";
+try { throw { k: 1 }; } catch (e5) { r2 = "map"; }
+try { let z = env_required("TE_NO_EXISTE_XYZ"); } catch (e6) { r2 = (e6.contains("env_required") == 1) ? "runtime" : "mal"; }
+println(out + "|r2=" + r2);

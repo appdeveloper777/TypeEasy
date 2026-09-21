@@ -49,6 +49,9 @@
   #include <unistd.h>
   #include <pthread.h>
   #include <sys/wait.h>
+  #if defined(__linux__)
+    #include <sys/prctl.h>
+  #endif
   #define te_sleep_ms(ms) usleep((ms) * 1000)
 #endif
 
@@ -1522,6 +1525,7 @@ int typeeasy_run_api_server_pool(const char *host, int port, int num_workers,
 
     pid_t *pids = (pid_t *)calloc((size_t)num_workers, sizeof(pid_t));
     if (!pids) return 1;
+    pid_t parent_pid = getpid();
 
     for (int i = 0; i < num_workers; i++) {
         pid_t pid = fork();
@@ -1540,6 +1544,13 @@ int typeeasy_run_api_server_pool(const char *host, int port, int num_workers,
         if (pid == 0) {
             /* Child: become a worker and never return to the spawn loop. */
             free(pids);
+#if defined(__linux__)
+            /* Die with the parent (SIGKILL'd or crashed): otherwise orphaned
+             * workers keep the SO_REUSEPORT socket and a manual restart ends up
+             * with old and new binaries sharing the port (ERP gotcha B8). */
+            prctl(PR_SET_PDEATHSIG, SIGTERM);
+            if (getppid() != parent_pid) _exit(0); /* parent already gone */
+#endif
             int rc = run_single_server(host, port, i);
             _exit(rc);
         }
@@ -1565,8 +1576,19 @@ int typeeasy_run_api_server_pool(const char *host, int port, int num_workers,
     for (int i = 0; i < num_workers; i++) {
         if (pids[i] > 0) kill(pids[i], SIGTERM);
     }
+    /* Graceful window, then SIGKILL stragglers (a worker stuck in a handler
+     * must not outlive the pool and keep the port). */
+    for (int tick = 0; tick < 25; tick++) {
+        int alive = 0;
+        for (int i = 0; i < num_workers; i++) {
+            if (pids[i] > 0 && waitpid(pids[i], NULL, WNOHANG) == 0) alive++;
+            else pids[i] = 0;
+        }
+        if (!alive) break;
+        te_sleep_ms(200);
+    }
     for (int i = 0; i < num_workers; i++) {
-        if (pids[i] > 0) waitpid(pids[i], NULL, 0);
+        if (pids[i] > 0) { kill(pids[i], SIGKILL); waitpid(pids[i], NULL, 0); }
     }
     free(pids);
     return 0;

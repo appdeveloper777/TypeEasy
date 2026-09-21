@@ -61,6 +61,7 @@ extern void native_sqlserver_close(ASTNode *args);
 
 /* ---- Runtime flags shared with ast.c ---- */
 extern char *throw_message;
+extern void te_throw_set_message(const char *msg);
 
 /* Cross-platform UTC mktime. timegm is GNU; Windows MSVC/MinGW uses _mkgmtime. */
 #if defined(_WIN32)
@@ -915,8 +916,7 @@ static int adapt_env_required(ASTNode *node, ASTNode *args) {
     if (!val || !*val) {
         char buf[256];
         snprintf(buf, sizeof(buf), "env_required: missing environment variable '%s'", key ? key : "(null)");
-        if (throw_message) { free(throw_message); throw_message = NULL; }
-        throw_message = strdup(buf);
+        te_throw_set_message(buf);
         g_vm.throw_flag = 1;
         if (key) free(key);
         add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, "", NULL));

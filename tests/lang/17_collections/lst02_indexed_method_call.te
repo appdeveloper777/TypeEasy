@@ -1,0 +1,18 @@
+// spec: LST-2
+// expect: {"k":[1,2,3]}|6|50|sum=9|20
+// Metodo sobre un elemento indexado como sentencia (m["k"].push(x);) y llamada de un lambda
+// guardado en una lista/map (fs[1](5), h["dup"](3)). Hasta 0.1.8 ambas eran syntax error.
+let m = { k: [1] };
+m["k"].push(2);
+m["k"].push(3);
+print(json_stringify(m) + "|");
+let fs = [fn(x) => { return x + 1; }, fn(x) => { return x * 10; }];
+let r = fs[1](5);
+print(("" + fs[0](5)) + "|");
+print(("" + r) + "|");
+let h = { dup: fn(x) => { return x * 2; }, sum: fn(a, b) => { return a + b; } };
+print("sum=" + ("" + h["sum"](4, 5)) + "|");
+var acc = [];
+h["dup"](10);
+acc.push(h["dup"](10));
+println("" + acc[0]);

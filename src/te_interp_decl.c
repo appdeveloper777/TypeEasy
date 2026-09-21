@@ -71,8 +71,7 @@ void interpret_var_decl(TeVM *vm, ASTNode *node) {
                     "TypeError: cannot assign a value of type '%s' to a variable of type '%s'.",
                     eff, declared_type);
                 te_val_free(&v);
-                if (throw_message) free(throw_message);
-                throw_message = strdup(buf);
+                te_throw_set_message(buf);
                 vm->throw_flag = 1;
                 return;
             }

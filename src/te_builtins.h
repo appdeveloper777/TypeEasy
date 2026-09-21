@@ -99,10 +99,33 @@ typedef struct TEHostAPI {
 
 #define TE_HOST_API_VERSION 3
 
+/* ABI handshake (0.1.8 re-tag #4). Besides te_module_register, a plugin exports
+ *     int te_module_abi_version(void);   -> TE_HOST_API_VERSION it was built with
+ *     int te_module_api_size(void);      -> sizeof(TEHostAPI) it was built with
+ * The host refuses to load a plugin whose values differ from its own, or a
+ * legacy plugin without the symbols (set TYPEEASY_ALLOW_LEGACY_PLUGINS=1 to
+ * load it anyway). Reason: a stale libte_*.so compiled against another layout
+ * registers fine and then every sqlite_* call returns []/0 in silence
+ * (JunX outage 2026-09-20: plugin from the 0.0.13 package under a 0.1.6 host). */
+#define TE_PLUGIN_EXPORT_ABI() \
+    TE_PLUGIN_EXPORT int te_module_abi_version(void) { return TE_HOST_API_VERSION; } \
+    TE_PLUGIN_EXPORT int te_module_api_size(void)   { return (int)sizeof(TEHostAPI); }
+#ifdef _WIN32
+#define TE_PLUGIN_EXPORT __declspec(dllexport)
+#else
+#define TE_PLUGIN_EXPORT
+#endif
+
 /* Returns 0 on success, non-zero on error (file not found, missing
  * `te_module_register`, ABI mismatch). On error, sets __ret__ to 0;
  * on success, sets __ret__ to 1. */
 int  te_load_native_module(const char *name_or_path);
+
+/* Shared by the POSIX/Windows loaders: validates the plugin's ABI handshake.
+ * getver/getsize may be NULL (legacy plugin). Returns 0 = accept, -4 = reject
+ * (a diagnostic was already printed to stderr). */
+int  te_plugin_abi_check(const char *name, const char *path,
+                         int (*getver)(void), int (*getsize)(void));
 
 #ifdef __cplusplus
 }

@@ -249,6 +249,9 @@ static int fiber_find_free(void) {
 static int fiber_valid(int id) {
     return id >= 0 && id < TE_FIBER_MAX && E()->fibers[id].in_use;
 }
+static int fiber_from_handle(int h) {
+    return (h >= TE_FIBER_HANDLE_BASE) ? h - TE_FIBER_HANDLE_BASE : -1;
+}
 
 /* Run the current fiber's lambda body, then return to the scheduler for good.
  * Solo se usa con fibers reales (Windows o ucontext); en el fallback sincrono
@@ -666,7 +669,7 @@ static int adapt_go(ASTNode *node, ASTNode *args) {
      * can read variables defined before it was spawned. */
     ctx_save(&f->ctx);
     add_or_update_variable(TE_SYM_RET,
-        create_ast_leaf_number(TE_T_INT, id, NULL, NULL));
+        create_ast_leaf_number(TE_T_INT, TE_FIBER_HANDLE_BASE + id, NULL, NULL));
     return 1;
 }
 
@@ -747,7 +750,7 @@ static int adapt_read_file_async(ASTNode *node, ASTNode *args) {
 /* await_async(task) -> the task's result value. Drives the loop until done. */
 static int adapt_await_async(ASTNode *node, ASTNode *args) {
     (void)node;
-    int id = args ? (int)evaluate_expression(args) : -1;
+    int id = args ? fiber_from_handle((int)evaluate_expression(args)) : -1;
     if (!fiber_valid(id)) {
         add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, "", NULL));
         return 1;
@@ -756,6 +759,25 @@ static int adapt_await_async(ASTNode *node, ASTNode *args) {
     evloop_run_until(ids, 1);
     add_or_update_variable(TE_SYM_RET, fiber_take_result(id));
     return 1;
+}
+
+int te_evloop_is_handle(int h) {
+    return fiber_valid(fiber_from_handle(h));
+}
+
+void te_evloop_await_handles(const int *hs, int n, ASTNode **out) {
+    int ids[TE_FIBER_MAX];
+    int m = 0;
+    for (int k = 0; k < n && m < TE_FIBER_MAX; k++) {
+        int id = fiber_from_handle(hs[k]);
+        if (fiber_valid(id)) ids[m++] = id;
+    }
+    if (m) evloop_run_until(ids, m);
+    for (int k = 0; k < n; k++) {
+        int id = fiber_from_handle(hs[k]);
+        out[k] = fiber_valid(id) ? fiber_take_result(id)
+                                 : create_ast_leaf(TE_T_STRING, 0, "", NULL);
+    }
 }
 
 /* Collect task ids from a literal/variable LIST or a variadic id list. */
@@ -778,11 +800,11 @@ static int evloop_collect_ids(ASTNode *args, int *out, int max) {
     }
     if (items) {
         for (ASTNode *it = items; it && n < max; it = it->next)
-            out[n++] = (int)evaluate_expression(it);
+            out[n++] = fiber_from_handle((int)evaluate_expression(it));
         return n;
     }
     for (ASTNode *a = args; a && n < max; a = a->next)
-        out[n++] = (int)evaluate_expression(a);
+        out[n++] = fiber_from_handle((int)evaluate_expression(a));
     return n;
 }
 

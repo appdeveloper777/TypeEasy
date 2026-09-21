@@ -789,7 +789,10 @@ char* get_node_string(ASTNode* node) {
         return out;
     }
 
-    if (node->type && nk_of(node) == NK_ACCESS_ATTR) {
+    /* Receptor llamada o acceso anidado (`f().attr`, `o.a.b.c`, `o?.a?.b`): camino único
+     * de valores; el bloque de abajo solo sabe de identificadores e índices. */
+    if (node->type && nk_of(node) == NK_ACCESS_ATTR && node->left &&
+        !(te_node_is_call(node->left) || nk_of(node->left) == NK_ACCESS_ATTR)) {
         ASTNode *o = node->left;
         ASTNode *a = node->right;
         if (!o || !a) return strdup("");
@@ -1531,7 +1534,13 @@ static void te_sql_envelope_wrap(int force) {
     #define ENV_ADD(p) do { ASTNode *_pp=(p); if(!env->left) env->left=_pp; else tail->right=_pp; tail=_pp; } while(0)
     #define ENV_BOOL(b) create_ast_leaf_number(TE_T_BOOL, (b)?1:0, NULL, NULL)
 
-    if (r->vtype == VAL_INT) {
+    if (r->vtype == VAL_INT && r->value.int_value < 0) {
+        /* SQLite exec con fallo (plugin viejo: -1 sin JSON). */
+        const char *le = te_sql_last_error();
+        ENV_ADD(create_kv_pair_node("success", ENV_BOOL(0)));
+        ENV_ADD(create_kv_pair_node("error", create_ast_leaf(TE_T_STRING, 0,
+                (le && *le) ? (char *)le : "exec failed (-1)", NULL)));
+    } else if (r->vtype == VAL_INT) {
         /* SQLite exec OK: __ret__ es int = filas afectadas. */
         ENV_ADD(create_kv_pair_node("success", ENV_BOOL(1)));
         ENV_ADD(create_kv_pair_node("data",
@@ -2029,10 +2038,7 @@ void te_runtime_reset_flags(void) {
     g_vm.return_flag = 0;
     g_vm.return_node = NULL;
     g_vm.throw_flag = 0;
-    if (throw_message) {
-        free(throw_message);
-        throw_message = NULL;
-    }
+    te_throw_set_message(NULL);
     g_vm.break_flag = 0;
     g_vm.continue_flag = 0;
 }
@@ -5262,6 +5268,19 @@ static double te_ev_access_attr(ASTNode *node) {
         ASTNode *objRef = node->left;
         ASTNode *attr   = node->right;
 
+        /* Receptor que no es un identificador ni un índice (`f().length`, `o.a.b.c`,
+         * `uuid_v4().length == 36`): camino único de valores (te_eval_value). */
+        if (objRef && (te_node_is_call(objRef) || nk_of(objRef) == NK_ACCESS_ATTR)) {
+            TeValue v; te_val_init(&v);
+            te_eval_value(node, &v);
+            double d = 0;
+            if (v.vtype == VAL_INT) d = (double)v.value.int_value;
+            else if (v.vtype == VAL_FLOAT) d = v.value.float_value;
+            else if (v.vtype == VAL_STRING && v.value.string_value) d = strtod(v.value.string_value, NULL);
+            te_val_free(&v);
+            return d;
+        }
+
         /* Fase 7: null-safe ?. — return 0 (null-as-number) if obj is null */
         if (node->value == 1 && objRef && nk_of(objRef) == NK_IDENTIFIER) {
             Variable *vv = find_variable(objRef->id);
@@ -6022,22 +6041,28 @@ static void te_stmt_index_assign(ASTNode *node) {
 }
 
 /* NK_THROW — extraído de interpret_ast (Fase 2). */
+/* Valor lanzado (además de throw_message, que sigue siendo su forma string):
+ * permite que `catch (e)` reciba maps/listas/objetos por referencia. */
+static void te_throw_value_clear(void) {
+    if (g_vm.throw_has_value) { te_val_free(&g_vm.throw_value); g_vm.throw_has_value = 0; }
+}
+void te_throw_set_message(const char *msg) {
+    if (throw_message) free(throw_message);
+    throw_message = msg ? strdup(msg) : NULL;
+    te_throw_value_clear();
+}
 static void te_stmt_throw(ASTNode *node) {
         ASTNode *e = node->left;
-        char *msg = NULL;
-        if (e && nk_of(e) == NK_STRING) msg = strdup(e->str_value ? e->str_value : "");
-        else if (e && nk_of(e) == NK_IDENTIFIER) {
-            Variable *v = find_variable(e->id);
-            if (v && v->vtype == VAL_STRING) msg = strdup(v->value.string_value ? v->value.string_value : "");
-            else if (v && v->vtype == VAL_INT) { char b[32]; snprintf(b,32,"%lld", (long long)v->value.int_value); msg = strdup(b); }
-            else msg = strdup("");
-        } else if (e) {
-            double d = evaluate_expression(e);
-            char b[64]; te_fmt_double(b, sizeof(b), d);
-            msg = strdup(b);
-        } else msg = strdup("");
+        TeValue v; te_val_init(&v);
+        if (e) te_eval_value(e, &v); else te_val_set_string(&v, "");
+        char *msg = te_var_to_string(&v);
         if (throw_message) free(throw_message);
-        throw_message = msg;
+        throw_message = msg ? msg : strdup("");
+        te_throw_value_clear();
+        te_val_init(&g_vm.throw_value);
+        te_val_copy(&g_vm.throw_value, &v);
+        g_vm.throw_has_value = 1;
+        te_val_free(&v);
         g_vm.throw_flag = 1;
 }
 
@@ -6054,9 +6079,18 @@ static void te_stmt_try_catch(ASTNode *node) {
             g_vm.throw_flag = 0;
             if (throw_message) { free(throw_message); throw_message = NULL; }
             if (err_var_name) {
-                ASTNode *lit = create_ast_leaf(TE_T_STRING, 0, msg, NULL);
-                add_or_update_variable((char*)err_var_name, lit);
+                /* Contenedores (map/lista/objeto) llegan como valor; escalares siguen
+                 * llegando como string (ERR-1: `throw 42` -> e + 1 es "421"). */
+                if (g_vm.throw_has_value && g_vm.throw_value.vtype == VAL_OBJECT) {
+                    TeValue cv; te_val_init(&cv);
+                    te_val_copy(&cv, &g_vm.throw_value);
+                    te_bind_param(err_var_name, &cv);
+                } else {
+                    ASTNode *lit = create_ast_leaf(TE_T_STRING, 0, msg, NULL);
+                    add_or_update_variable((char*)err_var_name, lit);
+                }
             }
+            te_throw_value_clear();
             free(msg);
             interpret_ast(catch_body);
         }
@@ -6742,15 +6776,19 @@ static void interpret_call_func_impl(ASTNode *node) {
  * de nuevo en __ret__. */
 static void interpret_call_expr(ASTNode *node) {
     if (!node || !node->right) return;
-    interpret_ast(node->right);
-    Variable *r = find_variable(TE_SYM_RET);
-    if (!r || r->vtype != VAL_OBJECT || !r->type || strcmp(r->type, TE_T_LAMBDA) != 0) {
+    /* El callee puede ser otra llamada (`make(10)(5)`), un índice (`fs[1](5)`),
+     * un atributo o cualquier expresión que produzca un lambda. */
+    TeValue cv; te_val_init(&cv);
+    te_eval_value(node->right, &cv);
+    if (cv.vtype != VAL_OBJECT || !cv.type || strcmp(cv.type, TE_T_LAMBDA) != 0 || !cv.value.object_value) {
+        te_val_free(&cv);
         te_runtime_fatalf("Error: expression is not callable (a function was expected).");
         return;
     }
     /* Capturar el puntero del lambda ANTES de invocar: call_lambda puede
      * sobrescribir __ret__ (y el global FASTRET que lo sombrea). */
-    ASTNode *lambda = (ASTNode*)(intptr_t)r->value.object_value;
+    ASTNode *lambda = (ASTNode*)(intptr_t)cv.value.object_value;
+    te_val_free(&cv);
     ASTNode *res = call_lambda(lambda, node->left);
     if (res) add_or_update_variable(TE_SYM_RET, res);
 }
@@ -7456,8 +7494,7 @@ static int te_cm_materialize_return(ASTNode *node, MethodNode *m, ObjectNode *ob
                                 "TypeError: method '%s' is declared as '%s' but returns a value of type '%s'.",
                                 m->name, expected, actual_lower);
                             te_val_free(&rv);
-                            if (throw_message) free(throw_message);
-                            throw_message = strdup(buf);
+                            te_throw_set_message(buf);
                             g_vm.throw_flag = 1;
                             g_vm.return_flag = 0; g_vm.return_node = NULL;
                             return 1;
@@ -7473,6 +7510,42 @@ static int te_cm_materialize_return(ASTNode *node, MethodNode *m, ObjectNode *ob
             g_vm.return_node = NULL;
         }
     return 0;
+}
+
+/* `m["k"].push(x)` / `o.items.push(x)` / `lista[i].pop()`: si el receptor índice o
+ * atributo vale un CONTENEDOR (lista/map), liga un temporal estable por nodo que
+ * ALIASA el contenedor original (add_or_update_variable guarda el nodo, así push/pop
+ * mutan la lista real) y reescribe node->left a ese ID; en cada ejecución se re-evalúa
+ * (node->chain_recv). Strings y objetos de clase siguen su camino propio. Devuelve 1
+ * si ligó el receptor. */
+static int te_cm_bind_container_receiver(ASTNode *node, ASTNode **objNode_io) {
+    ASTNode *recvNode = node->chain_recv ? node->chain_recv : *objNode_io;
+    if (!recvNode || !recvNode->type) return 0;
+    if (nk_of(recvNode) != NK_ACCESS_EXPR && nk_of(recvNode) != NK_ACCESS_ATTR) return 0;
+    TeValue recv; te_val_init(&recv);
+    te_eval_value(recvNode, &recv);
+    int is_container = recv.vtype == VAL_OBJECT && recv.type && recv.value.object_value &&
+        (strcmp(recv.type, TE_T_LIST) == 0 || strcmp(recv.type, TE_T_MAP) == 0 ||
+         strcmp(recv.type, TE_T_OBJECT_LITERAL) == 0);
+    if (!is_container) { te_val_free(&recv); return 0; }
+    const char *tn = (node->chain_recv && node->left && node->left->id) ? node->left->id : NULL;
+    char tmpc[40];
+    if (!tn) {
+        static int _chain_c_seq = 0;
+        snprintf(tmpc, sizeof(tmpc), "__chain_c_%d__", _chain_c_seq++);
+        tn = tmpc;
+    }
+    add_or_update_variable(tn, (ASTNode *)(intptr_t)recv.value.object_value);
+    if (!node->chain_recv) {
+        ASTNode *id = (ASTNode*)calloc(1, sizeof(ASTNode));
+        id->type = strdup(TE_T_ID);
+        id->id = strdup(tn);
+        node->chain_recv = recvNode;
+        node->left = id;
+    }
+    *objNode_io = node->left;
+    te_val_free(&recv);
+    return 1;
 }
 
 static void interpret_call_method_impl(ASTNode *node) {
@@ -7553,8 +7626,10 @@ static void interpret_call_method_impl(ASTNode *node) {
      * not a valid object" / resultado vacio (`uuid_v4().upper()` solo servia la
      * primera vez). El nombre del temporal es estable por nodo. */
     ASTNode *chainRecv = NULL;
-    if (node->chain_recv) chainRecv = node->chain_recv;
-    else if (objNode && objNode->type &&
+    if (te_cm_bind_container_receiver(node, &objNode)) {
+        /* `m["k"].push(x)` / `o.items.push(x)`: receptor ya ligado a un temporal. */
+    } else if (node->chain_recv && te_node_is_call(node->chain_recv)) chainRecv = node->chain_recv;
+    else if (!node->chain_recv && objNode && objNode->type &&
         (nk_of(objNode) == NK_CALL_METHOD || nk_of(objNode) == NK_CALL_FUNC))
         chainRecv = objNode;
     if (chainRecv) {
@@ -7788,8 +7863,7 @@ static void te_cm_invoke(ASTNode *node, MethodNode *m, ObjectNode *obj, Variable
     if (m->return_type && strcmp(m->return_type, TE_DT_VOID) == 0 && g_vm.return_flag && g_vm.return_node) {
         char buf[256];
         snprintf(buf, sizeof(buf), "TypeError: method '%s' is declared as 'void' and cannot return a value.", m->name);
-        if (throw_message) free(throw_message);
-        throw_message = strdup(buf);
+        te_throw_set_message(buf);
         g_vm.throw_flag = 1;
         g_vm.return_flag = 0; g_vm.return_node = NULL;
         return;
@@ -7803,8 +7877,7 @@ static void te_cm_invoke(ASTNode *node, MethodNode *m, ObjectNode *obj, Variable
         && (!g_vm.return_flag || !g_vm.return_node)) {
         char buf[256];
         snprintf(buf, sizeof(buf), "TypeError: method '%s' is declared as '%s' but does not return a value.", m->name, m->return_type);
-        if (throw_message) free(throw_message);
-        throw_message = strdup(buf);
+        te_throw_set_message(buf);
         g_vm.throw_flag = 1;
         return;
     }

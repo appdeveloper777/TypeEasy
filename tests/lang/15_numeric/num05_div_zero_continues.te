@@ -1,6 +1,8 @@
 // spec: NUM-5
 // expect-exit: 0
-// Division/modulo por cero no lanzan: el mensaje sale por la salida estandar, el resultado es 0 y el programa sigue.
+// expect-stderr-contains: Error: division by zero.
+// expect-stderr-contains: Error: modulo by zero.
+// Division/modulo por cero no lanzan: el mensaje sale por STDERR (no ensucia la salida del programa), el resultado es 0 y el programa sigue.
 let a = 1 / 0;
 println(a);
 let b = 5 % 0;

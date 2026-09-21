@@ -1,0 +1,15 @@
+// spec: MAP-1
+// expect: 5|hi|5 hi|null|null|5|x
+// Acceso anidado con punto sobre maps (o.a.b.c, o?.a?.b) en let, contexto string y numerico.
+// Hasta 0.1.8 solo funcionaba en `let`: en concat daba "" y en comparaciones 0.
+let o = { a: { b: { c: 5, s: "hi" } } };
+let v1 = o.a.b.c;
+print(("" + v1) + "|");
+print(o.a.b.s + "|");
+print(("" + o.a.b.c) + " " + o.a.b.s + "|");
+let z = null;
+print(("" + z?.a?.b) + "|");
+print(("" + o?.x?.y) + "|");
+if (o.a.b.c == 5) { print("5|"); } else { print("no|"); }
+let p = json_parse("{\"u\":{\"n\":\"x\"}}");
+println(p.u.n);

@@ -40,6 +40,8 @@ typedef struct TeVM {
     int var_count;
     int return_flag;           /* un return está en vuelo */
     int throw_flag;            /* un throw está en vuelo */
+    Variable throw_value;      /* valor lanzado (map/lista/objeto llegan al catch por referencia) */
+    int throw_has_value;
     int break_flag;
     int continue_flag;
     ASTNode *return_node;      /* valor del return en vuelo */

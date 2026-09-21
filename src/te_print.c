@@ -191,6 +191,17 @@ void interpret_print(ASTNode *node) {
     if (arg->type && nk_of(arg) == NK_ACCESS_ATTR) {
         ASTNode *o = arg->left;
         ASTNode *a = arg->right;
+        /* Receptor que no es identificador (`print(o.a.b)`, `print(f().x)`): camino único
+         * de valores; el bloque de abajo asume `o->id`. */
+        if (o && !(o->id && (nk_of(o) == NK_IDENTIFIER || nk_of(o) == NK_ID)) &&
+            nk_of(o) != NK_ACCESS_EXPR) {
+            TeValue tv; te_val_init(&tv);
+            te_eval_value(arg, &tv);
+            char *s = te_var_to_string(&tv);
+            te_val_free(&tv);
+            if (s) { dbg_printf("%s", s); append_to_stdout(s); free(s); }
+            return;
+        }
         /* Fase 1a: arr.length / map.length / str.length */
         if (a && a->id && strcmp(a->id, "length") == 0) {
             ASTNode *list = resolve_to_list(o);
@@ -341,6 +352,19 @@ static int te_println_access_attr(ASTNode *arg) {
     if (arg->type && nk_of(arg) == NK_ACCESS_ATTR) {
         ASTNode *o = arg->left;
         ASTNode *a = arg->right;
+        /* Receptor que no es identificador (`println(o.a.b)`, `println(f().x)`): camino
+         * único de valores; el resto del bloque asume `o->id`. */
+        if (o && !(o->id && (nk_of(o) == NK_IDENTIFIER || nk_of(o) == NK_ID)) &&
+            nk_of(o) != NK_ACCESS_EXPR) {
+            TeValue tv; te_val_init(&tv);
+            te_eval_value(arg, &tv);
+            char *s = te_var_to_string(&tv);
+            te_val_free(&tv);
+            dbg_printf("%s\n", s ? s : "");
+            append_to_stdout(s ? s : ""); append_to_stdout("\n");
+            if (s) free(s);
+            return 1;
+        }
         /* Fase 1a: arr.length / map.length / str.length */
         if (a && a->id && strcmp(a->id, "length") == 0) {
             ASTNode *list = resolve_to_list(o);

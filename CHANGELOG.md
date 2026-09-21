@@ -6,11 +6,52 @@ que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
 ## 0.1.8 — 2026-09-19 (re-tag 2026-09-20 con los fixes WebSocket)
 
-> El tag `v0.1.8` se movió el 2026-09-20 tres veces (3fa67c6 → 01db86d → eeb4894 → fix
-> del pool de workers) porque el build original crasheaba en producción con WebSocket +
+> El tag `v0.1.8` se movió el 2026-09-20 cuatro veces (3fa67c6 → 01db86d → eeb4894 → 5bef7ac →
+> re-tag #4 "gotchas") porque el build original crasheaba en producción con WebSocket +
 > HTTP concurrentes y los siguientes aún permitían que WebSockets zombis colgaran el
 > servidor. Los assets del release se regeneraron; si descargaste 0.1.8 antes de esa
 > fecha, verificá el SHA.
+
+### Cambios de comportamiento (re-tag #4, 2026-09-21 — "todos los gotchas abiertos")
+- **`load_native` rechaza plugins sin handshake de ABI.** Un `libte_*.so`/`.dll` compilado
+  contra otra disposición de `TEHostAPI` se registraba sin error y después TODAS sus builtins
+  devolvían `[]`/`0` en silencio (JunX 2026-09-20: plugin sqlite del paquete 0.0.13 bajo un
+  host 0.1.6 → `/api/register` y `/api/ranking` devolvían `[]` con la BD intacta). Ahora el
+  plugin exporta `te_module_abi_version()`/`te_module_api_size()` (macro
+  `TE_PLUGIN_EXPORT_ABI()`); si faltan o no coinciden con el host, `load_native` devuelve 0 y
+  loguea `[load_native] REJECTED '<name>' (<path>): …`. Escape: `TYPEEASY_ALLOW_LEGACY_PLUGINS=1`.
+  **Consecuencia:** al actualizar el binario hay que instalar el plugin del MISMO release
+  (`plugins/sqlite/`); los instaladores/tarballs ya lo traen. Test
+  `tests/regress/run_plugin_abi_handshake.sh`.
+- **Los workers de `--workers N` mueren con el padre** (`PR_SET_PDEATHSIG(SIGTERM)`, Linux) y el
+  padre escala a `SIGKILL` a los que no salen tras 5 s. Antes un `kill -9` al padre dejaba
+  huérfanos compartiendo el puerto (`SO_REUSEPORT`) y el siguiente arranque convivía con
+  binarios viejos (gotcha ERP B8 "intermitencia"). Test `tests/regress/run_workers_pdeathsig.sh`.
+- **`throw <map|lista|objeto>`: el `catch (e)` recibe el valor** (`e["codigo"]`, `e.length`);
+  antes recibía `0`. Strings y números siguen llegando como string (`[ERR-1]`); `Uncaught:`
+  muestra el JSON. Nueva regla `[ERR-4]` (`tests/lang/08_errors/throw_map_value.te`).
+- **`await_all(...)` con tareas `async fn`/`go()` devuelve los resultados reales** (antes una
+  lista de vacíos: los dos runtimes async compartían el mismo espacio de ids enteros). Los
+  handles de fibra ahora son `100000 + índice`; `await_all`/`await_task` despachan al runtime
+  dueño. Nueva regla `[ASY-2]` (`tests/lang/14_async/asy02_await_all_results.te`).
+- **`%` con operandos float usa `fmod`** (`7.5 % 2` → `1.5`, `7 % 2.5` → `2`); con enteros no
+  cambia. `[NUM-4]` actualizada (`num04_modulo_truncated_sign.te`).
+- **División/módulo por cero escriben el mensaje en stderr** (antes stdout, ensuciando la
+  salida de scripts parseados por herramientas); el resultado sigue siendo `0` y el programa
+  continúa. `[NUM-5]` actualizada.
+- **Acceso anidado con punto sobre maps en cualquier contexto**: `o.a.b.c`, `o?.a?.b`,
+  `p.u.n` (json_parse) funcionan en `let`, concat, comparaciones, `print`/`println` (antes
+  solo en `let`; en concat daba `""`, en `print` era syntax error). `[MAP-1]`
+  (`17_collections/map03_nested_dot_access.te`).
+- **`.length` sobre el resultado de una llamada o atributo anidado**: `uuid_v4().length`,
+  `concat(a,b).length`, `o.a.s.length`, `json_parse(s).length` (antes `Error: object
+  'uuid_v4' not found` y `0`/`""`). `[STR-1]` (`16_strings/str06_length_on_call.te`).
+- **`m["k"].push(x);`, `lista[i].pop();`, `fs[1](5)`, `h["dup"](3)`** dejan de ser syntax
+  error: método sobre un elemento indexado (muta el contenedor real) y llamada de un lambda
+  guardado en lista/map, como sentencia y como expresión. `[LST-2]`
+  (`17_collections/lst02_indexed_method_call.te`).
+- **Envelope `sql_exec(..., true)` con sqlite**: un exec fallido que devuelve `-1` ahora produce
+  `{ success:false, error:<sql_last_error> }` en vez de `success:true, data:-1`.
 
 ### Cambios de comportamiento
 - **WebSockets ociosos o muertos ya no agotan el pool de workers.** Cada WebSocket

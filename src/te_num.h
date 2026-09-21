@@ -10,6 +10,7 @@
 #define TE_NUM_H
 
 #include <stdio.h>
+#include <math.h>
 #include "ast.h"
 
 static inline double te_num_binop(NodeKind k, double a, double b) {
@@ -18,12 +19,13 @@ static inline double te_num_binop(NodeKind k, double a, double b) {
     case NK_SUB: return a - b;
     case NK_MUL: return a * b;
     case NK_DIV:
-        if (b == 0.0) { printf("Error: division by zero.\n"); return 0; }
+        if (b == 0.0) { fprintf(stderr, "Error: division by zero.\n"); return 0; }
         return a / b;
     case NK_MOD: {
+        if (b == 0.0) { fprintf(stderr, "Error: modulo by zero.\n"); return 0; }
         long long lv = (long long)a, rv = (long long)b;
-        if (rv == 0) { printf("Error: modulo by zero.\n"); return 0; }
-        return (double)(lv % rv);
+        if ((double)lv == a && (double)rv == b) return (double)(lv % rv);   /* enteros: C */
+        return fmod(a, b);                                                 /* floats: resto real */
     }
     case NK_GT:    return a > b;
     case NK_LT:    return a < b;

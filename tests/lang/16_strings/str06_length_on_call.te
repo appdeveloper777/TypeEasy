@@ -1,0 +1,14 @@
+// spec: STR-1
+// expect: 36|3|2|ok|36|3
+// .length sobre el resultado de una llamada / atributo anidado, en let, comparacion y contexto string.
+// Hasta 0.1.8: `uuid_v4().length` -> "Error: object 'uuid_v4' not found" y 0/"".
+let n1 = uuid_v4().length;
+print(("" + n1) + "|");
+let n2 = concat("ab", "c").length;
+print(("" + n2) + "|");
+let o = { a: { s: "hi" } };
+print(("" + o.a.s.length) + "|");
+if (uuid_v4().length == 36) { print("ok|"); } else { print("bad|"); }
+print(("" + uuid_v4().length) + "|");
+let lst = json_parse("[1,2,3]");
+println("" + json_parse("[1,2,3]").length);

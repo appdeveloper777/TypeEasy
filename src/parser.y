@@ -564,6 +564,9 @@ expression:
   | expression QDOT IDENTIFIER LPAREN expression_list RPAREN { ASTNode *call = create_method_call_node($1, $3, $5); call->value = 1; $$ = call; }
   | expression QDOT IDENTIFIER   { ASTNode *attr = create_ast_leaf(TE_T_ID, 0, NULL, $3); ASTNode *n = create_ast_node(TE_T_ACCESS_ATTR, $1, attr); n->value = 1; $$ = n; }
   | expression LSBRACKET expression RSBRACKET       { $$ = create_access_node($1, $3); }
+  /* fs[1](5) / handlers["k"](x) como expresión: llamar el lambda que vive en el elemento. */
+  | expression LSBRACKET expression RSBRACKET LPAREN RPAREN                 { $$ = create_call_on_expr_node(create_access_node($1, $3), NULL); }
+  | expression LSBRACKET expression RSBRACKET LPAREN expression_list RPAREN { $$ = create_call_on_expr_node(create_access_node($1, $3), $6); }
   | object_literal      { $$ = $1; }
   | expression DOT IDENTIFIER LPAREN RPAREN     {         $$ = create_method_call_node($1, $3, NULL); }
   | expression DOT IDENTIFIER LPAREN expression_list RPAREN       { $$ = create_method_call_node($1, $3, $5); }
@@ -744,13 +747,28 @@ func_call_expr SEMICOLON { $$ = $1; }
         ASTNode *access = create_access_node(base, $3);
         ASTNode *node = create_ast_node(TE_T_INDEX_ASSIGN, access, $6);
         $$ = node; }
+  /* m["k"].push(x); / lista[i].metodo(); — método sobre un elemento indexado como sentencia
+   * (mismo prefijo que arr[i] = x; antes era syntax error). */
+  | IDENTIFIER LSBRACKET expression RSBRACKET DOT IDENTIFIER LPAREN RPAREN SEMICOLON
+      { ASTNode *access = create_access_node(create_ast_leaf(TE_T_IDENTIFIER, 0, NULL, $1), $3);
+        $$ = create_method_call_node(access, $6, NULL); }
+  | IDENTIFIER LSBRACKET expression RSBRACKET DOT IDENTIFIER LPAREN expression_list RPAREN SEMICOLON
+      { ASTNode *access = create_access_node(create_ast_leaf(TE_T_IDENTIFIER, 0, NULL, $1), $3);
+        $$ = create_method_call_node(access, $6, $8); }
+  /* fs[1](5); — invocar un lambda guardado en una lista/map como sentencia. */
+  | IDENTIFIER LSBRACKET expression RSBRACKET LPAREN RPAREN SEMICOLON
+      { ASTNode *access = create_access_node(create_ast_leaf(TE_T_IDENTIFIER, 0, NULL, $1), $3);
+        $$ = create_call_on_expr_node(access, NULL); }
+  | IDENTIFIER LSBRACKET expression RSBRACKET LPAREN expression_list RPAREN SEMICOLON
+      { ASTNode *access = create_access_node(create_ast_leaf(TE_T_IDENTIFIER, 0, NULL, $1), $3);
+        $$ = create_call_on_expr_node(access, $6); }
   | PRINTLN LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node(TE_T_PRINTLN, $3, NULL); }
   | PRINT LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node(TE_T_PRINT, $3, NULL); }
-  | PRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf(TE_T_ID,0,NULL,$3); ASTNode *attr = create_ast_leaf(TE_T_ID,0,NULL,$5); ASTNode *access = create_ast_node(TE_T_ACCESS_ATTR, obj, attr); $$ = create_ast_node(TE_T_PRINT, access, NULL); }
+  /* (la regla `PRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN` se eliminó: hacía que `print(o.a.b)`
+   *  fuera syntax error; `expression DOT IDENTIFIER` produce el mismo ACCESS_ATTR.) */
   
   | FPRINTLN LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node(TE_T_FPRINTLN, $3, NULL); }
   | FPRINT LPAREN expression RPAREN SEMICOLON    { $$ = create_ast_node(TE_T_FPRINT, $3, NULL); }
-  | FPRINT LPAREN IDENTIFIER DOT IDENTIFIER RPAREN SEMICOLON    { ASTNode *obj = create_ast_leaf(TE_T_ID,0,NULL,$3); ASTNode *attr = create_ast_leaf(TE_T_ID,0,NULL,$5); ASTNode *access = create_ast_node(TE_T_ACCESS_ATTR, obj, attr); $$ = create_ast_node(TE_T_FPRINT, access, NULL); }
   
   | FOR LPAREN IDENTIFIER ASSIGN NUMBER SEMICOLON expression SEMICOLON expression RPAREN LBRACKET statement_list RBRACKET    { $$ = create_ast_node_for(TE_T_FOR, create_ast_leaf(TE_T_IDENTIFIER,0,NULL,$3), create_ast_leaf(TE_T_NUMBER,$5,NULL,NULL), $7, $9, $12); }
   /* Same prefix as the classic form but the 3rd field is an UPDATE statement

@@ -669,6 +669,8 @@ static int te_sqlite_query(ASTNode *node, ASTNode *args) {
 
 /* ─── entry point ──────────────────────────────────────────────────── */
 
+TE_PLUGIN_EXPORT_ABI()
+
 #ifdef _WIN32
 __declspec(dllexport)
 #endif

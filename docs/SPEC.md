@@ -273,11 +273,13 @@ verifica que ambos caminos producen la misma salida.
   `9007199254740993 / 3` → `3002399751580331` exacto) y `float` si hay resto
   (`35 / 20` → `1.75`, `-7 / 2` → `-3.5`). Para división entera usar `Math.floor`,
   `Math.ceil`, `Math.trunc` o `to_int`.
-- `[NUM-4]` `%` opera sobre la **parte entera truncada** de ambos operandos y sigue el
-  signo del dividendo (C): `-7 % 3` → `-1`, `7 % -3` → `1`, `7.5 % 2` → `1`.
+- `[NUM-4]` `%` entre enteros sigue el signo del dividendo (C): `-7 % 3` → `-1`, `7 % -3` → `1`.
+  Si algún operando es float el resultado es el **resto real** (`fmod`): `7.5 % 2` → `1.5`,
+  `7 % 2.5` → `2` (hasta 0.1.8 se truncaban ambos operandos: `7.5 % 2` → `1`).
 - `[NUM-5]` División o módulo por cero **no lanzan**: escriben `Error: division by zero.` /
-  `Error: modulo by zero.` en la **salida estándar** y el resultado es `0`; el programa continúa.
-  (En `--api` el handler sigue; validar divisores antes de dividir.)
+  `Error: modulo by zero.` en **stderr** (hasta 0.1.8 iba a stdout y ensuciaba la salida del
+  programa) y el resultado es `0`; el programa continúa. (En `--api` el handler sigue; validar
+  divisores antes de dividir.)
 - `[NUM-6]` `decimal` es exacto: `0.1m + 0.2m == 0.3m` es `true`; `decimal op int|float`
   da `decimal` (el `float` entra por su texto: `2.5m + 0.1` → `2.6`); la división conserva
   hasta 18 decimales (`"" + (1m / 3m)` → `0.333333333333333333`). El texto canónico
@@ -369,7 +371,8 @@ Builtins mínimos garantizados en este nivel de la spec:
 
 ### Strings
 - `[STR-1]` `.length` es la longitud en bytes UTF-8 y funciona sobre variables y expresiones
-  (`"abc".length`, `s.trim().length`).
+  (`"abc".length`, `s.trim().length`, `uuid_v4().length`, `o.a.s.length`, también en comparaciones
+  y en contexto string).
 - `[STR-2]` Métodos: `.upper()` `.lower()` `.trim()` `.contains(sub)` `.starts_with(p)` `.ends_with(s)`
   `.index_of(sub)` (−1 si no está) `.replace(a, b)` (**todas** las ocurrencias) `.split(sep)`
   (`split("")` devuelve el string entero como único elemento) `.substring(ini, fin)` (fin exclusivo)
@@ -398,8 +401,9 @@ Builtins mínimos garantizados en este nivel de la spec:
 - `[LST-6]` `for (let x in l)` itera los elementos en orden (también sobre arrays de `json_parse`).
 
 ### Colecciones (Map)
-- `[MAP-1]` Claves string (`"k"` o identificador). Acceso `m["k"]` y `m.k` (un nivel; anidado con
-  corchetes `m["a"]["b"]`). Clave ausente → `null` (`== null` es verdadero) pero en contexto string
+- `[MAP-1]` Claves string (`"k"` o identificador). Acceso `m["k"]` y `m.k`, anidado con corchetes
+  (`m["a"]["b"]`) o con punto (`m.a.b.c`, también `m?.a?.b` y en contexto string/numérico).
+  Clave ausente → `null` (`== null` es verdadero) pero en contexto string
   da `""` (un `null` explícito da `"null"`).
 - `[MAP-2]` `m["k"] = v` agrega o reemplaza; `.length`, `.keys()`, `.values()`, `.has(k)`, `"k" in m`.
 - `[MAP-3]` `{}` es un map vacío (`.length` 0). Su texto (`println`, `"" + m`) es el mismo JSON de
@@ -458,6 +462,10 @@ Builtins mínimos garantizados en este nivel de la spec:
 - `[ASY-1]` `var t = async fn() => { ... };` crea una tarea; `await t` la ejecuta hasta el final y
   devuelve su valor. `sleep_async(ms)` cede el control. Varias tareas se solapan en un hilo con orden
   determinado por los `await`.
+- `[ASY-2]` `await_all(t1, t2, ...)` / `await_all([t1, t2])` corre las tareas concurrentemente y
+  devuelve la lista de resultados **en orden** (tanto tareas `async fn`/`go` como `spawn`/
+  `lang_call_async`). (Hasta 0.1.8 con `async fn` devolvía valores vacíos: los handles de los dos
+  runtimes colisionaban.)
 
 ### LINQ (cadena de métodos)
 - `[LNQ-1]` `.orderBy(fn)` / `.orderByDescending(fn)` + `.thenBy(fn)` / `.thenByDescending(fn)`
@@ -488,6 +496,9 @@ try {
 - `[ERR-2]` Un `throw` sin `catch` termina el programa: `Uncaught: <valor>` en stderr y exit 1.
 - `[ERR-3]` Llamar una función inexistente es un **error fatal** (`Error: function 'x' not defined.`,
   exit 1) que `try/catch` no intercepta. La división por cero **no** es una excepción (`[NUM-5]`).
+- `[ERR-4]` `throw <map|lista|objeto>`: el `catch (e)` recibe el **valor** (`e["codigo"]`, `e.length`);
+  si no se captura, `Uncaught:` muestra su JSON. Escalares siguen la regla `[ERR-1]` (string).
+  (Hasta 0.1.8 el catch recibía `0`.)
 
 ---
 
@@ -515,17 +526,15 @@ Resolución de paths:
 Estas son **divergencias documentadas** entre la spec ideal y la
 implementación actual:
 
-- **`?.` profundo**: solo el primer nivel; encadenado no implementado. Igual `o.a.b` sobre maps
-  anidados: usar `o["a"]["b"]`.
-- **`throw` de un map o lista**: el `catch` recibe `0` (solo string/número viajan). (Pendiente.)
-- **`await_all(a, b)`**: devuelve una lista del tamaño correcto pero con los resultados vacíos.
-  Usar `await` individual. (Detectado 2026-09-19; pendiente.)
-- **`m["k"].push(x)` / `fs[1](5)`**: método o llamada sobre una expresión indexada es error de
-  sintaxis; asignar a variable primero.
 - **`println(f(x))` cuando `f` lanza**: imprime una línea vacía antes de propagar la excepción.
 - **`super`**: no existe (`--syntax-check` lo reporta, regla S5). Los métodos del padre
   se heredan y se llaman sobre `this`; el constructor del hijo re-asigna los atributos.
 - **HTTPS** en `http_get`/`http_post`: soportado desde 0.0.20 (Windows y Linux).
+
+Resueltas en 0.1.8 (re-tag #4, 2026-09-20): `?.`/`.` profundo sobre maps (`[MAP-1]`), `throw` de
+map/lista (`[ERR-4]`), `await_all` con `async fn` (`[ASY-2]`), `m["k"].push(x)` / `fs[1](5)`
+(`[LST-2]`, `[FN-5]`), `%` con floats (`[NUM-4]`), división por cero a stderr (`[NUM-5]`),
+`.length` sobre el resultado de una llamada (`[STR-1]`).
 
 ---
 

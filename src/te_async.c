@@ -22,6 +22,7 @@
 
 #include "te_async.h"
 #include "te_bridge.h"
+#include "te_evloop.h"
 #include "ast.h"
 #include "te_vm.h"
 #include "te_builtins.h"
@@ -251,6 +252,12 @@ static int adapt_lang_call_async(ASTNode *node, ASTNode *args) {
 static int adapt_await_task(ASTNode *node, ASTNode *args) {
     (void)node;
     int id = args ? (int)evaluate_expression(args) : -1;
+    if (te_evloop_is_handle(id)) {          /* task created by `async fn` / go() */
+        ASTNode *r = NULL;
+        te_evloop_await_handles(&id, 1, &r);
+        add_or_update_variable(TE_SYM_RET, r);
+        return 1;
+    }
     if (!te_task_valid(id)) {
         add_or_update_variable(TE_SYM_RET,
             create_ast_leaf(TE_T_STRING, 0, "", NULL));
@@ -296,17 +303,32 @@ static int te_async_collect_ids(ASTNode *args, int *out, int max) {
     return n;
 }
 
-/* await_all(...) -> list of results, one per task, run concurrently. */
+/* await_all(...) -> list of results, one per task, run concurrently. Handles
+ * may come from this pool (spawn/lang_call_async) or from the fiber event loop
+ * (`async fn`, go()); each runtime drives its own tasks, results keep order. */
 static int adapt_await_all(ASTNode *node, ASTNode *args) {
     (void)node;
     int ids[TE_TASK_MAX];
     int n = te_async_collect_ids(args, ids, TE_TASK_MAX);
 
-    te_async_run_until(ids, n);
+    ASTNode *results[TE_TASK_MAX];
+    int ev_h[TE_TASK_MAX], ev_pos[TE_TASK_MAX], ev_n = 0;
+    int pool_ids[TE_TASK_MAX], pool_n = 0;
+    for (int k = 0; k < n; k++) {
+        results[k] = NULL;
+        if (te_evloop_is_handle(ids[k])) { ev_h[ev_n] = ids[k]; ev_pos[ev_n++] = k; }
+        else pool_ids[pool_n++] = ids[k];
+    }
+    if (ev_n) {
+        ASTNode *ev_r[TE_TASK_MAX];
+        te_evloop_await_handles(ev_h, ev_n, ev_r);
+        for (int k = 0; k < ev_n; k++) results[ev_pos[k]] = ev_r[k];
+    }
+    if (pool_n) te_async_run_until(pool_ids, pool_n);
 
     ASTNode *head = NULL, *tail = NULL;
     for (int k = 0; k < n; k++) {
-        ASTNode *r = te_task_take_result(ids[k]);
+        ASTNode *r = results[k] ? results[k] : te_task_take_result(ids[k]);
         r->next = NULL;
         if (!head) head = tail = r;
         else { tail->next = r; tail = r; }

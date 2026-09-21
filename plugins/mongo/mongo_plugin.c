@@ -234,6 +234,8 @@ static int te_mongo_query(ASTNode *node, ASTNode *args) {
 
 /* ─── entry point ─────────────────────────────────────────────────── */
 
+TE_PLUGIN_EXPORT_ABI()
+
 void te_module_register(const TEHostAPI *host) {
     if (!host) return;
     if (host->abi_version < TE_HOST_API_VERSION) {

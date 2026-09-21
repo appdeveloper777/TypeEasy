@@ -77,3 +77,9 @@ python3 tests/regress/run_ws_http_lock.py --bin ./src/typeeasy
 
 echo "=== [asan] WebSockets ociosos/muertos no agotan el pool de workers (ping/pong + TYPEEASY_NUM_THREADS) ==="
 python3 tests/regress/run_ws_idle_starvation.py --bin ./src/typeeasy
+
+echo "=== [asan] handshake de ABI host<->plugin en load_native (plugin viejo = rechazo ruidoso) ==="
+bash tests/regress/run_plugin_abi_handshake.sh ./src/typeeasy
+
+echo "=== [asan] workers --workers N mueren con el padre (PR_SET_PDEATHSIG) ==="
+bash tests/regress/run_workers_pdeathsig.sh ./src/typeeasy 8879

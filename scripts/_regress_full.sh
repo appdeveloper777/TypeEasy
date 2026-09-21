@@ -146,6 +146,16 @@ else
 fi
 
 echo "==================================================================="
+echo " STAGE 6e  Plugin ABI handshake + workers PDEATHSIG"
+echo "==================================================================="
+PLUGABI_OUT="$( bash /app/tests/regress/run_plugin_abi_handshake.sh /app/src/typeeasy 2>&1 )"
+echo "$PLUGABI_OUT"
+if echo "$PLUGABI_OUT" | grep -q "PLUGIN_ABI_RESULT: PASS"; then PLUGABI_OK=0; echo "plugin-abi: PASS"; else PLUGABI_OK=1; echo "plugin-abi: FAIL"; fi
+PDEATH_OUT="$( bash /app/tests/regress/run_workers_pdeathsig.sh /app/src/typeeasy 8879 2>&1 )"
+echo "$PDEATH_OUT"
+if echo "$PDEATH_OUT" | grep -q "WORKERS_PDEATHSIG_RESULT: PASS"; then PDEATH_OK=0; echo "workers-pdeathsig: PASS"; else PDEATH_OK=1; echo "workers-pdeathsig: FAIL"; fi
+
+echo "==================================================================="
 echo " STAGE 7   Valgrind leak-check (key scripts)"
 echo "==================================================================="
 VG="valgrind --error-exitcode=99 --leak-check=full --show-leak-kinds=definite,indirect --errors-for-leak-kinds=definite --track-origins=yes -q"
@@ -184,13 +194,15 @@ if [ "${APIBLEED_OK:-1}" = "0" ]; then echo " api-bleed (--api):     PASS"; else
 if [ "${WSATTACH_OK:-1}" = "0" ]; then echo " ws-attach (--api):     PASS"; else echo " ws-attach (--api):     FAIL"; fi
 if [ "${WSLOCK_OK:-1}" = "0" ]; then echo " ws-http-lock (--api):  PASS"; else echo " ws-http-lock (--api):  FAIL"; fi
 if [ "${WSIDLE_OK:-1}" = "0" ]; then echo " ws-idle-starvation:    PASS"; else echo " ws-idle-starvation:    FAIL"; fi
+if [ "${PLUGABI_OK:-1}" = "0" ]; then echo " plugin-abi:            PASS"; else echo " plugin-abi:            FAIL"; fi
+if [ "${PDEATH_OK:-1}" = "0" ]; then echo " workers-pdeathsig:     PASS"; else echo " workers-pdeathsig:     FAIL"; fi
 if [ "$RC_TOTAL" = "0" ]; then
   echo " valgrind leaks:        no runtime (envelope/sql) leaks"
 else
   echo " valgrind leaks:        runtime leak detected (see above)"
 fi
 echo "==================================================================="
-if [ "${CLANG_OK:-2}" != "1" ] && [ "${DBSTD_OK:-1}" = "0" ] && [ "${BARELAMBDA_OK:-1}" = "0" ] && [ "${JSONATTR_OK:-1}" = "0" ] && [ "${JSONFNCALL_OK:-1}" = "0" ] && [ "${APIBLEED_OK:-1}" = "0" ] && [ "${WSATTACH_OK:-1}" = "0" ] && [ "${WSLOCK_OK:-1}" = "0" ] && [ "${WSIDLE_OK:-1}" = "0" ] && [ "$RC_TOTAL" = "0" ]; then
+if [ "${CLANG_OK:-2}" != "1" ] && [ "${DBSTD_OK:-1}" = "0" ] && [ "${BARELAMBDA_OK:-1}" = "0" ] && [ "${JSONATTR_OK:-1}" = "0" ] && [ "${JSONFNCALL_OK:-1}" = "0" ] && [ "${APIBLEED_OK:-1}" = "0" ] && [ "${WSATTACH_OK:-1}" = "0" ] && [ "${WSLOCK_OK:-1}" = "0" ] && [ "${WSIDLE_OK:-1}" = "0" ] && [ "${PLUGABI_OK:-1}" = "0" ] && [ "${PDEATH_OK:-1}" = "0" ] && [ "$RC_TOTAL" = "0" ]; then
   echo " RESULT: GREEN"; exit 0
 else
   echo " RESULT: RED"; exit 1

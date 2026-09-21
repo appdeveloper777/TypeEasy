@@ -103,6 +103,35 @@ void te_builtins_ensure_loaded(void) {
 
 /* ─── Fase 3: dynamic plugin loading ──────────────────────────────────── */
 
+int te_plugin_abi_check(const char *name, const char *path,
+                        int (*getver)(void), int (*getsize)(void)) {
+    if (!getver || !getsize) {
+        const char *allow = getenv("TYPEEASY_ALLOW_LEGACY_PLUGINS");
+        if (allow && (strcmp(allow, "1") == 0 || strcmp(allow, "yes") == 0)) {
+            fprintf(stderr, "[load_native] WARNING: '%s' (%s) is a legacy plugin without ABI "
+                    "handshake; loading because TYPEEASY_ALLOW_LEGACY_PLUGINS=1. If its builtins "
+                    "return []/0, reinstall the plugin shipped with this TypeEasy release.\n",
+                    name, path);
+            return 0;
+        }
+        fprintf(stderr, "[load_native] REJECTED '%s' (%s): plugin has no ABI handshake "
+                "(te_module_abi_version/te_module_api_size), i.e. it was built for an older "
+                "TypeEasy. A stale plugin registers fine and then returns []/0 in silence. "
+                "Fix: install the plugin from THIS release (plugins/%s/). Escape hatch: "
+                "TYPEEASY_ALLOW_LEGACY_PLUGINS=1.\n", name, path, name);
+        return -4;
+    }
+    int pv = getver(), ps = getsize();
+    if (pv != TE_HOST_API_VERSION || ps != (int)sizeof(TEHostAPI)) {
+        fprintf(stderr, "[load_native] REJECTED '%s' (%s): ABI mismatch — plugin built for "
+                "TEHostAPI v%d/%d bytes, host is v%d/%d bytes. Install the plugin shipped with "
+                "this TypeEasy release (plugins/%s/).\n",
+                name, path, pv, ps, TE_HOST_API_VERSION, (int)sizeof(TEHostAPI), name);
+        return -4;
+    }
+    return 0;
+}
+
 #ifndef _WIN32
 
 int te_load_native_module(const char *name_or_path) {
@@ -204,6 +233,13 @@ int te_load_native_module(const char *name_or_path) {
      * offsets. This line lets users spot the wrong path immediately. */
     fprintf(stderr, "[load_native] '%s' loaded from: %s\n",
             name_or_path, buf[0] ? buf : raw);
+    typedef int (*AbiIntFn)(void);
+    if (te_plugin_abi_check(name_or_path, buf[0] ? buf : raw,
+                            (AbiIntFn)dlsym(h, "te_module_abi_version"),
+                            (AbiIntFn)dlsym(h, "te_module_api_size")) != 0) {
+        dlclose(h);
+        return -4;
+    }
     /* Static storage so the pointer remains valid even if the plugin
      * (incorrectly) keeps a reference instead of copying the struct. */
     static TEHostAPI host;
@@ -334,6 +370,13 @@ int te_load_native_module(const char *name_or_path) {
      * the host API at wrong offsets. This line surfaces the wrong path. */
     fprintf(stderr, "[load_native] '%s' loaded from: %s\n",
             name_or_path, buf[0] ? buf : raw);
+    typedef int (*AbiIntFn)(void);
+    if (te_plugin_abi_check(name_or_path, buf[0] ? buf : raw,
+                            (AbiIntFn)(void *)GetProcAddress(h, "te_module_abi_version"),
+                            (AbiIntFn)(void *)GetProcAddress(h, "te_module_api_size")) != 0) {
+        FreeLibrary(h);
+        return -4;
+    }
     /* Static storage so the pointer remains valid even if a plugin keeps
      * a reference instead of copying the struct (see mongo plugin gotcha). */
     static TEHostAPI host;

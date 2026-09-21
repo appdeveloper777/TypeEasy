@@ -1,0 +1,22 @@
+// spec: ASY-2
+// expect: A B C|3|A B C|uno dos
+// `await_all` devuelve los resultados reales de cada tarea (antes: lista del
+// tamaño correcto con todos los valores vacíos). Variádico y con lista.
+var a = async fn() => { sleep_async(5); return "A"; };
+var b = async fn() => { sleep_async(3); return "B"; };
+var c = async fn() => { return "C"; };
+let rs = await_all(a, b, c);
+print(rs[0] + " " + rs[1] + " " + rs[2] + "|");
+print(("" + rs.length) + "|");
+var d = async fn() => { return "A"; };
+var e = async fn() => { return "B"; };
+var f = async fn() => { return "C"; };
+let tareas = [d, e, f];
+let rs2 = await_all(tareas);
+print(rs2[0] + " " + rs2[1] + " " + rs2[2] + "|");
+var g = async fn() => { return json_stringify({ "r": "uno" }); };
+var h = async fn() => { return json_stringify({ "r": "dos" }); };
+let rs3 = await_all(g, h);
+let m0 = json_parse(rs3[0]);
+let m1 = json_parse(rs3[1]);
+println(m0["r"] + " " + m1["r"]);

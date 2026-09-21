@@ -35,4 +35,14 @@
  * Idempotent. */
 void te_register_evloop_builtins(void);
 
+/* Task handles handed to .te are `TE_FIBER_HANDLE_BASE + fiber index`, so they
+ * never collide with the legacy te_async.c pool ids (both are plain ints and
+ * `await_all(a, b)` must be able to tell which runtime owns each one). */
+#define TE_FIBER_HANDLE_BASE 100000
+struct ASTNode;
+int  te_evloop_is_handle(int h);                 /* 1 if h is a live fiber handle */
+/* Runs the loop until every handle is done and returns each result (a fresh
+ * ASTNode per handle, in order). Invalid handles yield "". */
+void te_evloop_await_handles(const int *hs, int n, struct ASTNode **out);
+
 #endif /* TE_EVLOOP_H */

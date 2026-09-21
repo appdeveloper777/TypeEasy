@@ -207,15 +207,38 @@ static int eval_obj_attr(ObjectNode *obj, ASTNode *objRef, const char *attr, TeV
     return 0;
 }
 
+/* Longitud de un valor (para `.length`/`.size` sobre receptores que no son un identificador:
+ * `f().length`, `o.a.s.length`, `m["k"].length`). */
+static long long te_value_length(const TeValue *v) {
+    if (!v) return 0;
+    if (v->vtype == VAL_STRING) return v->value.string_value ? (long long)strlen(v->value.string_value) : 0;
+    if (v->vtype == VAL_OBJECT && v->type && v->value.object_value) {
+        if (strcmp(v->type, TE_T_LIST) == 0) return list_length((ASTNode *)(intptr_t)v->value.object_value);
+        if (strcmp(v->type, TE_T_MAP) == 0 || strcmp(v->type, TE_T_OBJECT_LITERAL) == 0)
+            return map_length((ASTNode *)(intptr_t)v->value.object_value);
+    }
+    return 0;
+}
+
 static void eval_access_attr(ASTNode *n, TeValue *out) {
     ASTNode *o = n->left, *a = n->right;
     if (!o || !a || !a->id) { te_val_set_int(out, 0); return; }
+    int simple_recv = (o->id && (nk_of(o) == NK_IDENTIFIER || nk_of(o) == NK_ID)) ||
+                      nk_of(o) == NK_STRING || nk_of(o) == NK_LIST || nk_of(o) == NK_OBJECT_LITERAL;
     /* .length / .size: virtual, ya resuelto por el walker numérico */
     if (strcmp(a->id, "length") == 0 || strcmp(a->id, "size") == 0) {
-        if (resolve_to_list(o) || resolve_to_map(o) ||
+        if (simple_recv && (resolve_to_list(o) || resolve_to_map(o) ||
             (o->id && find_variable(o->id) && find_variable(o->id)->vtype == VAL_STRING) ||
-            nk_of(o) == NK_STRING) {
+            nk_of(o) == NK_STRING)) {
             te_val_set_int(out, (long long)evaluate_expression(n));
+            return;
+        }
+        if (!simple_recv) {
+            TeValue base; te_val_init(&base);
+            te_eval_value(o, &base);
+            long long len = te_value_length(&base);
+            te_val_free(&base);
+            te_val_set_int(out, len);
             return;
         }
     }
