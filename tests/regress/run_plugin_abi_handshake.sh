@@ -13,6 +13,7 @@
 # Uso: bash tests/regress/run_plugin_abi_handshake.sh <typeeasy-bin>
 set -u
 BIN="${1:-./src/typeeasy}"
+case "$BIN" in /*) ;; *) BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")" ;; esac
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/../../src"
 W="$(mktemp -d)"

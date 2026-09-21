@@ -9,6 +9,7 @@
 # Uso: bash tests/regress/run_workers_pdeathsig.sh <typeeasy-bin> [puerto]
 set -u
 BIN="${1:-./src/typeeasy}"
+case "$BIN" in /*) ;; *) BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")" ;; esac
 PORT="${2:-8879}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 FIX="$HERE/ws_idle_starvation.te"
