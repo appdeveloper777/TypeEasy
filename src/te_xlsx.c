@@ -209,7 +209,12 @@ static char *te_xlsx_extract(const unsigned char *buf, size_t n,
             const unsigned char *data = lh + 30 + lf_fname_len + lf_extra_len;
             if (data + comp_sz > buf + n) return NULL;
             if (method == 0) {
-                /* Stored. */
+                /* Stored: comp_sz and uncomp_sz must match (a crafted entry
+                 * could otherwise pass the comp_sz bounds check above while
+                 * requesting a much larger uncomp_sz, causing memcpy() below
+                 * to read past the end of the source buffer). */
+                if (uncomp_sz != comp_sz) return NULL;
+                if (data + uncomp_sz > buf + n) return NULL;
                 char *out = (char*)malloc((size_t)uncomp_sz + 1);
                 if (!out) return NULL;
                 memcpy(out, data, uncomp_sz);

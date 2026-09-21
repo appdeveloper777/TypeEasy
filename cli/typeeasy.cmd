@@ -37,5 +37,9 @@ set "POSIX_TEMPLATES=%TYPEEASY_TEMPLATES::=%"
 set "POSIX_TEMPLATES=/!POSIX_TEMPLATES:\=/!"
 
 REM --- Invoke Git Bash with POSIX path + forward all arguments ---
-"%GITBASH%" -c "TYPEEASY_TEMPLATES='%POSIX_TEMPLATES%' '%POSIX_SCRIPT%' %*"
+REM Arguments are passed as separate argv entries after the -c script
+REM (becoming bash's $0, $1, ...) rather than spliced into the script text
+REM via %*, so a filename/argument containing $(...) or `...` can never be
+REM interpreted as shell command substitution (CVE-style command injection).
+"%GITBASH%" -c "TYPEEASY_TEMPLATES='%POSIX_TEMPLATES%' '%POSIX_SCRIPT%' \"$@\"" typeeasy %*
 endlocal

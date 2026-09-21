@@ -1,0 +1,24 @@
+// spec: CLS-1
+// xml(obj) y xml(lista de objetos) con atributos de texto largos (> 4 KB): el buffer crece
+// (hasta 0.1.9 era un malloc fijo + strcat -> heap overflow con texto ordinario).
+class Item { nombre : string; desc : string; n : int; }
+var big = "";
+for (i = 0; 600; 1) { big = big + "0123456789"; }
+let it = new Item();
+it.nombre = "a";
+it.desc = big;
+it.n = 7;
+let x1 = xml(it);
+println("" + x1.length);
+println(x1.contains("<n>7</n>"));
+var l = [];
+for (j = 0; 3; 1) {
+  let o = new Item();
+  o.nombre = "n" + j;
+  o.desc = big;
+  o.n = j;
+  l.push(o);
+}
+let x2 = xml(l);
+println("" + x2.length);
+println(x2.contains("</Items>"));

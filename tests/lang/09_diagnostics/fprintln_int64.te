@@ -1,0 +1,10 @@
+// spec: NUM-1
+// expect-stderr-contains: 9007199254740993
+// fprintln imprime enteros de 64 bits completos (hasta 0.1.9 usaba %d y truncaba a 32 bits).
+class C { v : int; }
+let c = new C();
+c.v = 9007199254740993;
+fprintln(c.v);
+let n = 9007199254740993;
+fprintln(n);
+println("ok");

@@ -1,0 +1,19 @@
+// spec: LST-2
+// Reasignar l[i] = v y m["k"] = v muchas veces: el valor anterior (escalar) se libera y
+// el contenedor conserva solo el nuevo. Los valores contenedor (lista/map) reemplazados
+// siguen siendo alias validos (no se liberan).
+var l = [0, 0, 0];
+var m = { a: 0, b: "x" };
+let shared = [9, 9];
+m["c"] = shared;
+for (i = 0; 500; 1) {
+  l[1] = i;
+  l[2] = "s" + i;
+  m["a"] = i * 2;
+  m["b"] = "v" + i;
+}
+m["c"] = 5;
+println("" + l[0] + "," + l[1] + "," + l[2]);
+println("" + m["a"] + "," + m["b"] + "," + m["c"]);
+println("" + shared.length + ":" + shared[0]);
+println("" + l.length);

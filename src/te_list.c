@@ -47,9 +47,12 @@ int te_list_method_dispatch(ASTNode *node, ASTNode *list) {
                 }
                 cur = cur->next;
             }
-            if (probe->type) free(probe->type);
-            if (probe->str_value) free(probe->str_value);
-            free(probe);
+            /* probe may alias a shared LIST/MAP/OBJECT_LITERAL/OBJECT/LAMBDA
+             * node (build_item_from_value/te_val_to_leaf return those by
+             * reference, not a copy) — freeing it unconditionally corrupts
+             * that shared value (use-after-free/double-free on next access).
+             * Only a freshly-built scalar leaf is ours to free. */
+            te_free_lambda_result(probe);
         }
         add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, found, NULL, NULL));
         return 1;

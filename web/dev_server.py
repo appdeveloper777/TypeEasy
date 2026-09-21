@@ -8,6 +8,8 @@ from urllib.parse import parse_qs, urlparse
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WEB_ROOT = REPO_ROOT / "web"
 
+ALLOWED_ORIGINS = {"http://localhost:8001", "http://127.0.0.1:8001"}
+
 ALLOWED_FILES = {
     "typeeasycode/apis/wasm_filter_endpoint.te",
     "typeeasycode/apis/dynamic_test_endpoint.te",
@@ -38,9 +40,18 @@ class TypeEasyDevHandler(SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+
+    def _enforce_same_origin(self):
+        """Rejects cross-origin requests to the state-changing editor
+        endpoints. A browser always sets Origin on cross-origin fetch/XHR
+        (and on most same-origin POSTs too); only reject when it's present
+        and doesn't match this server, so a malicious page open in another
+        tab can't drive a CSRF request against the local dev editor."""
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in ALLOWED_ORIGINS:
+            raise PermissionError(f"Origin no permitido: {origin}")
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -48,6 +59,7 @@ class TypeEasyDevHandler(SimpleHTTPRequestHandler):
             return super().do_GET()
 
         try:
+            self._enforce_same_origin()
             query = parse_qs(parsed.query)
             raw_path = query.get("path", [""])[0]
             file_path = resolve_allowed_path(raw_path)
@@ -55,11 +67,17 @@ class TypeEasyDevHandler(SimpleHTTPRequestHandler):
                 "path": raw_path,
                 "content": file_path.read_text(encoding="utf-8"),
             })
+        except PermissionError as exc:
+            self.send_json(403, {"error": str(exc)})
         except Exception as exc:
             self.send_json(400, {"error": str(exc)})
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        try:
+            self._enforce_same_origin()
+        except PermissionError as exc:
+            return self.send_json(403, {"error": str(exc)})
         if parsed.path == "/editor/file":
             return self.save_file()
         if parsed.path == "/editor/restart-api":
@@ -68,6 +86,9 @@ class TypeEasyDevHandler(SimpleHTTPRequestHandler):
 
     def save_file(self):
         try:
+            content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip()
+            if content_type != "application/json":
+                raise ValueError("Content-Type debe ser application/json")
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             raw_path = payload.get("path", "")

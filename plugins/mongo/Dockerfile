@@ -12,9 +12,10 @@ RUN apt-get update && \
 
 WORKDIR /build
 
-# Headers del host (te_builtins.h + ast.h)
+# Headers del host (te_builtins.h + ast.h + te_types.h, del que ast.h depende)
 COPY src/te_builtins.h /build/include/te_builtins.h
 COPY src/ast.h         /build/include/ast.h
+COPY src/te_types.h    /build/include/te_types.h
 
 # Plugin
 COPY plugins/mongo/mongo_plugin.c /build/mongo_plugin.c

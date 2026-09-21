@@ -1,0 +1,16 @@
+// spec: LST-4
+// l.contains(x) con x LISTA/MAP (o variable que las aliasa): el probe es el propio nodo
+// compartido y NO debe liberarse (hasta 0.1.9: free incondicional -> use-after-free;
+// la lista/map quedaba corrupta al volver a usarla).
+let inner = [1, 2];
+let m = { k: 1 };
+let l = [10, 20, 30];
+println("" + l.contains(inner));
+println("" + l.contains(m));
+println("" + l.contains([7, 8]));
+println("" + l.contains(20));
+// los contenedores siguen intactos despues
+println("" + inner.length);
+println("" + inner[1]);
+println("" + m.k);
+println("" + l.length);

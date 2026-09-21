@@ -239,6 +239,7 @@ void interpret_print(ASTNode *node) {
         /* v es null (`var v = null; print(v?.campo)`): imprimir null, no derreferenciar obj->class. */
         if (te_val_is_null(v)) { dbg_printf("null\n"); append_to_stdout("null\n"); return; }
         ObjectNode *obj = v->value.object_value;
+        if (!obj) { dbg_printf("null"); append_to_stdout("null"); return; }
         int idx = -1;
         for (int i = 0; i < obj->class->attr_count; i++) {
             if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
@@ -440,7 +441,7 @@ static int te_println_access_attr(ASTNode *arg) {
                             } else if (attr2->vtype == VAL_FLOAT) {
                                 char b[64]; te_fmt_double(b, sizeof(b), attr2->value.float_value); dbg_printf("%s\n", b);
                             } else {
-                                dbg_printf("%d\n", attr2->value.int_value);
+                                dbg_printf("%lld\n", (long long)attr2->value.int_value);
                                 char tmpx[32]; snprintf(tmpx, 32, "%lld\n", (long long)attr2->value.int_value);
                                 append_to_stdout(tmpx);
                             }
@@ -479,7 +480,7 @@ static int te_println_access_attr(ASTNode *arg) {
                                 } else if (attr2->vtype == VAL_FLOAT) {
                                     char b[64]; te_fmt_double(b, sizeof(b), attr2->value.float_value); dbg_printf("%s\n", b);
                                 } else {
-                                    dbg_printf("%d\n", attr2->value.int_value);
+                                    dbg_printf("%lld\n", (long long)attr2->value.int_value);
                                     char tmpx[32]; snprintf(tmpx, 32, "%lld\n", (long long)attr2->value.int_value);
                                     append_to_stdout(tmpx);
                                 }
@@ -511,6 +512,7 @@ static int te_println_access_attr(ASTNode *arg) {
         /* v es null (`var v = null; println(v?.campo)`): imprimir null, no derreferenciar obj->class. */
         if (te_val_is_null(v)) { dbg_printf("null\n"); append_to_stdout("null\n"); return 1; }
         ObjectNode *obj = v->value.object_value;
+        if (!obj) { dbg_printf("null\n"); append_to_stdout("null\n"); return 1; }
         int idx = -1;
         for (int i = 0; i < obj->class->attr_count; i++) {
             if (strcmp(obj->class->attributes[i].id, a->id) == 0) {
@@ -534,7 +536,7 @@ static int te_println_access_attr(ASTNode *arg) {
             append_to_stdout("\n");
         }
         else {
-            dbg_printf("%d\n", attr->value.int_value);
+            dbg_printf("%lld\n", (long long)attr->value.int_value);
             char temp[32]; snprintf(temp, 32, "%lld\n", (long long)attr->value.int_value);
             append_to_stdout(temp);
         }

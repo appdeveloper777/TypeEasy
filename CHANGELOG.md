@@ -4,6 +4,52 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
+## 0.1.10 — 2026-09-21 (seguridad y robustez; audita e incorpora el PR #8 de @atheneox)
+
+### Seguridad
+- **`response_header(nombre, valor)` sanea CR/LF y caracteres de control** en nombre y valor
+  (CWE-113, *HTTP response splitting*): un valor que venga de la petición ya no puede inyectar
+  cabeceras ni partir la respuesta. Suite `tests/api/security_api.api.json`.
+- **Launchers Windows `cli/typeeasy.cmd` e `installer/windows/typeeasy.cmd`**: los argumentos van
+  como `argv` separados a `bash -c '… "$@"'` en vez de pegarse al texto del script; un nombre con
+  `$(...)`/backticks ya no se ejecuta como comando. Verificado: `version`, `new "mi app"`, passthrough.
+- **`te_xlsx.c` (extractor ZIP/XLSX)**: una entrada *stored* con `comp_sz ≠ uncomp_sz` ya no lee
+  fuera del buffer (heap OOB read con un archivo malicioso).
+- **Plugin Mongo `mongo_query`**: el filtro es *whitelist* (solo `campo: escalar` planos); una
+  clave `$op`/con `.` o un valor documento/array/regex rechaza la query entera (`[]` + stderr) en
+  vez de correr un filtro debilitado (inyección NoSQL tipo `{"password":{"$ne":null}}`). Escape
+  hatch para scripts que arman sus propios operadores: `TE_MONGO_ALLOW_OPERATORS=1`.
+- **Ejemplo WhatsApp/Gemini (`tools/whatsapp_adapter`, `docker-compose.yml`)**: `/waha_webhook`
+  exige `WAHA_WEBHOOK_SECRET`, sin `WAHA_API_KEY` por defecto hardcodeada, y los servicios internos
+  (`gemini` :5003, `agent` :8081/:8082, sin auth propia) dejan de publicarse al host. `web/dev_server.py`
+  (editor local) exige mismo origen + `Content-Type` en los endpoints que escriben.
+
+### Robustez / corrección
+- **Atributos de clase `int`: `o.v = 9007199254740993` es exacto** (pasaba por `double` y quedaba
+  `…992`); `println(o.v)` imprime 64 bits (usaba `%d`). Test `01_types/int64_exact.te`.
+- `list.contains(x)` con `x` lista/map liberaba el nodo compartido (use-after-free) → solo libera
+  escalares frescos. Test `17_collections/lst07_contains_container_arg.te`.
+- `l[i] = v` / `m["k"] = v` liberan el escalar reemplazado (un leak por asignación en `--api`);
+  los contenedores reemplazados siguen siendo alias válidos. Test `lst08_index_reassign_many.te`.
+- `clone_object` (push de objeto a lista, `where`) no copiaba los atributos objeto → puntero sin
+  inicializar para un `Q?` nulo. Test `05_oop/object_optional_attr_clone.te`.
+- `xml(obj)` / `xml(lista)`: el buffer crece con el texto (antes `malloc(4096)` + `strcat` →
+  heap overflow con un atributo de texto ordinario > 4 KB). Test `05_oop/xml_long_attribute.te`.
+- `print/println(o.attr)` con `o` objeto nulo → `null` en vez de NULL-deref.
+- `request_cookie()` ya no trunca valores > 1 KB (JWT/SSO). `request_headers()`,
+  `request_queries()`, `request_params()` devuelven **siempre JSON válido**: un par que no entra en
+  el buffer se descarta entero en vez de cortarse a medias. Suite `security_api`.
+- `for (x in listaDeObjetos)` liberaba el wrapper de cada iteración (leak). `fprintln` de enteros
+  usa `%lld`. `plot()` verifica `fopen`/`popen`. `/api/discover` (`typeeasy_embedded_discover`)
+  crece el buffer en vez de desbordar los 64 KB fijos con muchas rutas (el ERP tiene ~1000).
+- Windows sin Postgres: `postgres_connect()` devuelve `-1` y `postgres_query()` `{"error":…}` en vez
+  de dejar `__ret__` viejo. SQL Server: se borra el `.conf` temporal de FreeTDS por conexión.
+- `api_server/te_websocket.c`: `realloc` chequeados. `api_server/servidor_api.c` (servidor de la
+  imagen Docker, no el binario `--api`): lock de invocación compartido con WS + recuperación
+  `setjmp` (un fatal en un handler → 500, no cae el proceso), reset de estado por intento de
+  match, reloj monotónico; `src/Dockerfile` vuelve a compilar (`bytecode.c`/`strvars.c` no
+  existían; faltaban `te_evloop.c`/`te_decimal.c`).
+
 ## 0.1.9 — 2026-09-21
 
 ### Cambios de comportamiento

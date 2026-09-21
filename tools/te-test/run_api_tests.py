@@ -147,6 +147,9 @@ def run_suite(spec_path: Path, binary: str, port: int, only: str | None) -> tupl
                 got = next((v for k, v in headers.items() if k.lower() == hk.lower()), None)
                 if got is None or hv not in got:
                     problems.append(f"header {hk}={got!r} !~ {hv!r}")
+            for hk in exp.get("header_absent", []):
+                if any(k.lower() == hk.lower() for k in headers):
+                    problems.append(f"header {hk} should be absent")
             ms = int((time.time() - t0) * 1000)
             if problems:
                 failed += 1

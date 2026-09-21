@@ -275,40 +275,65 @@ char* typeeasy_embedded_discover(TypeEasyEmbeddedContext* ctx, const char* scrip
     
     // NUEVO ENFOQUE: Descubrir endpoints directamente desde global_methods
     // Esto evita re-parsear el archivo (que causaría segfault con imports)
-    char* result = (char*)malloc(65536);
+    size_t cap = 65536;
+    char* result = (char*)malloc(cap);
     if (!result) {
         return NULL;
     }
-    
+    size_t len = 0;
+
     strcpy(result, "[");
+    len = 1;
     int first = 1;
-    
+
     MethodNode *m = g_vm.global_methods;
     while (m) {
         if (m->route_path) {
-            if (!first) strcat(result, ",");
-            
             // Detect response type
             const char *response_type = detect_response_type_embedded(m->body);
             const char *http_method = m->http_method ? m->http_method : "GET";
-            
+
             // Build JSON entry (now includes cache_ttl)
             char entry[1024];
-            snprintf(entry, sizeof(entry), 
-                     "{\"route\": \"%s\", \"method\": \"%s\", \"function\": \"%s\", \"response_type\": \"%s\", \"cache_ttl\": %d}", 
-                     m->route_path, 
-                     http_method, 
-                     m->name, 
+            int n = snprintf(entry, sizeof(entry),
+                     "%s{\"route\": \"%s\", \"method\": \"%s\", \"function\": \"%s\", \"response_type\": \"%s\", \"cache_ttl\": %d}",
+                     first ? "" : ",",
+                     m->route_path,
+                     http_method,
+                     m->name,
                      response_type,
                      m->cache_ttl);
-            strcat(result, entry);
+            if (n < 0) n = 0;
+            /* Cada route puede tener una cuenta arbitraria de endpoints (un
+             * .te real puede tener docenas); el buffer fijo de 65536 no
+             * crecia con la cantidad de entradas, así que un servicio con
+             * suficientes endpoints/rutas largas desbordaba el heap via
+             * strcat. Crece antes de cada append en vez de asumir que cabe. */
+            size_t need = len + (size_t)n + 1;
+            if (need > cap) {
+                size_t new_cap = cap;
+                while (new_cap < need) new_cap *= 2;
+                char *nb = (char*)realloc(result, new_cap);
+                if (!nb) { free(result); return NULL; }
+                result = nb; cap = new_cap;
+            }
+            memcpy(result + len, entry, (size_t)n);
+            len += (size_t)n;
+            result[len] = '\0';
             first = 0;
         }
         m = m->next;
     }
-    
-    strcat(result, "]");
-    
+
+    if (len + 2 > cap) {
+        size_t new_cap = cap * 2;
+        char *nb = (char*)realloc(result, new_cap);
+        if (!nb) { free(result); return NULL; }
+        result = nb; cap = new_cap;
+    }
+    result[len++] = ']';
+    result[len] = '\0';
+
     return result;
 }
 

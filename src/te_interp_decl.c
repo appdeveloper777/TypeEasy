@@ -251,8 +251,17 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
         obj->attributes[idx].vtype = VAL_STRING;
         if (g_vm.debug_mode) fprintf(stderr, "[DEBUG] Assign attr %s = %s (STRING)\n", attr_name, s);
       } else {
-        double val = evaluate_expression(value_node);
         int decl_is_float = (strcmp(declared, TE_DT_FLOAT) == 0 || strcmp(declared, TE_DT_FLOAT_OPT) == 0);
+        long long i64 = 0;
+        /* [NUM-1] int exacto: `o.v = 9007199254740993` pasaba por double y perdía precisión. */
+        if (!decl_is_float && te_eval_i64(value_node, &i64)) {
+            if (vm->throw_flag) return;
+            obj->attributes[idx].value.int_value = i64;
+            obj->attributes[idx].vtype = VAL_INT;
+            return;
+        }
+        double val = evaluate_expression(value_node);
+        if (vm->throw_flag) return;
         if (decl_is_float) {
             obj->attributes[idx].value.float_value = val;
             obj->attributes[idx].vtype = VAL_FLOAT;

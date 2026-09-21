@@ -1,0 +1,25 @@
+// spec: CLS-3
+// Un atributo objeto opcional (Q?) sin asignar es null; al clonar el objeto (push a una
+// lista, where) el clon debe conservar el puntero (null o el Q real). Hasta 0.1.9 clone_object
+// no copiaba los VAL_OBJECT y el clon quedaba con un puntero basura (malloc sin inicializar).
+class Q { x : int; }
+class P { n : int; q : Q?; }
+let p = new P();
+p.n = 1;
+var lista = [];
+lista.push(p);
+let c = lista[0];
+println("" + c.n);
+println("" + c.q);
+let p2 = new P();
+p2.n = 2;
+let q2 = new Q();
+q2.x = 42;
+p2.q = q2;
+lista.push(p2);
+let c2 = lista[1];
+println("" + c2.n);
+println("" + c2.q.x);
+let conQ = lista.where(fn(o) => o.n == 2);
+println("" + conQ.length);
+println("" + conQ[0].q.x);

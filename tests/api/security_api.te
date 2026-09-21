@@ -1,0 +1,30 @@
+// Suite de seguridad/robustez del runtime HTTP (PR #8, 0.1.10):
+//  - response_header(): CR/LF y controles se quitan (CWE-113 header injection)
+//  - request_cookie(): valores > 1 KB ya no se truncan
+//  - request_headers(): siempre JSON valido aunque un header largo no quepa en el buffer
+endpoint {
+    [HttpGet("/health")]
+    async Health() { return json({ ok: true }); }
+
+    [HttpPost("/api/hdr")]
+    async Hdr() {
+        // el CR/LF llega por el body (civetweb ya rechaza %0D%0A en la URI con 400)
+        let b = json_parse(request_body());
+        let v = ("" + b["v"]);
+        response_header("X-Test", v);
+        response_header("X-Nombre\r\nX-Inj2: evil", "z");
+        return json({ ok: true });
+    }
+
+    [HttpGet("/api/cookie")]
+    async Cookie() {
+        let c = request_cookie("big");
+        return json({ len: c.length });
+    }
+
+    [HttpGet("/api/hdrs")]
+    async Hdrs() {
+        let h = request_headers();
+        return h;
+    }
+}

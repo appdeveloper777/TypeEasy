@@ -107,7 +107,6 @@ typedef struct TeWsConn {
     MN *handler;              /* the .te handler MethodNode* */
     char *route_path;
     ChanNode *channels;
-    int alive;
     struct TeWsConn *next;
 } TeWsConn;
 
@@ -203,7 +202,6 @@ static TeWsConn *conn_new(struct mg_connection *mg, MN *handler) {
     c->handler = handler;
     c->route_path = handler->route_path ? strdup(handler->route_path) : NULL;
     c->channels = NULL;
-    c->alive = 1;
     c->next = g_conns;
     g_conns = c;
     return c;
@@ -416,6 +414,15 @@ void te_ws_shutdown(void) {
     pthread_mutex_unlock(&g_lock);
 }
 
+void te_ws_invoke_lock(void) {
+    pthread_once(&g_lock_once, make_lock);
+    pthread_mutex_lock(&g_lock);
+}
+
+void te_ws_invoke_unlock(void) {
+    pthread_mutex_unlock(&g_lock);
+}
+
 /* Civetweb pattern syntax uses a literal star for "anything but / and ?". Our
  * route uses '{name}'. Translate '/ws/game/{id}' -> '/ws/game/<star>'. Caller
  * frees the returned buffer. */
@@ -429,11 +436,11 @@ static char *translate_to_civetweb_pattern(const char *src) {
         if (*p == '{') {
             const char *end = strchr(p, '}');
             if (!end) { p++; continue; }
-            if (o + 2 >= cap) { cap *= 2; out = (char*)realloc(out, cap); if (!out) return NULL; }
+            if (o + 2 >= cap) { cap *= 2; char *nb = (char*)realloc(out, cap); if (!nb) { free(out); return NULL; } out = nb; }
             out[o++] = '*';
             p = end + 1;
         } else {
-            if (o + 2 >= cap) { cap *= 2; out = (char*)realloc(out, cap); if (!out) return NULL; }
+            if (o + 2 >= cap) { cap *= 2; char *nb = (char*)realloc(out, cap); if (!nb) { free(out); return NULL; } out = nb; }
             out[o++] = *p++;
         }
     }
@@ -500,12 +507,12 @@ int te_ws_broadcast(const char *channel, const char *msg) {
     int n = 0, cap = 0;
     pthread_mutex_lock(&g_lock);
     for (TeWsConn *c = g_conns; c; c = c->next) {
-        if (!c->alive) continue;
         if (!conn_has_channel(c, channel)) continue;
         if (n == cap) {
             cap = cap ? cap * 2 : 8;
-            targets = (struct mg_connection**)realloc(targets, cap * sizeof(*targets));
-            if (!targets) { pthread_mutex_unlock(&g_lock); return 0; }
+            struct mg_connection **nb = (struct mg_connection**)realloc(targets, cap * sizeof(*targets));
+            if (!nb) { free(targets); pthread_mutex_unlock(&g_lock); return 0; }
+            targets = nb;
         }
         targets[n++] = c->mg_conn;
     }

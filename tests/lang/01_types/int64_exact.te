@@ -18,3 +18,10 @@ println(10 / 4);
 println(3000000000 / 2);
 let lst = [9007199254740993];
 println(lst[0] + 0);
+// atributo de clase int: asignacion exacta (hasta 0.1.9 pasaba por double -> ...992)
+class K { v : int; }
+let k = new K();
+k.v = 9007199254740993;
+println(k.v);
+k.v = a + 4;
+println(k.v);

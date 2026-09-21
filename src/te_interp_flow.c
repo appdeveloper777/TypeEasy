@@ -104,7 +104,14 @@ void interpret_for_in(TeVM *vm, ASTNode *node) {
                 wrapper->value = 0;
                 /* debug print removed */
                 add_or_update_variable(node->id, wrapper);
-            } 
+                /* add_or_update_variable/te_value_to_variable only copies
+                 * wrapper->extra (the real ObjectNode*) into the Variable; it
+                 * never frees or takes ownership of `wrapper` itself. Without
+                 * this, every iteration leaked the wrapper node + its two
+                 * strdup'd strings (type/id). free_ast is safe here — it
+                 * never touches ->extra, only type/str_value/id/left/right. */
+                free_ast(wrapper);
+            }
         } else {
             /* Gotcha #6: items escalares (NUMBER/STRING/FLOAT/...) — ligar la
              * variable del bucle y ejecutar el cuerpo igual que para objetos.
