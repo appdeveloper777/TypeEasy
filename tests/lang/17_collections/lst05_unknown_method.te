@@ -1,9 +1,24 @@
 // spec: LST-5
-// expect-stderr-contains: unknown method 'max' on LIST value
-// Un metodo inexistente sobre una lista NO lanza: avisa en stderr y el resultado es null.
-// (max/min/indexOf no existen: usar orderBy/reduce/filter.)
+// Un metodo inexistente sobre una lista o un map LANZA un TypeError catcheable
+// (hasta 0.1.9: aviso en stderr y resultado null, que como falsy escondia el typo).
+// max/min/indexOf no existen: usar orderBy/reduce/filter.
 let nums = [1, 2, 3];
-let r = nums.max();
-println("" + r);
-println(r == null);
+var r = 7;
+try {
+  r = nums.max();
+  println("no llega");
+} catch (e) {
+  println("catch:" + e);
+}
+println("r sigue:" + r);
+let m = { a: 1 };
+try {
+  let z = m.contains("a");
+  println("no llega");
+} catch (e) {
+  println("catch:" + e);
+}
+// los metodos existentes siguen igual
+println("" + nums.sum());
+println("" + m.has("a"));
 println("sigue");

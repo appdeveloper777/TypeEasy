@@ -1,0 +1,8 @@
+// spec: LST-5
+// expect-exit: 1
+// expect-stderr-contains: Uncaught: TypeError: unknown method 'max' on list value.
+// Sin try/catch, el metodo inexistente termina el programa como cualquier throw ([ERR-2]).
+let nums = [1, 2, 3];
+println("antes");
+let r = nums.max();
+println("no");

@@ -400,8 +400,10 @@ Builtins mínimos garantizados en este nivel de la spec:
 - `[LST-4]` Operadores: `.map .filter .reduce(fn, init) .where .select .sum .count .first .last
   .any .all .none` (bool) `.contains(x)` (1/0) `x in l` `.join(sep) .orderBy(fn) .thenBy(fn)
   .take(n) .skip(n) .avg .distinct .countWhere .sumBy`.
-- `[LST-5]` Un método inexistente **no lanza**: `[method] unknown method 'x' on LIST value` en
-  stderr y resultado `null` (no existen `max/min/indexOf`: usar `orderBy`/`reduce`/`filter`).
+- `[LST-5]` Un método inexistente sobre una lista o un map **lanza** un error catcheable:
+  `TypeError: unknown method 'x' on list value.` (o `on map value.`); sin `catch` termina el programa
+  (`[ERR-2]`). No existen `max/min/indexOf`: usar `orderBy`/`reduce`/`filter`. (Hasta 0.1.9 avisaba en
+  stderr y devolvía `null`, que como falsy escondía el typo —p. ej. `.contains()` sobre un envelope.)
 - `[LST-6]` `for (let x in l)` itera los elementos en orden (también sobre arrays de `json_parse`).
 
 ### Colecciones (Map)
@@ -509,6 +511,9 @@ try {
   `<archivo>:<línea>: syntax error …`, `near '<token>'` y `error: could not parse file`, y el
   proceso sale con **exit 1** (stdout vacío). Igual que un error fatal de runtime (`[ERR-3]`,
   `[DECL-2]`): el código de salida nunca es 0 si el programa no terminó bien.
+- `[ERR-6]` `print(x)` / `println(x)` **no emiten nada** si evaluar `x` lanza (llamada a fn o método,
+  concatenación, literal de lista, expresión numérica): la excepción se propaga con stdout intacto.
+  (Hasta 0.1.9 `println(f(x))` imprimía una línea vacía antes de propagar.)
 
 ---
 
@@ -536,10 +541,12 @@ Resolución de paths:
 Estas son **divergencias documentadas** entre la spec ideal y la
 implementación actual:
 
-- **`println(f(x))` cuando `f` lanza**: imprime una línea vacía antes de propagar la excepción.
 - **`super`**: no existe (`--syntax-check` lo reporta, regla S5). Los métodos del padre
   se heredan y se llaman sobre `this`; el constructor del hijo re-asigna los atributos.
 - **HTTPS** en `http_get`/`http_post`: soportado desde 0.0.20 (Windows y Linux).
+
+Resueltas en 0.1.9: `println(f(x))` ya no imprime una línea vacía cuando `f` lanza (`[ERR-6]`);
+un método inexistente sobre lista/map lanza `TypeError` en vez de devolver `null` (`[LST-5]`).
 
 Resueltas en 0.1.8 (re-tag #4, 2026-09-20): `?.`/`.` profundo sobre maps (`[MAP-1]`), `throw` de
 map/lista (`[ERR-4]`), `await_all` con `async fn` (`[ASY-2]`), `m["k"].push(x)` / `fs[1](5)`

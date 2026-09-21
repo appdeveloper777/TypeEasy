@@ -1,3 +1,6 @@
-null
+catch:TypeError: unknown method 'max' on list value.
+r sigue:7
+catch:TypeError: unknown method 'contains' on map value.
+6
 1
 sigue

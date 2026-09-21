@@ -21,6 +21,16 @@ que fija la conducta nueva. Política: `docs/VERSIONING.md`.
   Hasta 0.1.8 respondía **200 con body vacío y sin rastro en el log** (cualquier `throw` sin
   `try`, incluido el nuevo ArithmeticError, era invisible). En handlers WebSocket solo se
   loguea (no se envía frame). Test `tests/api` caso `uncaught_throw_500`.
+- **Método inexistente sobre lista/map lanza** (`[LST-5]`): `nums.max()` o `m.contains("a")`
+  producen `TypeError: unknown method 'max' on list value.` catcheable (sin `catch`: `Uncaught:` y
+  exit 1; en `--api`, 500). Hasta 0.1.9 avisaba en stderr y devolvía `null`, que como falsy
+  escondía el typo (`if (res.contains("error"))` sobre un envelope seguía como si no hubiera error).
+  Los métodos sobre instancias de clase y strings ya eran fatales; no cambian. Tests
+  `17_collections/lst05_unknown_method.te`, `lst05_unknown_method_uncaught.te`.
+- **`print`/`println` no emiten nada si el argumento lanza** (`[ERR-6]`): `println(f(x))` con `f`
+  que hace `throw` propaga la excepción con stdout intacto (antes imprimía una línea vacía). Cubre
+  fn, método, concatenación, literal de lista y expresión numérica (`println(10 / 0)`). Test
+  `19_errors/err06_println_throw_no_output.te`.
 
 ### Empaquetado (.deb) — cierra issue #7
 - **`typeeasy-api@.service` arranca out-of-the-box.** La unit traía `WorkingDirectory=${TYPEEASY_APIS_DIR}`

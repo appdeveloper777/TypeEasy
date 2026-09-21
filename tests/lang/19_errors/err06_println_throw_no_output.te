@@ -1,0 +1,15 @@
+// spec: ERR-6
+// print/println con un argumento que LANZA no emiten nada (ni una linea vacia)
+// antes de propagar la excepcion. Cubre llamada a fn, metodo, concatenacion,
+// literal de lista y expresion numerica.
+let boom = fn(x) => { throw "boom" + x; return 1; };
+class C { m() : int { throw "en metodo"; return 1; } }
+let c = new C();
+try { println(boom(1)); } catch (e) { println("1:" + e); }
+try { print(boom(2)); } catch (e) { println("2:" + e); }
+try { println(c.m()); } catch (e) { println("3:" + e); }
+try { println("x" + boom(4)); } catch (e) { println("4:" + e); }
+try { println([1, boom(5)]); } catch (e) { println("5:" + e); }
+try { println(10 / 0); } catch (e) { println("6:" + e); }
+try { println([1].max()); } catch (e) { println("7:" + e); }
+println("fin");

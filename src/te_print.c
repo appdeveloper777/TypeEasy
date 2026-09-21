@@ -113,6 +113,7 @@ void interpret_print(ASTNode *node) {
     }
     if (arg->type && nk_of(arg) == NK_ADD && is_string_type(arg)) {
         char *s = get_node_string(arg);
+        if (g_vm.throw_flag) { free(s); return; }
         dbg_printf("%s", s);
         append_to_stdout(s);
         free(s);
@@ -123,6 +124,7 @@ void interpret_print(ASTNode *node) {
      * imprimía vacío. */
     if (arg->type && nk_of(arg) == NK_CALL_METHOD) {
         interpret_call_method(arg);
+        if (g_vm.throw_flag) return;
         Variable *r = find_variable(TE_SYM_RET);
         if (r) {
             if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, TE_T_LIST) == 0) {
@@ -143,6 +145,7 @@ void interpret_print(ASTNode *node) {
      * it like CALL_METHOD and print the captured __ret__ value. */
     if (arg->type && nk_of(arg) == NK_CALL_FUNC) {
         interpret_call_func(arg);
+        if (g_vm.throw_flag) return;
         Variable *r = find_variable(TE_SYM_RET);
         if (r) {
             if (r->vtype == VAL_OBJECT && r->type && strcmp(r->type, TE_T_LIST) == 0) {
@@ -285,7 +288,9 @@ void interpret_print(ASTNode *node) {
             { char *s = te_var_to_string(v); dbg_printf("%s", s); free(s); }   /* lista/map: mismo texto que "" + x */
     } else {
         long long i64v; double val;
-        if (te_eval_num(arg, &i64v, &val)) {   /* Fase 1b */
+        int is_int = te_eval_num(arg, &i64v, &val);   /* Fase 1b */
+        if (g_vm.throw_flag) return;
+        if (is_int) {
             dbg_printf("%lld", i64v);
         } else {
             char b[64]; te_fmt_double(b, sizeof(b), val); dbg_printf("%s", b);
@@ -579,6 +584,7 @@ void interpret_println(ASTNode *node) {
     }
     if (arg->type && nk_of(arg) == NK_ADD && is_string_type(arg)) {
         char *s = get_node_string(arg);
+        if (g_vm.throw_flag) { free(s); return; }
         dbg_printf("%s\n", s);
         append_to_stdout(s);
         append_to_stdout("\n");
@@ -587,6 +593,7 @@ void interpret_println(ASTNode *node) {
     }
     if (arg->type && nk_of(arg) == NK_CALL_METHOD) {
         interpret_call_method(arg);
+        if (g_vm.throw_flag) return;
         Variable *r = find_variable(TE_SYM_RET);
         if (!r) { dbg_printf("\n"); return; }
         if (r->vtype == VAL_STRING) { dbg_printf("%s\n", r->value.string_value ? r->value.string_value : ""); return; }
@@ -607,6 +614,7 @@ void interpret_println(ASTNode *node) {
     /* Ola 13: println(builtin(...)) — dispatch via __ret__ */
     if (arg->type && nk_of(arg) == NK_CALL_FUNC) {
         interpret_call_func(arg);
+        if (g_vm.throw_flag) return;
         Variable *r = find_variable(TE_SYM_RET);
         if (!r) { dbg_printf("\n"); return; }
         if (r->vtype == VAL_STRING) { dbg_printf("%s\n", r->value.string_value ? r->value.string_value : ""); append_to_stdout(r->value.string_value ? r->value.string_value : ""); append_to_stdout("\n"); return; }
@@ -650,6 +658,7 @@ void interpret_println(ASTNode *node) {
     if (arg->type && (nk_of(arg) == NK_LIST || nk_of(arg) == NK_OBJECT_LITERAL ||
                       nk_of(arg) == NK_DECIMAL || te_dec_expr_has_decimal(arg))) {
         TeValue tv; te_eval_value(arg, &tv);
+        if (g_vm.throw_flag) { te_val_free(&tv); return; }
         char *s = te_var_to_string(&tv);
         dbg_printf("%s\n", s); append_to_stdout(s); append_to_stdout("\n");
         free(s); te_val_free(&tv);
@@ -706,7 +715,9 @@ void interpret_println(ASTNode *node) {
         }
     } else {
         long long i64v; double val;
-        if (te_eval_num(arg, &i64v, &val)) {   /* Fase 1b */
+        int is_int = te_eval_num(arg, &i64v, &val);   /* Fase 1b */
+        if (g_vm.throw_flag) return;
+        if (is_int) {
             dbg_printf("%lld\n", i64v);
         } else {
             char b[64]; te_fmt_double(b, sizeof(b), val); dbg_printf("%s\n", b);

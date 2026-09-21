@@ -1,0 +1,18 @@
+// spec: ERR-1
+// Un throw dentro de un metodo de clase con tipo de retorno se propaga con SU mensaje
+// en cualquier contexto (statement, asignacion, let, concatenacion, println).
+// Hasta 0.1.9 lo pisaba "TypeError: method 'm' is declared as 'int' but does not return a value."
+// y en `let r = c.m()` / `"x" + c.m()` era un fatal no catcheable.
+class C {
+  m() : int { throw "en metodo"; return 1; }
+  s() : string { throw "en string"; return "x"; }
+  ok() : int { return 5; }
+}
+let c = new C();
+try { c.m(); println("no"); } catch (e) { println("A:" + e); }
+try { var r = 0; r = c.m(); println("no"); } catch (e) { println("B:" + e); }
+try { let r2 = c.m(); println("no"); } catch (e) { println("C:" + e); }
+try { println("x" + c.s()); } catch (e) { println("D:" + e); }
+try { println(c.m()); } catch (e) { println("E:" + e); }
+println("" + c.ok());
+println("fin");

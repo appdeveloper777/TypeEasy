@@ -183,6 +183,7 @@ static void eval_call(ASTNode *n, TeValue *out) {
     interpret_ast(n);
     Variable *r = find_variable(TE_SYM_RET);
     if (!r) {
+        if (g_vm.throw_flag) { te_val_set_int(out, 0); return; }   /* la llamada lanzó: no es fatal */
         te_runtime_fatalf("Error: no return value captured from expression '%s'.", n->type ? n->type : "unknown");
         te_val_set_int(out, 0);
         return;

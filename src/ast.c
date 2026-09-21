@@ -7258,17 +7258,28 @@ static int te_cm_list_builtin(ASTNode *node, ASTNode *objNode, Variable *v) {
     return 0;
 }
 
+/* [LST-5] Método inexistente sobre LIST/MAP: TypeError catcheable (antes: aviso en stderr y null,
+ * que como falsy escondía typos como `res.contains()` sobre un envelope). */
+static void te_cm_unknown_method_throw(ASTNode *node, const char *vtype) {
+    const char *low = vtype;
+    if (strcmp(vtype, TE_T_LIST) == 0) low = "list";
+    else if (strcmp(vtype, TE_T_MAP) == 0 || strcmp(vtype, TE_T_OBJECT_LITERAL) == 0) low = "map";
+    char buf[256];
+    snprintf(buf, sizeof(buf), "TypeError: unknown method '%s' on %s value.", node->id ? node->id : "?", low);
+    te_throw_set_message(buf);
+    g_vm.throw_flag = 1;
+    ASTNode *nullret = create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
+    add_or_update_variable(TE_SYM_RET, nullret);
+    free_ast(nullret);
+}
+
 /* Extraído de interpret_call_method_impl (Fase 2): devuelve 1 si manejó la llamada. */
 static int te_cm_map_builtin(ASTNode *node, ASTNode *objNode, Variable *v) {
     if (v && v->type &&
         (strcmp(v->type, TE_T_MAP) == 0 || strcmp(v->type, TE_T_OBJECT_LITERAL) == 0)) {
         ASTNode *map = (ASTNode*)(intptr_t)v->value.object_value;
         if (te_map_method_dispatch(node, map)) return 1;
-        fprintf(stderr, "[method] unknown method '%s' on %s value\n",
-                node->id ? node->id : "?", v->type);
-        ASTNode *nullret = create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
-        add_or_update_variable(TE_SYM_RET, nullret);
-        free_ast(nullret);
+        te_cm_unknown_method_throw(node, v->type);
         return 1;
     }
     return 0;
@@ -7790,11 +7801,7 @@ static void interpret_call_method_impl(ASTNode *node) {
         return;
     }
     if (v->type && strcmp(v->type, TE_T_OBJECT) != 0) {
-        fprintf(stderr, "[method] unknown method '%s' on %s value\n",
-                node->id ? node->id : "?", v->type);
-        ASTNode *nullret = create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
-        add_or_update_variable(TE_SYM_RET, nullret);
-        free_ast(nullret);
+        te_cm_unknown_method_throw(node, v->type);
         return;
     }
     // Try to get ObjectNode from value.object_value first, then from extra
@@ -7870,6 +7877,10 @@ static void te_cm_invoke(ASTNode *node, MethodNode *m, ObjectNode *obj, Variable
     debugger_push_frame(m->name, node);
     interpret_ast(m->body);
     debugger_pop_frame();
+
+    /* Un throw dentro del cuerpo se propaga tal cual: los chequeos de tipo de retorno
+     * de abajo lo pisarían con "does not return a value". */
+    if (g_vm.throw_flag) { g_vm.return_flag = 0; g_vm.return_node = NULL; return; }
 
     // --- TYPE CHECK: void method must NOT return a value ---
     if (m->return_type && strcmp(m->return_type, TE_DT_VOID) == 0 && g_vm.return_flag && g_vm.return_node) {

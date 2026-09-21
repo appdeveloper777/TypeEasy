@@ -1,0 +1,8 @@
+1:boom1
+2:boom2
+3:en metodo
+4:boom4
+5:boom5
+6:ArithmeticError: division by zero.
+7:TypeError: unknown method 'max' on list value.
+fin

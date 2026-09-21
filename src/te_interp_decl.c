@@ -269,6 +269,8 @@ void interpret_assign_attr(TeVM *vm, ASTNode *node) {
  * lee __ret__ sin re-ejecutar). */
 static int te_assign_from_call_fast(TeVM *vm, ASTNode *var_node, ASTNode *value_node) {
     interpret_ast(value_node);
+    /* la llamada lanzó: la variable conserva su valor (misma regla que [NUM-5]) */
+    if (vm->throw_flag) { vm->return_flag = 0; vm->return_node = NULL; return 1; }
     static int fr_init = 0;
     static int fr_enabled = 1;
     if (!fr_init) {
@@ -357,7 +359,7 @@ void interpret_assign(TeVM *vm, ASTNode *node) {
         if (te_assign_from_call_fast(vm, var_node, value_node)) return;
         /* la llamada ya corrió: tomar el valor de __ret__ sin re-ejecutarla */
         Variable *r = find_variable(TE_SYM_RET);
-        if (!r) { printf("Error: function in assignment returned nothing.\n"); return; }
+        if (!r) { if (!vm->throw_flag) printf("Error: function in assignment returned nothing.\n"); return; }
         TeValue v; te_val_copy(&v, r);
         te_assign_value(var_node, &v);
         vm->return_flag = 0;
