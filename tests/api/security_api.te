@@ -1,4 +1,4 @@
-// Suite de seguridad/robustez del runtime HTTP (PR #8, 0.1.10):
+// Suite de seguridad/robustez del runtime HTTP (PR #8, 0.1.9 re-tag #3):
 //  - response_header(): CR/LF y controles se quitan (CWE-113 header injection)
 //  - request_cookie(): valores > 1 KB ya no se truncan
 //  - request_headers(): siempre JSON valido aunque un header largo no quepa en el buffer

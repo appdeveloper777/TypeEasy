@@ -4,9 +4,12 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
-## 0.1.10 — 2026-09-21 (seguridad y robustez; audita e incorpora el PR #8 de @atheneox)
+## 0.1.9 — 2026-09-21
 
-### Seguridad
+> Re-tag #3 (`v0.1.9` sobre el commit final): además de lo de abajo, audita e incorpora el PR #8 de
+> @atheneox (seguridad y robustez). Todo bajo el mismo número de versión.
+
+### Seguridad (PR #8)
 - **`response_header(nombre, valor)` sanea CR/LF y caracteres de control** en nombre y valor
   (CWE-113, *HTTP response splitting*): un valor que venga de la petición ya no puede inyectar
   cabeceras ni partir la respuesta. Suite `tests/api/security_api.api.json`.
@@ -24,7 +27,7 @@ que fija la conducta nueva. Política: `docs/VERSIONING.md`.
   (`gemini` :5003, `agent` :8081/:8082, sin auth propia) dejan de publicarse al host. `web/dev_server.py`
   (editor local) exige mismo origen + `Content-Type` en los endpoints que escriben.
 
-### Robustez / corrección
+### Robustez / corrección (PR #8)
 - **Atributos de clase `int`: `o.v = 9007199254740993` es exacto** (pasaba por `double` y quedaba
   `…992`); `println(o.v)` imprime 64 bits (usaba `%d`). Test `01_types/int64_exact.te`.
 - `list.contains(x)` con `x` lista/map liberaba el nodo compartido (use-after-free) → solo libera
@@ -49,8 +52,6 @@ que fija la conducta nueva. Política: `docs/VERSIONING.md`.
   `setjmp` (un fatal en un handler → 500, no cae el proceso), reset de estado por intento de
   match, reloj monotónico; `src/Dockerfile` vuelve a compilar (`bytecode.c`/`strvars.c` no
   existían; faltaban `te_evloop.c`/`te_decimal.c`).
-
-## 0.1.9 — 2026-09-21
 
 ### Cambios de comportamiento
 - **División y módulo por cero lanzan** (`[NUM-5]`): `a / 0` y `a % 0` con `int`, `float` o
