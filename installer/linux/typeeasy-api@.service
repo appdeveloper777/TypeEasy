@@ -14,16 +14,16 @@ After=network.target
 Type=simple
 EnvironmentFile=-/etc/default/typeeasy-api
 EnvironmentFile=-/etc/default/typeeasy-api@%i
-Environment=TYPEEASY_APIS_DIR=/opt/typeeasy/apis
+Environment=TYPEEASY_APIS_DIR=/opt/typeeasy
 Environment=TYPEEASY_HOST=127.0.0.1
-# El binario instalado por el .deb es /usr/bin/typeeasy (wrapper Python que
+# El binario instalado por el .deb es /usr/bin/typeeasy (wrapper que
 # dispatcha serve/new/gen/...). El antiguo /usr/bin/typeeasy-server NO existe
 # y provocaba status=203/EXEC en arranque.
-# `serve --prod` espera ejecutarse dentro de un proyecto TypeEasy
-# (con typeeasy.toml en la raíz), por eso WorkingDirectory apunta al
-# directorio del proyecto (configurable via TYPEEASY_APIS_DIR).
-WorkingDirectory=${TYPEEASY_APIS_DIR}
-ExecStart=/usr/bin/typeeasy serve --prod --host ${TYPEEASY_HOST} --port %i
+# `serve --prod` espera ejecutarse dentro de un proyecto TypeEasy (con
+# typeeasy.toml en la raiz). systemd NO expande ${VAR} en WorkingDirectory=
+# (la unit quedaba "bad unit file setting" y nunca arrancaba), asi que el cd
+# lo hace el shell con la variable de /etc/default/typeeasy-api.
+ExecStart=/bin/sh -c 'cd "$TYPEEASY_APIS_DIR" && exec /usr/bin/typeeasy serve --prod --host "$TYPEEASY_HOST" --port %i'
 Restart=on-failure
 RestartSec=2
 User=www-data

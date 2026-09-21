@@ -1,2 +1,7 @@
-// xfail: syntax error must be reported with non-zero exit
+// spec: ERR-5
+// expect-exit: 1
+// expect-stderr-contains: syntax error
+// expect-stderr-contains: could not parse file
+// expect:
+// Un error de sintaxis se reporta en stderr con archivo:linea y el proceso sale con 1.
 let !@# = 1;

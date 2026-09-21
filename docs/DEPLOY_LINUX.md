@@ -108,7 +108,7 @@ Editar `/etc/default/typeeasy-api`:
 sudo nano /etc/default/typeeasy-api
 ```
 ```bash
-TYPEEASY_APIS_DIR=/opt/typeeasy/apis    # o /home/usuario/mi-app/apis
+TYPEEASY_APIS_DIR=/opt/typeeasy            # RAIZ del proyecto (donde esta typeeasy.toml); o /home/usuario/mi-app
 TYPEEASY_HOST=127.0.0.1                  # SOLO localhost (Caddy delante)
 ```
 
@@ -167,11 +167,11 @@ curl https://api.midominio.com/api/producto
 ```bash
 # App de producción en :8080
 sudo cp /etc/default/typeeasy-api /etc/default/typeeasy-api@8080
-echo 'TYPEEASY_APIS_DIR=/opt/typeeasy/prod-apis' | sudo tee -a /etc/default/typeeasy-api@8080
+echo 'TYPEEASY_APIS_DIR=/opt/typeeasy/prod' | sudo tee -a /etc/default/typeeasy-api@8080
 sudo systemctl enable --now typeeasy-api@8080
 
 # Staging en :8081
-echo 'TYPEEASY_APIS_DIR=/opt/typeeasy/staging-apis' | sudo tee /etc/default/typeeasy-api@8081
+echo 'TYPEEASY_APIS_DIR=/opt/typeeasy/staging' | sudo tee /etc/default/typeeasy-api@8081
 sudo systemctl enable --now typeeasy-api@8081
 
 # Caddy delante:

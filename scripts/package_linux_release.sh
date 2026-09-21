@@ -230,7 +230,7 @@ Priority: optional
 Architecture: ${ARCH}
 Maintainer: TypeEasy <noreply@typeeasy.dev>
 Installed-Size: ${INSTALLED_SIZE}
-Depends: libc6, libfl2, libmariadb3, libpq5, libsybdb5, libssl3, libcurl4, ca-certificates
+Depends: libc6, libfl2, libmariadb3, libpq5, libsybdb5, libssl3 | libssl3t64, libcurl4 | libcurl4t64, libgomp1, zlib1g, ca-certificates
 Description: TypeEasy interpreter and framework
  Interprete y framework experimental escrito en C que permite crear
  sintaxis propias, scripts y endpoints REST sin depender de Docker.

@@ -1,5 +1,9 @@
 // spec: DECL-2
-// xfail: let is immutable, reassignment must fail
+// expect-exit: 1
+// expect-stderr-contains: cannot assign to constant variable 'x'
+// expect:
+// `let` es constante: reasignar es un error fatal de runtime (exit 1) y nada posterior
+// se ejecuta (el println no imprime). Antes era `// xfail`; el comportamiento ya era este.
 let x = 1;
 x = 2;
 println(x);

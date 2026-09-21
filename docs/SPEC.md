@@ -505,6 +505,10 @@ try {
 - `[ERR-4]` `throw <map|lista|objeto>`: el `catch (e)` recibe el **valor** (`e["codigo"]`, `e.length`);
   si no se captura, `Uncaught:` muestra su JSON. Escalares siguen la regla `[ERR-1]` (string).
   (Hasta 0.1.8 el catch recibía `0`.)
+- `[ERR-5]` Un **error de sintaxis** aborta antes de ejecutar nada: stderr recibe
+  `<archivo>:<línea>: syntax error …`, `near '<token>'` y `error: could not parse file`, y el
+  proceso sale con **exit 1** (stdout vacío). Igual que un error fatal de runtime (`[ERR-3]`,
+  `[DECL-2]`): el código de salida nunca es 0 si el programa no terminó bien.
 
 ---
 

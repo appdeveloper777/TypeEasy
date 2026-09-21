@@ -22,6 +22,20 @@ que fija la conducta nueva. Política: `docs/VERSIONING.md`.
   `try`, incluido el nuevo ArithmeticError, era invisible). En handlers WebSocket solo se
   loguea (no se envía frame). Test `tests/api` caso `uncaught_throw_500`.
 
+### Empaquetado (.deb) — cierra issue #7
+- **`typeeasy-api@.service` arranca out-of-the-box.** La unit traía `WorkingDirectory=${TYPEEASY_APIS_DIR}`
+  y systemd **no expande variables** ahí: quedaba "bad unit file setting" y nunca arrancaba (5.º bug
+  encima de los 4 del issue, que ya estaban corregidos: `ExecStart` al wrapper real, unit en
+  `/lib/systemd/system`, `/etc/default/typeeasy-api` como conffile, `ProtectHome` comentado). Ahora el
+  `cd` lo hace `/bin/sh -c` con `TYPEEASY_APIS_DIR` (raíz del proyecto, default `/opt/typeeasy`;
+  configurable por `/etc/default/typeeasy-api[@puerto]`). Verificado con systemd real: `active`,
+  health 200 como `www-data`, restart/stop limpios.
+- **`Depends` completos:** faltaban `libgomp1` (OpenMP) y `zlib1g` → en un Ubuntu 24.04 limpio el
+  binario no cargaba (`libgomp.so.1: cannot open shared object file`). `libssl3 | libssl3t64`,
+  `libcurl4 | libcurl4t64`.
+- Tests `let_reassign_fails` y `syntax_error` dejan de ser `xfail`: afirman exit 1 + mensaje en
+  stderr (`[ERR-5]` nueva). Suite lang sin XFAIL.
+
 ## 0.1.8 — 2026-09-19 (re-tag 2026-09-20 con los fixes WebSocket)
 
 > El tag `v0.1.8` se movió el 2026-09-20 cuatro veces (3fa67c6 → 01db86d → eeb4894 → 5bef7ac →

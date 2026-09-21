@@ -2,10 +2,10 @@
 # Se aplica a TODAS las instancias salvo que exista
 # /etc/default/typeeasy-api@<port> que lo sobreescriba.
 
-# Directorio del proyecto TypeEasy a servir.
-# Debe contener un typeeasy.toml en la raiz (y opcionalmente apis/, public/, etc.).
-# `typeeasy serve --prod` se ejecuta con WorkingDirectory apuntando aqui.
-TYPEEASY_APIS_DIR=/opt/typeeasy/apis
+# Directorio del proyecto TypeEasy a servir (la RAIZ, no apis/).
+# Debe contener un typeeasy.toml (y apis/ con al menos un .te).
+# `typeeasy serve --prod` hace cd aqui antes de arrancar.
+TYPEEASY_APIS_DIR=/opt/typeeasy
 
 # Host donde bindear. Para que solo escuche local (recomendado si usas
 # nginx delante), dejar 127.0.0.1. Para exponer directo, usar 0.0.0.0.
