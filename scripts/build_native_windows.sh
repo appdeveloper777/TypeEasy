@@ -5,7 +5,7 @@
 # Prerrequisitos (una sola vez):
 #   1. Instalar MSYS2:        https://www.msys2.org/
 #   2. Abrir "MSYS2 MINGW64" e instalar paquetes:
-#        pacman -S --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-flex \
+#        pacman -S --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-libgomp mingw-w64-x86_64-flex \
 #                           mingw-w64-x86_64-bison mingw-w64-x86_64-libmariadbclient
 #      (Opcional, para el conector SQL Server sqlserver_*):
 #        pacman -S --needed mingw-w64-x86_64-freetds
