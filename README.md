@@ -10,10 +10,11 @@
 [![Página](https://img.shields.io/badge/Página%20Oficial-8A2BE2)](https://appdeveloper777.github.io/TypeEasy/#/home)
 [![GitHub Stars](https://img.shields.io/github/stars/appdeveloper777/TypeEasy?style=social)](https://github.com/appdeveloper777/TypeEasy/stargazers)
 
-**La API más rápida de escribir y desplegar: un binario, cero runtime, cero Docker, cero `npm install`.**
+**APIs con sintaxis familiar y motor nativo: sin instalar Python ni Node.js para ejecutar tus endpoints.**
 
-Escribís un endpoint con sintaxis tipo C# / TypeScript y lo servís con un único
-ejecutable nativo. Sin intérprete que instalar, sin árbol de dependencias.
+Escribís un endpoint con sintaxis tipo C# / TypeScript y lo servís con el motor
+de TypeEasy, que integra el intérprete y el servidor HTTP. Docker es opcional;
+las bibliotecas nativas y los plugins necesarios dependen del paquete y de tu aplicación.
 
 </div>
 
@@ -34,12 +35,16 @@ endpoint {
 
 ## ¿Qué es TypeEasy?
 
-TypeEasy es un **framework de APIs en un solo binario nativo (escrito en C)**.
-Su única promesa: que escribir y desplegar una API sea más rápido que con
-cualquier stack que tenga runtime y gestor de paquetes.
+TypeEasy es un **lenguaje con motor nativo escrito en C y servidor HTTP integrado**.
+El motor ejecuta tus scripts `.te`; no convierte automáticamente tu aplicación en
+un ejecutable independiente. Su objetivo es simplificar la creación y el despliegue
+de APIs con un conjunto integrado de herramientas.
+
+Para este ejemplo, instalá primero el [paquete nativo de TypeEasy para Windows o Linux](https://github.com/appdeveloper777/TypeEasy/releases/latest)
+y verificá que `typeeasy` esté en el PATH. Clonar el repositorio no instala el motor.
 
 ```bash
-# Quickstart real, 4 líneas:
+# Con TypeEasy ya instalado:
 git clone https://github.com/appdeveloper777/TypeEasy.git
 cd TypeEasy
 echo 'endpoint { [HttpGet("/")] home() { return json({ ok: true }); } }' > hola.te
@@ -48,8 +53,8 @@ typeeasy --api hola.te --port 8080      # -> http://localhost:8080/
 
 **¿En qué se enfoca?**
 
-- ⚡ **Un binario, cero runtime** — no instalás intérprete ni `node_modules`; el
-  ejecutable *es* el servidor. Desplegar = copiar un archivo.
+- ⚡ **Motor y servidor integrados** — sin un runtime de Python o Node.js aparte.
+  Desplegás el paquete nativo, tus scripts, configuración y los plugins que utilices.
 - 🧩 **Sintaxis familiar** — clases, tipado y atributos `[HttpGet]` estilo C#/.NET.
 - 🔐 **Listo para el camino feliz** — JWT (HS256), `@auth`, CORS, model binding
   con validación 422, worker pool y Swagger UI integrado.
@@ -57,18 +62,35 @@ typeeasy --api hola.te --port 8080      # -> http://localhost:8080/
 
 ### TypeEasy vs FastAPI (comparación honesta)
 
-|  | TypeEasy | FastAPI |
-|--|----------|---------|
-| Runtime a instalar | ninguno (un `.exe`) | Python + pip + uvicorn |
-| Desplegar | copiar 1 binario | imagen/venv + dependencias |
-| Arranque en frío | inmediato | importar el árbol de paquetes |
-| Ecosistema | acotado, enfocado en API | enorme (todo PyPI) |
-| Madurez | experimental (v0.0.x) | producción, batería completa |
+Comparación revisada el **22 de septiembre de 2026**, con TypeEasy **v0.1.9**.
+Compara el modelo de desarrollo y despliegue; no es un benchmark de rendimiento.
 
-> TypeEasy **no** intenta reemplazar a FastAPI en features ni ecosistema. Gana
-> en **time-to-deploy**: una API funcionando sin instalar nada alrededor.
-> Las capacidades de **CSV/LINQ/DataFrame** son *features de soporte* para mover
-> datos dentro de tus endpoints — **no** un competidor de Polars/pandas.
+| Aspecto | TypeEasy | FastAPI |
+|---------|----------|---------|
+| Ejecución | Motor nativo en C que ejecuta `.te`, con intérprete y servidor HTTP integrados | Framework de Python ejecutado con un servidor ASGI, como Uvicorn |
+| Instalación | Paquete nativo para Windows o Linux; bibliotecas del sistema y plugins según el paquete y la aplicación | Python, FastAPI, servidor ASGI y dependencias del proyecto, gestionados por ejemplo con pip o uv |
+| Qué desplegás | Motor, scripts `.te`, configuración y plugins compatibles; no solo un ejecutable | Código Python, configuración y entorno con sus dependencias, por ejemplo un entorno virtual o una imagen |
+| Docker | Opcional para ejecutar con el paquete nativo | Opcional; también puede ejecutarse directamente en un entorno Python |
+| Arranque y rendimiento | Deben medirse con la aplicación, el hardware y la configuración elegidos | Deben medirse bajo las mismas condiciones; importar paquetes no demuestra por sí solo menor rendimiento |
+| Ecosistema | Más pequeño, con herramientas integradas para APIs y manejo de datos | Ecosistema amplio de Python/PyPI, integraciones y herramientas de terceros |
+| Madurez y compatibilidad | v0.1.9, etapa pre-1.0; tiene pruebas de regresión y cambios de comportamiento documentados | Proyecto consolidado, usado en producción; también requiere fijar versiones y probar actualizaciones |
+| Operación en producción | Requiere configurar seguridad, HTTPS, secretos, supervisión, backups y servicios externos utilizados | Requiere las mismas responsabilidades operativas, además de gestionar el entorno Python |
+
+**Cuándo elegir cada uno:** TypeEasy puede encajar si preferís su sintaxis y un
+motor con servidor integrado, y aceptás las condiciones de una versión pre-1.0.
+FastAPI suele encajar mejor si ya trabajás con Python o necesitás su ecosistema
+de librerías e integraciones.
+
+> **No afirmamos que TypeEasy arranque instantáneamente ni que sea más rápido que
+> FastAPI.** Estar escrito en C no demuestra por sí solo mayor rendimiento de una
+> API. Para comparar arranque, latencia, throughput o memoria hacen falta pruebas
+> reproducibles con endpoints equivalentes, mismas condiciones y resultados correctos.
+> Las capacidades de CSV/LINQ/DataFrame apoyan el manejo de datos dentro de los
+> endpoints; no implican equivalencia con Polars o pandas.
+
+Referencias: [release v0.1.9](https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.1.9),
+[política de versionado de TypeEasy](docs/VERSIONING.md) y
+[ejecución y despliegue de FastAPI](https://fastapi.tiangolo.com/deployment/manually/).
 
 
 Página oficial: (https://appdeveloper777.github.io/TypeEasy/#/home)
@@ -581,6 +603,15 @@ Usuario WhatsApp → WAHA/Meta API → Adapter → Agent Gemini → Gemini AI
 | [Chatbot con WAHA](README_CHATBOT_WHATSAPP_WAHA_GEMINI.md) | Configuración completa con WAHA |
 | [Chatbot con Meta API](docs/META_WHATSAPP_SETUP.md) | Configuración con WhatsApp Cloud API |
 | [Crear Endpoints REST](docs/CREAR_ENDPOINTS.md) | Guía completa de APIs REST |
+
+---
+
+## ¿Por qué descargaste TypeEasy?
+
+Cuéntanos qué te llamó la atención, qué quieres construir o qué te falta para empezar.
+Tu opinión nos ayuda a decidir las próximas mejoras. Participar es voluntario.
+
+[Responder la encuesta de TypeEasy](https://docs.google.com/forms/d/e/1FAIpQLSdFFyCvQQZpjo2ZPeyqrDLGDLCmuGvCQDrZv9tu5fv3rzR_Ew/viewform?usp=publish-editor)
 
 ---
 
