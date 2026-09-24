@@ -18,6 +18,13 @@ las bibliotecas nativas y los plugins necesarios dependen del paquete y de tu ap
 
 </div>
 
+> ## 📝 ¿Por qué descargaste TypeEasy?
+>
+> Cuéntanos qué te llamó la atención, qué quieres construir o qué te falta para empezar.
+> Tu opinión nos ayuda a decidir las próximas mejoras. Toma 1 minuto y es voluntario.
+>
+> ### 👉 [Responder la encuesta de TypeEasy](https://docs.google.com/forms/d/e/1FAIpQLSdFFyCvQQZpjo2ZPeyqrDLGDLCmuGvCQDrZv9tu5fv3rzR_Ew/viewform?usp=publish-editor)
+
 ```ts
 endpoint {
     [HttpGet("/api/hola")]
@@ -603,15 +610,6 @@ Usuario WhatsApp → WAHA/Meta API → Adapter → Agent Gemini → Gemini AI
 | [Chatbot con WAHA](README_CHATBOT_WHATSAPP_WAHA_GEMINI.md) | Configuración completa con WAHA |
 | [Chatbot con Meta API](docs/META_WHATSAPP_SETUP.md) | Configuración con WhatsApp Cloud API |
 | [Crear Endpoints REST](docs/CREAR_ENDPOINTS.md) | Guía completa de APIs REST |
-
----
-
-## ¿Por qué descargaste TypeEasy?
-
-Cuéntanos qué te llamó la atención, qué quieres construir o qué te falta para empezar.
-Tu opinión nos ayuda a decidir las próximas mejoras. Participar es voluntario.
-
-[Responder la encuesta de TypeEasy](https://docs.google.com/forms/d/e/1FAIpQLSdFFyCvQQZpjo2ZPeyqrDLGDLCmuGvCQDrZv9tu5fv3rzR_Ew/viewform?usp=publish-editor)
 
 ---
 
