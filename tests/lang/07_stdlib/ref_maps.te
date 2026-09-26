@@ -1,0 +1,14 @@
+// spec: MAP-1, MAP-2
+// Referencia de metodos de map (docs/STDLIB.md). Salida verificada con 0.1.9.
+var m = { "nombre": "Ana", "edad": 30 };
+m["ciudad"] = "Lima";
+println("size=" + m.size() + " length=" + m.length);
+println("has=" + m.has("edad") + " no=" + m.has("pais"));
+println("keys=" + m.keys().join(","));
+let vs = m.values();
+println("values=" + len(vs));
+m.remove("edad");
+println("tras_remove=" + m.size() + " has_edad=" + m.has("edad"));
+println("falta=[" + m["pais"] + "]");
+m.clear();
+println("tras_clear=" + m.size());

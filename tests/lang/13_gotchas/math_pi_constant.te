@@ -1,0 +1,7 @@
+// spec: GOTCHA-MATH-PI
+// xfail: Math.PI / Math.E no estan expuestas como atributos (lanza "'Math' is not a valid object..."). Workaround: let PI = 3.141592653589793;
+let ok = Math.PI > 3.14 && Math.PI < 3.15;
+if (!ok) {
+    throw "Math.PI no disponible";
+}
+println(ok);

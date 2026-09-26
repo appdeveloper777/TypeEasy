@@ -1,0 +1,76 @@
+{
+  "Endpoint GET": {
+    "prefix": "get",
+    "body": [
+      "[HttpGet(\"/api/${1:recurso}\")]",
+      "${2:Listar}() : string {",
+      "    let conn = sql_connect(env(\"DB_HOST\"), env(\"DB_USER\"), env(\"DB_PASS\"), env(\"DB_NAME\"), 3306, { }, \"mysql\");",
+      "    let rows = sql_query(conn, \"SELECT ${3:id, nombre} FROM ${4:tabla} ORDER BY ${5:nombre}\", { }, \"mysql\");",
+      "    sql_close(conn, \"mysql\");",
+      "    return json(rows);",
+      "}"
+    ],
+    "description": "Endpoint GET que devuelve filas en JSON"
+  },
+  "Endpoint POST": {
+    "prefix": "post",
+    "body": [
+      "[HttpPost(\"/api/${1:recurso}\")]",
+      "${2:Crear}() : string {",
+      "    let p = json_parse(request_body());",
+      "    var nombre = (\"\" + p[\"nombre\"]);",
+      "    if (nombre == \"null\" || nombre == \"\") { response_status(422); return json({ \"error\": \"nombre requerido\" }); }",
+      "    $0",
+      "    return json({ \"ok\": true });",
+      "}"
+    ],
+    "description": "Endpoint POST con json_parse y validación"
+  },
+  "Transacción multi-tabla": {
+    "prefix": "tx",
+    "body": [
+      "sql_exec(conn, \"START TRANSACTION\", { }, \"mysql\", true);",
+      "let r1 = sql_exec(conn, \"${1:INSERT INTO t (a) VALUES (?)}\", [${2:a}], \"mysql\", true);",
+      "if (!r1.success) { sql_close(conn, \"mysql\"); response_status(500); return json({ \"error\": \"no se pudo guardar\" }); }",
+      "$0",
+      "sql_exec(conn, \"COMMIT\", { }, \"mysql\", true);",
+      "sql_close(conn, \"mysql\");"
+    ],
+    "description": "Escritura en varias tablas dentro de una transacción (sin COMMIT = rollback)"
+  },
+  "Clase": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Nombre} {",
+      "    ${2:campo} : ${3:string};",
+      "    __constructor(${2:campo}) {",
+      "        this.${2:campo} = ${2:campo};",
+      "    }",
+      "    ${4:metodo}() : ${5:string} {",
+      "        return this.${2:campo};",
+      "    }",
+      "}"
+    ],
+    "description": "Clase con atributo, constructor y método tipado"
+  },
+  "Función": {
+    "prefix": "fn",
+    "body": ["let ${1:nombre} = fn(${2:a}) => {", "    $0", "    return ${2:a};", "};"],
+    "description": "Función anónima asignada (let = constante)"
+  },
+  "for clásico": {
+    "prefix": "for",
+    "body": ["for (${1:i} = ${2:0}; ${3:10}; ${4:1}) {", "    $0", "}"],
+    "description": "for(i = INICIO; LIMITE_EXCLUSIVO; PASO) — el segundo término NO es una condición"
+  },
+  "for in": {
+    "prefix": "forin",
+    "body": ["for (let ${1:x} in ${2:lista}) {", "    $0", "}"],
+    "description": "Recorre una lista (el let es obligatorio)"
+  },
+  "try/catch": {
+    "prefix": "try",
+    "body": ["try {", "    $1", "} catch (${2:e}) {", "    println(${2:e});", "}"],
+    "description": "Bloque try/catch"
+  }
+}

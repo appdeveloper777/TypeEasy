@@ -1,0 +1,12 @@
+// spec: JSN-1, JSN-2
+// Referencia de conversiones y Math (docs/STDLIB.md). Salida verificada con 0.1.9.
+println("to_int=" + (to_int("12") + 1) + " to_float=" + to_float("1.5") + " to_str=" + to_str(7) + "!");
+let lista = [1, 2, 3];
+println("len_str=" + len("hola") + " len_list=" + len(lista));
+println("range=" + range(0, 4).join(","));
+println("floor=" + Math.floor(3.7) + " ceil=" + Math.ceil(3.2) + " round=" + Math.round(2.5) + " trunc=" + Math.trunc(-3.7));
+println("abs=" + Math.abs(-5) + " sign=" + Math.sign(-2) + " pow=" + Math.pow(2, 10) + " sqrt=" + Math.sqrt(16));
+println("min=" + Math.min(3, 8) + " max=" + Math.max(3, 8) + " mod=" + Math.mod(10, 3));
+println("json=" + json_stringify({ "a": 1, "b": [true, null] }));
+let p = json_parse("{\"x\": 5, \"y\": \"z\"}");
+println("json_parse=" + p["x"] + p["y"]);

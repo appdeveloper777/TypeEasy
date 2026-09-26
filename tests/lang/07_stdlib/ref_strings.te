@@ -1,0 +1,14 @@
+// spec: STR-2
+// Referencia de metodos de string (docs/STDLIB.md). Salida verificada con 0.1.9.
+let s = "Hola Mundo";
+println("replace=" + s.replace("Mundo", "TE"));
+println("index_of=" + s.index_of("Mundo") + " find=" + s.find("o") + " falta=" + s.index_of("xyz"));
+println("starts=" + s.starts_with("Hola") + " ends=" + s.ends_with("do"));
+println("substring=" + s.substring(0, 4) + " substr=" + s.substr(5, 3));
+println("pad_left=" + "7".pad_left(3, "0") + " pad_right=" + "ab".pad_right(4, "."));
+println("repeat=" + "-".repeat(5));
+println("char_at=" + s.char_at(1) + " char_code=" + "A".char_code());
+println("parse_int=" + ("42".parse_int() + 1) + " parse_float=" + ("2.5".parse_float() * 2));
+let partes = "a,b,c".split(",");
+println("split=" + partes.length + " primero=" + partes[0]);
+println("upper=" + s.upper() + " lower=" + s.lower() + " trim=[" + "  x  ".trim() + "]");

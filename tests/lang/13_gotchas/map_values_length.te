@@ -1,0 +1,9 @@
+// spec: GOTCHA-VALUES-LENGTH
+// xfail: .length sobre la lista que devuelve map.values() da 0 (join/len funcionan). Workaround: len(m.values()).
+var m = { "a": 1, "b": 2 };
+let vs = m.values();
+let n = vs.length;
+if (n != 2) {
+    throw "m.values().length devolvio " + n;
+}
+println(n);

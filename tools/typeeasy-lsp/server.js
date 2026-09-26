@@ -1,8 +1,11 @@
 // TypeEasy Language Server.
 //
 // Capabilities (declared on initialize):
-//   - completion        (keywords + builtins + workspace-scanned identifiers)
-//   - hover             (markdown blurb for keywords/builtins/declarations)
+//   - completion        (keywords + builtins + workspace-scanned identifiers;
+//                        after `x.` -> string/list/map methods, after `Math.` -> Math.*)
+//   - hover             (signature + description for builtins/methods; declarations)
+//   - signatureHelp     (builtin signature while typing its arguments)
+//   - formatting        (Format Document -> `typeeasy --fmt`, needs TYPEEASY_BIN)
 //   - documentSymbol    (Outline view: classes/methods/functions/variables)
 //   - definition        (right-click -> "Go to Definition")
 //   - references        (right-click -> "Find All References")
@@ -36,16 +39,132 @@ const path = require('path');
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 
-const BUILTINS = [
-  'println', 'print', 'fprint', 'fprintln',
-  'len', 'to_int', 'to_float', 'to_str',
-  'json', 'json_stringify', 'json_parse', 'http_get', 'http_post',
-  'read_file', 'write_file', 'file_exists',
-  'assert', 'assert_eq', 'concat',
-  'sql_query', 'sql_exec', 'response_status',
-  'go', 'sleep_async', 'await_async_all',
-  'Math.sqrt', 'Math.abs', 'Math.floor', 'Math.ceil', 'Math.round',
-  'Math.pow', 'Math.min', 'Math.max'
+// Catálogo de builtins: [nombre, firma, descripción]. Fuente: docs/STDLIB.md,
+// docs/API_BUILTINS.md y docs/SPEC.md §5. Alimenta completion, hover y signatureHelp.
+const BUILTIN_CATALOG = [
+  ['println', 'println(x)', 'Imprime x y un salto de línea.'],
+  ['print', 'print(x)', 'Imprime x sin salto de línea.'],
+  ['len', 'len(x) -> int', 'Longitud de string/lista/map. Ojo 0.1.9: sobre una lista literal devuelve 0; usá una variable.'],
+  ['to_int', 'to_int(x) -> int', 'Convierte a entero.'],
+  ['to_float', 'to_float(x) -> float', 'Convierte a float.'],
+  ['to_str', 'to_str(x) -> string', 'Convierte a string.'],
+  ['range', 'range(ini, fin) -> list', 'Lista de enteros [ini, fin) (fin exclusivo).'],
+  ['json', 'json(value) -> response', 'Serializa a JSON (en --api responde application/json).'],
+  ['json_stringify', 'json_stringify(value) -> string', 'Serializa map/lista/objeto a JSON.'],
+  ['json_parse', 'json_parse(s) -> any', 'Parsea JSON. Acceso con corchetes: p["k"]. "" -> null, inválido -> 0.'],
+  ['xml', 'xml(value) -> response', 'Responde application/xml.'],
+  ['concat', 'concat(a, b, ...) -> string', 'Concatena argumentos como string.'],
+  ['read_file', 'read_file(path) -> string', 'Lee un archivo de texto.'],
+  ['write_file', 'write_file(path, body)', 'Escribe un archivo de texto.'],
+  ['file_exists', 'file_exists(path) -> bool', 'true si el archivo existe.'],
+  ['env', 'env(name, default?) -> string', 'Variable de entorno.'],
+  ['env_required', 'env_required(name) -> string', 'Variable de entorno obligatoria (falla si falta).'],
+  ['http_get', 'http_get(url) -> string', 'GET HTTP/HTTPS.'],
+  ['http_post', 'http_post(url, body) -> string', 'POST HTTP/HTTPS.'],
+  ['request_param', 'request_param(name) -> string', 'Parámetro de query/ruta/form del request actual.'],
+  ['request_body', 'request_body() -> string', 'Cuerpo crudo del request.'],
+  ['request_header', 'request_header(name) -> string', 'Header del request.'],
+  ['response_status', 'response_status(code)', 'Fija el status HTTP de la respuesta.'],
+  ['jwt_sign', 'jwt_sign(payload, secret) -> string', 'Firma un JWT HS256.'],
+  ['jwt_verify', 'jwt_verify(token, secret) -> bool', 'Verifica un JWT HS256.'],
+  ['current_claims', 'current_claims() -> string', 'Payload del JWT validado por @auth.'],
+  ['sql_connect', 'sql_connect(host, user, pass, db, port, opts, engine) -> handle', 'Conexión agnóstica de motor (engine: "mysql" | "sqlite" | "postgres" ...).'],
+  ['sql_query', 'sql_query(conn, sql, params, engine) -> string', 'SELECT con parámetros; devuelve JSON de filas.'],
+  ['sql_exec', 'sql_exec(conn, sql, params, engine, envelope?)', 'INSERT/UPDATE/DELETE/DDL. Con envelope=true devuelve { success, ... }.'],
+  ['sql_close', 'sql_close(conn, engine)', 'Cierra la conexión.'],
+  ['sql_last_error', 'sql_last_error() -> string', 'Mensaje del último fallo SQL ("" si OK).'],
+  ['mysql_connect', 'mysql_connect(host, user, pass, db, opts?) -> handle', 'Conexión MySQL/MariaDB. Cloud (TiDB): { "tls": 1 }.'],
+  ['mysql_query', 'mysql_query(conn, sql, "json"?) -> string', 'SQL en MySQL. El arg "json" SOLO en SELECT.'],
+  ['mysql_close', 'mysql_close(conn)', 'Cierra (o devuelve al pool) la conexión.'],
+  ['sqlite_connect', 'sqlite_connect(path) -> handle', 'Abre/crea una base SQLite.'],
+  ['sqlite_query', 'sqlite_query(db, sql) -> rows', 'SELECT en SQLite.'],
+  ['sqlite_exec', 'sqlite_exec(db, sql)', 'Escritura/DDL en SQLite (-1 si falla).'],
+  ['sqlite_last_id', 'sqlite_last_id(db) -> int', 'Último rowid insertado.'],
+  ['sqlite_close', 'sqlite_close(db)', 'Cierra la base SQLite.'],
+  ['now', 'now() -> string', 'Fecha/hora actual.'],
+  ['now_epoch', 'now_epoch() -> int', 'Epoch en segundos.'],
+  ['date_parse', 'date_parse(s)', 'Parsea una fecha.'],
+  ['date_format', 'date_format(t, fmt) -> string', 'Formatea una fecha.'],
+  ['date_add', 'date_add(t, n, unit)', 'Suma n unidades a una fecha.'],
+  ['date_diff', 'date_diff(a, b, unit) -> int', 'Diferencia entre fechas.'],
+  ['uuid_v4', 'uuid_v4() -> string', 'UUID v4 aleatorio.'],
+  ['uuid_valid', 'uuid_valid(s) -> bool', 'Valida un UUID.'],
+  ['sha1', 'sha1(s) -> string', 'SHA-1 hex (usar en vez de SHA1() de SQL, que no es portable).'],
+  ['assert', 'assert(cond, msg?)', 'Falla si cond es falso.'],
+  ['assert_eq', 'assert_eq(a, b, msg?)', 'Falla si a != b.'],
+  ['go', 'go(fn)', 'Lanza una tarea concurrente.'],
+  ['sleep_async', 'sleep_async(ms)', 'Cede el control ms milisegundos.'],
+  ['await_all', 'await_all(t1, t2, ...) -> list', 'Espera varias tareas; resultados en orden.'],
+  ['Math.abs', 'Math.abs(x)', 'Valor absoluto.'],
+  ['Math.floor', 'Math.floor(x)', 'Redondeo hacia abajo.'],
+  ['Math.ceil', 'Math.ceil(x)', 'Redondeo hacia arriba.'],
+  ['Math.round', 'Math.round(x)', 'Redondeo al entero más cercano.'],
+  ['Math.trunc', 'Math.trunc(x)', 'Parte entera.'],
+  ['Math.sign', 'Math.sign(x)', '-1, 0 o 1.'],
+  ['Math.sqrt', 'Math.sqrt(x)', 'Raíz cuadrada.'],
+  ['Math.pow', 'Math.pow(b, e)', 'Potencia.'],
+  ['Math.min', 'Math.min(a, b)', 'Mínimo.'],
+  ['Math.max', 'Math.max(a, b)', 'Máximo.'],
+  ['Math.mod', 'Math.mod(a, b)', 'Módulo.']
+];
+const BUILTINS = BUILTIN_CATALOG.map(b => b[0]);
+const BUILTIN_INFO = new Map(BUILTIN_CATALOG.map(b => [b[0], { sig: b[1], doc: b[2] }]));
+
+// Métodos que se ofrecen después de un '.' (string / lista / map). Ver docs/STDLIB.md.
+const METHOD_CATALOG = [
+  ['replace', 'replace(a, b)', 'string', 'Reemplaza TODAS las ocurrencias.'],
+  ['index_of', 'index_of(x) -> int', 'string', '-1 si no está.'],
+  ['find', 'find(x) -> int', 'string', 'Alias de index_of.'],
+  ['contains', 'contains(x) -> bool', 'string/lista', 'true si contiene x.'],
+  ['starts_with', 'starts_with(p) -> bool', 'string', ''],
+  ['ends_with', 'ends_with(s) -> bool', 'string', ''],
+  ['substring', 'substring(ini, fin?)', 'string', 'fin exclusivo.'],
+  ['substr', 'substr(ini, largo)', 'string', 'Por longitud.'],
+  ['pad_left', 'pad_left(n, c)', 'string', 'Rellena a la izquierda ("7".pad_left(3,"0") -> "007").'],
+  ['pad_right', 'pad_right(n, c)', 'string', 'Rellena a la derecha.'],
+  ['repeat', 'repeat(n)', 'string', ''],
+  ['char_at', 'char_at(i)', 'string', ''],
+  ['char_code', 'char_code() -> int', 'string', ''],
+  ['parse_int', 'parse_int() -> int', 'string', ''],
+  ['parse_float', 'parse_float() -> float', 'string', ''],
+  ['split', 'split(sep) -> list', 'string', ''],
+  ['upper', 'upper()', 'string', ''],
+  ['lower', 'lower()', 'string', ''],
+  ['trim', 'trim()', 'string', ''],
+  ['length', 'length', 'string/lista/map', 'Longitud (propiedad).'],
+  ['push', 'push(x)', 'lista', 'Agrega al final (muta).'],
+  ['pop', 'pop()', 'lista', 'Quita el último (muta).'],
+  ['size', 'size() -> int', 'lista/map', ''],
+  ['get', 'get(i)', 'lista', ''],
+  ['join', 'join(sep) -> string', 'lista', ''],
+  ['sort', 'sort()', 'lista', 'Ordena EN EL LUGAR; no devuelve la lista.'],
+  ['reverse', 'reverse()', 'lista', 'Invierte EN EL LUGAR; no devuelve la lista.'],
+  ['map', 'map(fn(x) => ...)', 'lista', 'Lista nueva.'],
+  ['filter', 'filter(fn(x) => ...)', 'lista', 'Lista nueva.'],
+  ['reduce', 'reduce(fn(acc, x) => ..., inicial)', 'lista', ''],
+  ['where', 'where(fn)', 'lista', 'LINQ: filtra.'],
+  ['select', 'select(fn)', 'lista', 'LINQ: proyecta.'],
+  ['orderBy', 'orderBy(fn)', 'lista', 'LINQ: orden estable.'],
+  ['orderByDescending', 'orderByDescending(fn)', 'lista', ''],
+  ['thenBy', 'thenBy(fn)', 'lista', ''],
+  ['first', 'first()', 'lista', ''],
+  ['last', 'last()', 'lista', ''],
+  ['firstOrDefault', 'firstOrDefault()', 'lista', ''],
+  ['any', 'any(fn) -> bool', 'lista', ''],
+  ['all', 'all(fn) -> bool', 'lista', ''],
+  ['count', 'count() -> int', 'lista', ''],
+  ['countWhere', 'countWhere(fn) -> int', 'lista', ''],
+  ['sum', 'sum()', 'lista', ''],
+  ['sumBy', 'sumBy(fn)', 'lista', ''],
+  ['avg', 'avg()', 'lista', ''],
+  ['distinct', 'distinct()', 'lista', ''],
+  ['take', 'take(n)', 'lista', ''],
+  ['skip', 'skip(n)', 'lista', ''],
+  ['has', 'has(k) -> bool', 'map', ''],
+  ['keys', 'keys() -> list', 'map', 'Orden de inserción.'],
+  ['values', 'values() -> list', 'map', 'Ojo 0.1.9: .length sobre el resultado da 0; usá len(vs).'],
+  ['remove', 'remove(k)', 'map', ''],
+  ['clear', 'clear()', 'map', '']
 ];
 const KEYWORDS = [
   'let', 'var', 'const', 'if', 'else', 'while', 'for', 'in',
@@ -64,6 +183,8 @@ connection.onInitialize(() => ({
     textDocumentSync: TextDocumentSyncKind.Full,
     completionProvider: { triggerCharacters: ['.', ' '] },
     hoverProvider: true,
+    signatureHelpProvider: { triggerCharacters: ['(', ','] },
+    documentFormattingProvider: true,
     documentSymbolProvider: true,
     definitionProvider: true,
     referencesProvider: true,
@@ -432,11 +553,28 @@ connection.onDidChangeWatchedFiles(() => { fileAnalysisCache.clear(); });
 // ---------------------------------------------------------------------------
 connection.onCompletion((params) => {
   const items = [];
+  const doc = documents.get(params.textDocument.uri);
+  // Después de `x.` ofrecer métodos de string/lista/map (salvo `Math.`).
+  if (doc) {
+    const off = doc.offsetAt(params.position);
+    const before = doc.getText().slice(Math.max(0, off - 80), off);
+    const m = /([A-Za-z0-9_\])"']+)\.([A-Za-z_]*)$/.exec(before);
+    if (m) {
+      if (m[1] === 'Math') {
+        for (const b of BUILTIN_CATALOG.filter(x => x[0].startsWith('Math.')))
+          items.push({ label: b[0].slice(5), kind: CompletionItemKind.Function, detail: b[1], documentation: b[2] });
+        return items;
+      }
+      for (const [name, sig, on, d] of METHOD_CATALOG)
+        items.push({ label: name, kind: name === 'length' ? CompletionItemKind.Property : CompletionItemKind.Method,
+                     detail: `${sig}  (${on})`, documentation: d || undefined });
+      return items;
+    }
+  }
   for (const k of KEYWORDS)
     items.push({ label: k, kind: CompletionItemKind.Keyword });
-  for (const b of BUILTINS)
-    items.push({ label: b, kind: CompletionItemKind.Function });
-  const doc = documents.get(params.textDocument.uri);
+  for (const b of BUILTIN_CATALOG)
+    items.push({ label: b[0], kind: CompletionItemKind.Function, detail: b[1], documentation: b[2] });
   if (doc) {
     const seen = new Set();
     const addSym = (s, container) => {
@@ -479,8 +617,14 @@ connection.onHover((params) => {
     return { contents: { kind: 'markdown', value: label } };
   }
   // 3) Builtin / keyword fallback (no definition site).
-  if (BUILTINS.includes(w.word))
-    return { contents: { kind: 'markdown', value: `**${w.word}** _(builtin)_` } };
+  const text = doc.getText();
+  const qualified = (w.start >= 5 && text.slice(w.start - 5, w.start) === 'Math.') ? 'Math.' + w.word : w.word;
+  const info = BUILTIN_INFO.get(qualified);
+  if (info)
+    return { contents: { kind: 'markdown', value: '```te\n' + info.sig + '\n```\n' + info.doc + '\n\n_(builtin)_' } };
+  const meth = (w.start > 0 && text[w.start - 1] === '.') ? METHOD_CATALOG.find(x => x[0] === w.word) : null;
+  if (meth)
+    return { contents: { kind: 'markdown', value: '```te\n.' + meth[1] + '\n```\n' + (meth[3] || '') + ` _(método de ${meth[2]})_` } };
   if (KEYWORDS.includes(w.word))
     return { contents: { kind: 'markdown', value: `**${w.word}** _(keyword)_` } };
   return null;
@@ -594,6 +738,61 @@ connection.onReferences((params) => {
   }
   return locations;
 });
+
+// ---------------------------------------------------------------------------
+// Signature help: firma del builtin cuyo '(' está abierto antes del cursor.
+// ---------------------------------------------------------------------------
+connection.onSignatureHelp((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const off = doc.offsetAt(params.position);
+  const text = doc.getText().slice(Math.max(0, off - 400), off);
+  let depth = 0, commas = 0;
+  for (let i = text.length - 1; i >= 0; i--) {
+    const ch = text[i];
+    if (ch === ')' || ch === ']' || ch === '}') depth++;
+    else if (ch === '[' || ch === '{') { if (depth === 0) return null; depth--; }
+    else if (ch === '(') {
+      if (depth > 0) { depth--; continue; }
+      const m = /((?:Math\.)?[A-Za-z_][A-Za-z0-9_]*)\s*$/.exec(text.slice(0, i));
+      const info = m && BUILTIN_INFO.get(m[1]);
+      if (!info) return null;
+      const inner = /\(([^)]*)\)/.exec(info.sig);
+      const ps = inner ? inner[1].split(',').map(s => s.trim()).filter(Boolean) : [];
+      return {
+        signatures: [{ label: info.sig, documentation: info.doc, parameters: ps.map(p => ({ label: p })) }],
+        activeSignature: 0,
+        activeParameter: Math.min(commas, Math.max(0, ps.length - 1))
+      };
+    } else if (ch === ',' && depth === 0) commas++;
+    else if (ch === ';') return null;
+  }
+  return null;
+});
+
+// ---------------------------------------------------------------------------
+// Formatting: delega en `typeeasy --fmt <archivo>` (imprime el resultado por
+// stdout). Sin binario -> no formatea (devuelve []).
+// ---------------------------------------------------------------------------
+connection.onDocumentFormatting((params) => new Promise((resolve) => {
+  const doc = documents.get(params.textDocument.uri);
+  const bin = nativeBin();
+  if (!doc || !bin) { resolve([]); return; }
+  const original = doc.getText();
+  const tmpDir = process.env.TYPEEASY_TMPDIR || os.tmpdir();
+  const tmp = path.join(tmpDir, `_lsp_fmt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.te`);
+  try { fs.writeFileSync(tmp, original); } catch (_e) { resolve([]); return; }
+  const proc = spawn(bin, ['--fmt', tmp], { cwd: process.env.TYPEEASY_CWD || process.cwd() });
+  let out = '';
+  proc.stdout.on('data', d => out += d.toString());
+  proc.on('error', () => { try { fs.unlinkSync(tmp); } catch (_e) {} resolve([]); });
+  proc.on('close', (code) => {
+    try { fs.unlinkSync(tmp); } catch (_e) {}
+    if (code !== 0 || !out || out === original) { resolve([]); return; }
+    const end = doc.positionAt(original.length);
+    resolve([{ range: { start: { line: 0, character: 0 }, end }, newText: out }]);
+  });
+}));
 
 // ---------------------------------------------------------------------------
 // Lifecycle

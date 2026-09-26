@@ -1,0 +1,20 @@
+// spec: LST-2, LST-4, LST-6
+// Referencia de metodos de lista (docs/STDLIB.md). Salida verificada con 0.1.9.
+var l = [3, 1, 2];
+l.push(5);
+println("length=" + l.length + " size=" + l.size() + " get=" + l.get(0));
+println("contains=" + l.contains(2) + " no=" + l.contains(9));
+println("join=" + l.join("-"));
+l.sort();
+println("sort=" + l.join(","));
+l.reverse();
+println("reverse=" + l.join(","));
+let dobles = [1, 2, 3].map(fn(x) => x * 2);
+let pares = [1, 2, 3, 4].filter(fn(x) => x % 2 == 0);
+let suma = [1, 2, 3, 4].reduce(fn(a, x) => a + x, 0);
+println("map=" + dobles.join(",") + " filter=" + pares.join(",") + " reduce=" + suma);
+var total = 0;
+for (let x in [10, 20, 30]) {
+    total = total + x;
+}
+println("for_in=" + total);

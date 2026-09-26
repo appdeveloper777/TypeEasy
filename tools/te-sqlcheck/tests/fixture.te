@@ -1,0 +1,33 @@
+// Fixture de te_sqlcheck: el comentario al final de cada llamada (OK / ERR / DYN) dice qué debe reportar.
+let T_CLIENTES = "clientes";
+let COLS = "id, nombre, email";
+let SQL_LISTA = "SELECT " + COLS + " FROM " + T_CLIENTES + " ORDER BY nombre";
+
+let listar = fn(conn) => {
+    return db_query(conn, SQL_LISTA);                                        // OK
+};
+
+let buscar = fn(conn, id) => {
+    return db_query(conn, "SELECT id, nombre FROM clientes WHERE id = @id", [id]);  // OK
+};
+
+let roto = fn(conn) => {
+    return db_query(conn, "SELECT id, telefono FROM clientes");             // ERR telefono
+};
+
+let tabla_mal = fn(conn) => {
+    return db_exec(conn, concat("UPDATE client", "es_x SET nombre = ? WHERE id = ?"), ["a", 1]);  // ERR clientes_x
+};
+
+let insertar = fn(conn, n) => {
+    let res = db_exec(conn, "INSERT INTO clientes (nombre, email) VALUES (?, ?)", [n, ""]);  // OK
+    return res;
+};
+
+let dinamica = fn(conn, orden) => {
+    return db_query(conn, "SELECT id FROM clientes ORDER BY " + orden);     // DYN
+};
+
+let sintaxis = fn(conn) => {
+    return db_query(conn, "SELECT id FROM clientes WHERE");                  // ERR sintaxis
+};

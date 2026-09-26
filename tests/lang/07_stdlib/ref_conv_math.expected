@@ -1,0 +1,8 @@
+to_int=13 to_float=1.5 to_str=7!
+len_str=4 len_list=3
+range=0,1,2,3
+floor=3 ceil=4 round=3 trunc=-3
+abs=5 sign=-1 pow=1024 sqrt=4
+min=3 max=8 mod=1
+json={"a":1,"b":[true,null]}
+json_parse=5z

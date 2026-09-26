@@ -1,0 +1,10 @@
+replace=Hola TE
+index_of=5 find=1 falta=-1
+starts=1 ends=1
+substring=Hola substr=Mun
+pad_left=007 pad_right=ab..
+repeat=-----
+char_at=o char_code=65
+parse_int=43 parse_float=5
+split=3 primero=a
+upper=HOLA MUNDO lower=hola mundo trim=[x]

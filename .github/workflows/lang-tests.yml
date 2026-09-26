@@ -98,6 +98,9 @@ jobs:
       - name: Spec <-> tests coverage (every [ID] rule in docs/SPEC.md has a test; no unknown ids)
         run: python tools/te-test/spec_coverage.py --strict
 
+      - name: te-sqlcheck self-test (SQL embebido validado contra SQLite)
+        run: python tools/te-sqlcheck/tests/test_te_sqlcheck.py
+
       - name: Run language test suite
         run: |
           python tools/te-test/run_tests.py tests/lang \

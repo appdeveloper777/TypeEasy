@@ -1,8 +1,8 @@
 {
   "name": "typeeasy-debug",
   "displayName": "TypeEasy Debugger",
-  "description": "Debug adapter + Language Server for TypeEasy (.te files): syntax, go-to-definition, find-references, hover, completion, F5 debug.",
-  "version": "0.0.3",
+  "description": "Debug adapter + Language Server for TypeEasy (.te files): syntax, diagnostics, completion of builtins and string/list/map methods, signature help, hover, format document (te --fmt), snippets, go-to-definition, find-references, F5 debug.",
+  "version": "0.0.4",
   "publisher": "typeeasy",
   "engines": {
     "vscode": "^1.75.0"
@@ -48,6 +48,12 @@
     "breakpoints": [
       {
         "language": "typeeasy"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "typeeasy",
+        "path": "./snippets/typeeasy.json"
       }
     ],
     "grammars": [

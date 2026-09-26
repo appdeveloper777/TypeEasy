@@ -544,6 +544,13 @@ implementación actual:
 - **`super`**: no existe (`--syntax-check` lo reporta, regla S5). Los métodos del padre
   se heredan y se llaman sobre `this`; el constructor del hijo re-asigna los atributos.
 - **HTTPS** en `http_get`/`http_post`: soportado desde 0.0.20 (Windows y Linux).
+- **`len()` sobre una lista literal** (`len([1,2,3])`) devuelve `0`; sobre una variable funciona
+  (`tests/lang/13_gotchas/len_list_literal.te`, xfail).
+- **`.length` sobre la lista de `m.values()`** devuelve `0`; `len(vs)` funciona
+  (`tests/lang/13_gotchas/map_values_length.te`, xfail).
+- **`Math.PI` / `Math.E`** no están expuestas; definir la constante
+  (`tests/lang/13_gotchas/math_pi_constant.te`, xfail).
+- `l.sort()` / `l.reverse()` mutan la lista y no devuelven nada (ver `docs/STDLIB.md`).
 
 Resueltas en 0.1.9: `println(f(x))` ya no imprime una línea vacía cuando `f` lanza (`[ERR-6]`);
 un método inexistente sobre lista/map lanza `TypeError` en vez de devolver `null` (`[LST-5]`).

@@ -203,7 +203,7 @@
   <header class="topbar">
     <button class="hamburger" id="hamburger" aria-label="Menú">☰</button>
     <a class="brand" href="#/home"><span class="logo">Te</span> TypeEasy</a>
-    <span class="ver" id="verBadge">v0.1.0</span>
+    <span class="ver" id="verBadge">v0.1.9</span>
     <span class="spacer"></span>
     <nav class="tnav">
       <a href="#/home" data-i18n="nav_home">Inicio</a>
@@ -370,6 +370,7 @@ window.NAV_ES = [
     ["errors", "Manejo de errores"],
     ["modules", "Módulos (import)"],
     ["stdlib", "Stdlib"],
+    ["tooling", "Herramientas (editor, SQL, pruebas)"],
     ["timing", "Medir tiempo"],
     ["bridge", "Bridge (otros lenguajes)"],
     ["async", "Async / concurrencia"],
@@ -432,6 +433,7 @@ window.NAV_EN = [
     ["errors", "Error handling"],
     ["modules", "Modules (import)"],
     ["stdlib", "Stdlib"],
+    ["tooling", "Tooling (editor, SQL, tests)"],
     ["timing", "Measure time"],
     ["bridge", "Bridge (other languages)"],
     ["async", "Async / concurrency"],
@@ -574,28 +576,28 @@ PAGES.quickstart = `
 <p class="lead">De cero a una API corriendo en menos de 5 minutos.</p>
 
 <h2>1. Instalar</h2>
-<p>Descarga el binario para tu sistema desde la página de releases (versión actual: <strong>v0.0.34</strong>). En la sección <strong>Assets</strong> de la release encontrarás:</p>
+<p>Descarga el binario para tu sistema desde la página de releases (versión actual: <strong>v0.1.9</strong>). En la sección <strong>Assets</strong> de la release encontrarás:</p>
 <ul>
-  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.0.34.exe</code> (instalador) o <code class="inline">TypeEasy-0.0.34-win64.zip</code> (portable).</li>
-  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.0.34_amd64.deb</code> (Debian/Ubuntu/Mint) o <code class="inline">TypeEasy-0.0.34-linux-amd64.tar.gz</code> (portable).</li>
-  <li><strong>Linux ARM64</strong> (Raspberry Pi, servidores ARM): <code class="inline">typeeasy_0.0.34_arm64.deb</code> o <code class="inline">TypeEasy-0.0.34-linux-arm64.tar.gz</code>.</li>
-  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.0.34-android-arm64.tar.gz</code>.</li>
-  <li><code class="inline">SHA256SUMS-0.0.34.txt</code> para verificar la descarga.</li>
+  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.1.9.exe</code> (instalador) o <code class="inline">TypeEasy-0.1.9-win64.zip</code> (portable).</li>
+  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.1.9_amd64.deb</code> (Debian/Ubuntu/Mint) o <code class="inline">TypeEasy-0.1.9-linux-amd64.tar.gz</code> (portable).</li>
+  <li><strong>Linux ARM64</strong> (Raspberry Pi, servidores ARM): <code class="inline">typeeasy_0.1.9_arm64.deb</code> o <code class="inline">TypeEasy-0.1.9-linux-arm64.tar.gz</code>.</li>
+  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.1.9-android-arm64.tar.gz</code>.</li>
+  <li><code class="inline">SHA256SUMS-0.1.9.txt</code> para verificar la descarga.</li>
 </ul>
-<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.0.34" target="_blank" rel="noopener">Release v0.0.34 en GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">Todas las releases &rarr;</a></p>
+<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.1.9" target="_blank" rel="noopener">Release v0.1.9 en GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">Todas las releases &rarr;</a></p>
 ${sh(`# Linux (Debian/Ubuntu)
-sudo apt install ./typeeasy_0.0.34_amd64.deb
+sudo apt install ./typeeasy_0.1.9_amd64.deb
 
 # Linux/Android portable: descomprime y usa el binario que trae
-tar -xzf TypeEasy-0.0.34-linux-amd64.tar.gz
+tar -xzf TypeEasy-0.1.9-linux-amd64.tar.gz
 
 # Verificar la instalación (Windows, Linux o Android)
-typeeasy --version        # TypeEasy 0.0.34`)}
+typeeasy --version        # TypeEasy 0.1.9`)}
 <div class="note"><strong>Dónde queda el binario.</strong> El instalador de Windows lo deja en <code class="inline">%LOCALAPPDATA%\\Programs\\TypeEasy\\bin\\typeeasy-bin.exe</code> (y agrega <code class="inline">typeeasy</code>/<code class="inline">te</code> al PATH). El <code class="inline">.deb</code> instala <code class="inline">/usr/bin/typeeasy-bin</code> (el motor) y <code class="inline">/usr/bin/typeeasy</code> (CLI con <code class="inline">new</code>, <code class="inline">gen</code>, <code class="inline">serve</code>…). Si un subcomando del CLI no reconoce un flag del motor (p. ej. <code class="inline">--syntax-check</code>), llama directo a <code class="inline">typeeasy-bin</code>.</div>
 
 <h2>1b. O clona y compila (para estudiar o extender el motor)</h2>
 <p>Si quieres leer el código del intérprete, agregar una función nativa o <a href="#/extend">ampliar la sintaxis</a>, clona el repositorio en la versión que quieras y compílalo. Necesitas <code class="inline">gcc</code>, <code class="inline">flex</code>, <code class="inline">bison</code>, <code class="inline">make</code> y las cabeceras de MariaDB/PostgreSQL/OpenSSL (en Windows, MSYS2/MinGW-w64).</p>
-${sh(`git clone --branch v0.0.34 https://github.com/appdeveloper777/TypeEasy.git
+${sh(`git clone --branch v0.1.9 https://github.com/appdeveloper777/TypeEasy.git
 cd TypeEasy
 
 # Linux (Ubuntu/Debian): deps una sola vez
@@ -1403,6 +1405,42 @@ PAGES.stdlib = `
 <h1>Librería estándar</h1>
 <p class="lead">Builtins disponibles en cualquier script TypeEasy.</p>
 
+<h2>Métodos de string, lista y map <span class="ver" style="vertical-align:middle">v0.1.9</span></h2>
+<p>Cada ejemplo de esta sección es un test de la suite (<code class="inline">tests/lang/07_stdlib/ref_*.te</code>): si el motor cambia, CI falla. Referencia completa con salidas: <a href="https://github.com/appdeveloper777/TypeEasy/blob/main/docs/STDLIB.md" target="_blank" rel="noopener">docs/STDLIB.md &rarr;</a></p>
+<h3>Strings</h3>
+${te(`let s = "Hola Mundo";
+s.replace("Mundo", "TE");     // "Hola TE" (reemplaza TODAS)
+s.index_of("Mundo");          // 5   (-1 si no está)
+s.starts_with("Hola");        // 1
+s.substring(0, 4);            // "Hola" (fin exclusivo)
+s.substr(5, 3);               // "Mun"  (por longitud)
+"7".pad_left(3, "0");         // "007"
+"-".repeat(5);                // "-----"
+"42".parse_int() + 1;         // 43
+"a,b,c".split(",");           // lista de 3
+s.upper();  s.lower();  "  x  ".trim();`)}
+<h3>Listas</h3>
+${te(`var l = [3, 1, 2];
+l.push(5);                    // muta la lista
+l.contains(2);                // 1
+l.join("-");                  // "3-1-2-5"
+l.sort();                     // ordena EN EL LUGAR (no devuelve la lista)
+l.reverse();                  // invierte EN EL LUGAR
+[1, 2, 3].map(fn(x) => x * 2);               // [2, 4, 6]
+[1, 2, 3, 4].filter(fn(x) => x % 2 == 0);    // [2, 4]
+[1, 2, 3, 4].reduce(fn(a, x) => a + x, 0);   // 10
+for (let x in [10, 20, 30]) { println(x); }  // el let es obligatorio`)}
+<h3>Maps</h3>
+${te(`var m = { "nombre": "Ana", "edad": 30 };
+m["ciudad"] = "Lima";
+m.size();                     // 3
+m.has("edad");                // 1
+m.keys().join(",");           // "nombre,edad,ciudad" (orden de inserción)
+m.remove("edad");
+m["pais"];                    // clave ausente: "" en contexto string
+m.clear();`)}
+<div class="note"><strong>Trampas conocidas (0.1.9).</strong> <code class="inline">len([1,2,3])</code> sobre una lista <em>literal</em> da 0 (guardá la lista en una variable); <code class="inline">m.values().length</code> da 0 (usá <code class="inline">let vs = m.values(); len(vs)</code>); <code class="inline">Math.PI</code> no existe (definí la constante). Cada una tiene su test <code class="inline">xfail</code>: cuando el motor la corrija, la suite avisa. Ver <a href="#/tooling">Herramientas</a>.</div>
+
 <h2>Matemáticas</h2>
 ${te(`Math.abs(-5);      // 5
 Math.floor(3.7);   // 3
@@ -1490,6 +1528,68 @@ ${out('{"origen":"Lima","grados":21}')}
 
 <div class="pager">
   <a class="prev" href="#/modules">&larr; Módulos</a>
+  <a href="#/tooling">Herramientas &rarr;</a>
+</div>
+`;
+
+PAGES.tooling = `
+<h1>Herramientas: editor, SQL, pruebas y versiones</h1>
+<p class="lead">Cinco prácticas para que un proyecto grande en TypeEasy no se rompa en producción.</p>
+
+<h2>1. VS Code: autocompletado, firmas y formato</h2>
+<p>La extensión TypeEasy (se instala desde el repo, ver <a href="#/debug">Depurar en VS Code</a>) trae desde la versión 0.0.4:</p>
+<ul>
+  <li><strong>Autocompletado</strong> de builtins con firma y descripción; después de <code class="inline">x.</code> ofrece los métodos de string/lista/map y después de <code class="inline">Math.</code> las funciones matemáticas.</li>
+  <li><strong>Ayuda de firma</strong> mientras escribís los argumentos (<code class="inline">json_parse(</code> &rarr; <code class="inline">json_parse(s) -&gt; any</code>).</li>
+  <li><strong>Formatear documento</strong> (Shift+Alt+F) con <code class="inline">typeeasy --fmt</code>.</li>
+  <li><strong>Diagnósticos</strong> en vivo con <code class="inline">--syntax-check</code> (errores y lint).</li>
+  <li><strong>Snippets</strong>: <code class="inline">get</code>, <code class="inline">post</code>, <code class="inline">tx</code> (transacción), <code class="inline">class</code>, <code class="inline">fn</code>, <code class="inline">for</code>, <code class="inline">forin</code>, <code class="inline">try</code>.</li>
+</ul>
+<p>Diagnósticos y formato usan el binario: configúra <code class="inline">typeeasy.binaryPath</code> si no está en la ruta estándar.</p>
+
+<h2>2. Formato y lint desde la terminal</h2>
+${sh(`typeeasy --fmt archivo.te            # imprime el archivo formateado
+typeeasy --fmt archivo.te --write    # lo reescribe
+typeeasy --fmt archivo.te --check    # exit 1 si necesita formato (para CI)
+typeeasy --syntax-check archivo.te   # {"ok":true,"errors":[],"warnings":[]}`)}
+
+<h2>3. Validar el SQL en el build: te-sqlcheck</h2>
+<p>Un SELECT con una columna mal escrita no falla al compilar: falla en producción, a veces como un <code class="inline">{"error": ...}</code> dentro de una respuesta 200. <code class="inline">tools/te-sqlcheck</code> extrae el SQL de tus <code class="inline">.te</code> y lo <strong>prepara</strong> en tu base (<code class="inline">PREPARE</code> en MySQL/MariaDB, <code class="inline">EXPLAIN</code> en SQLite) <strong>sin ejecutarlo</strong>.</p>
+${sh(`python tools/te-sqlcheck/te_sqlcheck.py --mysql-cmd "mysql -uroot mi_db" "src/**/*.te"
+python tools/te-sqlcheck/te_sqlcheck.py --sqlite app.db "src/**/*.te"
+
+# src/clientes.te:15: error: 1054: Unknown column 'telefono' in 'field list'
+# te_sqlcheck: 6 consultas validadas, 1 errores, 0 warnings, 1 dinámicas omitidas`)}
+<p>Valida literales, constantes <code class="inline">let</code> y concatenaciones de literales; <code class="inline">@param</code> y <code class="inline">?</code> se preparan como placeholders. Lo armado con valores de runtime (<code class="inline">"ORDER BY " + col</code>) se cuenta como <em>dinámico</em> y se omite. Consejo: SQL literal con parámetros es más seguro (sin inyección) <em>y</em> queda validado. Sale con exit 1 si hay errores, así que sirve como paso de CI.</p>
+
+<h2>4. Pruebas: del lenguaje y de tu app</h2>
+${sh(`python tools/te-test/run_tests.py tests/lang --bin ./src/typeeasy
+# === TOTAL: PASS=... FAIL=0 XFAIL=3 XPASS=0 SKIP=0 ===`)}
+<p>Cada test es un <code class="inline">.te</code> con su salida esperada (<code class="inline">// expect:</code> o un <code class="inline">.expected</code> al lado). Para tu aplicación, la práctica que más bugs atrapa es una <strong>prueba de contrato contra una base de prueba</strong> (una copia que se resetea): pedir cada endpoint GET y exigir HTTP 200, JSON válido, las claves esperadas y <strong>ningún <code class="inline">"error"</code> anidado</strong>.</p>
+<h3>Regla: trampa = test</h3>
+<p>Antes de documentar una trampa del lenguaje, escribí un test que la reproduzca con <code class="inline">// xfail: motivo</code>; el test debe <strong>terminar con error</strong> mientras la trampa exista. Cuando el motor la corrige, el test pasa a <strong>XPASS</strong>, la suite falla y te avisa que quites el xfail y actualices la documentación.</p>
+${te(`// xfail: Math.PI no existe. Workaround: let PI = 3.141592653589793;
+let ok = Math.PI > 3.14 && Math.PI < 3.15;
+if (!ok) {
+    throw "Math.PI no disponible";
+}`)}
+
+<h2>5. Congelar la versión del motor por servicio</h2>
+<p>Si varios servicios comparten un servidor, actualizar el binario global los mueve a todos a la vez. El CLI <code class="inline">/usr/bin/typeeasy</code> respeta <code class="inline">TYPEEASY_BIN</code>: guardá cada versión en su carpeta y fijala por servicio en su <code class="inline">EnvironmentFile</code>. Así actualizás de a uno, verificás y seguís.</p>
+${sh(`# congelar la versión actual
+sudo install -d /opt/typeeasy/versions/0.1.9
+sudo install -m 555 /usr/bin/typeeasy-bin /opt/typeeasy/versions/0.1.9/typeeasy-bin
+
+# fijar un servicio (EnvironmentFile de su unit systemd)
+echo "TYPEEASY_BIN=/opt/typeeasy/versions/0.1.9/typeeasy-bin" | sudo tee -a /etc/mi-api.env
+sudo systemctl restart mi-api
+
+# ¿qué binario corre de verdad?
+sudo readlink /proc/$(systemctl show -p MainPID --value mi-api)/exe`)}
+<p>Qué cambia entre versiones: <a href="https://github.com/appdeveloper777/TypeEasy/blob/main/docs/VERSIONING.md" target="_blank" rel="noopener">docs/VERSIONING.md</a> y el <a href="https://github.com/appdeveloper777/TypeEasy/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a>.</p>
+
+<div class="pager">
+  <a class="prev" href="#/stdlib">&larr; Stdlib</a>
   <a href="#/timing">Medir tiempo &rarr;</a>
 </div>
 `;
@@ -2877,7 +2977,7 @@ typeeasy --api apis/main.te --port 8090 --host 127.0.0.1 --workers 2`)}
 <p class="warn"><strong>El servidor habla HTTP en claro.</strong> Para producción, poné un <strong>reverse proxy con TLS</strong> (nginx, Caddy o un Ingress) delante del binario: termina HTTPS y reenvía a TypeEasy por HTTP local. Lo mismo aplica para rate limiting y balanceo entre varios <code class="inline">--workers</code>.</p>
 
 <h3>Linux — systemd (incluido en el .deb)</h3>
-${sh(`sudo apt install ./typeeasy_0.0.34_amd64.deb   # binario + CLI + alias 'te'
+${sh(`sudo apt install ./typeeasy_0.1.9_amd64.deb   # binario + CLI + alias 'te'
 sudo vi /etc/default/typeeasy-api               # archivo .te a servir
 sudo systemctl enable --now typeeasy-api@9001
 sudo systemctl status typeeasy-api@9001
@@ -3368,28 +3468,28 @@ PAGES.quickstart = `
 <p class="lead">From zero to a running API in under 5 minutes.</p>
 
 <h2>1. Install</h2>
-<p>Download the binary for your system from the releases page (current version: <strong>v0.0.34</strong>). Under the release's <strong>Assets</strong> you will find:</p>
+<p>Download the binary for your system from the releases page (current version: <strong>v0.1.9</strong>). Under the release's <strong>Assets</strong> you will find:</p>
 <ul>
-  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.0.34.exe</code> (installer) or <code class="inline">TypeEasy-0.0.34-win64.zip</code> (portable).</li>
-  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.0.34_amd64.deb</code> (Debian/Ubuntu/Mint) or <code class="inline">TypeEasy-0.0.34-linux-amd64.tar.gz</code> (portable).</li>
-  <li><strong>Linux ARM64</strong> (Raspberry Pi, ARM servers): <code class="inline">typeeasy_0.0.34_arm64.deb</code> or <code class="inline">TypeEasy-0.0.34-linux-arm64.tar.gz</code>.</li>
-  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.0.34-android-arm64.tar.gz</code>.</li>
-  <li><code class="inline">SHA256SUMS-0.0.34.txt</code> to verify the download.</li>
+  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.1.9.exe</code> (installer) or <code class="inline">TypeEasy-0.1.9-win64.zip</code> (portable).</li>
+  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.1.9_amd64.deb</code> (Debian/Ubuntu/Mint) or <code class="inline">TypeEasy-0.1.9-linux-amd64.tar.gz</code> (portable).</li>
+  <li><strong>Linux ARM64</strong> (Raspberry Pi, ARM servers): <code class="inline">typeeasy_0.1.9_arm64.deb</code> or <code class="inline">TypeEasy-0.1.9-linux-arm64.tar.gz</code>.</li>
+  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.1.9-android-arm64.tar.gz</code>.</li>
+  <li><code class="inline">SHA256SUMS-0.1.9.txt</code> to verify the download.</li>
 </ul>
-<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.0.34" target="_blank" rel="noopener">Release v0.0.34 on GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">All releases &rarr;</a></p>
+<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.1.9" target="_blank" rel="noopener">Release v0.1.9 on GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">All releases &rarr;</a></p>
 ${sh(`# Linux (Debian/Ubuntu)
-sudo apt install ./typeeasy_0.0.34_amd64.deb
+sudo apt install ./typeeasy_0.1.9_amd64.deb
 
 # Linux/Android portable: extract and use the bundled binary
-tar -xzf TypeEasy-0.0.34-linux-amd64.tar.gz
+tar -xzf TypeEasy-0.1.9-linux-amd64.tar.gz
 
 # Verify the install (Windows, Linux or Android)
-typeeasy --version        # TypeEasy 0.0.34`)}
+typeeasy --version        # TypeEasy 0.1.9`)}
 <div class="note"><strong>Where the binary lives.</strong> The Windows installer puts it at <code class="inline">%LOCALAPPDATA%\\Programs\\TypeEasy\\bin\\typeeasy-bin.exe</code> (and adds <code class="inline">typeeasy</code>/<code class="inline">te</code> to PATH). The <code class="inline">.deb</code> installs <code class="inline">/usr/bin/typeeasy-bin</code> (the engine) and <code class="inline">/usr/bin/typeeasy</code> (CLI with <code class="inline">new</code>, <code class="inline">gen</code>, <code class="inline">serve</code>…). If a CLI subcommand does not recognise an engine flag (e.g. <code class="inline">--syntax-check</code>), call <code class="inline">typeeasy-bin</code> directly.</div>
 
 <h2>1b. Or clone and build (to study or extend the engine)</h2>
 <p>If you want to read the interpreter source, add a native function or <a href="#/extend">extend the syntax</a>, clone the repository at the version you want and build it. You need <code class="inline">gcc</code>, <code class="inline">flex</code>, <code class="inline">bison</code>, <code class="inline">make</code> and the MariaDB/PostgreSQL/OpenSSL headers (on Windows, MSYS2/MinGW-w64).</p>
-${sh(`git clone --branch v0.0.34 https://github.com/appdeveloper777/TypeEasy.git
+${sh(`git clone --branch v0.1.9 https://github.com/appdeveloper777/TypeEasy.git
 cd TypeEasy
 
 # Linux (Ubuntu/Debian): deps, once
@@ -4183,6 +4283,42 @@ PAGES.stdlib = `
 <h1>Standard library</h1>
 <p class="lead">Builtins available in any TypeEasy script.</p>
 
+<h2>String, list and map methods <span class="ver" style="vertical-align:middle">v0.1.9</span></h2>
+<p>Every example in this section is a test in the suite (<code class="inline">tests/lang/07_stdlib/ref_*.te</code>): if the engine changes, CI fails. Full reference with outputs: <a href="https://github.com/appdeveloper777/TypeEasy/blob/main/docs/STDLIB.md" target="_blank" rel="noopener">docs/STDLIB.md &rarr;</a></p>
+<h3>Strings</h3>
+${te(`let s = "Hola Mundo";
+s.replace("Mundo", "TE");     // "Hola TE" (replaces ALL)
+s.index_of("Mundo");          // 5   (-1 if missing)
+s.starts_with("Hola");        // 1
+s.substring(0, 4);            // "Hola" (end exclusive)
+s.substr(5, 3);               // "Mun"  (by length)
+"7".pad_left(3, "0");         // "007"
+"-".repeat(5);                // "-----"
+"42".parse_int() + 1;         // 43
+"a,b,c".split(",");           // list of 3
+s.upper();  s.lower();  "  x  ".trim();`)}
+<h3>Lists</h3>
+${te(`var l = [3, 1, 2];
+l.push(5);                    // mutates the list
+l.contains(2);                // 1
+l.join("-");                  // "3-1-2-5"
+l.sort();                     // sorts IN PLACE (returns nothing)
+l.reverse();                  // reverses IN PLACE
+[1, 2, 3].map(fn(x) => x * 2);               // [2, 4, 6]
+[1, 2, 3, 4].filter(fn(x) => x % 2 == 0);    // [2, 4]
+[1, 2, 3, 4].reduce(fn(a, x) => a + x, 0);   // 10
+for (let x in [10, 20, 30]) { println(x); }  // the let is required`)}
+<h3>Maps</h3>
+${te(`var m = { "nombre": "Ana", "edad": 30 };
+m["ciudad"] = "Lima";
+m.size();                     // 3
+m.has("edad");                // 1
+m.keys().join(",");           // "nombre,edad,ciudad" (insertion order)
+m.remove("edad");
+m["pais"];                    // missing key: "" in string context
+m.clear();`)}
+<div class="note"><strong>Known pitfalls (0.1.9).</strong> <code class="inline">len([1,2,3])</code> on a <em>literal</em> list returns 0 (store the list in a variable); <code class="inline">m.values().length</code> returns 0 (use <code class="inline">let vs = m.values(); len(vs)</code>); <code class="inline">Math.PI</code> does not exist (define the constant). Each one has an <code class="inline">xfail</code> test: when the engine fixes it, the suite tells you. See <a href="#/tooling">Tooling</a>.</div>
+
 <h2>Math</h2>
 ${te(`Math.abs(-5);      // 5
 Math.floor(3.7);   // 3
@@ -4270,6 +4406,67 @@ ${out('{"source":"Lima","degrees":21}')}
 
 <div class="pager">
   <a class="prev" href="#/modules">&larr; Modules</a>
+  <a href="#/tooling">Tooling &rarr;</a>
+</div>
+`;
+
+PAGES.tooling = `
+<h1>Tooling: editor, SQL, tests and versions</h1>
+<p class="lead">Five practices that keep a large TypeEasy project from breaking in production.</p>
+
+<h2>1. VS Code: completion, signatures and formatting</h2>
+<p>The TypeEasy extension (installed from the repo, see <a href="#/debug">Debug in VS Code</a>) ships since version 0.0.4:</p>
+<ul>
+  <li><strong>Completion</strong> of builtins with signature and description; after <code class="inline">x.</code> it offers string/list/map methods and after <code class="inline">Math.</code> the math functions.</li>
+  <li><strong>Signature help</strong> while typing arguments (<code class="inline">json_parse(</code> &rarr; <code class="inline">json_parse(s) -&gt; any</code>).</li>
+  <li><strong>Format Document</strong> (Shift+Alt+F) via <code class="inline">typeeasy --fmt</code>.</li>
+  <li>Live <strong>diagnostics</strong> with <code class="inline">--syntax-check</code> (errors and lint).</li>
+  <li><strong>Snippets</strong>: <code class="inline">get</code>, <code class="inline">post</code>, <code class="inline">tx</code> (transaction), <code class="inline">class</code>, <code class="inline">fn</code>, <code class="inline">for</code>, <code class="inline">forin</code>, <code class="inline">try</code>.</li>
+</ul>
+<p>Diagnostics and formatting use the binary: set <code class="inline">typeeasy.binaryPath</code> if it is not in the standard location.</p>
+
+<h2>2. Format and lint from the terminal</h2>
+${sh(`typeeasy --fmt file.te            # prints the formatted file
+typeeasy --fmt file.te --write    # rewrites it
+typeeasy --fmt file.te --check    # exit 1 if it needs formatting (for CI)
+typeeasy --syntax-check file.te   # {"ok":true,"errors":[],"warnings":[]}`)}
+
+<h2>3. Validate SQL at build time: te-sqlcheck</h2>
+<p>A SELECT with a misspelled column does not fail at compile time: it fails in production, sometimes as an <code class="inline">{"error": ...}</code> inside a 200 response. <code class="inline">tools/te-sqlcheck</code> extracts the SQL from your <code class="inline">.te</code> files and <strong>prepares</strong> it on your database (<code class="inline">PREPARE</code> on MySQL/MariaDB, <code class="inline">EXPLAIN</code> on SQLite) <strong>without running it</strong>.</p>
+${sh(`python tools/te-sqlcheck/te_sqlcheck.py --mysql-cmd "mysql -uroot my_db" "src/**/*.te"
+python tools/te-sqlcheck/te_sqlcheck.py --sqlite app.db "src/**/*.te"
+
+# src/clientes.te:15: error: 1054: Unknown column 'telefono' in 'field list'`)}
+<p>It validates literals, <code class="inline">let</code> constants and concatenations of literals; <code class="inline">@param</code> and <code class="inline">?</code> are prepared as placeholders. SQL built from runtime values (<code class="inline">"ORDER BY " + col</code>) is counted as <em>dynamic</em> and skipped. Tip: literal SQL with parameters is safer (no injection) <em>and</em> gets validated. It exits 1 on errors, so it works as a CI step.</p>
+
+<h2>4. Tests: the language and your app</h2>
+${sh(`python tools/te-test/run_tests.py tests/lang --bin ./src/typeeasy
+# === TOTAL: PASS=... FAIL=0 XFAIL=3 XPASS=0 SKIP=0 ===`)}
+<p>Each test is a <code class="inline">.te</code> with its expected output (<code class="inline">// expect:</code> or a sibling <code class="inline">.expected</code>). For your application, the practice that catches the most bugs is a <strong>contract test against a test database</strong> (a copy that gets reset): request every GET endpoint and require HTTP 200, valid JSON, the expected keys and <strong>no nested <code class="inline">"error"</code></strong>.</p>
+<h3>Rule: pitfall = test</h3>
+<p>Before documenting a language pitfall, write a test that reproduces it with <code class="inline">// xfail: reason</code>; the test must <strong>end with an error</strong> while the pitfall exists. When the engine fixes it, the test becomes <strong>XPASS</strong>, the suite fails and tells you to remove the xfail and update the docs.</p>
+${te(`// xfail: Math.PI does not exist. Workaround: let PI = 3.141592653589793;
+let ok = Math.PI > 3.14 && Math.PI < 3.15;
+if (!ok) {
+    throw "Math.PI not available";
+}`)}
+
+<h2>5. Pin the engine version per service</h2>
+<p>When several services share a server, upgrading the global binary moves all of them at once. The <code class="inline">/usr/bin/typeeasy</code> CLI honours <code class="inline">TYPEEASY_BIN</code>: keep each version in its own folder and pin it per service in its <code class="inline">EnvironmentFile</code>. Then you upgrade one at a time, verify, and continue.</p>
+${sh(`# freeze the current version
+sudo install -d /opt/typeeasy/versions/0.1.9
+sudo install -m 555 /usr/bin/typeeasy-bin /opt/typeeasy/versions/0.1.9/typeeasy-bin
+
+# pin a service (EnvironmentFile of its systemd unit)
+echo "TYPEEASY_BIN=/opt/typeeasy/versions/0.1.9/typeeasy-bin" | sudo tee -a /etc/my-api.env
+sudo systemctl restart my-api
+
+# which binary is really running?
+sudo readlink /proc/$(systemctl show -p MainPID --value my-api)/exe`)}
+<p>What changes between versions: <a href="https://github.com/appdeveloper777/TypeEasy/blob/main/docs/VERSIONING.md" target="_blank" rel="noopener">docs/VERSIONING.md</a> and the <a href="https://github.com/appdeveloper777/TypeEasy/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a>.</p>
+
+<div class="pager">
+  <a class="prev" href="#/stdlib">&larr; Stdlib</a>
   <a href="#/timing">Measure time &rarr;</a>
 </div>
 `;
@@ -5514,7 +5711,7 @@ te --api-dir ./apis --workers 4 --hotreload`)}
 <p class="warn"><strong>The server speaks plain HTTP.</strong> For production, put a <strong>TLS reverse proxy</strong> (nginx, Caddy or an Ingress) in front of the binary: it terminates HTTPS and forwards to TypeEasy over local HTTP. The same applies to rate limiting and balancing across multiple <code class="inline">--workers</code>.</p>
 
 <h3>Linux — systemd (bundled in the .deb)</h3>
-${sh(`sudo apt install ./typeeasy_0.0.34_amd64.deb   # binary + CLI + 'te' alias
+${sh(`sudo apt install ./typeeasy_0.1.9_amd64.deb   # binary + CLI + 'te' alias
 sudo vi /etc/default/typeeasy-api               # .te file to serve
 sudo systemctl enable --now typeeasy-api@9001
 sudo systemctl status typeeasy-api@9001

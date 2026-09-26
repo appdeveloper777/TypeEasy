@@ -1,0 +1,7 @@
+size=3 length=3
+has=1 no=0
+keys=nombre,edad,ciudad
+values=3
+tras_remove=2 has_edad=0
+falta=[]
+tras_clear=0

@@ -1,0 +1,7 @@
+length=4 size=4 get=3
+contains=1 no=0
+join=3-1-2-5
+sort=1,2,3,5
+reverse=5,3,2,1
+map=2,4,6 filter=2,4 reduce=10
+for_in=60

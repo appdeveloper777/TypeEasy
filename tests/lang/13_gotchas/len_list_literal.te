@@ -1,0 +1,7 @@
+// spec: GOTCHA-LEN-LITERAL
+// xfail: len() sobre una EXPRESION (lista literal o resultado de una llamada, p.ej. len(m.values())) devuelve 0; sobre una variable funciona. Workaround: guardar en una variable.
+let n = len([1, 2, 3]);
+if (n != 3) {
+    throw "len([1,2,3]) devolvio " + n;
+}
+println(n);
