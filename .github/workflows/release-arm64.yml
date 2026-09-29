@@ -94,6 +94,10 @@ jobs:
         # arm64 en su nombre y en el campo Architecture del .deb.
         run: ARCH=arm64 bash scripts/package_linux_release.sh "${{ steps.meta.outputs.version }}"
 
+      - name: Smoke test del artefacto (.deb + tests/lang y tests/api con el binario empaquetado)
+        # Antes del rename: release_smoke.sh verifica SHA256SUMS-<ver>.txt. Si falla no se publica.
+        run: bash scripts/release_smoke.sh "${{ steps.meta.outputs.version }}" arm64
+
       - name: Rename SHA256SUMS (avoid clobbering the amd64 release asset)
         # release-linux y release-arm64 publican en la MISMA GitHub Release; sin
         # renombrar, el SHA256SUMS de arm64 sobreescribiria el de amd64.

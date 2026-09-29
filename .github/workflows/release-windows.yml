@@ -157,6 +157,17 @@ jobs:
         env:
           TYPEEASY_VERSION: ${{ steps.meta.outputs.version }}
 
+      - name: Smoke test web + HTTP (ref_web y tests/api con el binario empaquetado)
+        shell: bash
+        env:
+          TYPEEASY_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          BIN="dist/windows/TypeEasy-${TYPEEASY_VERSION}-win64/bin/typeeasy-bin.exe"
+          "$BIN" tests/lang/07_stdlib/ref_web.te | tr -d '\r' > ref_web.out
+          diff <(tr -d '\r' < tests/lang/07_stdlib/ref_web.expected) ref_web.out
+          python tools/te-test/run_api_tests.py tests/api --bin "$BIN" --port 18181
+
       - name: Install Inno Setup
         shell: pwsh
         run: |

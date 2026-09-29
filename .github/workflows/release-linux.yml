@@ -76,6 +76,13 @@ jobs:
       - name: Package tar.gz and .deb
         run: bash scripts/package_linux_release.sh "${{ steps.meta.outputs.version }}"
 
+      - name: Smoke test del artefacto (.deb en Debian limpio + tests/lang y tests/api con el binario empaquetado)
+        # Si falla no se sube nada al release. bookworm = misma glibc que el build (gcc:13.2.0).
+        run: |
+          for i in 1 2 3; do docker pull -q debian:bookworm-slim && break; sleep 15; done
+          docker run --rm -v "${{ github.workspace }}":/app -w /app debian:bookworm-slim \
+            bash scripts/release_smoke.sh "${{ steps.meta.outputs.version }}" amd64
+
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:

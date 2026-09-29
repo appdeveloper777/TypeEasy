@@ -122,6 +122,9 @@ Un parche de app sin issue ni test hace que el bug quede invisible para el motor
 [ ] A/B ERP: binario anterior vs nuevo = distintos 0; bytecode vs walker = distintos 0
 [ ] ERP aislado (te-math-aislado.sh) sin 5xx ni errores runtime
 [ ] git tag vX.Y.Z → CI publica win64/linux + SHA256SUMS
+    (antes de subir, los workflows prueban el ARTEFACTO: Linux amd64/arm64 con
+    scripts/release_smoke.sh = SHA256SUMS + .deb en Debian limpio + tests/lang + tests/api;
+    Windows = smoke + ref_web + tests/api con el .exe empaquetado. Si falla, no se publica)
 [ ] Instalación VM (te-install-XYZ.sh fase 1 → --install) y local; un solo md5 en todos los procesos
 [ ] SINTAXIS_Y_GOTCHAS.md §versiones + memoria del repo actualizadas
 ```
