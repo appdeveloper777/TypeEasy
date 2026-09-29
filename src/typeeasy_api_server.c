@@ -618,6 +618,41 @@ static void te_req_profile_flush(const char *method, const char *uri, int status
     te_profile_reset();
 }
 
+/* Reason phrase del status HTTP. Antes cualquier código fuera de una lista corta
+ * salía como "OK" (p.ej. "HTTP/1.1 429 OK", "409 OK"). */
+static const char *te_http_reason(int status) {
+    switch (status) {
+        case 200: return "OK";
+        case 201: return "Created";
+        case 202: return "Accepted";
+        case 204: return "No Content";
+        case 301: return "Moved Permanently";
+        case 302: return "Found";
+        case 303: return "See Other";
+        case 304: return "Not Modified";
+        case 307: return "Temporary Redirect";
+        case 308: return "Permanent Redirect";
+        case 400: return "Bad Request";
+        case 401: return "Unauthorized";
+        case 402: return "Payment Required";
+        case 403: return "Forbidden";
+        case 404: return "Not Found";
+        case 405: return "Method Not Allowed";
+        case 409: return "Conflict";
+        case 410: return "Gone";
+        case 413: return "Payload Too Large";
+        case 415: return "Unsupported Media Type";
+        case 422: return "Unprocessable Entity";
+        case 429: return "Too Many Requests";
+        case 500: return "Internal Server Error";
+        case 501: return "Not Implemented";
+        case 502: return "Bad Gateway";
+        case 503: return "Service Unavailable";
+        case 504: return "Gateway Timeout";
+        default:  return (status >= 500) ? "Server Error" : (status >= 400) ? "Client Error" : "OK";
+    }
+}
+
 /* Cierre de la instrumentacion por request (antes macro TE_REQ_DONE dentro de request_handler). */
 static void te_req_done(const char *method, const char *uri, int st, clock_t t0) {
     double _ms = (double)(clock() - t0) * 1000.0 / CLOCKS_PER_SEC;
@@ -795,19 +830,25 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
             const char *eq = strchr(p, '=');
             const char *amp = strchr(p, '&');
             if (!amp) amp = p + strlen(p);
-            char key[128], val[1024];
             if (eq && eq < amp) {
                 int kl = (int)(eq - p);
                 int vl = (int)(amp - (eq + 1));
-                if (kl > 0 && kl < (int)sizeof(key) && vl < (int)sizeof(val)) {
+                /* Heap, no buffers fijos: un valor >= 1024 bytes (o clave >= 128)
+                 * se descartaba en silencio. El tamaño ya lo acota civetweb
+                 * (tamaño máximo de la línea de petición). */
+                char *key = (kl > 0) ? (char *)malloc((size_t)kl + 1) : NULL;
+                char *val = key ? (char *)malloc((size_t)vl + 1) : NULL;
+                if (key && val) {
                     memcpy(key, p, kl); key[kl] = '\0';
                     memcpy(val, eq + 1, vl); val[vl] = '\0';
                     /* Decodifica DESPUES de partir por & y = (un %26/%3D queda dentro del valor).
                      * Si el escape es invalido se conserva el texto crudo. */
-                    if (mg_url_decode(key, kl, key, (int)sizeof(key), 1) < 0) { memcpy(key, p, kl); key[kl] = '\0'; }
-                    if (mg_url_decode(val, vl, val, (int)sizeof(val), 1) < 0) { memcpy(val, eq + 1, vl); val[vl] = '\0'; }
+                    if (mg_url_decode(key, kl, key, kl + 1, 1) < 0) { memcpy(key, p, kl); key[kl] = '\0'; }
+                    if (mg_url_decode(val, vl, val, vl + 1, 1) < 0) { memcpy(val, eq + 1, vl); val[vl] = '\0'; }
                     typeeasy_http_add_query(key, val);
                 }
+                free(key);
+                free(val);
             }
             if (*amp == '\0') break;
             p = amp + 1;
@@ -917,19 +958,13 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
      * or by automatic typed-body validation (HTTP 422). */
     int status = typeeasy_http_get_status();
     if (status <= 0) status = 200;
-    const char *reason = "OK";
-    switch (status) {
-        case 200: reason = "OK"; break;
-        case 201: reason = "Created"; break;
-        case 204: reason = "No Content"; break;
-        case 400: reason = "Bad Request"; break;
-        case 401: reason = "Unauthorized"; break;
-        case 403: reason = "Forbidden"; break;
-        case 404: reason = "Not Found"; break;
-        case 422: reason = "Unprocessable Entity"; break;
-        case 500: reason = "Internal Server Error"; break;
-        default:  reason = "OK"; break;
-    }
+    const char *reason = te_http_reason(status);
+    /* 204/304 no llevan cuerpo (RFC 9110 §15.3.5/§15.4.5): se descarta lo que
+     * haya devuelto el handler y no se envía Content-Length. */
+    int no_body = (status == 204 || status == 304);
+    if (no_body) body_len = 0;
+    char clen_hdr[48] = "";
+    if (!no_body) snprintf(clen_hdr, sizeof(clen_hdr), "Content-Length: %d\r\n", body_len);
 
     /* Capture any custom response headers set by the handler via
      * response_header(k, v) (e.g. Set-Cookie). These live in interpreter-global
@@ -973,12 +1008,12 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
     mg_printf(conn,
               "HTTP/1.1 %d %s\r\n"
               "Content-Type: %s\r\n"
-              "Content-Length: %d\r\n"
+              "%s"
               "Access-Control-Allow-Origin: %s\r\n"
               TE_CORS_EXTRA_HEADERS
               "%s"
               "\r\n",
-              status, reason, ctype, body_len, cors_org,
+              status, reason, ctype, clen_hdr, cors_org,
               extra_headers ? extra_headers : "");
     if (body_len > 0) mg_write(conn, body_ptr, body_len);
 

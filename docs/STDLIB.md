@@ -162,6 +162,47 @@ json={"a":1,"b":[true,null]}
 json_parse=5z
 ```
 
+## 4b. Codificación web (desde 0.1.10) — [`tests/lang/07_stdlib/ref_web.te`](../tests/lang/07_stdlib/ref_web.te)
+
+| Función | Nota |
+|---|---|
+| `url_encode(s)` | RFC 3986: conserva `A-Z a-z 0-9 - _ . ~`; el resto → `%XX` (espacio = `%20`, UTF-8 byte a byte) |
+| `url_decode(s)` | `+` → espacio, `%XX` → byte; escape inválido y `%00` quedan literales |
+| `html_escape(s)` | `& < > " '` → `&amp; &lt; &gt; &quot; &#39;` (para armar HTML/correos con datos del usuario) |
+
+En `--api`, `request_query()` ya entrega el valor decodificado: **no** llames `url_decode` encima
+(un `%2B` legítimo se convertiría en espacio).
+
+```te
+println("enc=" + url_encode("José Pérez & Hijos/100%"));
+println("enc_unreserved=" + url_encode("aZ09-_.~"));
+println("enc_vacio=[" + url_encode("") + "]");
+println("dec=" + url_decode("Jos%C3%A9+P%C3%A9rez%20%26%20Hijos%2F100%25"));
+println("dec_invalido=" + url_decode("100%zz%4"));
+println("dec_nul=" + url_decode("a%00b"));
+let orig = "ñandú: a+b=c & d?";
+println("ida_y_vuelta=" + (url_decode(url_encode(orig)) == orig));
+println("html=" + html_escape("<a href=\"x\">O'Neil & Co</a>"));
+println("html_plano=" + html_escape("sin cambios"));
+println("replace_todas=" + "a-b-c".replace("-", "+"));
+let v = "x y";
+println("var=" + url_encode(v));
+```
+
+```text
+enc=Jos%C3%A9%20P%C3%A9rez%20%26%20Hijos%2F100%25
+enc_unreserved=aZ09-_.~
+enc_vacio=[]
+dec=José Pérez & Hijos/100%
+dec_invalido=100%zz%4
+dec_nul=a%00b
+ida_y_vuelta=1
+html=&lt;a href=&quot;x&quot;&gt;O&#39;Neil &amp; Co&lt;/a&gt;
+html_plano=sin cambios
+replace_todas=a+b+c
+var=x%20y
+```
+
 ## 5. Trampas conocidas (cada una tiene su test `// xfail`)
 
 Regla del proyecto: **una trampa sin test no se documenta**. Cuando se corrija en el motor,

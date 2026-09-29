@@ -96,6 +96,23 @@ Cuando alguien descubre un comportamiento sorprendente:
 4. Al corregirse, el `xfail` se quita, el gotcha pasa de B a C con la versión, y
    el CHANGELOG lo lista en "Cambios de comportamiento".
 
+### 4b. Parche en una app ⇒ issue + xfail el mismo día
+
+Si un problema **del motor** se esquiva con un parche en una aplicación (ERP, clientes;
+p.ej. decodificar a mano `request_query`, un `REPLACE` en SQL, un helper que rodea un bug):
+
+1. **El mismo día** se abre un issue en este repo (`gh issue create`) describiendo el
+   comportamiento actual vs. el esperado. El repo es **público**: sin datos de clientes,
+   hosts, credenciales ni SQL de producción; solo un repro mínimo.
+2. Se agrega el test que reproduce el bug marcado como fallo esperado, citando el issue:
+   `// xfail: issue #N …` en `tests/lang/…` o `"xfail": "… issue #N"` en un caso de
+   `tests/api/*.api.json`.
+3. El parche de la app lleva un comentario con el número de issue y se **retira** cuando
+   el motor corregido se instala (el test pasa a XPASS y el CI obliga a quitar la marca).
+
+Un parche de app sin issue ni test hace que el bug quede invisible para el motor
+(caso real: `request_query` sin decodificar, parcheado en el ERP y corregido recién en 0.1.10).
+
 ## 5. Checklist de release
 
 ```

@@ -13,6 +13,27 @@ que fija la conducta nueva. Política: `docs/VERSIONING.md`.
   después de partir por `&`/`=` (un `%26`/`%3D` queda dentro del valor) y un escape inválido se
   conserva literal. Los parámetros de ruta (`{x}`) ya llegaban decodificados y no cambian.
   Suite `tests/api/query_decode_api.api.json`.
+- **Valores de query largos ya no se pierden**: una clave ≥ 128 bytes o un valor ≥ 1024 bytes se
+  descartaba en silencio (`request_query` devolvía `""`). Ahora se usan buffers dinámicos; el tope lo
+  pone el tamaño máximo de la petición de civetweb.
+- **Reason phrase correcta**: cualquier status fuera de una lista corta salía como `OK`
+  (`HTTP/1.1 429 OK`, `409 OK`). Ahora 202, 3xx, 402, 405, 409, 410, 413, 415, 429, 501-504 llevan su
+  texto; los no listados usan `Client Error`/`Server Error`.
+- **204/304 sin cuerpo**: con `response_status(204)` se enviaba igual el cuerpo del handler y un
+  `Content-Length`. Ahora no se envía ninguno de los dos (RFC 9110).
+
+### Nuevo
+- **`url_encode(s)`, `url_decode(s)`, `html_escape(s)`** (`[STR-8]`, `tests/lang/07_stdlib/ref_web.te`,
+  `docs/STDLIB.md` §4b). `url_decode` conserva literales los escapes inválidos y `%00`.
+- **Suite de conformidad HTTP** `tests/api/http_conformance_api.api.json` (34 casos: verbos, status y
+  reason, headers case-insensitive, sanitización CRLF de `response_header`, cookies, varios
+  `Set-Cookie`, query repetida/vacía/larga, UTF-8 en cuerpo y JSON `\u`, límite `TYPEEASY_MAX_BODY` →
+  413). Corre en CI (job `db-real`). Conocido: verbo no registrado en ruta existente da 404 en vez de
+  405 — caso `xfail`, issue #9.
+- Runner `tools/te-test/run_api_tests.py`: `"xfail"` por caso (XPASS falla el run), `"reason"`,
+  headers repetidos unidos, `{{repeat:TEXTO:N}}` y errores de conexión como status 0.
+- Política `docs/VERSIONING.md` §4b: un parche en una app que esquiva un bug del motor exige, el mismo
+  día, issue en este repo + test `xfail`.
 
 ### Herramientas y documentación (commit `14290f7`, sin cambios en el motor)
 - **`tools/te-sqlcheck`**: valida el SQL embebido en los `.te` contra la base real con `PREPARE`/`EXPLAIN`

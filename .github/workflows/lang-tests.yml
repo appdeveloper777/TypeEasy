@@ -232,6 +232,9 @@ jobs:
       - name: Build interpreter
         run: make -C src typeeasy
 
+      - name: API endpoint suites (tests/api/*.api.json - conformidad HTTP, query decode, frames, security)
+        run: python3 tools/te-test/run_api_tests.py tests/api --bin src/typeeasy --port 18181
+
       - name: Bytecode accelerator == walker (differential, tests/lang)
         run: python3 tests/regress/run_bc_diff.py --bin src/typeeasy
 

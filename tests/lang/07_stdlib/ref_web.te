@@ -1,0 +1,15 @@
+// spec: STR-8
+// url_encode / url_decode / html_escape (0.1.10) y .replace (todas las ocurrencias).
+println("enc=" + url_encode("José Pérez & Hijos/100%"));
+println("enc_unreserved=" + url_encode("aZ09-_.~"));
+println("enc_vacio=[" + url_encode("") + "]");
+println("dec=" + url_decode("Jos%C3%A9+P%C3%A9rez%20%26%20Hijos%2F100%25"));
+println("dec_invalido=" + url_decode("100%zz%4"));
+println("dec_nul=" + url_decode("a%00b"));
+let orig = "ñandú: a+b=c & d?";
+println("ida_y_vuelta=" + (url_decode(url_encode(orig)) == orig));
+println("html=" + html_escape("<a href=\"x\">O'Neil & Co</a>"));
+println("html_plano=" + html_escape("sin cambios"));
+println("replace_todas=" + "a-b-c".replace("-", "+"));
+let v = "x y";
+println("var=" + url_encode(v));

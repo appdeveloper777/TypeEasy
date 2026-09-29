@@ -389,6 +389,10 @@ Builtins mínimos garantizados en este nivel de la spec:
 - `[STR-6]` Escapes: `\t` `\n` `\"` `\\`. `\uXXXX` **no** se interpreta (queda literal).
 - `[STR-7]` `==`/`!=` comparan por valor exacto (`"10" == "10.0"` es falso); `<` `>` entre strings
   **no ordenan** (siempre falso).
+- `[STR-8]` Codificación web (desde 0.1.10): `url_encode(s)` hace percent-encoding RFC 3986 (conserva
+  `A-Z a-z 0-9 - _ . ~`; espacio → `%20`, bytes UTF-8 → `%XX` en mayúsculas); `url_decode(s)` convierte
+  `+` en espacio y `%XX` en el byte (escape inválido y `%00` quedan literales);
+  `html_escape(s)` reemplaza `& < > " '` por `&amp; &lt; &gt; &quot; &#39;`.
 
 ### Colecciones (List)
 - `[LST-1]` Índice 0-based; fuera de rango (incl. negativo) → `null`; `.length`; anidamiento

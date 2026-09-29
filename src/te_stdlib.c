@@ -1148,6 +1148,97 @@ static int adapt_uuid_valid(ASTNode *node, ASTNode *args) {
     return 1;
 }
 
+/* ===== Web encoding (0.1.10) =====
+ * url_encode(s)  -> percent-encoding RFC 3986: se conservan A-Z a-z 0-9 - _ . ~;
+ *                   todo lo demás (incl. espacio y bytes UTF-8) sale como %XX.
+ * url_decode(s)  -> '+' = espacio, %XX = byte. Un escape inválido se conserva
+ *                   literal; %00 también (un NUL truncaría el string de TE).
+ * html_escape(s) -> & < > " ' => &amp; &lt; &gt; &quot; &#39;  */
+static int te_hexval(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+static int adapt_url_encode(ASTNode *node, ASTNode *args) {
+    (void)node;
+    char *s = args ? get_node_string(args) : NULL;
+    const char *src = s ? s : "";
+    size_t n = strlen(src);
+    char *out = (char*)malloc(n * 3 + 1);
+    if (!out) { if (s) free(s); te_set_ret_string(""); return 1; }
+    static const char hex[] = "0123456789ABCDEF";
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)src[i];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~') {
+            out[o++] = (char)c;
+        } else {
+            out[o++] = '%'; out[o++] = hex[c >> 4]; out[o++] = hex[c & 15];
+        }
+    }
+    out[o] = '\0';
+    te_set_ret_string(out);
+    free(out);
+    if (s) free(s);
+    return 1;
+}
+static int adapt_url_decode(ASTNode *node, ASTNode *args) {
+    (void)node;
+    char *s = args ? get_node_string(args) : NULL;
+    const char *src = s ? s : "";
+    size_t n = strlen(src);
+    char *out = (char*)malloc(n + 1);
+    if (!out) { if (s) free(s); te_set_ret_string(""); return 1; }
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (src[i] == '+') { out[o++] = ' '; continue; }
+        if (src[i] == '%' && i + 2 < n) {
+            int h = te_hexval((unsigned char)src[i + 1]);
+            int l = te_hexval((unsigned char)src[i + 2]);
+            if (h >= 0 && l >= 0 && (h | l) != 0) {
+                out[o++] = (char)((h << 4) | l);
+                i += 2;
+                continue;
+            }
+        }
+        out[o++] = src[i];
+    }
+    out[o] = '\0';
+    te_set_ret_string(out);
+    free(out);
+    if (s) free(s);
+    return 1;
+}
+static int adapt_html_escape(ASTNode *node, ASTNode *args) {
+    (void)node;
+    char *s = args ? get_node_string(args) : NULL;
+    const char *src = s ? s : "";
+    size_t n = strlen(src);
+    char *out = (char*)malloc(n * 6 + 1);   /* peor caso: '"' -> "&quot;" */
+    if (!out) { if (s) free(s); te_set_ret_string(""); return 1; }
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++) {
+        const char *rep = NULL;
+        switch (src[i]) {
+            case '&':  rep = "&amp;";  break;
+            case '<':  rep = "&lt;";   break;
+            case '>':  rep = "&gt;";   break;
+            case '"':  rep = "&quot;"; break;
+            case '\'': rep = "&#39;";  break;
+            default: break;
+        }
+        if (rep) { size_t rl = strlen(rep); memcpy(out + o, rep, rl); o += rl; }
+        else out[o++] = src[i];
+    }
+    out[o] = '\0';
+    te_set_ret_string(out);
+    free(out);
+    if (s) free(s);
+    return 1;
+}
+
 /* Called once by te_builtins_ensure_loaded(). Idempotent — overwrites are OK.
  * Add new core builtins here as one-liners. */
 void te_register_ast_builtins(void) {
@@ -1175,6 +1266,10 @@ void te_register_ast_builtins(void) {
     te_builtin_register("date_diff",         adapt_date_diff);
     te_builtin_register("uuid_v4",           adapt_uuid_v4);
     te_builtin_register("uuid_valid",        adapt_uuid_valid);
+    /* web encoding (0.1.10) */
+    te_builtin_register("url_encode",        adapt_url_encode);
+    te_builtin_register("url_decode",        adapt_url_decode);
+    te_builtin_register("html_escape",       adapt_html_escape);
     /* subprocess language bridge (lang_spawn/lang_call/...) */
     te_register_bridge_builtins();
     /* cooperative async runtime (spawn/await_task/await_all/lang_call_async) */

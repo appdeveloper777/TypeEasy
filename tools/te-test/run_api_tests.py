@@ -20,6 +20,15 @@ Each suite is a JSON file `tests/api/<name>.api.json`:
       ]
     }
 
+Other expectations: "reason" (reason phrase), "header_absent": [names]. Repeated
+response headers (Set-Cookie) are joined with ", " so "header" matches any of them.
+A case with "xfail": "<motivo / issue>" documents a KNOWN engine bug: failing is
+reported as XFAIL (not a failure); passing is XPASS and fails the run so the mark
+is removed once the engine is fixed (same rule as `// xfail` in tests/lang).
+Connection errors (reset, refused) are reported as status 0.
+`{{repeat:TEXTO:N}}` inside path, header values or a string body expands to TEXTO
+repeated N times (size-limit cases without huge literals).
+
 Usage:
     python tools/te-test/run_api_tests.py tests/api [--bin ./src/typeeasy.exe] [--port 8181] [-k substr]
 
@@ -31,6 +40,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -61,7 +71,25 @@ def load_env_file(path: Path) -> dict[str, str]:
     return out
 
 
-def http(method: str, url: str, headers: dict, body) -> tuple[int, dict, str]:
+_REPEAT = re.compile(r"\{\{repeat:([^:}]*):(\d+)\}\}")
+
+
+def expand(v):
+    if isinstance(v, str):
+        return _REPEAT.sub(lambda m: m.group(1) * int(m.group(2)), v)
+    if isinstance(v, dict):
+        return {k: expand(x) for k, x in v.items()}
+    return v
+
+
+def _headers(msg) -> dict:
+    out: dict[str, str] = {}
+    for k, v in msg.items():
+        out[k] = f"{out[k]}, {v}" if k in out else v
+    return out
+
+
+def http(method: str, url: str, headers: dict, body) -> tuple[int, dict, str, str]:
     data = None
     if body is not None:
         if isinstance(body, (dict, list)):
@@ -72,9 +100,11 @@ def http(method: str, url: str, headers: dict, body) -> tuple[int, dict, str]:
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
-            return r.status, dict(r.headers), r.read().decode("utf-8", "replace")
+            return r.status, _headers(r.headers), r.read().decode("utf-8", "replace"), r.reason
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers), e.read().decode("utf-8", "replace")
+        return e.code, _headers(e.headers), e.read().decode("utf-8", "replace"), str(e.reason)
+    except (urllib.error.URLError, ConnectionError, OSError) as e:
+        return 0, {}, f"<connection error: {e}>", ""
 
 
 def subset(expected, actual) -> bool:
@@ -113,6 +143,7 @@ def run_suite(spec_path: Path, binary: str, port: int, only: str | None) -> tupl
             try:
                 if http("GET", base + health, {}, None)[0] == 200:
                     break
+                time.sleep(0.25)
             except Exception:
                 time.sleep(0.25)
         else:
@@ -126,11 +157,14 @@ def run_suite(spec_path: Path, binary: str, port: int, only: str | None) -> tupl
             if only and only not in name:
                 continue
             t0 = time.time()
-            status, headers, body = http(case.get("method", "GET"), base + case["path"], case.get("headers", {}), case.get("body"))
+            status, headers, body, reason = http(case.get("method", "GET"), base + expand(case["path"]),
+                                                 expand(case.get("headers", {})), expand(case.get("body")))
             exp = case.get("expect", {})
             problems = []
             if "status" in exp and status != exp["status"]:
                 problems.append(f"status {status} != {exp['status']}")
+            if "reason" in exp and reason != exp["reason"]:
+                problems.append(f"reason {reason!r} != {exp['reason']!r}")
             if "contains" in exp:
                 for needle in ([exp["contains"]] if isinstance(exp["contains"], str) else exp["contains"]):
                     if needle not in body:
@@ -151,7 +185,14 @@ def run_suite(spec_path: Path, binary: str, port: int, only: str | None) -> tupl
                 if any(k.lower() == hk.lower() for k in headers):
                     problems.append(f"header {hk} should be absent")
             ms = int((time.time() - t0) * 1000)
-            if problems:
+            if case.get("xfail"):
+                if problems:
+                    passed += 1
+                    print(f"XFAIL {spec_path.stem} :: {name} ({ms} ms) -- {case['xfail']}")
+                else:
+                    failed += 1
+                    print(f"XPASS {spec_path.stem} :: {name} ({ms} ms) -- ya funciona: quitar \"xfail\" y cerrar el issue")
+            elif problems:
                 failed += 1
                 print(f"FAIL  {spec_path.stem} :: {name} ({ms} ms)")
                 for p in problems:

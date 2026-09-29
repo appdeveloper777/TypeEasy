@@ -1,0 +1,106 @@
+// Suite de conformidad HTTP del modo --api (0.1.10): metodos, status + reason
+// phrase, headers, cookies, query, cuerpo/encodings y limites de tamaño.
+// La corre tools/te-test/run_api_tests.py con http_conformance_api.api.json.
+// Un caso con "xfail" documenta un bug CONOCIDO del motor (ver docs/VERSIONING.md §4).
+endpoint {
+    [HttpGet("/health")]
+    async Health() { return json({ ok: true }); }
+
+    // ---- Metodos: mismo path, un handler por verbo ----
+    [HttpGet("/api/m")]
+    async MGet() {
+        let m = request_method();
+        let p = request_path();
+        return json({ m: m, path: p });
+    }
+    [HttpPost("/api/m")]
+    async MPost() {
+        let m = request_method();
+        let b = request_body();
+        return json({ m: m, body: b });
+    }
+    [HttpPut("/api/m")]
+    async MPut() {
+        let m = request_method();
+        let b = request_body();
+        return json({ m: m, body: b });
+    }
+    [HttpPatch("/api/m")]
+    async MPatch() {
+        let m = request_method();
+        let b = request_body();
+        return json({ m: m, body: b });
+    }
+    [HttpDelete("/api/m")]
+    async MDelete() {
+        let m = request_method();
+        return json({ m: m });
+    }
+
+    // ---- Status: el handler fija el codigo ----
+    [HttpGet("/api/status/{code}")]
+    async St() {
+        let s = request_param("code");
+        let c = s.parse_int();
+        response_status(c);
+        return json({ code: c });
+    }
+
+    // ---- Headers ----
+    [HttpGet("/api/h")]
+    async H() {
+        let a = request_header("x-custom");
+        let b = request_header("X-CUSTOM");
+        let falta = request_header("X-No-Existe");
+        return json({ a: a, b: b, falta: falta });
+    }
+    [HttpGet("/api/h/echo")]
+    async HEcho() {
+        let v = request_query("v");
+        response_header("X-Echo", v);
+        return json({ ok: true });
+    }
+    [HttpPost("/api/h/echo")]
+    async HEchoBody() {
+        let v = request_body();
+        response_header("X-Echo", v);
+        return json({ ok: true });
+    }
+
+    // ---- Cookies ----
+    [HttpGet("/api/c")]
+    async C() {
+        let a = request_cookie("a");
+        let b = request_cookie("b");
+        let tok = request_cookie("tok");
+        let falta = request_cookie("zz");
+        return json({ a: a, b: b, tok: tok, tok_len: tok.length, falta: falta });
+    }
+    [HttpGet("/api/c/set")]
+    async CSet() {
+        response_header("Set-Cookie", "s1=uno; Path=/; HttpOnly");
+        response_header("Set-Cookie", "s2=dos; Path=/; SameSite=Lax");
+        return json({ ok: true });
+    }
+
+    // ---- Query ----
+    [HttpGet("/api/q")]
+    async Q() {
+        let v = request_query("v");
+        return json({ v: v, len: v.length });
+    }
+
+    // ---- Cuerpo y encodings ----
+    [HttpPost("/api/echo")]
+    async Echo() {
+        let b = request_body();
+        let ct = request_header("Content-Type");
+        return json({ body: b, len: b.length, ct: ct });
+    }
+    [HttpPost("/api/json")]
+    async J() {
+        let p = json_parse(request_body());
+        let n = p["nombre"];
+        return json({ nombre: n });
+    }
+}

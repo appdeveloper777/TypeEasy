@@ -1,0 +1,11 @@
+enc=Jos%C3%A9%20P%C3%A9rez%20%26%20Hijos%2F100%25
+enc_unreserved=aZ09-_.~
+enc_vacio=[]
+dec=José Pérez & Hijos/100%
+dec_invalido=100%zz%4
+dec_nul=a%00b
+ida_y_vuelta=1
+html=&lt;a href=&quot;x&quot;&gt;O&#39;Neil &amp; Co&lt;/a&gt;
+html_plano=sin cambios
+replace_todas=a+b+c
+var=x%20y
