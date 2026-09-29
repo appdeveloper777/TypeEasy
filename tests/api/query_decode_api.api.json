@@ -1,0 +1,49 @@
+{
+  "entry": "query_decode_api.te",
+  "health": "/health",
+  "env": {
+    "TYPEEASY_DEV": "1"
+  },
+  "cases": [
+    {
+      "name": "'+' en el query string es espacio",
+      "path": "/api/q?q=Abigail+Dominguez+Ruiz",
+      "expect": { "status": 200, "json": { "q": "Abigail Dominguez Ruiz" } }
+    },
+    {
+      "name": "%20 es espacio",
+      "path": "/api/q?q=Casa%20de%20Paz",
+      "expect": { "status": 200, "json": { "q": "Casa de Paz" } }
+    },
+    {
+      "name": "UTF-8 percent-encoded (tilde) llega como texto",
+      "path": "/api/q?q=Dom%C3%ADnguez",
+      "expect": { "status": 200, "json": { "q": "Domínguez" } }
+    },
+    {
+      "name": "%26 y %3D quedan dentro del valor (se decodifica despues de partir)",
+      "path": "/api/q?q=a%26b%3Dc&x=1",
+      "expect": { "status": 200, "json": { "q": "a&b=c" } }
+    },
+    {
+      "name": "%2B es un '+' literal",
+      "path": "/api/q?q=C%2B%2B",
+      "expect": { "status": 200, "json": { "q": "C++" } }
+    },
+    {
+      "name": "la clave tambien se decodifica",
+      "path": "/api/q?%C3%B1=si",
+      "expect": { "status": 200, "json": { "k": "si" } }
+    },
+    {
+      "name": "escape invalido se conserva literal",
+      "path": "/api/q?q=100%25zz%zz",
+      "expect": { "status": 200, "json": { "q": "100%zz%zz" } }
+    },
+    {
+      "name": "control: parametro de ruta ya decodificado (sin doble decodificacion)",
+      "path": "/api/p/Jos%C3%A9%2520",
+      "expect": { "status": 200, "json": { "x": "José%20" } }
+    }
+  ]
+}

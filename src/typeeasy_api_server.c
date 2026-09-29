@@ -802,6 +802,10 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
                 if (kl > 0 && kl < (int)sizeof(key) && vl < (int)sizeof(val)) {
                     memcpy(key, p, kl); key[kl] = '\0';
                     memcpy(val, eq + 1, vl); val[vl] = '\0';
+                    /* Decodifica DESPUES de partir por & y = (un %26/%3D queda dentro del valor).
+                     * Si el escape es invalido se conserva el texto crudo. */
+                    if (mg_url_decode(key, kl, key, (int)sizeof(key), 1) < 0) { memcpy(key, p, kl); key[kl] = '\0'; }
+                    if (mg_url_decode(val, vl, val, (int)sizeof(val), 1) < 0) { memcpy(val, eq + 1, vl); val[vl] = '\0'; }
                     typeeasy_http_add_query(key, val);
                 }
             }

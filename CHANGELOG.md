@@ -4,6 +4,26 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
+## Sin publicar (próxima 0.1.10)
+
+### Cambios de comportamiento
+- **`request_query(k)` devuelve el valor decodificado** (`+` y `%20` → espacio, `%C3%AD` → `í`,
+  `%2B` → `+`). Antes llegaba crudo, así que cualquier búsqueda con espacios o tildes no encontraba
+  nada (`?q=Juan+P%C3%A9rez` → `"Juan+P%C3%A9rez"`). La clave también se decodifica; se decodifica
+  después de partir por `&`/`=` (un `%26`/`%3D` queda dentro del valor) y un escape inválido se
+  conserva literal. Los parámetros de ruta (`{x}`) ya llegaban decodificados y no cambian.
+  Suite `tests/api/query_decode_api.api.json`.
+
+### Herramientas y documentación (commit `14290f7`, sin cambios en el motor)
+- **`tools/te-sqlcheck`**: valida el SQL embebido en los `.te` contra la base real con `PREPARE`/`EXPLAIN`
+  (no ejecuta nada); MySQL/MariaDB o SQLite. Self-test en CI.
+- **LSP / VS Code (`tools/typeeasy-lsp`, `tools/typeeasy-vscode`)**: autocompletado de métodos con firma,
+  formateo del documento y snippets.
+- **`docs/STDLIB.md`**: referencia de la librería estándar; cada ejemplo es un test
+  (`tests/lang/07_stdlib/ref_*.te`). Tests de gotchas nuevos en `tests/lang/13_gotchas/`
+  (`len_list_literal`, `map_values_length`, `math_pi_constant`).
+- Tutorial web (`docs/index.html`) actualizado a 0.1.9 con la sección de herramientas.
+
 ## 0.1.9 — 2026-09-21
 
 > Re-tag #3 (`v0.1.9` sobre el commit final): además de lo de abajo, audita e incorpora el PR #8 de

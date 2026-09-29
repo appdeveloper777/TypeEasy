@@ -174,6 +174,10 @@ el test pasa a `XPASS` y se quita el `xfail`.
 | `Math.PI` / `Math.E` no existen | `let PI = 3.141592653589793;` | `tests/lang/13_gotchas/math_pi_constant.te` |
 | `l.sort()` no devuelve la lista | llamar y luego usar `l` | `ref_lists.te` |
 
+**Corregida en 0.1.10:** `request_query("q")` (modo `--api`) devolvía el valor **sin decodificar**
+(`"Juan+P%C3%A9rez"`), así que las búsquedas con espacios o tildes no encontraban nada. Ahora llega
+`"Juan Pérez"`. Con un motor ≤ 0.1.9 hay que decodificar a mano. Test `tests/api/query_decode_api.api.json`.
+
 ## 6. Cómo agregar una entrada a esta página
 
 1. Escribí el ejemplo como test en `tests/lang/07_stdlib/ref_<tema>.te` (con `// spec: STD-...`).

@@ -1,0 +1,18 @@
+// request_query() entrega el valor DECODIFICADO (antes llegaba crudo: "a+b", "a%20b",
+// "Dom%C3%ADnguez" -> una busqueda con espacios o tildes no encontraba nada).
+// Los parametros de ruta ({x}) ya los decodificaba civetweb; se prueban como control.
+endpoint {
+    [HttpGet("/health")]
+    async Health() { return json({ ok: true }); }
+
+    [HttpGet("/api/q")]
+    async Q() {
+        let q = request_query("q");
+        return json({ q: q, len: q.length, k: request_query("ñ") });
+    }
+
+    [HttpGet("/api/p/{x}")]
+    async P() {
+        return json({ x: request_param("x") });
+    }
+}
