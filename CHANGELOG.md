@@ -21,15 +21,17 @@ que fija la conducta nueva. Política: `docs/VERSIONING.md`.
   texto; los no listados usan `Client Error`/`Server Error`.
 - **204/304 sin cuerpo**: con `response_status(204)` se enviaba igual el cuerpo del handler y un
   `Content-Length`. Ahora no se envía ninguno de los dos (RFC 9110).
+- **405 Method Not Allowed** (issue #9): un verbo no registrado sobre un path que sí existe (exacto o
+  con `{param}`) respondía `404 Endpoint not found`. Ahora responde `405` con `Allow: <verbos del path>`,
+  CORS y `{"error":"method_not_allowed"}` (sin cuerpo si es `HEAD`). Un path inexistente sigue en 404.
 
 ### Nuevo
 - **`url_encode(s)`, `url_decode(s)`, `html_escape(s)`** (`[STR-8]`, `tests/lang/07_stdlib/ref_web.te`,
   `docs/STDLIB.md` §4b). `url_decode` conserva literales los escapes inválidos y `%00`.
-- **Suite de conformidad HTTP** `tests/api/http_conformance_api.api.json` (34 casos: verbos, status y
-  reason, headers case-insensitive, sanitización CRLF de `response_header`, cookies, varios
+- **Suite de conformidad HTTP** `tests/api/http_conformance_api.api.json` (41 casos: verbos, 405 + `Allow`,
+  status y reason, headers case-insensitive, sanitización CRLF de `response_header`, cookies, varios
   `Set-Cookie`, query repetida/vacía/larga, UTF-8 en cuerpo y JSON `\u`, límite `TYPEEASY_MAX_BODY` →
-  413). Corre en CI (job `db-real`). Conocido: verbo no registrado en ruta existente da 404 en vez de
-  405 — caso `xfail`, issue #9.
+  413). Corre en CI (job `db-real`).
 - Runner `tools/te-test/run_api_tests.py`: `"xfail"` por caso (XPASS falla el run), `"reason"`,
   headers repetidos unidos, `{{repeat:TEXTO:N}}` y errores de conexión como status 0.
 - Política `docs/VERSIONING.md` §4b: un parche en una app que esquiva un bug del motor exige, el mismo

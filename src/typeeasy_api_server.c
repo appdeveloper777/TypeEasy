@@ -13,7 +13,7 @@
  *   - HTTP method match (GET/POST/PUT/DELETE/PATCH).
  *   - Exact path match first; falls back to `{param}` pattern matching
  *     (params get exposed to the .te body via typeeasy_http_add_param).
- *   - 404 on no match.
+ *   - 405 + Allow when the path exists with other verbs; 404 when it does not.
  *
  * Content-Type derived from `detect_response_type_embedded` of the method
  * body: "xml" -> application/xml, otherwise application/json.
@@ -767,6 +767,49 @@ static void te_rh_respond_fatal(struct mg_connection *conn, const char *method, 
         mg_write(conn, err, elen);
 }
 
+/* Sin handler para (verbo, uri): 405 + Allow si el path existe con otros verbos, si no 404.
+ * Se llama con el lock del interprete tomado (match_route_pattern toca el estado HTTP) y lo libera. */
+static void te_rh_respond_no_route(struct mg_connection *conn, const char *method, const char *uri, clock_t t0) {
+    const char *seen[8];
+    int n = 0;
+    for (MethodNode *r = g_vm.global_methods; r && n < 8; r = r->next) {
+        if (!r->route_path) continue;
+        const char *mh = r->http_method ? r->http_method : "GET";
+        int hit = strchr(r->route_path, '{') ? match_route_pattern(r->route_path, uri)
+                                              : (strcmp(r->route_path, uri) == 0);
+        int dup = 0;
+        for (int i = 0; i < n && !dup; i++) dup = (strcmp(seen[i], mh) == 0);
+        if (hit && !dup) seen[n++] = mh;
+    }
+    char allow[96] = "";
+    for (int i = 0; i < n; i++) {
+        size_t used = strlen(allow);
+        snprintf(allow + used, sizeof(allow) - used, "%s%s", i ? ", " : "", seen[i]);
+    }
+    typeeasy_http_reset();
+    invoke_lock_release();
+    if (n == 0) {
+        te_req_done(method, uri, 404, t0);
+        mg_send_http_error(conn, 404, "Endpoint not found: %s %s", method, uri);
+        return;
+    }
+    te_req_done(method, uri, 405, t0);
+    char cors_org[1024];
+    cors_resolve_origin(conn, cors_org, sizeof(cors_org));
+    const char *body = "{\"error\":\"method_not_allowed\"}";
+    int blen = (int)strlen(body);
+    mg_printf(conn,
+              "HTTP/1.1 405 Method Not Allowed\r\n"
+              "Allow: %s\r\n"
+              "Content-Type: application/json\r\n"
+              "Content-Length: %d\r\n"
+              "Access-Control-Allow-Origin: %s\r\n"
+              TE_CORS_EXTRA_HEADERS
+              "\r\n",
+              allow, blen, cors_org);
+    if (strcmp(method, "HEAD") != 0) mg_write(conn, body, blen);
+}
+
 static int request_handler(struct mg_connection *conn, void *cbdata) {
     (void)cbdata;
     const struct mg_request_info *req = mg_get_request_info(conn);
@@ -817,9 +860,7 @@ static int request_handler(struct mg_connection *conn, void *cbdata) {
 
     MethodNode *m = find_route(uri, method);
     if (!m) {
-        invoke_lock_release();
-        te_req_done(method, uri, 404, _req_t0);
-        mg_send_http_error(conn, 404, "Endpoint not found: %s %s", method, uri);
+        te_rh_respond_no_route(conn, method, uri, _req_t0);
         return 1;
     }
 
