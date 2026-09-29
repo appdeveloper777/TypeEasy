@@ -4,7 +4,7 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
-## Sin publicar (próxima 0.1.10)
+## 0.1.10 — 2026-09-28
 
 ### Cambios de comportamiento
 - **`request_query(k)` devuelve el valor decodificado** (`+` y `%20` → espacio, `%C3%AD` → `í`,
