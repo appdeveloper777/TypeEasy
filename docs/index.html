@@ -203,7 +203,7 @@
   <header class="topbar">
     <button class="hamburger" id="hamburger" aria-label="Menú">☰</button>
     <a class="brand" href="#/home"><span class="logo">Te</span> TypeEasy</a>
-    <span class="ver" id="verBadge">v0.1.9</span>
+    <span class="ver" id="verBadge">v0.1.10</span>
     <span class="spacer"></span>
     <nav class="tnav">
       <a href="#/home" data-i18n="nav_home">Inicio</a>
@@ -384,6 +384,7 @@ window.NAV_ES = [
     ["jwt", "Autenticación JWT"],
     ["cookies", "Cookies y sesión"],
     ["response-headers", "Cabeceras de respuesta"],
+    ["http", "HTTP: query, códigos y escapes (0.1.10)"],
     ["cors", "CORS"],
     ["database", "Bases de datos"],
     ["async-endpoint", "Async/await endpoint"],
@@ -447,6 +448,7 @@ window.NAV_EN = [
     ["jwt", "JWT authentication"],
     ["cookies", "Cookies & session"],
     ["response-headers", "Response headers"],
+    ["http", "HTTP: query, status & escaping (0.1.10)"],
     ["cors", "CORS"],
     ["database", "Databases"],
     ["async-endpoint", "Async/await endpoint"],
@@ -576,28 +578,28 @@ PAGES.quickstart = `
 <p class="lead">De cero a una API corriendo en menos de 5 minutos.</p>
 
 <h2>1. Instalar</h2>
-<p>Descarga el binario para tu sistema desde la página de releases (versión actual: <strong>v0.1.9</strong>). En la sección <strong>Assets</strong> de la release encontrarás:</p>
+<p>Descarga el binario para tu sistema desde la página de releases (versión actual: <strong>v0.1.10</strong>). En la sección <strong>Assets</strong> de la release encontrarás:</p>
 <ul>
-  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.1.9.exe</code> (instalador) o <code class="inline">TypeEasy-0.1.9-win64.zip</code> (portable).</li>
-  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.1.9_amd64.deb</code> (Debian/Ubuntu/Mint) o <code class="inline">TypeEasy-0.1.9-linux-amd64.tar.gz</code> (portable).</li>
-  <li><strong>Linux ARM64</strong> (Raspberry Pi, servidores ARM): <code class="inline">typeeasy_0.1.9_arm64.deb</code> o <code class="inline">TypeEasy-0.1.9-linux-arm64.tar.gz</code>.</li>
-  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.1.9-android-arm64.tar.gz</code>.</li>
-  <li><code class="inline">SHA256SUMS-0.1.9.txt</code> para verificar la descarga.</li>
+  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.1.10.exe</code> (instalador) o <code class="inline">TypeEasy-0.1.10-win64.zip</code> (portable).</li>
+  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.1.10_amd64.deb</code> (Debian/Ubuntu/Mint) o <code class="inline">TypeEasy-0.1.10-linux-amd64.tar.gz</code> (portable).</li>
+  <li><strong>Linux ARM64</strong> (Raspberry Pi, servidores ARM): <code class="inline">typeeasy_0.1.10_arm64.deb</code> o <code class="inline">TypeEasy-0.1.10-linux-arm64.tar.gz</code>.</li>
+  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.1.10-android-arm64.tar.gz</code>.</li>
+  <li><code class="inline">SHA256SUMS-0.1.10.txt</code> para verificar la descarga.</li>
 </ul>
-<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.1.9" target="_blank" rel="noopener">Release v0.1.9 en GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">Todas las releases &rarr;</a></p>
+<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.1.10" target="_blank" rel="noopener">Release v0.1.10 en GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">Todas las releases &rarr;</a></p>
 ${sh(`# Linux (Debian/Ubuntu)
-sudo apt install ./typeeasy_0.1.9_amd64.deb
+sudo apt install ./typeeasy_0.1.10_amd64.deb
 
 # Linux/Android portable: descomprime y usa el binario que trae
-tar -xzf TypeEasy-0.1.9-linux-amd64.tar.gz
+tar -xzf TypeEasy-0.1.10-linux-amd64.tar.gz
 
 # Verificar la instalación (Windows, Linux o Android)
-typeeasy --version        # TypeEasy 0.1.9`)}
+typeeasy --version        # TypeEasy 0.1.10`)}
 <div class="note"><strong>Dónde queda el binario.</strong> El instalador de Windows lo deja en <code class="inline">%LOCALAPPDATA%\\Programs\\TypeEasy\\bin\\typeeasy-bin.exe</code> (y agrega <code class="inline">typeeasy</code>/<code class="inline">te</code> al PATH). El <code class="inline">.deb</code> instala <code class="inline">/usr/bin/typeeasy-bin</code> (el motor) y <code class="inline">/usr/bin/typeeasy</code> (CLI con <code class="inline">new</code>, <code class="inline">gen</code>, <code class="inline">serve</code>…). Si un subcomando del CLI no reconoce un flag del motor (p. ej. <code class="inline">--syntax-check</code>), llama directo a <code class="inline">typeeasy-bin</code>.</div>
 
 <h2>1b. O clona y compila (para estudiar o extender el motor)</h2>
 <p>Si quieres leer el código del intérprete, agregar una función nativa o <a href="#/extend">ampliar la sintaxis</a>, clona el repositorio en la versión que quieras y compílalo. Necesitas <code class="inline">gcc</code>, <code class="inline">flex</code>, <code class="inline">bison</code>, <code class="inline">make</code> y las cabeceras de MariaDB/PostgreSQL/OpenSSL (en Windows, MSYS2/MinGW-w64).</p>
-${sh(`git clone --branch v0.1.9 https://github.com/appdeveloper777/TypeEasy.git
+${sh(`git clone --branch v0.1.10 https://github.com/appdeveloper777/TypeEasy.git
 cd TypeEasy
 
 # Linux (Ubuntu/Debian): deps una sola vez
@@ -1577,11 +1579,11 @@ if (!ok) {
 <h2>5. Congelar la versión del motor por servicio</h2>
 <p>Si varios servicios comparten un servidor, actualizar el binario global los mueve a todos a la vez. El CLI <code class="inline">/usr/bin/typeeasy</code> respeta <code class="inline">TYPEEASY_BIN</code>: guardá cada versión en su carpeta y fijala por servicio en su <code class="inline">EnvironmentFile</code>. Así actualizás de a uno, verificás y seguís.</p>
 ${sh(`# congelar la versión actual
-sudo install -d /opt/typeeasy/versions/0.1.9
-sudo install -m 555 /usr/bin/typeeasy-bin /opt/typeeasy/versions/0.1.9/typeeasy-bin
+sudo install -d /opt/typeeasy/versions/0.1.10
+sudo install -m 555 /usr/bin/typeeasy-bin /opt/typeeasy/versions/0.1.10/typeeasy-bin
 
 # fijar un servicio (EnvironmentFile de su unit systemd)
-echo "TYPEEASY_BIN=/opt/typeeasy/versions/0.1.9/typeeasy-bin" | sudo tee -a /etc/mi-api.env
+echo "TYPEEASY_BIN=/opt/typeeasy/versions/0.1.10/typeeasy-bin" | sudo tee -a /etc/mi-api.env
 sudo systemctl restart mi-api
 
 # ¿qué binario corre de verdad?
@@ -2330,6 +2332,7 @@ buscar() {
 }`)}
 ${sh(`curl "http://localhost:9000/api/buscar?q=zapatos&pagina=2"`)}
 ${out('{"buscando":"zapatos","pagina":"2"}')}
+<div class="note"><strong>Desde 0.1.10</strong> el valor llega <strong>decodificado</strong>: <code class="inline">?q=Jos%C3%A9+P%C3%A9rez</code> &rarr; <code class="inline">"José Pérez"</code>. Ver <a href="#/http">HTTP: query, códigos y escapes</a>.</div>
 
 <h2>Cuerpo de la petición</h2>
 ${te(`[HttpPost("/api/echo")]
@@ -2672,6 +2675,113 @@ curl -i http://localhost:9000/api/download`)}
 
 <div class="pager">
   <a class="prev" href="#/cookies">&larr; Cookies y sesión</a>
+  <a href="#/http">HTTP (0.1.10) &rarr;</a>
+</div>
+`;
+
+PAGES.http = `
+<h1>HTTP: query, códigos y escapes <span class="ver" style="vertical-align:middle">v0.1.10</span></h1>
+<p class="lead">La versión 0.1.10 afinó cómo el servidor habla HTTP: la query llega decodificada, hay helpers para URLs y HTML, los códigos de estado salen con su texto correcto, <code class="inline">204</code> va sin cuerpo y un verbo equivocado responde <code class="inline">405</code>. Todos los ejemplos de esta página se corrieron con el binario 0.1.10 y la salida es la real.</p>
+
+<h2>La API de ejemplo</h2>
+${te(`endpoint {
+    [HttpGet("/api/buscar")]
+    buscar() {
+        let q = request_query("q");
+        return json({ buscando: q });
+    }
+
+    [HttpGet("/api/enlace")]
+    enlace() {
+        let nombre = request_query("nombre");
+        let url = concat("https://tienda.ejemplo/clientes?nombre=", url_encode(nombre));
+        return json({ url: url });
+    }
+
+    [HttpGet("/api/tarjeta")]
+    tarjeta() {
+        let nombre = request_query("nombre");
+        let html = concat("<p>Hola ", html_escape(nombre), "</p>");
+        return json({ html: html });
+    }
+
+    [HttpDelete("/api/tareas/{id}")]
+    borrar() {
+        response_status(204);
+        return json({ ok: true });
+    }
+
+    [HttpPost("/api/login")]
+    login() {
+        response_status(429);
+        response_header("Retry-After", "60");
+        return json({ error: "demasiados_intentos" });
+    }
+}`, "http_demo.te")}
+${sh(`typeeasy --api http_demo.te --port 9000`)}
+
+<h2>1. <code class="inline">request_query</code> llega decodificado</h2>
+<p>El navegador manda los espacios como <code class="inline">+</code> o <code class="inline">%20</code> y las tildes como <code class="inline">%C3%A9</code>. Desde 0.1.10 <code class="inline">request_query</code> te entrega el texto ya limpio, así que una búsqueda con espacios o tildes funciona sin hacer nada:</p>
+${sh(`curl "http://localhost:9000/api/buscar?q=Jos%C3%A9+P%C3%A9rez"`)}
+${out('{"buscando":"José Pérez"}')}
+<div class="note"><strong>Cambio de comportamiento.</strong> Hasta 0.1.9 llegaba crudo (<code class="inline">"Jos%C3%A9+P%C3%A9rez"</code>) y un <code class="inline">LIKE</code> con eso no encontraba nada. Si tu código ya llamaba a un decodificador propio encima, quitalo: decodificar dos veces rompe los <code class="inline">%</code> y <code class="inline">+</code> literales. Los parámetros de ruta (<code class="inline">{id}</code>) ya llegaban decodificados y no cambian.</div>
+<p>También se corrigieron los <strong>valores largos</strong>: una clave de 128 bytes o más, o un valor de 1024 bytes o más, se perdía en silencio (<code class="inline">""</code>). Ahora un <code class="inline">?q=</code> de 3000 caracteres llega completo.</p>
+
+<h2>2. <code class="inline">url_encode</code>, <code class="inline">url_decode</code> y <code class="inline">html_escape</code></h2>
+<p>Para armar un enlace con datos del usuario, codificá el valor con <code class="inline">url_encode</code> (RFC 3986: el espacio sale como <code class="inline">%20</code> y el <code class="inline">&amp;</code> como <code class="inline">%26</code>, así no parte la query):</p>
+${sh(`curl "http://localhost:9000/api/enlace?nombre=Pan+%26+Caf%C3%A9"`)}
+${out('{"url":"https://tienda.ejemplo/clientes?nombre=Pan%20%26%20Caf%C3%A9"}')}
+<p>Para meter texto del usuario dentro de HTML (un correo, un comprobante), pasalo por <code class="inline">html_escape</code> y así no se interpreta como etiquetas:</p>
+${sh(`curl "http://localhost:9000/api/tarjeta?nombre=%3Cb%3EAna%3C%2Fb%3E"`)}
+${out('{"html":"<p>Hola &lt;b&gt;Ana&lt;/b&gt;</p>"}')}
+<p><code class="inline">url_decode</code> sirve fuera de <code class="inline">request_query</code> (por ejemplo, un texto que viene de un archivo o de otra API):</p>
+${te(`println(url_decode("Jos%C3%A9+P%C3%A9rez"));   // José Pérez
+println(url_decode("100%zz"));                // 100%zz  (escape inválido: queda literal)`)}
+
+<h2>3. Los códigos de estado salen con su texto</h2>
+<p>Antes cualquier status poco común salía como <code class="inline">OK</code> (<code class="inline">HTTP/1.1 429 OK</code>). Ahora 202, 3xx, 402, 405, 409, 410, 413, 415, 429 y 501-504 llevan su frase correcta:</p>
+${sh(`curl -i -X POST http://localhost:9000/api/login`)}
+${out(`HTTP/1.1 429 Too Many Requests
+Content-Type: application/json
+Content-Length: 31
+Retry-After: 60
+
+{"error":"demasiados_intentos"}`)}
+
+<h2>4. <code class="inline">204 No Content</code> va sin cuerpo</h2>
+<p>Con <code class="inline">response_status(204)</code> (o 304) el servidor ya no envía el cuerpo del handler ni <code class="inline">Content-Length</code>, como pide el RFC 9110. Útil en <code class="inline">DELETE</code>:</p>
+${sh(`curl -i -X DELETE http://localhost:9000/api/tareas/7`)}
+${out(`HTTP/1.1 204 No Content
+Content-Type: application/json
+`)}
+
+<h2>5. Verbo equivocado &rarr; <code class="inline">405</code> con <code class="inline">Allow</code></h2>
+<p>Si el path existe pero con otro verbo, la respuesta es <code class="inline">405 Method Not Allowed</code> y la cabecera <code class="inline">Allow</code> dice qué verbos acepta. Un path que no existe sigue siendo <code class="inline">404</code>:</p>
+${sh(`curl -i http://localhost:9000/api/tareas/7      # la ruta solo tiene DELETE
+curl -i http://localhost:9000/api/nada          # no existe`)}
+${out(`HTTP/1.1 405 Method Not Allowed
+Allow: DELETE
+Content-Type: application/json
+Content-Length: 30
+
+{"error":"method_not_allowed"}
+
+HTTP/1.1 404 Not Found`)}
+
+<table class="ref">
+  <tr><th>Qué</th><th>Hasta 0.1.9</th><th>Desde 0.1.10</th></tr>
+  <tr><td><code>request_query("q")</code> con <code>?q=Jos%C3%A9+P%C3%A9rez</code></td><td><code>Jos%C3%A9+P%C3%A9rez</code></td><td><code>José Pérez</code></td></tr>
+  <tr><td>Valor de query de 1024+ bytes</td><td><code>""</code> (se perdía)</td><td>Llega completo</td></tr>
+  <tr><td><code>response_status(429)</code></td><td><code>429 OK</code></td><td><code>429 Too Many Requests</code></td></tr>
+  <tr><td><code>response_status(204)</code></td><td>Enviaba cuerpo + <code>Content-Length</code></td><td>Sin cuerpo</td></tr>
+  <tr><td>Verbo no registrado en un path existente</td><td><code>404</code></td><td><code>405</code> + <code>Allow</code></td></tr>
+  <tr><td>Codificar URL / escapar HTML</td><td>Helper propio</td><td><code>url_encode</code>, <code>url_decode</code>, <code>html_escape</code></td></tr>
+</table>
+
+<div class="note"><strong>Cómo se prueba.</strong> Todo esto está cubierto por la suite de conformidad HTTP del repo (<code class="inline">tests/api/http_conformance_api.api.json</code>, 41 casos: verbos, 405 + <code class="inline">Allow</code>, status y reason, headers, cookies, query repetida/vacía/larga, UTF-8, límite de cuerpo &rarr; 413) y por <code class="inline">tests/api/query_decode_api.api.json</code>. Corren en CI en cada cambio. Detalle completo en el <a href="https://github.com/appdeveloper777/TypeEasy/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a>.</div>
+
+<div class="pager">
+  <a class="prev" href="#/response-headers">&larr; Cabeceras de respuesta</a>
   <a href="#/cors">CORS &rarr;</a>
 </div>
 `;
@@ -2718,7 +2828,7 @@ typeeasy --api mi_api.te --cors-origin "*"`)}
 <p>Cabeceras que envía automáticamente: <code class="inline">Access-Control-Allow-Origin</code>, <code class="inline">Access-Control-Allow-Methods</code> (<code class="inline">GET, POST, PUT, DELETE, PATCH, OPTIONS</code>) y <code class="inline">Access-Control-Allow-Headers</code> (<code class="inline">Content-Type, Authorization</code>).</p>
 
 <div class="pager">
-  <a class="prev" href="#/cookies">&larr; Cookies y sesión</a>
+  <a class="prev" href="#/http">&larr; HTTP (0.1.10)</a>
   <a href="#/database">Bases de datos &rarr;</a>
 </div>
 `;
@@ -2977,7 +3087,7 @@ typeeasy --api apis/main.te --port 8090 --host 127.0.0.1 --workers 2`)}
 <p class="warn"><strong>El servidor habla HTTP en claro.</strong> Para producción, poné un <strong>reverse proxy con TLS</strong> (nginx, Caddy o un Ingress) delante del binario: termina HTTPS y reenvía a TypeEasy por HTTP local. Lo mismo aplica para rate limiting y balanceo entre varios <code class="inline">--workers</code>.</p>
 
 <h3>Linux — systemd (incluido en el .deb)</h3>
-${sh(`sudo apt install ./typeeasy_0.1.9_amd64.deb   # binario + CLI + alias 'te'
+${sh(`sudo apt install ./typeeasy_0.1.10_amd64.deb   # binario + CLI + alias 'te'
 sudo vi /etc/default/typeeasy-api               # archivo .te a servir
 sudo systemctl enable --now typeeasy-api@9001
 sudo systemctl status typeeasy-api@9001
@@ -3468,28 +3578,28 @@ PAGES.quickstart = `
 <p class="lead">From zero to a running API in under 5 minutes.</p>
 
 <h2>1. Install</h2>
-<p>Download the binary for your system from the releases page (current version: <strong>v0.1.9</strong>). Under the release's <strong>Assets</strong> you will find:</p>
+<p>Download the binary for your system from the releases page (current version: <strong>v0.1.10</strong>). Under the release's <strong>Assets</strong> you will find:</p>
 <ul>
-  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.1.9.exe</code> (installer) or <code class="inline">TypeEasy-0.1.9-win64.zip</code> (portable).</li>
-  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.1.9_amd64.deb</code> (Debian/Ubuntu/Mint) or <code class="inline">TypeEasy-0.1.9-linux-amd64.tar.gz</code> (portable).</li>
-  <li><strong>Linux ARM64</strong> (Raspberry Pi, ARM servers): <code class="inline">typeeasy_0.1.9_arm64.deb</code> or <code class="inline">TypeEasy-0.1.9-linux-arm64.tar.gz</code>.</li>
-  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.1.9-android-arm64.tar.gz</code>.</li>
-  <li><code class="inline">SHA256SUMS-0.1.9.txt</code> to verify the download.</li>
+  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.1.10.exe</code> (installer) or <code class="inline">TypeEasy-0.1.10-win64.zip</code> (portable).</li>
+  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.1.10_amd64.deb</code> (Debian/Ubuntu/Mint) or <code class="inline">TypeEasy-0.1.10-linux-amd64.tar.gz</code> (portable).</li>
+  <li><strong>Linux ARM64</strong> (Raspberry Pi, ARM servers): <code class="inline">typeeasy_0.1.10_arm64.deb</code> or <code class="inline">TypeEasy-0.1.10-linux-arm64.tar.gz</code>.</li>
+  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.1.10-android-arm64.tar.gz</code>.</li>
+  <li><code class="inline">SHA256SUMS-0.1.10.txt</code> to verify the download.</li>
 </ul>
-<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.1.9" target="_blank" rel="noopener">Release v0.1.9 on GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">All releases &rarr;</a></p>
+<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.1.10" target="_blank" rel="noopener">Release v0.1.10 on GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">All releases &rarr;</a></p>
 ${sh(`# Linux (Debian/Ubuntu)
-sudo apt install ./typeeasy_0.1.9_amd64.deb
+sudo apt install ./typeeasy_0.1.10_amd64.deb
 
 # Linux/Android portable: extract and use the bundled binary
-tar -xzf TypeEasy-0.1.9-linux-amd64.tar.gz
+tar -xzf TypeEasy-0.1.10-linux-amd64.tar.gz
 
 # Verify the install (Windows, Linux or Android)
-typeeasy --version        # TypeEasy 0.1.9`)}
+typeeasy --version        # TypeEasy 0.1.10`)}
 <div class="note"><strong>Where the binary lives.</strong> The Windows installer puts it at <code class="inline">%LOCALAPPDATA%\\Programs\\TypeEasy\\bin\\typeeasy-bin.exe</code> (and adds <code class="inline">typeeasy</code>/<code class="inline">te</code> to PATH). The <code class="inline">.deb</code> installs <code class="inline">/usr/bin/typeeasy-bin</code> (the engine) and <code class="inline">/usr/bin/typeeasy</code> (CLI with <code class="inline">new</code>, <code class="inline">gen</code>, <code class="inline">serve</code>…). If a CLI subcommand does not recognise an engine flag (e.g. <code class="inline">--syntax-check</code>), call <code class="inline">typeeasy-bin</code> directly.</div>
 
 <h2>1b. Or clone and build (to study or extend the engine)</h2>
 <p>If you want to read the interpreter source, add a native function or <a href="#/extend">extend the syntax</a>, clone the repository at the version you want and build it. You need <code class="inline">gcc</code>, <code class="inline">flex</code>, <code class="inline">bison</code>, <code class="inline">make</code> and the MariaDB/PostgreSQL/OpenSSL headers (on Windows, MSYS2/MinGW-w64).</p>
-${sh(`git clone --branch v0.1.9 https://github.com/appdeveloper777/TypeEasy.git
+${sh(`git clone --branch v0.1.10 https://github.com/appdeveloper777/TypeEasy.git
 cd TypeEasy
 
 # Linux (Ubuntu/Debian): deps, once
@@ -4454,11 +4564,11 @@ if (!ok) {
 <h2>5. Pin the engine version per service</h2>
 <p>When several services share a server, upgrading the global binary moves all of them at once. The <code class="inline">/usr/bin/typeeasy</code> CLI honours <code class="inline">TYPEEASY_BIN</code>: keep each version in its own folder and pin it per service in its <code class="inline">EnvironmentFile</code>. Then you upgrade one at a time, verify, and continue.</p>
 ${sh(`# freeze the current version
-sudo install -d /opt/typeeasy/versions/0.1.9
-sudo install -m 555 /usr/bin/typeeasy-bin /opt/typeeasy/versions/0.1.9/typeeasy-bin
+sudo install -d /opt/typeeasy/versions/0.1.10
+sudo install -m 555 /usr/bin/typeeasy-bin /opt/typeeasy/versions/0.1.10/typeeasy-bin
 
 # pin a service (EnvironmentFile of its systemd unit)
-echo "TYPEEASY_BIN=/opt/typeeasy/versions/0.1.9/typeeasy-bin" | sudo tee -a /etc/my-api.env
+echo "TYPEEASY_BIN=/opt/typeeasy/versions/0.1.10/typeeasy-bin" | sudo tee -a /etc/my-api.env
 sudo systemctl restart my-api
 
 # which binary is really running?
@@ -5083,6 +5193,7 @@ search() {
 }`)}
 ${sh(`curl "http://localhost:9000/api/search?q=shoes&page=2"`)}
 ${out('{"searching":"shoes","page":"2"}')}
+<div class="note"><strong>Since 0.1.10</strong> the value arrives <strong>decoded</strong>: <code class="inline">?q=Jos%C3%A9+P%C3%A9rez</code> &rarr; <code class="inline">"José Pérez"</code>. See <a href="#/http">HTTP: query, status &amp; escaping</a>.</div>
 
 <h2>Request body</h2>
 ${te(`[HttpPost("/api/echo")]
@@ -5425,6 +5536,113 @@ curl -i http://localhost:9000/api/download`)}
 
 <div class="pager">
   <a class="prev" href="#/cookies">&larr; Cookies and session</a>
+  <a href="#/http">HTTP (0.1.10) &rarr;</a>
+</div>
+`;
+
+PAGES.http = `
+<h1>HTTP: query, status &amp; escaping <span class="ver" style="vertical-align:middle">v0.1.10</span></h1>
+<p class="lead">Version 0.1.10 tightened how the server speaks HTTP: the query arrives decoded, there are helpers for URLs and HTML, status codes carry the right reason phrase, <code class="inline">204</code> has no body and a wrong verb answers <code class="inline">405</code>. Every example on this page was run with the 0.1.10 binary and the output is real.</p>
+
+<h2>The example API</h2>
+${te(`endpoint {
+    [HttpGet("/api/search")]
+    search() {
+        let q = request_query("q");
+        return json({ searching: q });
+    }
+
+    [HttpGet("/api/link")]
+    link() {
+        let name = request_query("name");
+        let url = concat("https://shop.example/customers?name=", url_encode(name));
+        return json({ url: url });
+    }
+
+    [HttpGet("/api/card")]
+    card() {
+        let name = request_query("name");
+        let html = concat("<p>Hello ", html_escape(name), "</p>");
+        return json({ html: html });
+    }
+
+    [HttpDelete("/api/tasks/{id}")]
+    remove() {
+        response_status(204);
+        return json({ ok: true });
+    }
+
+    [HttpPost("/api/login")]
+    login() {
+        response_status(429);
+        response_header("Retry-After", "60");
+        return json({ error: "too_many_attempts" });
+    }
+}`, "http_demo.te")}
+${sh(`typeeasy --api http_demo.te --port 9000`)}
+
+<h2>1. <code class="inline">request_query</code> arrives decoded</h2>
+<p>Browsers send spaces as <code class="inline">+</code> or <code class="inline">%20</code> and accents as <code class="inline">%C3%A9</code>. Since 0.1.10 <code class="inline">request_query</code> hands you the clean text, so a search with spaces or accents just works:</p>
+${sh(`curl "http://localhost:9000/api/search?q=Jos%C3%A9+P%C3%A9rez"`)}
+${out('{"searching":"José Pérez"}')}
+<div class="note"><strong>Behavior change.</strong> Up to 0.1.9 the value arrived raw (<code class="inline">"Jos%C3%A9+P%C3%A9rez"</code>) and a <code class="inline">LIKE</code> with it found nothing. If your code already ran its own decoder on top, remove it: decoding twice breaks literal <code class="inline">%</code> and <code class="inline">+</code>. Route parameters (<code class="inline">{id}</code>) were already decoded and do not change.</div>
+<p><strong>Long values</strong> were fixed too: a key of 128+ bytes or a value of 1024+ bytes was silently dropped (<code class="inline">""</code>). Now a 3000-character <code class="inline">?q=</code> arrives complete.</p>
+
+<h2>2. <code class="inline">url_encode</code>, <code class="inline">url_decode</code> and <code class="inline">html_escape</code></h2>
+<p>To build a link with user data, encode the value with <code class="inline">url_encode</code> (RFC 3986: space becomes <code class="inline">%20</code> and <code class="inline">&amp;</code> becomes <code class="inline">%26</code>, so it doesn't split the query):</p>
+${sh(`curl "http://localhost:9000/api/link?name=Pan+%26+Caf%C3%A9"`)}
+${out('{"url":"https://shop.example/customers?name=Pan%20%26%20Caf%C3%A9"}')}
+<p>To put user text inside HTML (an email, a receipt), pass it through <code class="inline">html_escape</code> so it isn't interpreted as tags:</p>
+${sh(`curl "http://localhost:9000/api/card?name=%3Cb%3EAna%3C%2Fb%3E"`)}
+${out('{"html":"<p>Hello &lt;b&gt;Ana&lt;/b&gt;</p>"}')}
+<p><code class="inline">url_decode</code> is for text outside <code class="inline">request_query</code> (e.g. from a file or another API):</p>
+${te(`println(url_decode("Jos%C3%A9+P%C3%A9rez"));   // José Pérez
+println(url_decode("100%zz"));                // 100%zz  (invalid escape: kept literal)`)}
+
+<h2>3. Status codes carry their reason phrase</h2>
+<p>Previously any uncommon status came out as <code class="inline">OK</code> (<code class="inline">HTTP/1.1 429 OK</code>). Now 202, 3xx, 402, 405, 409, 410, 413, 415, 429 and 501-504 carry the right phrase:</p>
+${sh(`curl -i -X POST http://localhost:9000/api/login`)}
+${out(`HTTP/1.1 429 Too Many Requests
+Content-Type: application/json
+Content-Length: 29
+Retry-After: 60
+
+{"error":"too_many_attempts"}`)}
+
+<h2>4. <code class="inline">204 No Content</code> has no body</h2>
+<p>With <code class="inline">response_status(204)</code> (or 304) the server no longer sends the handler's body nor <code class="inline">Content-Length</code>, as RFC 9110 requires. Handy for <code class="inline">DELETE</code>:</p>
+${sh(`curl -i -X DELETE http://localhost:9000/api/tasks/7`)}
+${out(`HTTP/1.1 204 No Content
+Content-Type: application/json
+`)}
+
+<h2>5. Wrong verb &rarr; <code class="inline">405</code> with <code class="inline">Allow</code></h2>
+<p>If the path exists but with another verb, the answer is <code class="inline">405 Method Not Allowed</code> and the <code class="inline">Allow</code> header lists the accepted verbs. A path that doesn't exist is still <code class="inline">404</code>:</p>
+${sh(`curl -i http://localhost:9000/api/tasks/7      # route only has DELETE
+curl -i http://localhost:9000/api/nothing      # does not exist`)}
+${out(`HTTP/1.1 405 Method Not Allowed
+Allow: DELETE
+Content-Type: application/json
+Content-Length: 30
+
+{"error":"method_not_allowed"}
+
+HTTP/1.1 404 Not Found`)}
+
+<table class="ref">
+  <tr><th>What</th><th>Up to 0.1.9</th><th>Since 0.1.10</th></tr>
+  <tr><td><code>request_query("q")</code> with <code>?q=Jos%C3%A9+P%C3%A9rez</code></td><td><code>Jos%C3%A9+P%C3%A9rez</code></td><td><code>José Pérez</code></td></tr>
+  <tr><td>Query value of 1024+ bytes</td><td><code>""</code> (dropped)</td><td>Arrives complete</td></tr>
+  <tr><td><code>response_status(429)</code></td><td><code>429 OK</code></td><td><code>429 Too Many Requests</code></td></tr>
+  <tr><td><code>response_status(204)</code></td><td>Sent body + <code>Content-Length</code></td><td>No body</td></tr>
+  <tr><td>Unregistered verb on an existing path</td><td><code>404</code></td><td><code>405</code> + <code>Allow</code></td></tr>
+  <tr><td>Encode URL / escape HTML</td><td>Your own helper</td><td><code>url_encode</code>, <code>url_decode</code>, <code>html_escape</code></td></tr>
+</table>
+
+<div class="note"><strong>How it is tested.</strong> All of this is covered by the repo's HTTP conformance suite (<code class="inline">tests/api/http_conformance_api.api.json</code>, 41 cases: verbs, 405 + <code class="inline">Allow</code>, status and reason, headers, cookies, repeated/empty/long query, UTF-8, body limit &rarr; 413) and by <code class="inline">tests/api/query_decode_api.api.json</code>. They run in CI on every change. Full detail in the <a href="https://github.com/appdeveloper777/TypeEasy/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a>.</div>
+
+<div class="pager">
+  <a class="prev" href="#/response-headers">&larr; Response headers</a>
   <a href="#/cors">CORS &rarr;</a>
 </div>
 `;
@@ -5471,7 +5689,7 @@ typeeasy --api my_api.te --cors-origin "*"`)}
 <p>Headers it sends automatically: <code class="inline">Access-Control-Allow-Origin</code>, <code class="inline">Access-Control-Allow-Methods</code> (<code class="inline">GET, POST, PUT, DELETE, PATCH, OPTIONS</code>) and <code class="inline">Access-Control-Allow-Headers</code> (<code class="inline">Content-Type, Authorization</code>).</p>
 
 <div class="pager">
-  <a class="prev" href="#/cookies">&larr; Cookies & session</a>
+  <a class="prev" href="#/http">&larr; HTTP (0.1.10)</a>
   <a href="#/database">Databases &rarr;</a>
 </div>
 `;
@@ -5711,7 +5929,7 @@ te --api-dir ./apis --workers 4 --hotreload`)}
 <p class="warn"><strong>The server speaks plain HTTP.</strong> For production, put a <strong>TLS reverse proxy</strong> (nginx, Caddy or an Ingress) in front of the binary: it terminates HTTPS and forwards to TypeEasy over local HTTP. The same applies to rate limiting and balancing across multiple <code class="inline">--workers</code>.</p>
 
 <h3>Linux — systemd (bundled in the .deb)</h3>
-${sh(`sudo apt install ./typeeasy_0.1.9_amd64.deb   # binary + CLI + 'te' alias
+${sh(`sudo apt install ./typeeasy_0.1.10_amd64.deb   # binary + CLI + 'te' alias
 sudo vi /etc/default/typeeasy-api               # .te file to serve
 sudo systemctl enable --now typeeasy-api@9001
 sudo systemctl status typeeasy-api@9001
