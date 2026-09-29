@@ -4,16 +4,6 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
-## Sin publicar
-
-### Cambios de comportamiento
-- **CSV en arm64/Android: el último campo ya no lee memoria ajena.** Sin `mmap` (todo Linux no x86_64)
-  el buffer del archivo no terminaba en NUL; en un CSV sin `\n` final el último campo arrastraba bytes
-  de memoria vecina (`"dulce"` → `"dulce + p.nombre..."`), así que `where(p => p.x == "...")` perdía la
-  última fila. x86_64 y Windows no estaban afectados. Lo detectó el smoke test del release arm64
-  (`tests/lang/10_linq_csv/csv_linq_where*.te`).
-- **Release:** los workflows prueban el artefacto antes de publicar (`scripts/release_smoke.sh`).
-
 ## 0.1.10 — 2026-09-28
 
 ### Cambios de comportamiento
@@ -34,8 +24,16 @@ que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 - **405 Method Not Allowed** (issue #9): un verbo no registrado sobre un path que sí existe (exacto o
   con `{param}`) respondía `404 Endpoint not found`. Ahora responde `405` con `Allow: <verbos del path>`,
   CORS y `{"error":"method_not_allowed"}` (sin cuerpo si es `HEAD`). Un path inexistente sigue en 404.
+- **CSV en arm64/Android: el último campo ya no lee memoria ajena.** Sin `mmap` (todo Linux no x86_64)
+  el buffer del archivo no terminaba en NUL; en un CSV sin `\n` final el último campo arrastraba bytes
+  de memoria vecina (`"dulce"` → `"dulce + p.nombre..."`), así que `where(p => p.x == "...")` perdía la
+  última fila. x86_64 y Windows no estaban afectados. Lo detectó el smoke test del release arm64
+  (`tests/lang/10_linq_csv/csv_linq_where*.te`).
 
 ### Nuevo
+- **Smoke test del artefacto antes de publicar**: Linux amd64/arm64 (`scripts/release_smoke.sh`:
+  SHA256SUMS, `.deb` en Debian limpio, binario del tar.gz == del `.deb`, `tests/lang` + `tests/api`) y
+  Windows (`ref_web` + `tests/api` con el `.exe` empaquetado). Si falla, no se publica.
 - **`url_encode(s)`, `url_decode(s)`, `html_escape(s)`** (`[STR-8]`, `tests/lang/07_stdlib/ref_web.te`,
   `docs/STDLIB.md` §4b). `url_decode` conserva literales los escapes inválidos y `%00`.
 - **Suite de conformidad HTTP** `tests/api/http_conformance_api.api.json` (41 casos: verbos, 405 + `Allow`,
