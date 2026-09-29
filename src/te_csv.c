@@ -830,6 +830,9 @@ static char *csv_read_all(FILE *fp, size_t *out_len) {
             buf = nb; cap = ncap;
         }
     }
+    /* El parser corta el ultimo campo en el NUL: sin esto, un CSV sin '\n' final
+     * leia memoria ajena (arm64/Android, que no usan mmap). len < cap siempre aqui. */
+    buf[len] = '\0';
     *out_len = len;
     return buf;
 }

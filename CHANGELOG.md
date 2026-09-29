@@ -4,6 +4,16 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
+## Sin publicar
+
+### Cambios de comportamiento
+- **CSV en arm64/Android: el último campo ya no lee memoria ajena.** Sin `mmap` (todo Linux no x86_64)
+  el buffer del archivo no terminaba en NUL; en un CSV sin `\n` final el último campo arrastraba bytes
+  de memoria vecina (`"dulce"` → `"dulce + p.nombre..."`), así que `where(p => p.x == "...")` perdía la
+  última fila. x86_64 y Windows no estaban afectados. Lo detectó el smoke test del release arm64
+  (`tests/lang/10_linq_csv/csv_linq_where*.te`).
+- **Release:** los workflows prueban el artefacto antes de publicar (`scripts/release_smoke.sh`).
+
 ## 0.1.10 — 2026-09-28
 
 ### Cambios de comportamiento
