@@ -38,16 +38,9 @@ las bibliotecas nativas y los plugins necesarios dependen del paquete y de tu ap
 
 ### ⚡ Tu primera API en 3 pasos
 
-| 1️⃣ Descarga e instala | 2️⃣ Crea `hola.te` | 3️⃣ Ejecuta y abre |
-|---|---|---|
-| Elige tu sistema arriba 👆 | `endpoint { [HttpGet("/api/hola")] Hola() { return json({ mensaje: "¡Hola!" }); } }` | `typeeasy --api hola.te` → abre **http://localhost:8080/api/hola** |
+**1️⃣ Descarga e instala** — elige tu sistema arriba 👆
 
-> ## 📝 ¿Ya lo descargaste? Ayúdanos a mejorar, cuéntanos para qué
->
-> Cuéntanos qué te llamó la atención, qué quieres construir o qué te falta para empezar.
-> Tu opinión nos ayuda a decidir las próximas mejoras. Toma 1 minuto y es voluntario.
->
-> ### 👉 [Responder la encuesta de TypeEasy](https://docs.google.com/forms/d/e/1FAIpQLSdFFyCvQQZpjo2ZPeyqrDLGDLCmuGvCQDrZv9tu5fv3rzR_Ew/viewform?usp=publish-editor)
+**2️⃣ Crea `hola.te`**
 
 ```ts
 endpoint {
@@ -55,6 +48,19 @@ endpoint {
     Hola() { return json({ mensaje: "¡Hola desde TypeEasy!" }); }
 }
 ```
+
+**3️⃣ Ejecuta y abre** **http://localhost:8080/api/hola**
+
+```bash
+typeeasy --api hola.te
+```
+
+> ## 📝 ¿Ya lo descargaste? Ayúdanos a mejorar, cuéntanos para qué
+>
+> Cuéntanos qué te llamó la atención, qué quieres construir o qué te falta para empezar.
+> Tu opinión nos ayuda a decidir las próximas mejoras. Toma 1 minuto y es voluntario.
+>
+> ### 👉 [Responder la encuesta de TypeEasy](https://docs.google.com/forms/d/e/1FAIpQLSdFFyCvQQZpjo2ZPeyqrDLGDLCmuGvCQDrZv9tu5fv3rzR_Ew/viewform?usp=publish-editor)
 
 <div align="center">
 
