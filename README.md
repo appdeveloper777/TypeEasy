@@ -42,7 +42,7 @@ las bibliotecas nativas y los plugins necesarios dependen del paquete y de tu ap
 |---|---|---|
 | Elige tu sistema arriba 👆 | `endpoint { [HttpGet("/api/hola")] Hola() { return json({ mensaje: "¡Hola!" }); } }` | `typeeasy --api hola.te` → abre **http://localhost:8080/api/hola** |
 
-> ## 📝 ¿Ya lo descargaste? Cuéntanos para qué
+> ## 📝 ¿Ya lo descargaste? Ayúdanos a mejorar, cuéntanos para qué
 >
 > Cuéntanos qué te llamó la atención, qué quieres construir o qué te falta para empezar.
 > Tu opinión nos ayuda a decidir las próximas mejoras. Toma 1 minuto y es voluntario.
