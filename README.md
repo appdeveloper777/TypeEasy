@@ -16,9 +16,33 @@ Escribís un endpoint con sintaxis tipo C# / TypeScript y lo servís con el moto
 de TypeEasy, que integra el intérprete y el servidor HTTP. Docker es opcional;
 las bibliotecas nativas y los plugins necesarios dependen del paquete y de tu aplicación.
 
+<br>
+
+## ⬇️ Descárgalo gratis
+
+**Un solo binario · sin Python ni Node.js · listo en 1 minuto**
+
+<a href="https://github.com/appdeveloper777/TypeEasy/releases/latest"><img src="https://img.shields.io/badge/Windows-Instalador%20.exe-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Descargar TypeEasy para Windows" height="42"></a>
+&nbsp;
+<a href="https://github.com/appdeveloper777/TypeEasy/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb%20%C2%B7%20tar.gz-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Descargar TypeEasy para Linux" height="42"></a>
+&nbsp;
+<a href="https://github.com/appdeveloper777/TypeEasy/releases/latest"><img src="https://img.shields.io/badge/Android-Termux%20arm64-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Descargar TypeEasy para Android" height="42"></a>
+
+<a href="https://github.com/appdeveloper777/TypeEasy/releases/latest"><img src="https://img.shields.io/github/v/release/appdeveloper777/TypeEasy?label=%C3%BAltima%20versi%C3%B3n&style=flat-square&color=8A2BE2" alt="Última versión"></a>
+<img src="https://img.shields.io/badge/licencia-MIT%20%C2%B7%20gratis-2ea44f?style=flat-square" alt="Licencia MIT, gratis">
+<a href="https://appdeveloper777.github.io/TypeEasy/#/home"><img src="https://img.shields.io/badge/tutorial-paso%20a%20paso-ff7a00?style=flat-square" alt="Tutorial paso a paso"></a>
+
+<sub>Windows 10/11 (instalador o .zip) · Linux amd64/arm64 (.deb o .tar.gz) · Android arm64 (Termux)</sub>
+
 </div>
 
-> ## 📝 ¿Por qué descargaste TypeEasy?
+### ⚡ Tu primera API en 3 pasos
+
+| 1️⃣ Descarga e instala | 2️⃣ Crea `hola.te` | 3️⃣ Ejecuta y abre |
+|---|---|---|
+| Elige tu sistema arriba 👆 | `endpoint { [HttpGet("/api/hola")] Hola() { return json({ mensaje: "¡Hola!" }); } }` | `typeeasy --api hola.te` → abre **http://localhost:8080/api/hola** |
+
+> ## 📝 ¿Ya lo descargaste? Cuéntanos para qué
 >
 > Cuéntanos qué te llamó la atención, qué quieres construir o qué te falta para empezar.
 > Tu opinión nos ayuda a decidir las próximas mejoras. Toma 1 minuto y es voluntario.
