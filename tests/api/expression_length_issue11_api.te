@@ -1,0 +1,15 @@
+// xfail: issue #11. Parenthesized string expression .length differs in API mode.
+let ValidateExpressionName = fn(raw) => {
+    let p=json_parse(raw);
+    let rows=p["rows"];
+    for(let row in rows){
+        if((""+row["name"]).length>4){response_status(400);return "too_long";}
+    }
+    return "valid";
+};
+endpoint {
+    [HttpGet("/health")]
+    async Health(){return json({ok:true});}
+    [HttpPost("/validate")]
+    async Validate(){let raw=request_body();let result=ValidateExpressionName(raw);return json({result:result});}
+}

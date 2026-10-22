@@ -1,0 +1,21 @@
+// xfail: issue #10. Nested JSON list assignment must not abort an API worker.
+let EnrichNestedRows = fn(p) => {
+    let rows=p["rows"];
+    for(let row in rows){
+        var details=[];
+        details.push({id:1,name:"Example"});
+        row["details"]=details;
+    }
+    return "";
+};
+let EnrichRaw = fn(raw) => {
+    let p=json_parse(raw);
+    EnrichNestedRows(p);
+    return json_stringify(p);
+};
+endpoint {
+    [HttpGet("/health")]
+    async Health(){return json({ok:true});}
+    [HttpPost("/enrich")]
+    async Enrich(){let raw=request_body();return json(EnrichRaw(raw));}
+}
