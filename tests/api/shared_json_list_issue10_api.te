@@ -1,0 +1,14 @@
+// xfail: TypeEasy issue #10, a list transferred between parsed maps corrupts ownership.
+let TransferPayments = fn(raw) => {
+    var data=json_parse(raw);
+    let incoming=data;
+    data=json_parse("{\"pagos\":[{\"monto\":\"5\"}]}");
+    data["pagos"]=incoming["pagos"];
+    return json_stringify(data);
+};
+endpoint {
+    [HttpGet("/health")]
+    async Health(){return json({ok:true});}
+    [HttpPost("/transfer")]
+    async Transfer(){let raw=request_body();return json(TransferPayments(raw));}
+}

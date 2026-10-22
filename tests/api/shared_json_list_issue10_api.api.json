@@ -1,0 +1,35 @@
+{
+    "entry":  "shared_json_list_issue10_api.te",
+    "cases":  [
+                  {
+                      "body":  {
+                                   "pagos":  [
+                                                 {
+                                                     "monto":  "1"
+                                                 },
+                                                 {
+                                                     "monto":  "10"
+                                                 }
+                                             ]
+                               },
+                      "name":  "list transferred between parsed maps keeps worker alive",
+                      "xfail":  "TypeEasy issue #10: sharing a list between parsed maps can double free or SIGSEGV in API mode",
+                      "path":  "/transfer",
+                      "method":  "POST",
+                      "expect":  {
+                                     "json":  {
+                                                  "pagos":  [
+                                                                {
+                                                                    "monto":  "1"
+                                                                },
+                                                                {
+                                                                    "monto":  "10"
+                                                                }
+                                                            ]
+                                              },
+                                     "status":  200
+                                 }
+                  }
+              ],
+    "health":  "/health"
+}
