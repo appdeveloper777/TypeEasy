@@ -1637,5 +1637,38 @@
       "count": 2,
       "uniques": 1
     }
+  },
+  {
+    "timestamp": "2026-10-20T00:00:00Z",
+    "clones": {
+      "count": 5,
+      "uniques": 3
+    },
+    "views": {
+      "count": 5,
+      "uniques": 1
+    }
+  },
+  {
+    "timestamp": "2026-10-21T00:00:00Z",
+    "clones": {
+      "count": 2,
+      "uniques": 2
+    },
+    "views": {
+      "count": 0,
+      "uniques": 0
+    }
+  },
+  {
+    "timestamp": "2026-10-22T00:00:00Z",
+    "clones": {
+      "count": 8,
+      "uniques": 6
+    },
+    "views": {
+      "count": 0,
+      "uniques": 0
+    }
   }
 ]
