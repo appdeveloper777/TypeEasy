@@ -50,7 +50,6 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-libgomp
             mingw-w64-x86_64-libmariadbclient
-            mingw-w64-x86_64-freetds
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-make
             mingw-w64-x86_64-cmake
@@ -61,6 +60,30 @@ jobs:
             make
             unzip
             curl
+
+      # FreeTDS (conector SQL Server sqlserver_*) se instala aparte: en el
+      # runner la db bundle de setup-msys2 a veces resuelve
+      # `mingw-w64-x86_64-freetds` como "target not found" y, al ir en el
+      # `install:` de arriba, abortaba TODO el paso (pacman falla en bloque).
+      # Un `pacman -Syy` forzado + reintentos refresca la db y lo instala; si
+      # tras reintentar sigue ausente, falla fuerte (NO degradamos a stub: el
+      # release Windows debe conservar el bridge real; el smoke#4 lo verifica).
+      - name: Install FreeTDS (SQL Server connector)
+        shell: msys2 {0}
+        run: |
+          set -u
+          for i in 1 2 3 4 5; do
+            pacman -Syy --noconfirm || true
+            if pacman -S --noconfirm --needed --overwrite '*' mingw-w64-x86_64-freetds; then
+              echo "=== FreeTDS instalado (intento $i) ==="
+              exit 0
+            fi
+            echo "--- FreeTDS no disponible aun; reintento $i/5 ---" >&2
+            sleep 10
+          done
+          echo "ERROR: no se pudo instalar mingw-w64-x86_64-freetds tras 5 reintentos." >&2
+          echo "       El conector SQL Server (sqlserver_*) no se puede enlazar." >&2
+          exit 1
 
       - name: Build OpenSSL-based libmariadb.dll
         shell: msys2 {0}
