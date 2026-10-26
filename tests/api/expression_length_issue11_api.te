@@ -1,0 +1,19 @@
+// xfail: issue #11 (SEPARATE bug, NOT fixed in 0.1.11). `.length` on a
+// parenthesized string expression resolves wrong in API mode:
+// `(""+row["name"]).length` -> "is not a valid object to access an attribute".
+// This is an expression-evaluation defect, independent of the #10 double-free
+// teardown fix. ERP workaround: materialize the string in a variable first.
+let ValidateExpressionName = fn(raw) => {
+    let p=json_parse(raw);
+    let rows=p["rows"];
+    for(let row in rows){
+        if((""+row["name"]).length>4){response_status(400);return "too_long";}
+    }
+    return "valid";
+};
+endpoint {
+    [HttpGet("/health")]
+    async Health(){return json({ok:true});}
+    [HttpPost("/validate")]
+    async Validate(){let raw=request_body();let result=ValidateExpressionName(raw);return json({result:result});}
+}

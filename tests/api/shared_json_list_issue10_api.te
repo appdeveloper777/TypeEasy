@@ -1,0 +1,17 @@
+// Regression (TE issue #10, fixed in 0.1.11): a list transferred between two
+// parsed JSON maps must keep the worker alive (was: double free / SIGSEGV at
+// teardown because the list node was a child of two request-owned roots and the
+// per-root free freed it twice). Mirrors the ERP pre-invoice -> invoice path.
+let TransferPayments = fn(raw) => {
+    var data=json_parse(raw);
+    let incoming=data;
+    data=json_parse("{\"pagos\":[{\"monto\":\"5\"}]}");
+    data["pagos"]=incoming["pagos"];
+    return json_stringify(data);
+};
+endpoint {
+    [HttpGet("/health")]
+    async Health(){return json({ok:true});}
+    [HttpPost("/transfer")]
+    async Transfer(){let raw=request_body();return json(TransferPayments(raw));}
+}

@@ -317,6 +317,7 @@ ASTNode* from_csv_to_dataframe(const char* filename, ClassNode* cls);
 
 ASTNode *create_list_node(ASTNode *items);
 void te_req_free_json_tree(ASTNode *root);
+void te_req_free_forest(ASTNode **roots, int nroots);
 void te_ret_scalar(ASTNode *n);
 void te_free_lambda_result(ASTNode *r);
 void te_req_owned_ast_register(ASTNode *root);

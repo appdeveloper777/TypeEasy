@@ -4291,6 +4291,100 @@ void te_req_free_json_tree(ASTNode *root) {
     free_ast(root);
 }
 
+/* v0.1.11 (fix TE issues #10/#11): libera el BOSQUE de raices json_parse / list /
+ * map registradas por-request (g_vm.req_owned_ast), visitando cada nodo UNA sola
+ * vez aunque un nodo sea alcanzable desde DOS raices distintas. El free por-raiz
+ * anterior (bucle de te_req_free_json_tree por cada entrada) liberaba dos veces el
+ * nodo compartido cuando una asignacion lo cruza entre arboles:
+ *   m["k"] = otroParseado["k"];        // issue #10 (lista compartida)
+ *   row["x"] = listaFresca;            // issue #10 (la lista fresca es otra raiz)
+ *   data["pagos"] = incoming["pagos"]; // conversion pre-factura -> factura
+ * El doble free daba `double free or corruption` / `free(): invalid pointer` ->
+ * SIGABRT/SIGSEGV: el worker --api moria antes de responder (nginx: 502).
+ * Este fix SOLO cambia el TEARDOWN: el aliasing de contenedores en runtime queda
+ * intacto (misma semantica de referencia del lenguaje). Dedup por direccion con
+ * un set open-addressing de vida corta; espejo exacto del free de free_ast
+ * (from_pool, borrowed_children, strings internados) + strip del indice lateral. */
+typedef struct { ASTNode **slots; size_t cap, count; } TeNodeSet;
+
+static int te_nodeset_add(TeNodeSet *s, ASTNode *p) {
+    if ((s->count + 1) * 10 >= s->cap * 7) {            /* mantener load < 0.7 */
+        size_t ncap = s->cap ? s->cap * 2 : 256;
+        ASTNode **n = (ASTNode**)calloc(ncap, sizeof(ASTNode*));
+        if (!n) return 1;                               /* OOM: tratar como nuevo (peor caso: como antes) */
+        for (size_t i = 0; i < s->cap; i++) {
+            ASTNode *q = s->slots[i];
+            if (!q) continue;
+            size_t j = (size_t)(((uintptr_t)q * 11400714819323198485ULL) >> 32) & (ncap - 1);
+            while (n[j]) j = (j + 1) & (ncap - 1);
+            n[j] = q;
+        }
+        free(s->slots); s->slots = n; s->cap = ncap;
+    }
+    size_t mask = s->cap - 1;
+    size_t j = (size_t)(((uintptr_t)p * 11400714819323198485ULL) >> 32) & mask;
+    while (s->slots[j]) { if (s->slots[j] == p) return 0; j = (j + 1) & mask; }
+    s->slots[j] = p; s->count++;
+    return 1;
+}
+
+void te_req_free_forest(ASTNode **roots, int nroots) {
+    if (!roots || nroots <= 0) return;
+    TeNodeSet seen = { NULL, 0, 0 };
+    size_t scap = 256, sp = 0;
+    ASTNode **stack = (ASTNode**)malloc(scap * sizeof(ASTNode*));
+    if (!stack) {   /* OOM: fallback al free por-raiz (puede double-free, pero sin memoria no hay opcion mejor) */
+        for (int i = 0; i < nroots; i++) te_req_free_json_tree(roots[i]);
+        return;
+    }
+    for (int i = 0; i < nroots; i++) if (roots[i]) stack[sp++] = roots[i];
+
+    while (sp > 0) {
+        /* asegurar hueco para hasta 4 pushes (next + left + right + chain_recv) */
+        if (sp + 4 > scap) {
+            size_t ncap = scap * 2;
+            ASTNode **grown = (ASTNode**)realloc(stack, ncap * sizeof(ASTNode*));
+            if (!grown) { /* sin crecer: procesar sin apilar hijos para no desbordar */
+                ASTNode *x = stack[--sp];
+                if (x && !x->from_pool && te_nodeset_add(&seen, x)) {
+                    if (x->type) {
+                        if (nk_of(x) == NK_LIST) { te_list_idx_free((TEListIdx*)x->extra); x->extra = NULL; }
+                        else if (nk_of(x) == NK_OBJECT_LITERAL || strcmp(x->type, TE_T_MAP) == 0) { te_map_hash_free((TEMapHash*)x->extra); x->extra = NULL; }
+                    }
+                    /* dejar hijos vivos (leak) antes que corromper: raro (solo OOM) */
+                }
+                continue;
+            }
+            stack = grown; scap = ncap;
+        }
+        ASTNode *x = stack[--sp];
+        if (!x) continue;
+        /* Pool nodes (CSV/LINQ wrappers): no se liberan; solo seguir la cadena ->next. */
+        if (x->from_pool) { if (te_nodeset_add(&seen, x) && x->next) stack[sp++] = x->next; continue; }
+        if (!te_nodeset_add(&seen, x)) continue;   /* nodo compartido ya liberado por otra raiz */
+        /* indice lateral por-nodo (free_ast no lo toca) */
+        if (x->type) {
+            if (nk_of(x) == NK_LIST) { te_list_idx_free((TEListIdx*)x->extra); x->extra = NULL; }
+            else if (nk_of(x) == NK_OBJECT_LITERAL || strcmp(x->type, TE_T_MAP) == 0) { te_map_hash_free((TEMapHash*)x->extra); x->extra = NULL; }
+        }
+        /* cuerpo del nodo: mismo criterio que free_ast */
+        if (x->type && x->type != te_csv_state()->wrapper_obj_type) free(x->type);
+        if (x->str_value && !x->str_interned) free(x->str_value);
+        if (x->id && !x->id_interned) free(x->id);
+        int borrowed = x->borrowed_children;
+        ASTNode *l = x->left, *r = x->right, *cr = x->chain_recv, *nx = x->next;
+        free(x);
+        if (nx) stack[sp++] = nx;                  /* la cadena ->next siempre se recorre */
+        if (!borrowed) {                           /* hijos prestados (plantilla) no se tocan */
+            if (l)  stack[sp++] = l;
+            if (r)  stack[sp++] = r;
+            if (cr) stack[sp++] = cr;
+        }
+    }
+    free(stack);
+    free(seen.slots);
+}
+
 /* Forward decl needed because te_list_get_idx is defined further below. */
 static TEListIdx* te_list_get_idx(ASTNode *list);
 

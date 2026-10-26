@@ -420,8 +420,12 @@ static void te_req_owned_free_all(void) {
     extern void te_closures_free_request(void);
     for (int i = 0; i < g_vm.req_owned_count; i++) free_object_node(g_vm.req_owned_objects[i]);
     g_vm.req_owned_count = 0;
-    extern void te_req_free_json_tree(ASTNode *root);
-    for (int i = 0; i < g_vm.req_owned_ast_count; i++) te_req_free_json_tree(g_vm.req_owned_ast[i]);
+    /* v0.1.11 (fix TE #10/#11): liberar TODAS las raices json_parse/list/map del
+     * request como un bosque con dedup por puntero, no una por una. Un nodo
+     * cruzado entre dos raices (m["k"]=otroParseado["k"], row["x"]=listaFresca,
+     * pre-factura->factura) se liberaba dos veces -> SIGABRT y el worker moria. */
+    extern void te_req_free_forest(ASTNode **roots, int nroots);
+    te_req_free_forest(g_vm.req_owned_ast, g_vm.req_owned_ast_count);
     g_vm.req_owned_ast_count = 0;
     te_closures_free_request();
 }

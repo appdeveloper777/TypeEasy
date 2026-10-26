@@ -1,0 +1,24 @@
+// Regression (TE issue #10, fixed in 0.1.11): assigning a freshly-built list to a
+// field of a parsed JSON map must not abort an API worker (was: invalid free at
+// per-request teardown because the fresh list is itself a request-owned root and
+// also a child of the parsed tree -> freed twice).
+let EnrichNestedRows = fn(p) => {
+    let rows=p["rows"];
+    for(let row in rows){
+        var details=[];
+        details.push({id:1,name:"Example"});
+        row["details"]=details;
+    }
+    return "";
+};
+let EnrichRaw = fn(raw) => {
+    let p=json_parse(raw);
+    EnrichNestedRows(p);
+    return json_stringify(p);
+};
+endpoint {
+    [HttpGet("/health")]
+    async Health(){return json({ok:true});}
+    [HttpPost("/enrich")]
+    async Enrich(){let raw=request_body();return json(EnrichRaw(raw));}
+}
