@@ -5448,6 +5448,26 @@ static double te_ev_access_attr(ASTNode *node) {
                 (strcmp(objRef->type, TE_T_STRING) == 0 || strcmp(objRef->type, TE_T_STRING_LITERAL) == 0)) {
                 return (double)(objRef->str_value ? strlen(objRef->str_value) : 0);
             }
+            /* issue #11: `.length` sobre una EXPRESIÓN (concatenación, ternario,
+             * `(""+x)`, etc.) — el receptor no es un id/literal/índice simple, así
+             * que se evalúa al valor y se mide por tipo (string -> strlen,
+             * lista/mapa -> nº de elementos). Antes caía al error genérico de
+             * acceso a atributo ("'<expr>' is not a valid object"). */
+            {
+                TeValue rv; te_val_init(&rv);
+                te_eval_value(objRef, &rv);
+                double dl = -1;
+                if (rv.vtype == VAL_STRING)
+                    dl = (double)(rv.value.string_value ? strlen(rv.value.string_value) : 0);
+                else if (rv.vtype == VAL_OBJECT && rv.type) {
+                    if (strcmp(rv.type, TE_T_LIST) == 0)
+                        dl = (double)list_length((ASTNode*)(intptr_t)rv.value.object_value);
+                    else if (strcmp(rv.type, TE_T_MAP) == 0 || strcmp(rv.type, TE_T_OBJECT_LITERAL) == 0)
+                        dl = (double)map_length((ASTNode*)(intptr_t)rv.value.object_value);
+                }
+                te_val_free(&rv);
+                if (dl >= 0) return dl;
+            }
         }
 
         /* Bug fix: arr[i].attr — objRef es un ACCESS_EXPR (indexing),

@@ -1,8 +1,8 @@
-// xfail: issue #11 (SEPARATE bug, NOT fixed in 0.1.11). `.length` on a
-// parenthesized string expression resolves wrong in API mode:
-// `(""+row["name"]).length` -> "is not a valid object to access an attribute".
-// This is an expression-evaluation defect, independent of the #10 double-free
-// teardown fix. ERP workaround: materialize the string in a variable first.
+// Regression (TE issue #11, fixed in 0.1.12): `.length` on a parenthesized
+// string expression resolves correctly in API mode. Before the fix,
+// `(""+row["name"]).length` emitted "is not a valid object to access an
+// attribute" and the length guard never triggered (te_ev_access_attr handled
+// only list/map/string-var/string-literal receivers, not a general expression).
 let ValidateExpressionName = fn(raw) => {
     let p=json_parse(raw);
     let rows=p["rows"];
