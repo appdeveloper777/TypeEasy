@@ -1,0 +1,16 @@
+// obj.cb(args) donde cb es un atributo dynamic que guarda un lambda (rama "Fase F" de
+// interpret_call_method_impl). El retorno escalar se copia a __ret__ y el nodo temporal se libera.
+var hits = 0;
+class Holder {
+    cb : dynamic;
+    fac : int;
+    __constructor() { this.fac = 1; }
+}
+let h = new Holder();
+h.cb = fn(n) => { hits = hits + n; return "cb-" + n; };
+h.cb(1);
+h.cb(2);
+println(hits);
+let v = h.cb(4);
+println(v);
+println(hits);
