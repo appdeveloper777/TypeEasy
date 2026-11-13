@@ -1,0 +1,12 @@
+// spec: STR-6 (regresion: repeat/replace con comprobacion de overflow; comportamiento normal intacto)
+println("ab".repeat(3));
+println("[" + "ab".repeat(0) + "]");
+println("[" + "ab".repeat(-2) + "]");
+println("[" + "".repeat(5) + "]");
+println("x".repeat(1));
+println("a-b-c".replace("-", "--"));
+println("aaa".replace("a", "bb"));
+println("abc".replace("b", ""));
+println("abc".replace("z", "y"));
+println("abc".replace("", "y"));
+println("hola hola".replace("hola", "chau"));

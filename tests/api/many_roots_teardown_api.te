@@ -1,0 +1,21 @@
+// Regression (fixed in 0.1.15): per-request teardown (te_req_free_forest) used a
+// fixed 256-pointer stack and dumped ALL request-owned roots into it before the
+// capacity check -> heap overflow / `realloc(): invalid next size` (SIGABRT) when a
+// single request registered >256 roots (map literals, json_parse results...).
+let ManyRoots = fn(n) => {
+    var i = 0;
+    var total = 0;
+    while (i < n) {
+        let m = { a: 1 };
+        let p = json_parse("[{\"c\":\"1\"}]");
+        total = total + m["a"];
+        i = i + 1;
+    }
+    return total;
+};
+endpoint {
+    [HttpGet("/health")]
+    async Health(){return json({ok:true});}
+    [HttpGet("/many")]
+    async Many(){return json({total:ManyRoots(400)});}
+}

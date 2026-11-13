@@ -13,8 +13,10 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ast_internal.h"   /* te_runtime_fatalf */
 
 int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
     if (!node || !node->id) return 0;
@@ -115,10 +117,15 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
             ASTNode *r = create_ast_leaf(TE_T_STRING, 0, s, NULL);
             te_ret_scalar(r);
         } else {
-            int count = 0; const char *p = s;
+            size_t count = 0; const char *p = s;
             while ((p = strstr(p, needle)) != NULL) { count++; p += nl; }
-            size_t out_len = strlen(s) + count * (rl > nl ? rl - nl : 0);
+            size_t sl0 = strlen(s);
+            size_t grow = (rl > nl) ? rl - nl : 0;
+            if (grow != 0 && count > (SIZE_MAX - 1 - sl0) / grow)
+                te_runtime_fatalf("Error: string.replace result too large.");
+            size_t out_len = sl0 + count * grow;
             char *out = (char*)malloc(out_len + 1);
+            if (!out) te_runtime_fatalf("Error: string.replace out of memory.");
             char *o = out; const char *cur = s;
             while (1) {
                 const char *next = strstr(cur, needle);
@@ -223,9 +230,12 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         int n = arg ? (int)evaluate_expression(arg) : 0;
         if (n < 0) n = 0;
         size_t sl = strlen(s);
+        if (n > 0 && sl > (SIZE_MAX - 1) / (size_t)n)
+            te_runtime_fatalf("Error: string.repeat result too large.");
         char *out = (char*)malloc(sl * (size_t)n + 1);
-        for (int i = 0; i < n; i++) memcpy(out + i * sl, s, sl);
-        out[sl * n] = 0;
+        if (!out) te_runtime_fatalf("Error: string.repeat out of memory.");
+        for (int i = 0; i < n; i++) memcpy(out + (size_t)i * sl, s, sl);
+        out[sl * (size_t)n] = 0;
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
         free(out);
         te_ret_scalar(r);
