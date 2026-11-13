@@ -61,6 +61,6 @@ int te_math_method_dispatch(ASTNode *node, ASTNode *objNode) {
         te_fmt_double(buf, sizeof(buf), res);
         r = create_ast_leaf(TE_T_FLOAT, 0, buf, NULL);
     }
-    add_or_update_variable(TE_SYM_RET, r);
+    te_ret_scalar(r);
     return 1;
 }

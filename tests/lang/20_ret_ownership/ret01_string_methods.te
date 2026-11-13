@@ -1,0 +1,33 @@
+// spec: RET-1
+// Salida observable de los metodos de string cuyo resultado pasa por __ret__
+// (el fix de temporales no debe cambiar ningun valor). Se repite en un bucle
+// para que cualquier temporal reutilizado/liberado de mas se note.
+let s = "  Hola Mundo 123  ";
+let t = s.trim();
+println("[" + t + "] [" + t.upper() + "] [" + t.lower() + "]");
+println(t.length);
+println(t.contains("Mundo")); println(t.contains("zzz"));
+println(t.substring(1, 4)); println(t.substring(5)); println(t.substring(9, 2));
+let w = "7";
+println(w.pad_left(4, "0")); println(w.pad_right(4, "*")); println(w.pad_left(1)); println(w.pad_left(0, "x"));
+println(t.starts_with("Hola")); println(t.starts_with("hola")); println(t.ends_with("123")); println(t.ends_with("x"));
+let ab = "ab";
+println(ab.repeat(3)); println(ab.repeat(0)); println(ab.repeat(-2));
+println(t.char_at(0)); println(t.char_at(5)); println("[" + t.char_at(99) + "]");
+println(t.char_code(0)); println(t.char_code(99));
+println(t.index_of("Mundo")); println(t.index_of("zzz")); println(t.find("o"));
+let n1 = "42";
+let n2 = "3.5";
+println(n1.parse_int() + 1); println(n2.parse_float() * 2); println("abc".parse_int());
+println(t.replace("o", "0")); println(t.replace("", "x"));
+var acc = "";
+var i = 0;
+while (i < 40) {
+    let p = ab.repeat(2);
+    let pl = p.pad_left(6, "-");
+    let ch = t.char_at(i % 14);
+    acc = pl + "|" + ch;
+    i = i + 1;
+}
+println(acc);
+println(t.length + ab.length + 1);

@@ -1626,7 +1626,9 @@ static void te_sql_envelope_wrap(int force) {
     #undef ENV_ADD
     /* __ret__ toma ownership de `env` (te_value_to_variable guarda el ASTNode
      * como object_value para OBJECT_LITERAL); el string viejo se libera dentro
-     * de add_or_update_variable. */
+     * de add_or_update_variable. Registrado en el bosque por-request (dedup por
+     * puntero) para liberarlo a fin de request, como json_parse; en modo CLI es no-op. */
+    te_req_owned_ast_register(env);
     add_or_update_variable(TE_SYM_RET, env);
 }
 
@@ -6984,7 +6986,7 @@ static void interpret_call_expr(ASTNode *node) {
     ASTNode *lambda = (ASTNode*)(intptr_t)cv.value.object_value;
     te_val_free(&cv);
     ASTNode *res = call_lambda(lambda, node->left);
-    if (res) add_or_update_variable(TE_SYM_RET, res);
+    if (res) { add_or_update_variable(TE_SYM_RET, res); te_free_lambda_result(res); }
 }
 
 /* v0.0.24 — user-defined `@<name>` decorator guard.
@@ -7010,7 +7012,7 @@ int te_invoke_decorator_guard(const char *name) {
 
     ASTNode *lambda = (ASTNode*)(intptr_t)fv->value.object_value;
     ASTNode *res = call_lambda(lambda, NULL);
-    if (res) add_or_update_variable(TE_SYM_RET, res);
+    if (res) { add_or_update_variable(TE_SYM_RET, res); te_free_lambda_result(res); }
 
     Variable *ret = find_variable(TE_SYM_RET);
     if (!ret) return 0;
@@ -7144,15 +7146,15 @@ static int te_cm_fusion_where_chain(ASTNode *node, ASTNode *objNode) {
                         return 1;
                     }
                     if (outer_kind == 2) {
-                        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+                        te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                         return 1;
                     }
                     if (outer_kind == 3) {
                         if (sum_is_int && sum_acc == (double)(long long)sum_acc) {
-                            add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)sum_acc, NULL, NULL));
+                            te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)sum_acc, NULL, NULL));
                         } else {
                             char buf[64]; te_fmt_double(buf, sizeof(buf), sum_acc);
-                            add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                            te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                         }
                         return 1;
                     }
@@ -7215,7 +7217,7 @@ static int te_cm_fusion_where_aggregate(ASTNode *node, ASTNode *objNode) {
                                 if (outer_is_countWhere) {
                                     long long total = te_colcache_count(cc, mask);
                                     free(mask);
-                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)total, NULL, NULL));
+                                    te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)total, NULL, NULL));
                                     return 1;
                                 }
                                 long long itotal = 0; double dtotal = 0.0; int is_int = 1;
@@ -7223,14 +7225,14 @@ static int te_cm_fusion_where_aggregate(ASTNode *node, ASTNode *objNode) {
                                     free(mask);
                                     if (is_int) {
                                         if (itotal >= INT_MIN && itotal <= INT_MAX) {
-                                            add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)itotal, NULL, NULL));
+                                            te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)itotal, NULL, NULL));
                                         } else {
                                             char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
-                                            add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                                            te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                                         }
                                     } else {
                                         char buf[64]; te_fmt_double(buf, sizeof(buf), dtotal);
-                                        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                                        te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                                     }
                                     return 1;
                                 }
@@ -7267,17 +7269,17 @@ static int te_cm_fusion_where_aggregate(ASTNode *node, ASTNode *objNode) {
                             free(arr);
                             if (!fail) {
                                 if (outer_is_countWhere) {
-                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)cnt, NULL, NULL));
+                                    te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)cnt, NULL, NULL));
                                 } else if (!any_float) {
                                     if (itotal >= INT_MIN && itotal <= INT_MAX) {
-                                        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)itotal, NULL, NULL));
+                                        te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)itotal, NULL, NULL));
                                     } else {
                                         char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
-                                        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                                        te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                                     }
                                 } else {
                                     char buf[64]; te_fmt_double(buf, sizeof(buf), dtotal + (double)itotal);
-                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                                    te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                                 }
                                 return 1;
                             }
@@ -7298,17 +7300,17 @@ static int te_cm_fusion_where_aggregate(ASTNode *node, ASTNode *objNode) {
                         }
                         if (!fail) {
                             if (outer_is_countWhere) {
-                                add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)cnt, NULL, NULL));
+                                te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)cnt, NULL, NULL));
                             } else if (!any_float) {
                                 if (itotal >= INT_MIN && itotal <= INT_MAX) {
-                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)itotal, NULL, NULL));
+                                    te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)itotal, NULL, NULL));
                                 } else {
                                     char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
-                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                                    te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                                 }
                             } else {
                                 char buf[64]; te_fmt_double(buf, sizeof(buf), dtotal + (double)itotal);
-                                add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                                te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                             }
                             return 1;
                         }
@@ -7419,7 +7421,7 @@ static int te_cm_list_builtin(ASTNode *node, ASTNode *objNode, Variable *v) {
         }
         if (list && node->id && strcmp(node->id, "pop") == 0) {
             ASTNode *cur = list->left;
-            if (!cur) { add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
+            if (!cur) { te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
             te_colcache_invalidate(list);     /* v0.0.13 (perf) */
             if (!cur->next) {
                 /* single element: capture it, then empty the list */
@@ -7933,7 +7935,7 @@ static void interpret_call_method_impl(ASTNode *node) {
     if (node->value == 1) {
         if (!v || (v->type && strcmp(v->type, TE_T_NULL) == 0)) {
             ASTNode *r = create_ast_leaf(TE_T_NULL, 0, NULL, NULL);
-            add_or_update_variable(TE_SYM_RET, r);
+            te_ret_scalar(r);
             return;
         }
     }

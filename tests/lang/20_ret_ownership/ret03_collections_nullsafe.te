@@ -1,0 +1,24 @@
+// spec: RET-3
+// length/contains/has de listas y mapas, acceso null-safe `?.`, y metodos
+// agregados cuyo resultado escalar pasa por __ret__.
+let lst = [1, 2, 3, 4];
+let mp = { "a": 1, "b": 2 };
+let nada = null;
+println(lst.length); println(lst.contains(3)); println(lst.contains(9));
+println(mp.length); println(mp.has("a")); println(mp.has("z"));
+println(nada?.x); println(nada?.x ?? "dflt");
+let obj = { "x": 5 };
+println(obj?.x);
+let nm = "ok";
+println(nm?.length);
+var i = 0;
+var n = 0;
+while (i < 30) {
+    let l = lst.length;
+    let c = lst.contains(2);
+    let h = mp.has("b");
+    let q = nada?.y;
+    if (l == 4 && c && h) { n = n + 1; }
+    i = i + 1;
+}
+println(n);

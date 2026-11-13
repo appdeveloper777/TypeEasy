@@ -57,7 +57,7 @@ int te_map_method_dispatch(ASTNode *node, ASTNode *map) {
         ASTNode *r = (ASTNode*)calloc(1, sizeof(ASTNode));
         memset(r, 0, sizeof(ASTNode));
         r->type = strdup(TE_T_NUMBER); r->value = found;
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(m, "remove") == 0) {
@@ -83,7 +83,7 @@ int te_map_method_dispatch(ASTNode *node, ASTNode *map) {
     /* ---- Ola 13: map size/length, clear ---- */
     if (strcmp(m, "size") == 0 || strcmp(m, "length") == 0) {
         int n = map_length(map);  /* uses cache */
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, n, NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, n, NULL, NULL));
         return 1;
     }
     if (strcmp(m, "clear") == 0) {

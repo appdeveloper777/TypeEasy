@@ -201,7 +201,7 @@ static int adapt_spawn(ASTNode *node, ASTNode *args) {
     (void)node;
     int id = te_task_find_free();
     if (id < 0 || !args) {
-        add_or_update_variable(TE_SYM_RET,
+        te_ret_scalar(
             create_ast_leaf_number(TE_T_INT, -1, NULL, NULL));
         return 1;
     }
@@ -212,7 +212,7 @@ static int adapt_spawn(ASTNode *node, ASTNode *args) {
     T()->tasks[id].lambda = args; /* raw lambda node; AST outlives the task */
     T()->tasks[id].slot   = -1;
     T()->tasks[id].result = NULL;
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf_number(TE_T_INT, id, NULL, NULL));
     return 1;
 }
@@ -228,7 +228,7 @@ static int adapt_lang_call_async(ASTNode *node, ASTNode *args) {
     int id = te_task_find_free();
     if (id < 0) {
         if (req) free(req);
-        add_or_update_variable(TE_SYM_RET,
+        te_ret_scalar(
             create_ast_leaf_number(TE_T_INT, -1, NULL, NULL));
         return 1;
     }
@@ -243,7 +243,7 @@ static int adapt_lang_call_async(ASTNode *node, ASTNode *args) {
     T()->tasks[id].slot   = slot;
     T()->tasks[id].lambda = NULL;
     T()->tasks[id].result = NULL;
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf_number(TE_T_INT, id, NULL, NULL));
     return 1;
 }
@@ -259,7 +259,7 @@ static int adapt_await_task(ASTNode *node, ASTNode *args) {
         return 1;
     }
     if (!te_task_valid(id)) {
-        add_or_update_variable(TE_SYM_RET,
+        te_ret_scalar(
             create_ast_leaf(TE_T_STRING, 0, "", NULL));
         return 1;
     }

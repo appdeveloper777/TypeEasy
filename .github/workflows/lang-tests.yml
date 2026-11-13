@@ -179,6 +179,18 @@ jobs:
           python3 tests/regress/run_scalar_return_memory.py --bin src/typeeasy
           TYPEEASY_NO_BC=1 python3 tests/regress/run_scalar_return_memory.py --bin src/typeeasy
 
+      - name: __ret__ temporaries RSS regression (native Linux)
+        # Reusa el src/typeeasy normal del paso anterior (antes del rebuild con ASan).
+        # La ruta SQL usa el plugin SQLite en memoria: se construye e instala aqui
+        # (mismo comando que scripts/run_asan_tests.sh) porque ese script corre despues.
+        run: |
+          gcc -shared -fPIC -O2 -Wall -Wno-unused-parameter -I src \
+            plugins/sqlite/sqlite_plugin.c -lsqlite3 -o plugins/sqlite/libte_sqlite.so
+          mkdir -p "$HOME/.te/packages/sqlite"
+          cp plugins/sqlite/libte_sqlite.so "$HOME/.te/packages/sqlite/libte_sqlite.so"
+          python3 tests/regress/run_ret_ownership_memory.py --bin src/typeeasy
+          TYPEEASY_NO_BC=1 python3 tests/regress/run_ret_ownership_memory.py --bin src/typeeasy
+
       - name: Build with ASan and run lang suite
         run: bash scripts/run_asan_tests.sh
 

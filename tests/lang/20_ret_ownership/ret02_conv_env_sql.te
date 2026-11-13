@@ -1,0 +1,28 @@
+// spec: RET-2
+// to_int / to_float, env con y sin default, env_required, sql_last_error.
+println(to_int("12") + 1);
+println(to_int("-7"));
+println(to_int("abc"));
+println(to_float("1.5") + 1);
+println(to_float("2"));
+println(to_str(7) + "!");
+let a = env("TE_RET_OWNERSHIP_UNSET_VAR", "fallback");
+println(a);
+let b = env("TE_RET_OWNERSHIP_UNSET_VAR") ?? "was-null";
+println(b);
+let p = env("PATH", "none");
+println(p == "none");
+var e1 = "";
+try { let z = env_required("TE_RET_OWNERSHIP_UNSET_VAR"); } catch (err) { e1 = err; }
+let ok1 = e1.contains("env_required");
+println(ok1);
+let le = sql_last_error();
+println("[" + le + "]");
+var k = 0;
+var tot = 0;
+while (k < 30) {
+    tot = tot + to_int("3") + to_int("1");
+    let c = env("TE_RET_OWNERSHIP_UNSET_VAR", "d");
+    k = k + 1;
+}
+println(tot);

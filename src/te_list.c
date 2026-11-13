@@ -22,7 +22,7 @@ int te_list_method_dispatch(ASTNode *node, ASTNode *list) {
     /* ---- Ola 13: list extras: size/length, contains, reverse, sort, get ---- */
     if (strcmp(m, "size") == 0 || strcmp(m, "length") == 0) {
         int n = list_length(list);  /* uses cache */
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, n, NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, n, NULL, NULL));
         return 1;
     }
     if (strcmp(m, "contains") == 0) {
@@ -54,7 +54,7 @@ int te_list_method_dispatch(ASTNode *node, ASTNode *list) {
              * Only a freshly-built scalar leaf is ours to free. */
             te_free_lambda_result(probe);
         }
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, found, NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, found, NULL, NULL));
         return 1;
     }
     if (strcmp(m, "reverse") == 0) {
@@ -114,7 +114,7 @@ int te_list_method_dispatch(ASTNode *node, ASTNode *list) {
         int idx = arg ? (int)evaluate_expression(arg) : 0;
         ASTNode *cur = list_get_item(list, idx);  /* Ola 14: O(1) */
         if (cur) { add_or_update_variable(TE_SYM_RET, build_item_from_value(cur)); }
-        else { add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); }
+        else { te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); }
         return 1;
     }
     if (strcmp(m, "join") == 0) {
@@ -140,7 +140,7 @@ int te_list_method_dispatch(ASTNode *node, ASTNode *list) {
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
         free(out);
         if (sep) free(sep);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     return 0;

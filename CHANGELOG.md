@@ -4,6 +4,19 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
+## 0.1.14 (2026-11-13)
+
+### Corregido
+- Fugas de memoria por request en el motor (sin cambios de comportamiento observable):
+  los temporales escalares que se copiaban a `__ret__` (métodos de string, `to_int`/`to_float`,
+  `env`, `sql_last_error`, `?.`, longitudes/contains de listas y mapas, agregados LINQ/CSV,
+  etc.) ahora se liberan tras la copia; el envelope SQL (`{success, data|error}`) se registra
+  en el bosque por-request; el resultado de los guards `@decorator` se libera; y el bytecode
+  cacheado se libera al invalidarlo entre requests en vez de recompilar sobre el anterior.
+  Regresiones: `tests/lang/20_ret_ownership/` (salida observable) y
+  `tests/regress/run_ret_ownership_memory.py` (RSS, walker y bytecode).
+- Corregido un doble free al inlinear metodos numericos que leen `lista[i].atributo`: cada consumidor obtiene su propio `ListItemAttrSite`. Regresiones: `tests/lang/20_ret_ownership/ret03_inline_list_attr_method.te` y 12 requests repetidos en `tests/api/bytecode_inline_list_attr_api.api.json`.
+
 ## 0.1.12-dev
 
 ### Corregido

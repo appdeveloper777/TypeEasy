@@ -185,13 +185,13 @@ int lazy_terminal(ASTNode *lazy_node, ASTNode *node) {
     if (counters) free(counters);
 
     if (is_toList) { te_req_owned_ast_register(result); add_or_update_variable(TE_SYM_RET, result); return 1; }
-    if (is_count)  { add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)count, NULL, NULL)); return 1; }
+    if (is_count)  { te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)count, NULL, NULL)); return 1; }
     if (is_sum) {
         if (sum_is_int && sum_acc == (double)(long long)sum_acc)
-            add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)sum_acc, NULL, NULL));
+            te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)sum_acc, NULL, NULL));
         else {
             char buf[64]; te_fmt_double(buf, sizeof(buf), sum_acc);
-            add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+            te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
         }
         return 1;
     }
@@ -199,10 +199,10 @@ int lazy_terminal(ASTNode *lazy_node, ASTNode *node) {
         add_or_update_variable(TE_SYM_RET, first_out ? first_out : create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
         return 1;
     }
-    if (is_forEach) { add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
+    if (is_forEach) { te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
     if (is_reduce)  { add_or_update_variable(TE_SYM_RET, reduce_acc ? reduce_acc : create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
-    if (is_any)     { add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, any_match,   NULL, NULL)); return 1; }
-    if (is_every)   { add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, every_match, NULL, NULL)); return 1; }
+    if (is_any)     { te_ret_scalar( create_ast_leaf_number(TE_T_INT, any_match,   NULL, NULL)); return 1; }
+    if (is_every)   { te_ret_scalar( create_ast_leaf_number(TE_T_INT, every_match, NULL, NULL)); return 1; }
     return 0;
 }
 
@@ -309,7 +309,7 @@ static int te_ll_numeric(ASTNode *node, ASTNode *list, const char *fname) {
     if (strcmp(fname, "minVal") == 0 || strcmp(fname, "maxVal") == 0) {
         int want_max = (strcmp(fname, "maxVal") == 0);
         ASTNode *it = list->left;
-        if (!it) { add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
+        if (!it) { te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
         int is_str = (it->type && strcmp(it->type, TE_T_STRING) == 0);
         double best_n = 0.0; char *best_s = NULL;
         if (is_str) best_s = it->str_value ? it->str_value : "";
@@ -337,24 +337,24 @@ static int te_ll_numeric(ASTNode *node, ASTNode *list, const char *fname) {
 static int te_ll_positional(ASTNode *node, ASTNode *list, const char *fname) {
     if (strcmp(fname, "first") == 0) {
         if (list->left) add_or_update_variable(TE_SYM_RET, build_item_from_value(list->left));
-        else add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+        else te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
         return 1;
     }
     if (strcmp(fname, "firstOrDefault") == 0) {
         if (list->left) add_or_update_variable(TE_SYM_RET, build_item_from_value(list->left));
-        else add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+        else te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
         return 1;
     }
     if (strcmp(fname, "last") == 0) {
         ASTNode *cur = list->left;
-        if (!cur) { add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
+        if (!cur) { te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
         while (cur->next) cur = cur->next;
         add_or_update_variable(TE_SYM_RET, build_item_from_value(cur));
         return 1;
     }
     if (strcmp(fname, "lastOrDefault") == 0) {
         ASTNode *cur = list->left;
-        if (!cur) { add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
+        if (!cur) { te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL)); return 1; }
         while (cur->next) cur = cur->next;
         add_or_update_variable(TE_SYM_RET, build_item_from_value(cur));
         return 1;
@@ -363,12 +363,12 @@ static int te_ll_positional(ASTNode *node, ASTNode *list, const char *fname) {
         ASTNode *cur = list->left;
         if (!cur) {
             printf("Error: single() requires exactly one element, list is empty.\n");
-            add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+            te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
             return 1;
         }
         if (cur->next) {
             printf("Error: single() requires exactly one element, list has more than one.\n");
-            add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+            te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
             return 1;
         }
         add_or_update_variable(TE_SYM_RET, build_item_from_value(cur));

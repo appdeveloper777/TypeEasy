@@ -33,14 +33,16 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         char *out = strdup(s);
         for (char *p = out; *p; p++) *p = toupper((unsigned char)*p);
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
-        add_or_update_variable(TE_SYM_RET, r);
+        free(out);   /* create_ast_leaf copia el string */
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(m, "lower") == 0) {
         char *out = strdup(s);
         for (char *p = out; *p; p++) *p = tolower((unsigned char)*p);
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
-        add_or_update_variable(TE_SYM_RET, r);
+        free(out);   /* create_ast_leaf copia el string */
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(m, "trim") == 0) {
@@ -50,7 +52,8 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         while (end > start && isspace((unsigned char)*(end - 1))) end--;
         char *out = strndup(start, end - start);
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
-        add_or_update_variable(TE_SYM_RET, r);
+        free(out);   /* create_ast_leaf copia el string */
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(m, "contains") == 0) {
@@ -62,7 +65,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         int found = (needle && strstr(s, needle)) ? 1 : 0;
         if (tmp) free(tmp);
         ASTNode *r = create_ast_leaf_number(TE_T_INT, found, NULL, NULL);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(m, "split") == 0) {
@@ -95,7 +98,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
     }
     if (strcmp(m, "length") == 0) {
         ASTNode *r = create_ast_leaf_number(TE_T_INT, (long long)strlen(s), NULL, NULL);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     /* ---- Ola 13: replace, substr, find, starts_with, ends_with, repeat,
@@ -110,7 +113,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         size_t nl = strlen(needle), rl = strlen(repl);
         if (nl == 0) {
             ASTNode *r = create_ast_leaf(TE_T_STRING, 0, s, NULL);
-            add_or_update_variable(TE_SYM_RET, r);
+            te_ret_scalar(r);
         } else {
             int count = 0; const char *p = s;
             while ((p = strstr(p, needle)) != NULL) { count++; p += nl; }
@@ -127,7 +130,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
             }
             ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
             free(out);
-            add_or_update_variable(TE_SYM_RET, r);
+            te_ret_scalar(r);
         }
         if (t1) free(t1);
         if (t2) free(t2);
@@ -146,7 +149,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         char *out = strndup(s + start, len);
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
         free(out);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(m, "find") == 0 || strcmp(m, "index_of") == 0 || strcmp(m, "indexOf") == 0) {
@@ -158,7 +161,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
             if (p) idx = (int)(p - s);
             free(t);
         }
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, idx, NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, idx, NULL, NULL));
         return 1;
     }
     if (strcmp(m, "substring") == 0) {   /* JS/Java: (inicio, fin EXCLUSIVO); fin omitido = hasta el final */
@@ -174,7 +177,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         char *out = strndup(s + start, (size_t)(end - start));
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
         free(out);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(m, "pad_left") == 0 || strcmp(m, "pad_right") == 0) {   /* LPAD/RPAD: (ancho, relleno=" ") */
@@ -192,7 +195,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         out[slen + pad] = 0;
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
         free(out);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(m, "starts_with") == 0) {
@@ -200,7 +203,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         char *t = arg ? get_node_string(arg) : NULL;
         int ok = 0;
         if (t) { ok = (strncmp(s, t, strlen(t)) == 0) ? 1 : 0; free(t); }
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, ok, NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, ok, NULL, NULL));
         return 1;
     }
     if (strcmp(m, "ends_with") == 0) {
@@ -212,7 +215,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
             ok = (tl <= sl && memcmp(s + sl - tl, t, tl) == 0) ? 1 : 0;
             free(t);
         }
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, ok, NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, ok, NULL, NULL));
         return 1;
     }
     if (strcmp(m, "repeat") == 0) {
@@ -225,16 +228,16 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         out[sl * n] = 0;
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
         free(out);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(m, "parse_int") == 0) {
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, atoi(s), NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, atoi(s), NULL, NULL));
         return 1;
     }
     if (strcmp(m, "parse_float") == 0) {
         char buf[64]; te_fmt_double(buf, sizeof(buf), atof(s));
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+        te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
         return 1;
     }
     if (strcmp(m, "char_at") == 0) {
@@ -244,7 +247,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         char buf[2] = {0, 0};
         if (idx >= 0 && idx < sl) buf[0] = s[idx];
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, buf, NULL);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(m, "char_code") == 0) {
@@ -252,7 +255,7 @@ int te_string_method_dispatch(ASTNode *node, ASTNode *objNode, Variable *v) {
         int idx = arg ? (int)evaluate_expression(arg) : 0;
         int sl = (int)strlen(s);
         int c = (idx >= 0 && idx < sl) ? (unsigned char)s[idx] : 0;
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, c, NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, c, NULL, NULL));
         return 1;
     }
     return 0;

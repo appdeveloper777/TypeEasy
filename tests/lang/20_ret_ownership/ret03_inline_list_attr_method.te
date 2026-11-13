@@ -1,0 +1,17 @@
+// Inlining a numeric method must preserve list-object attribute results.
+class InlineRow {
+    value: int;
+    __constructor(v: int) { this.value = v; }
+}
+
+let inlineRows = [];
+inlineRows.push(new InlineRow(41));
+inlineRows.push(new InlineRow(8));
+
+class InlineReader {
+    at(index: int): int { return inlineRows[index].value; }
+}
+
+let reader = new InlineReader();
+println(reader.at(0) + 1);
+println(reader.at(1) + 1);

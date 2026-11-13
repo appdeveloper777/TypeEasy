@@ -485,7 +485,7 @@ static int adapt_lang_spawn(ASTNode *node, ASTNode *args) {
     char *cmd = args ? get_node_string(args) : NULL;
     int slot = te_proc_spawn(cmd ? cmd : "");
     if (cmd) free(cmd);
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf_number(TE_T_INT, slot, NULL, NULL));
     return 1;
 }
@@ -501,7 +501,7 @@ static int adapt_lang_call(ASTNode *node, ASTNode *args) {
         resp = te_proc_read_line(slot);
     }
     if (req) free(req);
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf(TE_T_STRING, 0, resp ? resp : "", NULL));
     if (resp) free(resp);
     return 1;
@@ -515,7 +515,7 @@ static int adapt_lang_send(ASTNode *node, ASTNode *args) {
     char *line = a1 ? get_node_string(a1) : NULL;
     int ok = te_proc_write_line(slot, line ? line : "", line ? strlen(line) : 0) == 0;
     if (line) free(line);
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf_number(TE_T_INT, ok ? 1 : 0, NULL, NULL));
     return 1;
 }
@@ -525,7 +525,7 @@ static int adapt_lang_recv(ASTNode *node, ASTNode *args) {
     (void)node;
     int slot = args ? (int)evaluate_expression(args) : -1;
     char *resp = te_proc_read_line(slot);
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf(TE_T_STRING, 0, resp ? resp : "", NULL));
     if (resp) free(resp);
     return 1;
@@ -536,7 +536,7 @@ static int adapt_lang_close(ASTNode *node, ASTNode *args) {
     (void)node;
     int slot = args ? (int)evaluate_expression(args) : -1;
     te_proc_close(slot);
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf_number(TE_T_INT, 0, NULL, NULL));
     return 1;
 }

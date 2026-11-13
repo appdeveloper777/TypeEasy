@@ -1989,7 +1989,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
     const char *s2 = (arg2 && arg2->str_value) ? arg2->str_value : NULL;
 
     if (strcmp(m, "count") == 0 && !arg1) {
-        add_or_update_variable(TE_SYM_RET,
+        te_ret_scalar(
             create_ast_leaf_number(TE_T_INT, df->row_count, NULL, NULL));
         return 1;
     }
@@ -2013,12 +2013,12 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
         /* TE INT es i32; si el resultado overflowea, devolvemos FLOAT
          * (double exacto hasta 2^53 ~ 9e15). Igual semántica que sumBy de OO mode. */
         if (r >= INT_MIN && r <= INT_MAX) {
-            add_or_update_variable(TE_SYM_RET,
+            te_ret_scalar(
                 create_ast_leaf_number(TE_T_INT, (long long)r, NULL, NULL));
         } else {
             char buf[32];
             snprintf(buf, sizeof(buf), "%lld", r);
-            add_or_update_variable(TE_SYM_RET,
+            te_ret_scalar(
                 create_ast_leaf_number(TE_T_FLOAT, 0, buf, NULL));
         }
         return 1;
@@ -2059,22 +2059,22 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
                 }
                 if (is_avg) {
                     if (n == 0) {
-                        add_or_update_variable(TE_SYM_RET,
+                        te_ret_scalar(
                             create_ast_leaf_number(TE_T_INT, 0, NULL, NULL));
                     } else {
                         double avg = (double)r / (double)n;
                         char buf[40];
                         te_fmt_double(buf, sizeof(buf), avg);
-                        add_or_update_variable(TE_SYM_RET,
+                        te_ret_scalar(
                             create_ast_leaf_number(TE_T_FLOAT, 0, buf, NULL));
                     }
                 } else if (r >= INT_MIN && r <= INT_MAX) {
-                    add_or_update_variable(TE_SYM_RET,
+                    te_ret_scalar(
                         create_ast_leaf_number(TE_T_INT, (long long)r, NULL, NULL));
                 } else {
                     char buf[32];
                     snprintf(buf, sizeof(buf), "%lld", r);
-                    add_or_update_variable(TE_SYM_RET,
+                    te_ret_scalar(
                         create_ast_leaf_number(TE_T_FLOAT, 0, buf, NULL));
                 }
                 return 1;
@@ -2101,7 +2101,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
                 }
                 char buf[40];
                 te_fmt_double(buf, sizeof(buf), acc);
-                add_or_update_variable(TE_SYM_RET,
+                te_ret_scalar(
                     create_ast_leaf_number(TE_T_FLOAT, 0, buf, NULL));
                 return 1;
             }
@@ -2172,7 +2172,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
             else if (strcmp(m, "any") == 0)   r = (cnt > 0);
             else if (strcmp(m, "none") == 0)  r = (cnt == 0);
             else                              r = ((size_t)cnt == n);   /* all / every */
-            add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(
+            te_ret_scalar( create_ast_leaf_number(
                 strcmp(m, "countWhere") == 0 ? TE_T_INT : TE_T_BOOL, r, NULL, NULL));
             return 1;
         }
@@ -2220,7 +2220,7 @@ int te_df_dispatch_method(DataFrame *df, ASTNode *node) {
             printf("\n");
         }
         if (df->row_count > limit) printf("... (%d more rows)\n", df->row_count - limit);
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, df->row_count, NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, df->row_count, NULL, NULL));
         return 1;
     }
     if ((strcmp(m, "toList") == 0 || strcmp(m, "toArray") == 0) && !arg1) {

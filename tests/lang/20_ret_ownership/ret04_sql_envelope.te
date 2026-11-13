@@ -1,0 +1,30 @@
+// spec: RET-4
+// Envelope SQL ({success, data|error}) de sql_exec / sql_query con SQLite.
+// Requiere el plugin libte_sqlite (igual que tests/lang/12_db).
+load_native("sqlite");
+let c = sql_connect("", "", "", ":memory:", 0, { }, "sqlite");
+let cr = sql_exec(c, "CREATE TABLE t (id INTEGER, v TEXT)", { }, "sqlite", true);
+println(cr.success);
+let r1 = sql_exec(c, "INSERT INTO t VALUES (1, 'x')", { }, "sqlite", true);
+println(r1.success); println(r1.data);
+let r2 = sql_exec(c, "INSERT INTO t VALUES (2, 'y')", { }, "sqlite", true);
+println(r2.success);
+let q = sql_query(c, "SELECT id, v FROM t ORDER BY id", { }, "sqlite", true);
+println(q.success); println(q.data);
+let bad = sql_exec(c, "INSERT INTO nope VALUES (1)", { }, "sqlite", true);
+println(bad.success);
+let msg = "" + bad.error;
+println(msg.contains("no such table"));
+let le = sql_last_error();
+println(le.contains("no such table"));
+let raw = sql_query(c, "SELECT id FROM t ORDER BY id", { }, "sqlite", false);
+println(raw);
+var i = 0;
+var okc = 0;
+while (i < 20) {
+    let a = sql_query(c, "SELECT COUNT(*) AS n FROM t", { }, "sqlite", true);
+    if (a.success) { okc = okc + 1; }
+    i = i + 1;
+}
+println(okc);
+sql_close(c, "sqlite");

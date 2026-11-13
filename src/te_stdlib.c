@@ -319,7 +319,7 @@ static int te_bi_core(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
             }
         }
         ASTNode *r = create_ast_leaf_number(TE_T_INT, n, NULL, NULL);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
 
@@ -370,7 +370,7 @@ static int te_bi_core(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
         }
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out ? out : "", NULL);
         if (out) free(out);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(fn, "write_file") == 0) {
@@ -388,14 +388,14 @@ static int te_bi_core(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
         if (path) free(path);
         if (content) free(content);
         ASTNode *r = create_ast_leaf_number(TE_T_INT, ok, NULL, NULL);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(fn, "file_exists") == 0) {
         char *path = a0 ? get_node_string(a0) : NULL;
         int ok = 0;
         if (path) { FILE *fp = fopen(path, "rb"); if (fp) { ok = 1; fclose(fp); } free(path); }
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, ok, NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, ok, NULL, NULL));
         return 1;
     }
 
@@ -419,7 +419,7 @@ static int te_bi_core(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
                 if (s) free(s);
             } else v = (int)evaluate_expression(a0);
         }
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, v, NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, v, NULL, NULL));
         return 1;
     }
     if (strcmp(fn, "to_float") == 0) {
@@ -440,14 +440,14 @@ static int te_bi_core(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
             } else v = evaluate_expression(a0);
         }
         char buf[64]; te_fmt_double(buf, sizeof(buf), v);
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+        te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
         return 1;
     }
     if (strcmp(fn, "to_str") == 0) {
         char *s = a0 ? get_node_string(a0) : strdup("");
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, s ? s : "", NULL);
         if (s) free(s);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
 
@@ -456,23 +456,23 @@ static int te_bi_core(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
         char *s = a0 ? get_node_string(a0) : strdup("");
         fprintf(stderr, "%s\n", s ? s : "");
         if (s) free(s);
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, 0, NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, 0, NULL, NULL));
         return 1;
     }
 
     /* ---- abs(x), min(a,b), max(a,b): top-level convenience ---- */
     if (strcmp(fn, "abs") == 0) {
         double v = a0 ? evaluate_expression(a0) : 0;
-        if (v == (int)v) add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, abs((int)v), NULL, NULL));
-        else { char buf[64]; te_fmt_double(buf, sizeof(buf), v < 0 ? -v : v); add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL)); }
+        if (v == (int)v) te_ret_scalar( create_ast_leaf_number(TE_T_INT, abs((int)v), NULL, NULL));
+        else { char buf[64]; te_fmt_double(buf, sizeof(buf), v < 0 ? -v : v); te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL)); }
         return 1;
     }
     if (strcmp(fn, "min") == 0 || strcmp(fn, "max") == 0) {
         double va = a0 ? evaluate_expression(a0) : 0;
         double vb = a1 ? evaluate_expression(a1) : va;
         double r = (strcmp(fn,"min")==0) ? (va < vb ? va : vb) : (va > vb ? va : vb);
-        if (r == (long long)r) add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)r, NULL, NULL));
-        else { char buf[64]; te_fmt_double(buf, sizeof(buf), r); add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL)); }
+        if (r == (long long)r) te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)r, NULL, NULL));
+        else { char buf[64]; te_fmt_double(buf, sizeof(buf), r); te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL)); }
         return 1;
     }
 
@@ -486,7 +486,7 @@ static int te_bi_core(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
             fprintf(stderr, "    ASSERT FAILED: %s (line %d)\n", msg ? msg : "condition is false", node->line);
             if (msg) free(msg);
         }
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)(cond != 0), NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)(cond != 0), NULL, NULL));
         return 1;
     }
     if (strcmp(fn, "assert_eq") == 0) {
@@ -508,7 +508,7 @@ static int te_bi_core(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
             }
         }
         if (!eq) g_vm.test_failed = 1;
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, eq, NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, eq, NULL, NULL));
         return 1;
     }
     return 0;
@@ -524,13 +524,13 @@ static int te_bi_json(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
         te_json_emit_node(&b, root);
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, b.p, NULL);
         free(b.p);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(fn, "json_parse") == 0) {
         char *s = a0 ? get_node_string(a0) : NULL;
         if (!s) {
-            add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, "", NULL));
+            te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, "", NULL));
             return 1;
         }
         const char *p = s;
@@ -565,7 +565,7 @@ static int te_bi_crypto(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1)
         for (int i = 0; i < SHA_DIGEST_LENGTH; i++) sprintf(hex + i*2, "%02x", md[i]);
         hex[SHA_DIGEST_LENGTH*2] = 0;
         if (s) free(s);
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, hex, NULL));
+        te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, hex, NULL));
         return 1;
     }
     if (strcmp(fn, "sha256") == 0) {
@@ -576,7 +576,7 @@ static int te_bi_crypto(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1)
         for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) sprintf(hex + i*2, "%02x", md[i]);
         hex[SHA256_DIGEST_LENGTH*2] = 0;
         if (s) free(s);
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, hex, NULL));
+        te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, hex, NULL));
         return 1;
     }
     if (strcmp(fn, "md5_hex") == 0) {
@@ -587,7 +587,7 @@ static int te_bi_crypto(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1)
         for (int i = 0; i < MD5_DIGEST_LENGTH; i++) sprintf(hex + i*2, "%02x", md[i]);
         hex[MD5_DIGEST_LENGTH*2] = 0;
         if (s) free(s);
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, hex, NULL));
+        te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, hex, NULL));
         return 1;
     }
     if (strcmp(fn, "hmac_sha256") == 0) {
@@ -603,7 +603,7 @@ static int te_bi_crypto(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1)
         for (unsigned int i = 0; i < mdlen; i++) sprintf(hex + i*2, "%02x", md[i]);
         hex[mdlen*2] = 0;
         if (key) free(key); if (msg) free(msg);
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, hex, NULL));
+        te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, hex, NULL));
         return 1;
     }
     if (strcmp(fn, "base64_encode") == 0) {
@@ -616,7 +616,7 @@ static int te_bi_crypto(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1)
         if (s) free(s);
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, out, NULL);
         free(out);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(fn, "base64_decode") == 0) {
@@ -632,7 +632,7 @@ static int te_bi_crypto(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1)
         out[n] = 0;
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, (char*)out, NULL);
         free(out); if (s) free(s);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     return 0;
@@ -724,7 +724,7 @@ static int te_bi_http(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
             }
         }
         free(key);
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, allowed, NULL, NULL));
+        te_ret_scalar( create_ast_leaf_number(TE_T_INT, allowed, NULL, NULL));
         return 1;
     }
 
@@ -737,7 +737,7 @@ static int te_bi_http(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
         if (hdrs) free(hdrs);
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, body ? body : "", NULL);
         if (body) free(body);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(fn, "http_post") == 0) {
@@ -752,7 +752,7 @@ static int te_bi_http(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
         if (hdrs) free(hdrs);
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, body ? body : "", NULL);
         if (body) free(body);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
     if (strcmp(fn, "http_request") == 0) {
@@ -772,14 +772,14 @@ static int te_bi_http(const char *fn, ASTNode *node, ASTNode *a0, ASTNode *a1) {
         if (hdrs) free(hdrs);
         ASTNode *r = create_ast_leaf(TE_T_STRING, 0, body ? body : "", NULL);
         if (body) free(body);
-        add_or_update_variable(TE_SYM_RET, r);
+        te_ret_scalar(r);
         return 1;
     }
 
     if (strcmp(fn, "http_last_status") == 0) {
         /* Feature 1: HTTP status code of the last http_get/post/request call.
          * 0 = no response (network failure / unreachable host). */
-        add_or_update_variable(TE_SYM_RET,
+        te_ret_scalar(
             create_ast_leaf_number(TE_T_INT, te_http_last_status(), NULL, NULL));
         return 1;
     }
@@ -842,7 +842,7 @@ TE_WRAP_EVAL(sqlserver_close,   native_sqlserver_close)
  * bridge/plugin (B6 ERP: detectar fallos sin parsear el dato ni usar envelope). */
 static int adapt_sql_last_error(ASTNode *node, ASTNode *args) {
     (void)node; (void)args;
-    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, (char*)te_sql_last_error(), NULL));
+    te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, (char*)te_sql_last_error(), NULL));
     return 1;
 }
 
@@ -862,7 +862,7 @@ static int adapt_load_native(ASTNode *node, ASTNode *args) {
     }
     int rc = name ? te_load_native_module(name) : -1;
     if (owned) free(owned);
-    add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, rc == 0 ? 1 : 0, NULL, NULL));
+    te_ret_scalar( create_ast_leaf_number(TE_T_INT, rc == 0 ? 1 : 0, NULL, NULL));
     return 1;
 }
 
@@ -885,7 +885,7 @@ static int adapt_env(ASTNode *node, ASTNode *args) {
     const char *val = (key && *key) ? getenv(key) : NULL;
     if (key) free(key);
     if (val && *val) {
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, val, NULL));
+        te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, val, NULL));
     } else {
         /* unset/empty: usar el 2º arg como default si se dio. Si NO hay 2º
          * arg, devolver null (no "") para que `env("X") ?? def` funcione
@@ -894,11 +894,11 @@ static int adapt_env(ASTNode *node, ASTNode *args) {
         ASTNode *a1 = args ? args->next : NULL; /* gotcha #1: 2nd arg via ->next */
         if (a1) {
             char *def = get_node_string(a1);
-            add_or_update_variable(TE_SYM_RET,
+            te_ret_scalar(
                 create_ast_leaf(TE_T_STRING, 0, def ? def : "", NULL));
             if (def) free(def);
         } else {
-            add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+            te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
         }
     }
     return 1;
@@ -919,11 +919,11 @@ static int adapt_env_required(ASTNode *node, ASTNode *args) {
         te_throw_set_message(buf);
         g_vm.throw_flag = 1;
         if (key) free(key);
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, "", NULL));
+        te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, "", NULL));
         return 1;
     }
     if (key) free(key);
-    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, val, NULL));
+    te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, val, NULL));
     return 1;
 }
 
@@ -981,14 +981,14 @@ static int adapt_now(ASTNode *node, ASTNode *args) {
     (void)node; (void)args;
     char buf[32];
     te_format_iso_utc(time(NULL), buf, sizeof(buf));
-    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, buf, NULL));
+    te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, buf, NULL));
     return 1;
 }
 
 /* now_epoch() -> int (seconds since 1970-01-01 UTC) */
 static int adapt_now_epoch(ASTNode *node, ASTNode *args) {
     (void)node; (void)args;
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf_number(TE_T_INT, (long long)time(NULL), NULL, NULL));
     return 1;
 }
@@ -1004,7 +1004,7 @@ static int adapt_now_ms(ASTNode *node, ASTNode *args) {
     if (!initialized) { t0 = ts; initialized = 1; }
     long long ms = (long long)(ts.tv_sec - t0.tv_sec) * 1000LL
                  + (long long)(ts.tv_nsec - t0.tv_nsec) / 1000000LL;
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf_number(TE_T_INT, (long long)ms, NULL, NULL));
     return 1;
 }
@@ -1020,7 +1020,7 @@ static int adapt_date_parse(ASTNode *node, ASTNode *args) {
     time_t t = 0;
     int rc = te_parse_iso_utc(s, &t);
     if (s) free(s);
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf_number(TE_T_INT, rc == 0 ? (int)t : 0, NULL, NULL));
     return 1;
 }
@@ -1041,7 +1041,7 @@ static int adapt_date_format(ASTNode *node, ASTNode *args) {
     char buf[128];
     strftime(buf, sizeof(buf), (fmt && *fmt) ? fmt : "%Y-%m-%dT%H:%M:%SZ", &g);
     if (fmt) free(fmt);
-    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, buf, NULL));
+    te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, buf, NULL));
     return 1;
 }
 
@@ -1058,7 +1058,7 @@ static int adapt_date_add(ASTNode *node, ASTNode *args) {
     int rc = te_parse_iso_utc(s, &t);
     if (rc != 0) {
         if (s) free(s); if (unit) free(unit);
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, "", NULL));
+        te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, "", NULL));
         return 1;
     }
     long long mult = 1;
@@ -1072,7 +1072,7 @@ static int adapt_date_add(ASTNode *node, ASTNode *args) {
     char buf[32];
     te_format_iso_utc(t, buf, sizeof(buf));
     if (s) free(s); if (unit) free(unit);
-    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, buf, NULL));
+    te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, buf, NULL));
     return 1;
 }
 
@@ -1100,7 +1100,7 @@ static int adapt_date_diff(ASTNode *node, ASTNode *args) {
         diff /= div;
     }
     if (sa) free(sa); if (sb) free(sb); if (unit) free(unit);
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf_number(TE_T_INT, (long long)diff, NULL, NULL));
     return 1;
 }
@@ -1122,7 +1122,7 @@ static int adapt_uuid_v4(ASTNode *node, ASTNode *args) {
         "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
         b[0],b[1],b[2],b[3], b[4],b[5], b[6],b[7], b[8],b[9],
         b[10],b[11],b[12],b[13],b[14],b[15]);
-    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, out, NULL));
+    te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, out, NULL));
     return 1;
 }
 
@@ -1143,7 +1143,7 @@ static int adapt_uuid_valid(ASTNode *node, ASTNode *args) {
     if (s) free(s);
     /* gotcha #6: uuid_valid es un predicado; devolver BOOL (true/false) en vez
      * de INT 1/0 para que `if (uuid_valid(x))` y println muestren booleanos. */
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf_number(TE_T_BOOL, ok, NULL, NULL));
     return 1;
 }

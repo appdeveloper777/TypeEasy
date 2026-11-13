@@ -386,7 +386,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     te_free_lambda_result(call_lambda(fn, item));
                     item = item->next;
                 }
-                add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+                te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                 return 1;
             }
             if (strcmp(fname, "find") == 0) {
@@ -403,7 +403,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                         item = item->next;
                     }
                     if (ok) {
-                        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+                        te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                         return 1;
                     }
                     item = list->left;
@@ -418,7 +418,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     }
                     item = item->next;
                 }
-                add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+                te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                 return 1;
             }
             if (strcmp(fname, "any") == 0) {
@@ -431,7 +431,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     if (t) { found = 1; break; }
                     item = item->next;
                 }
-                add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_BOOL, found, NULL, NULL));
+                te_ret_scalar( create_ast_leaf_number(TE_T_BOOL, found, NULL, NULL));
                 return 1;
             }
             if (strcmp(fname, "every") == 0) {
@@ -446,7 +446,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                         item = item->next;
                     }
                     if (ok) {
-                        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_BOOL, all, NULL, NULL));
+                        te_ret_scalar( create_ast_leaf_number(TE_T_BOOL, all, NULL, NULL));
                         return 1;
                     }
                     item = list->left; all = 1;
@@ -458,7 +458,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     if (t) { all = 0; break; }
                     item = item->next;
                 }
-                add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_BOOL, all, NULL, NULL));
+                te_ret_scalar( create_ast_leaf_number(TE_T_BOOL, all, NULL, NULL));
                 return 1;
             }
             /* ===== v0.0.11 LINQ-style higher-order operators ===== */
@@ -474,7 +474,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                         item = item->next;
                     }
                     if (ok) {
-                        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_BOOL, none_match, NULL, NULL));
+                        te_ret_scalar( create_ast_leaf_number(TE_T_BOOL, none_match, NULL, NULL));
                         return 1;
                     }
                     item = list->left; none_match = 1;
@@ -486,7 +486,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     if (t) { none_match = 0; break; }
                     item = item->next;
                 }
-                add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_BOOL, none_match, NULL, NULL));
+                te_ret_scalar( create_ast_leaf_number(TE_T_BOOL, none_match, NULL, NULL));
                 return 1;
             }
             if (strcmp(fname, "lastWhere") == 0) {
@@ -502,7 +502,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     }
                     if (ok) {
                         if (last_match) add_or_update_variable(TE_SYM_RET, build_item_from_value(last_match));
-                        else add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+                        else te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                         return 1;
                     }
                     item = list->left; last_match = NULL;
@@ -514,7 +514,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     item = item->next;
                 }
                 if (last_match) add_or_update_variable(TE_SYM_RET, build_item_from_value(last_match));
-                else add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+                else te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                 return 1;
             }
             if (strcmp(fname, "countWhere") == 0) {
@@ -530,7 +530,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                         if (te_colcache_eval_pred(cc, aidx, &fl, mask)) {
                             long long total = te_colcache_count(cc, mask);
                             free(mask);
-                            add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)total, NULL, NULL));
+                            te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)total, NULL, NULL));
                             return 1;
                         }
                         free(mask);
@@ -561,7 +561,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                             }
                             free(arr);
                             if (!fail) {
-                                add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)total, NULL, NULL));
+                                te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)total, NULL, NULL));
                                 return 1;
                             }
                             /* fall through to sequential fallback */
@@ -578,7 +578,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                             item = item->next;
                         }
                         if (ok) {
-                            add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, cnt, NULL, NULL));
+                            te_ret_scalar( create_ast_leaf_number(TE_T_INT, cnt, NULL, NULL));
                             return 1;
                         }
                     }
@@ -590,7 +590,7 @@ static int te_lq_reduce_find_pred(ASTNode *node, ASTNode *list, ASTNode *fn, con
                     te_free_lambda_result(r);
                     item = item->next;
                 }
-                add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, cnt, NULL, NULL));
+                te_ret_scalar( create_ast_leaf_number(TE_T_INT, cnt, NULL, NULL));
                 return 1;
             }
     return 0;
@@ -610,14 +610,14 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                         if (te_colcache_sum(cc, aidx, NULL, &itotal, &dtotal, &is_int)) {
                             if (is_int) {
                                 if (itotal >= INT_MIN && itotal <= INT_MAX) {
-                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)itotal, NULL, NULL));
+                                    te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)itotal, NULL, NULL));
                                 } else {
                                     char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
-                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                                    te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                                 }
                             } else {
                                 char buf[64]; te_fmt_double(buf, sizeof(buf), dtotal);
-                                add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                                te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                             }
                             return 1;
                         }
@@ -654,14 +654,14 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                             if (!fail) {
                                 if (!any_float) {
                                     if (itotal >= INT_MIN && itotal <= INT_MAX) {
-                                        add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)itotal, NULL, NULL));
+                                        te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)itotal, NULL, NULL));
                                     } else {
                                         char buf[32]; snprintf(buf, sizeof(buf), "%lld", itotal);
-                                        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                                        te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                                     }
                                 } else {
                                     char buf[64]; te_fmt_double(buf, sizeof(buf), dtotal + (double)itotal);
-                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                                    te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                                 }
                                 return 1;
                             }
@@ -683,14 +683,14 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                                 /* Build a NUMBER node carrying the int64 via str_value
                                  * when it overflows int32, otherwise the usual int slot. */
                                 if (iacc >= INT_MIN && iacc <= INT_MAX) {
-                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)iacc, NULL, NULL));
+                                    te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)iacc, NULL, NULL));
                                 } else {
                                     char buf[32]; snprintf(buf, sizeof(buf), "%lld", iacc);
-                                    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                                    te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                                 }
                             } else {
                                 char buf[64]; te_fmt_double(buf, sizeof(buf), dacc + (double)iacc);
-                                add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                                te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                             }
                             return 1;
                         }
@@ -710,10 +710,10 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                     item = item->next;
                 }
                 if (is_int && acc == (double)(long long)acc) {
-                    add_or_update_variable(TE_SYM_RET, create_ast_leaf_number(TE_T_INT, (long long)acc, NULL, NULL));
+                    te_ret_scalar( create_ast_leaf_number(TE_T_INT, (long long)acc, NULL, NULL));
                 } else {
                     char buf[64]; te_fmt_double(buf, sizeof(buf), acc);
-                    add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                    te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                 }
                 return 1;
             }
@@ -732,7 +732,7 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                             double sum = is_int ? (double)itotal : dtotal;
                             double res = n > 0 ? sum / (double)n : 0.0;
                             char buf[64]; te_fmt_double(buf, sizeof(buf), res);
-                            add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                            te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                             return 1;
                         }
                     }
@@ -748,7 +748,7 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                     if (ok) {
                         double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
                         char buf[64]; te_fmt_double(buf, sizeof(buf), res);
-                        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                        te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                         return 1;
                     }
                     item = list->left; acc = 0.0; cnt = 0;
@@ -761,7 +761,7 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                 }
                 double res = cnt > 0 ? (acc / (double)cnt) : 0.0;
                 char buf[64]; te_fmt_double(buf, sizeof(buf), res);
-                add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
+                te_ret_scalar( create_ast_leaf(TE_T_FLOAT, 0, buf, NULL));
                 return 1;
             }
             if (strcmp(fname, "minBy") == 0 || strcmp(fname, "maxBy") == 0) {
@@ -797,7 +797,7 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                     }
                     if (ok) {
                         if (best_item) add_or_update_variable(TE_SYM_RET, build_item_from_value(best_item));
-                        else add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+                        else te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                         return 1;
                     }
                     item = list->left; best_item = NULL; first = 1; best_key = 0.0;
@@ -811,7 +811,7 @@ static int te_lq_aggregates(ASTNode *node, ASTNode *list, ASTNode *fn, const cha
                     item = item->next;
                 }
                 if (best_item) add_or_update_variable(TE_SYM_RET, build_item_from_value(best_item));
-                else add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+                else te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                 return 1;
             }
     return 0;
@@ -1430,7 +1430,7 @@ int te_linq_ops_method_dispatch(ASTNode *node, ASTNode *list) {
             }
             if (!fn) {
                 printf("Error: %s() requires a lambda or function value.\n", node->id);
-                add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
+                te_ret_scalar( create_ast_leaf(TE_T_NULL, 0, NULL, NULL));
                 return 1;
             }
             /* v0.0.11: normalize aliases so we can reuse existing branches */

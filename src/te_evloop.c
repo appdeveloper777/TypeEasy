@@ -654,7 +654,7 @@ static int adapt_go(ASTNode *node, ASTNode *args) {
     (void)node;
     int id = fiber_find_free();
     if (id < 0 || !args) {
-        add_or_update_variable(TE_SYM_RET,
+        te_ret_scalar(
             create_ast_leaf_number(TE_T_INT, -1, NULL, NULL));
         return 1;
     }
@@ -668,7 +668,7 @@ static int adapt_go(ASTNode *node, ASTNode *args) {
     /* Seed the fiber's scope with the current (global) scope so the coroutine
      * can read variables defined before it was spawned. */
     ctx_save(&f->ctx);
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf_number(TE_T_INT, TE_FIBER_HANDLE_BASE + id, NULL, NULL));
     return 1;
 }
@@ -686,7 +686,7 @@ static int adapt_sleep_async(ASTNode *node, ASTNode *args) {
     } else {
         te_msleep(ms);
     }
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf_number(TE_T_INT, 0, NULL, NULL));
     return 1;
 }
@@ -711,7 +711,7 @@ static int adapt_read_file_async(ASTNode *node, ASTNode *args) {
             fiber_yield();                 /* loop runs others until job->done */
             /* resumed: worker finished, result is published */
             const char *body = (job->ok && job->out_buf) ? job->out_buf : "";
-            add_or_update_variable(TE_SYM_RET,
+            te_ret_scalar(
                 create_ast_leaf(TE_T_STRING, 0, (char *)body, NULL));
             E()->current->io_job = NULL;
             free(job->in_str);
@@ -740,7 +740,7 @@ static int adapt_read_file_async(ASTNode *node, ASTNode *args) {
             fclose(fp);
         }
     }
-    add_or_update_variable(TE_SYM_RET,
+    te_ret_scalar(
         create_ast_leaf(TE_T_STRING, 0, body ? body : "", NULL));
     free(body);
     free(path);
@@ -752,7 +752,7 @@ static int adapt_await_async(ASTNode *node, ASTNode *args) {
     (void)node;
     int id = args ? fiber_from_handle((int)evaluate_expression(args)) : -1;
     if (!fiber_valid(id)) {
-        add_or_update_variable(TE_SYM_RET, create_ast_leaf(TE_T_STRING, 0, "", NULL));
+        te_ret_scalar( create_ast_leaf(TE_T_STRING, 0, "", NULL));
         return 1;
     }
     int ids[1] = { id };

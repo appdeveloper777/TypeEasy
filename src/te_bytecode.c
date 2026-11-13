@@ -65,20 +65,36 @@ static void bc_register_method(MethodNode *m) {
     vm->bc_methods[vm->bc_methods_n++] = m;
 }
 
-/* NOTE: we do NOT free the BCInfo / Instrs blocks. Some code paths (inherited
- * methods sharing AST, recursive compile) may register the same pointer twice;
- * the leak is bounded by the program's compiled code size and happens once per
- * script reload boundary, not per request. */
+/* Libera un BCInfo compilado: code[] (y los ListItemAttrSite que cuelgan de los
+ * BC_LIST_ITEM_ATTR), guards[] y el propio BCInfo. Cada nodo/metodo tiene su
+ * BCInfo propio (calloc en bc_finish) y se registra una sola vez por ciclo de
+ * compilacion; los llamadores ponen el puntero a NULL tras liberar, de modo que
+ * un registro duplicado solo ve NULL y no hay doble free. */
+static void bc_free_info(BCInfo *info) {
+    if (!info || (void *)info == BC_NOT_COMPILABLE) return;
+    if (info->code) {
+        for (int i = 0; i < info->len; i++)
+            if (info->code[i].op == BC_LIST_ITEM_ATTR) free(info->code[i].u.lia_site);
+    }
+    free(info->guards);
+    free(info->code);
+    free(info);
+}
+
+/* Invalida el bytecode cacheado entre requests (las Instrs guardan Variable*
+ * crudos que quedan obsoletos al reciclar los slots) y LIBERA el BCInfo anterior:
+ * antes se descartaba el puntero y cada request recompilaba, filtrando el
+ * programa previo. Se llama solo entre requests (ningun bc_run en vuelo). */
 void bc_invalidate_all(void) {
     TeVM *vm = &g_vm;
     for (int i = 0; i < vm->bc_nodes_n; i++) {
         ASTNode *n = vm->bc_nodes[i];
-        if (n && n->bc != BC_NOT_COMPILABLE) n->bc = NULL;
+        if (n && n->bc && n->bc != BC_NOT_COMPILABLE) { bc_free_info((BCInfo *)n->bc); n->bc = NULL; }
     }
     vm->bc_nodes_n = 0;
     for (int i = 0; i < vm->bc_methods_n; i++) {
         MethodNode *mm = vm->bc_methods[i];
-        if (mm && mm->bc_body != BC_NOT_COMPILABLE) mm->bc_body = NULL;
+        if (mm && mm->bc_body && mm->bc_body != BC_NOT_COMPILABLE) { bc_free_info((BCInfo *)mm->bc_body); mm->bc_body = NULL; }
     }
     vm->bc_methods_n = 0;
 }
@@ -334,7 +350,27 @@ static int bc_c_call_method(BCC *c, ASTNode *node) {
     for (int i = n_params - 1; i >= 0; i--) bc_emit_var(c, BC_STORE_VAR, param_vars[i]);
     if (!bc_guard(c, ov, 1, obj->class, objRef->id)) return 0;
     bc_emit_var(c, BC_SET_THIS, ov);
-    if (body_len > 0) { memcpy(&c->out[c->pos], body->code, (size_t)body_len * sizeof(Instr)); c->pos += body_len; }
+    if (body_len > 0) {
+        int inline_start = c->pos;
+        for (int i = 0; i < body_len; i++) {
+            Instr *dst = &c->out[c->pos];
+            *dst = body->code[i];
+            if (dst->op == BC_LIST_ITEM_ATTR) {
+                ListItemAttrSite *source = body->code[i].u.lia_site;
+                ListItemAttrSite *copy = source ? (ListItemAttrSite *)malloc(sizeof(*copy)) : NULL;
+                if (!copy) {
+                    for (int j = inline_start; j < c->pos; j++)
+                        if (c->out[j].op == BC_LIST_ITEM_ATTR) free(c->out[j].u.lia_site);
+                    c->pos = inline_start;
+                    c->failed = 1;
+                    return 0;
+                }
+                *copy = *source;
+                dst->u.lia_site = copy;
+            }
+            c->pos++;
+        }
+    }
     /* Los guards del cuerpo (params numéricos) se heredan; sus this.attr los
      * cubre el guard de clase del objeto (kind 1). */
     for (int i = 0; i < body->n_guards; i++) bc_guard(c, body->guards[i].var, body->guards[i].kind, body->guards[i].cls, body->guards[i].id);

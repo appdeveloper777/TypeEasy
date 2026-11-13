@@ -1,0 +1,18 @@
+{
+  "entry": "bytecode_inline_list_attr_api.te",
+  "health": "/health",
+  "cases": [
+    { "name": "inline list attr request 01", "path": "/inline", "expect": { "status": 200, "json": { "value": 9 } } },
+    { "name": "inline list attr request 02", "path": "/inline", "expect": { "status": 200, "json": { "value": 9 } } },
+    { "name": "inline list attr request 03", "path": "/inline", "expect": { "status": 200, "json": { "value": 9 } } },
+    { "name": "inline list attr request 04", "path": "/inline", "expect": { "status": 200, "json": { "value": 9 } } },
+    { "name": "inline list attr request 05", "path": "/inline", "expect": { "status": 200, "json": { "value": 9 } } },
+    { "name": "inline list attr request 06", "path": "/inline", "expect": { "status": 200, "json": { "value": 9 } } },
+    { "name": "inline list attr request 07", "path": "/inline", "expect": { "status": 200, "json": { "value": 9 } } },
+    { "name": "inline list attr request 08", "path": "/inline", "expect": { "status": 200, "json": { "value": 9 } } },
+    { "name": "inline list attr request 09", "path": "/inline", "expect": { "status": 200, "json": { "value": 9 } } },
+    { "name": "inline list attr request 10", "path": "/inline", "expect": { "status": 200, "json": { "value": 9 } } },
+    { "name": "inline list attr request 11", "path": "/inline", "expect": { "status": 200, "json": { "value": 9 } } },
+    { "name": "inline list attr request 12", "path": "/inline", "expect": { "status": 200, "json": { "value": 9 } } }
+  ]
+}

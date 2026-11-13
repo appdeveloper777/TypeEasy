@@ -1,0 +1,129 @@
+// Synthetic fixture for run_ret_ownership_memory.py (no external services; the
+// SQL route uses an in-memory SQLite database through the bundled plugin).
+// Each route repeats one family of calls whose result lands in __ret__ so that a
+// per-call leak of ~0.2-1 KiB becomes visible in the process RSS after a few
+// hundred requests: SQL envelope, sql_last_error, env, string methods,
+// to_int/to_float, null-safe `?.`, a hot numeric loop (bytecode cache) and a
+// `@guard` decorator.
+load_native("sqlite");
+
+// The guard returns a fresh ~1 KiB string (the runner replaces the token with a
+// synthetic filler) so that a leaked guard result is visible in RSS.
+let ret_guard_base = "__RET_GUARD_FILL__";
+let ret_guard = fn() => { return ret_guard_base + ret_guard_base; };
+
+endpoint {
+    [HttpGet("/control")]
+    async Control() {
+        return json("{\"ok\":1}");
+    }
+
+    [HttpGet("/sql")]
+    async Sql() {
+        let c = sql_connect("", "", "", ":memory:", 0, { }, "sqlite");
+        let t = sql_exec(c, "CREATE TABLE t (id INTEGER, v TEXT)", { }, "sqlite", true);
+        var i = 0;
+        var ok = 0;
+        while (i < 12) {
+            let a = sql_exec(c, "INSERT INTO t VALUES (1, 'x')", { }, "sqlite", true);
+            let q = sql_query(c, "SELECT id, v FROM t", { }, "sqlite", true);
+            let bad = sql_exec(c, "INSERT INTO nope VALUES (1)", { }, "sqlite", true);
+            if (a.success) { ok = ok + 1; }
+            if (q.success) { ok = ok + 1; }
+            if (!bad.success) { ok = ok + 1; }
+            i = i + 1;
+        }
+        sql_close(c, "sqlite");
+        return json("{\"ok\":" + ok + "}");
+    }
+
+    [HttpGet("/lasterr")]
+    async LastErr() {
+        var i = 0;
+        var n = 0;
+        while (i < 60) {
+            let msg = sql_last_error();
+            let el = msg.length;
+            if (el >= 0) { n = n + 1; }
+            i = i + 1;
+        }
+        return json("{\"ok\":" + n + "}");
+    }
+
+    [HttpGet("/env")]
+    async Env() {
+        var i = 0;
+        var n = 0;
+        while (i < 60) {
+            let a = env("TE_RET_OWNERSHIP_UNSET_VAR", "fallback");
+            let b = env("TE_RET_OWNERSHIP_UNSET_VAR") ?? "none";
+            if (a == "fallback") { n = n + 1; }
+            if (b == "none") { n = n + 1; }
+            i = i + 1;
+        }
+        return json("{\"ok\":" + n + "}");
+    }
+
+    [HttpGet("/str")]
+    async Str() {
+        let s = "  Hola Mundo 123  ";
+        var i = 0;
+        var n = 0;
+        while (i < 30) {
+            let t = s.trim();
+            let u = t.upper();
+            let k = t.contains("Mundo");
+            let l = t.length;
+            let sub = t.substring(1, 4);
+            let pl = sub.pad_left(8, "*");
+            let pr = sub.pad_right(8, "-");
+            let r = sub.repeat(3);
+            let ch = t.char_at(2);
+            let cc = t.char_code(2);
+            let ix = t.index_of("M");
+            let sw = t.starts_with("Hola");
+            let ew = t.ends_with("123");
+            if (l == 14 && k && ix == 5 && sw && ew) { n = n + 1; }
+            i = i + 1;
+        }
+        return json("{\"ok\":" + n + "}");
+    }
+
+    [HttpGet("/conv")]
+    async Conv() {
+        let nada = null;
+        let lst = [1, 2, 3];
+        let mp = { "a": 1 };
+        var i = 0;
+        var n = 0;
+        while (i < 40) {
+            let a = to_int("12");
+            let b = to_float("1.5");
+            let c = nada?.x;
+            let d = lst.length;
+            let e = lst.contains(2);
+            let f = mp.length;
+            if (a == 12 && d == 3) { n = n + 1; }
+            i = i + 1;
+        }
+        return json("{\"ok\":" + n + "}");
+    }
+
+    [HttpGet("/loop")]
+    async Loop() {
+        var i = 0;
+        var total = 0;
+        while (i < 200) {
+            total = total + i * 2;
+            if (total > 100000) { total = total - 100000; }
+            i = i + 1;
+        }
+        return json("{\"ok\":1}");
+    }
+
+    @ret_guard
+    [HttpGet("/guard")]
+    async Guard() {
+        return json("{\"ok\":1}");
+    }
+}

@@ -1,0 +1,27 @@
+// Repeated API requests exercise ownership of BC_LIST_ITEM_ATTR sites copied
+// when a numeric method is inlined into the handler's arithmetic expression.
+class InlineRow {
+    value: int;
+    __constructor(v: int) { this.value = v; }
+}
+
+let inlineRows = [];
+inlineRows.push(new InlineRow(41));
+inlineRows.push(new InlineRow(8));
+
+class InlineReader {
+    at(index: int): int { return inlineRows[index].value; }
+}
+
+let inlineReader = new InlineReader();
+
+endpoint {
+    [HttpGet("/health")]
+    async Health() { return json({ ok: true }); }
+
+    [HttpGet("/inline")]
+    async Inline() {
+        var result = inlineReader.at(1) + 1;
+        return json({ value: result });
+    }
+}
