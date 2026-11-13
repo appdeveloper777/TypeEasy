@@ -6150,7 +6150,7 @@ static void te_stmt_method_call_alone(ASTNode *node) {
                         nargs, nargs == 1 ? "was" : "were");
                 }
                 ASTNode *r = call_lambda(lambda, a);
-                if (r) add_or_update_variable(TE_SYM_RET, r);
+                if (r) { add_or_update_variable(TE_SYM_RET, r); te_free_lambda_result(r); }
             } else {
                 call_native_function(node->id, a);
             }
@@ -8025,7 +8025,7 @@ static void interpret_call_method_impl(ASTNode *node) {
             if (obj->class->attributes[i].id && strcmp(obj->class->attributes[i].id, node->id) == 0
                 && a->vtype == VAL_OBJECT && a->type && strcmp(a->type, TE_T_LAMBDA) == 0 && a->value.object_value) {
                 ASTNode *r = call_lambda((ASTNode *)(intptr_t)a->value.object_value, node->right);
-                if (r) add_or_update_variable(TE_SYM_RET, r);
+                if (r) { add_or_update_variable(TE_SYM_RET, r); te_free_lambda_result(r); }
                 return;
             }
         }

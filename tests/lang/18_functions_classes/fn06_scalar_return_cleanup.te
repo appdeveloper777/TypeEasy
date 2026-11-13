@@ -67,3 +67,10 @@ let returnExistingLazy = fn() => { return existingLazy; };
 var lazyAlias = returnExistingLazy();
 println(lazyAlias.count());
 println(xs.length);
+
+// Statement-position calls discard a scalar return; side effects must still run.
+var hits = 0;
+let bump = fn(n) => { hits = hits + n; return "bumped-" + n; };
+bump(1);
+bump(2);
+println(hits);
