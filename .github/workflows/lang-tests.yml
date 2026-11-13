@@ -182,6 +182,11 @@ jobs:
       - name: Build with ASan and run lang suite
         run: bash scripts/run_asan_tests.sh
 
+      - name: API endpoint suites under ASan
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:halt_on_error=1
+        run: python3 tools/te-test/run_api_tests.py tests/api --bin src/typeeasy --port 18181
+
       - name: Upload ASan JUnit report
         if: always()
         uses: actions/upload-artifact@v4

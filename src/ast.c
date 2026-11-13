@@ -4347,7 +4347,7 @@ void te_req_free_forest(ASTNode **roots, int nroots) {
             ASTNode **grown = (ASTNode**)realloc(stack, ncap * sizeof(ASTNode*));
             if (!grown) { /* sin crecer: procesar sin apilar hijos para no desbordar */
                 ASTNode *x = stack[--sp];
-                if (x && !x->from_pool && te_nodeset_add(&seen, x)) {
+                if (x && te_nodeset_add(&seen, x) && !x->from_pool) {
                     if (x->type) {
                         if (nk_of(x) == NK_LIST) { te_list_idx_free((TEListIdx*)x->extra); x->extra = NULL; }
                         else if (nk_of(x) == NK_OBJECT_LITERAL || strcmp(x->type, TE_T_MAP) == 0) { te_map_hash_free((TEMapHash*)x->extra); x->extra = NULL; }
@@ -4360,9 +4360,11 @@ void te_req_free_forest(ASTNode **roots, int nroots) {
         }
         ASTNode *x = stack[--sp];
         if (!x) continue;
+        /* Deduplicar antes de distinguir nodos del pool: una raiz compartida puede
+           llegar despues de que el nodo ya fue visitado y liberado. */
+        if (!te_nodeset_add(&seen, x)) continue;
         /* Pool nodes (CSV/LINQ wrappers): no se liberan; solo seguir la cadena ->next. */
-        if (x->from_pool) { if (te_nodeset_add(&seen, x) && x->next) stack[sp++] = x->next; continue; }
-        if (!te_nodeset_add(&seen, x)) continue;   /* nodo compartido ya liberado por otra raiz */
+        if (x->from_pool) { if (x->next) stack[sp++] = x->next; continue; }
         /* indice lateral por-nodo (free_ast no lo toca) */
         if (x->type) {
             if (nk_of(x) == NK_LIST) { te_list_idx_free((TEListIdx*)x->extra); x->extra = NULL; }

@@ -11,6 +11,10 @@ que fija la conducta nueva. Política: `docs/VERSIONING.md`.
   nodo AST temporal después de copiarlo a `__ret__`. Los retornos de listas, mapas,
   objetos y lambdas conservan sus alias. Regresiones: `tests/lang/18_functions_classes/fn06_scalar_return_cleanup.te`
   y `tests/regress/run_scalar_return_memory.py` (walker y bytecode).
+- Corregido el teardown de JSON compartido: el recolector deduplica los nodos
+  antes de procesar wrappers del pool, evitando un use-after-free en endpoints
+  API con árboles anidados o compartidos. Regresiones: `tests/api/nested_json_array_issue10_api.te`
+  y `tests/api/shared_json_list_issue10_api.te`, también ejecutadas bajo ASan en CI.
 
 ## 0.1.10 — 2026-09-28
 
