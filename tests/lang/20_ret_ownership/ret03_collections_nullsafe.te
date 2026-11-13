@@ -1,4 +1,4 @@
-// spec: RET-3
+// regression: scalar return ownership in collections and null-safe access
 // length/contains/has de listas y mapas, acceso null-safe `?.`, y metodos
 // agregados cuyo resultado escalar pasa por __ret__.
 let lst = [1, 2, 3, 4];

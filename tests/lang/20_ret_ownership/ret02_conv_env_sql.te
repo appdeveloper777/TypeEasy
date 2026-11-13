@@ -1,4 +1,4 @@
-// spec: RET-2
+// regression: scalar return ownership in conversion, environment and SQL helpers
 // to_int / to_float, env con y sin default, env_required, sql_last_error.
 println(to_int("12") + 1);
 println(to_int("-7"));

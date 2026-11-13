@@ -1,4 +1,4 @@
-// spec: RET-4
+// regression: request ownership of SQL result envelopes
 // Envelope SQL ({success, data|error}) de sql_exec / sql_query con SQLite.
 // Requiere el plugin libte_sqlite (igual que tests/lang/12_db).
 load_native("sqlite");

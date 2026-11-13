@@ -1,4 +1,4 @@
-// spec: RET-1
+// regression: scalar return ownership in string methods
 // Salida observable de los metodos de string cuyo resultado pasa por __ret__
 // (el fix de temporales no debe cambiar ningun valor). Se repite en un bucle
 // para que cualquier temporal reutilizado/liberado de mas se note.
