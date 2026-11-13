@@ -4,6 +4,23 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
+## 0.1.15 (2026-11-13)
+
+### Corregido
+- `--api`: desbordamiento de heap al terminar una peticion que registraba mas de 256 raices
+  propias del request (map/list literales evaluados, resultados de `json_parse`, envelopes de
+  `sql_exec`). `te_req_free_forest` volcaba todas las raices en una pila inicial de 256 punteros
+  sin comprobar capacidad; el proceso abortaba con `realloc(): invalid next size` (SIGABRT)
+  despues de ejecutar el handler y dejaba de atender. Presente desde 0.1.11. Ahora la pila se
+  dimensiona al numero de raices. Regresion: `tests/api/many_roots_teardown_api.api.json`.
+- `string.repeat` y `string.replace`: el tamano del resultado se calcula con comprobacion de
+  overflow y se valida el `malloc` antes de escribir.
+
+### Cambios de comportamiento
+- `string.repeat` / `string.replace` cuyo resultado no cabe en memoria terminan con error de
+  runtime (500 en `--api`) en vez de escribir fuera del buffer. Las entradas normales no cambian:
+  `tests/lang/16_strings/str06_repeat_replace.te`.
+
 ## 0.1.14 (2026-11-13)
 
 ### Corregido

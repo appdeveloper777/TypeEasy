@@ -4335,6 +4335,14 @@ void te_req_free_forest(ASTNode **roots, int nroots) {
     if (!roots || nroots <= 0) return;
     TeNodeSet seen = { NULL, 0, 0 };
     size_t scap = 256, sp = 0;
+    /* La pila inicial debe poder alojar TODAS las raices (volcado previo al bucle, que
+       solo comprueba capacidad por iteracion) mas el margen de 4 pushes del bucle. Con
+       >256 raices por peticion --api el volcado escribia fuera del buffer (heap corrupto). */
+    if ((size_t)nroots + 4 > scap) scap = (size_t)nroots + 4;
+    if (scap > SIZE_MAX / sizeof(ASTNode*)) {   /* inalcanzable con int nroots; defensivo */
+        for (int i = 0; i < nroots; i++) te_req_free_json_tree(roots[i]);
+        return;
+    }
     ASTNode **stack = (ASTNode**)malloc(scap * sizeof(ASTNode*));
     if (!stack) {   /* OOM: fallback al free por-raiz (puede double-free, pero sin memoria no hay opcion mejor) */
         for (int i = 0; i < nroots; i++) te_req_free_json_tree(roots[i]);
