@@ -3495,7 +3495,7 @@ void te_ret_scalar(ASTNode *n) {
  * que lo DESCARTA (predicados where/count/any/every/find; proyecciones cuyo
  * valor se consume y no se retiene). Tras el clonado en call_lambda_exec_body,
  * todo resultado ESCALAR es fresco y owned -> liberarlo es seguro. LIST/MAP/
- * OBJECT/OBJECT_LITERAL/LAMBDA pueden aliasar el payload de una variable o el
+ * OBJECT/OBJECT_LITERAL/LAMBDA/LAZY_ITER pueden aliasar el payload de una variable o el
  * body del programa -> NUNCA se liberan. NO usar en sitios que RETIENEN el
  * resultado (map/select que lo appendean a una lista). */
 void te_free_lambda_result(ASTNode *r) {
@@ -3505,7 +3505,8 @@ void te_free_lambda_result(ASTNode *r) {
             strcmp(r->type, TE_T_MAP) == 0 ||
             strcmp(r->type, TE_T_OBJECT_LITERAL) == 0 ||
             strcmp(r->type, TE_T_OBJECT) == 0 ||
-            strcmp(r->type, TE_T_LAMBDA) == 0))
+            strcmp(r->type, TE_T_LAMBDA) == 0 ||
+            strcmp(r->type, TE_T_LAZY_ITER) == 0))
         return;
     free_ast(r);
 }
@@ -6914,7 +6915,7 @@ static void interpret_call_func_impl(ASTNode *node) {
             ASTNode *r = call_lambda(lambda, node->left);
             if (g_vm.profile_enabled) te_prof_leave(node->id);
             te_callstack_pop();
-            if (r) add_or_update_variable(TE_SYM_RET, r);
+            if (r) { add_or_update_variable(TE_SYM_RET, r); te_free_lambda_result(r); }
             return;
         }
     }
@@ -8390,7 +8391,7 @@ static ASTNode* call_lambda_impl(ASTNode *lambda, ASTNode *argsList) {
 
 /* Materializa el resultado de un lambda como nodo para los consumidores (LINQ, call sites).
  * Contrato de ownership (v0.0.30): ESCALARES frescos (el consumidor puede liberarlos con
- * te_free_lambda_result); LIST/MAP/OBJECT/LAMBDA aliasan (nunca se liberan). */
+ * te_free_lambda_result); LIST/MAP/OBJECT/LAMBDA/LAZY_ITER aliasan (nunca se liberan). */
 static ASTNode* call_lambda_result_node(ASTNode *ret) {
     TeValue v;
     te_eval_value(ret, &v);

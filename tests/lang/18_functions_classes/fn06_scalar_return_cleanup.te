@@ -1,0 +1,69 @@
+// Return nodes copied into __ret__ are no longer needed after the copy.
+// Scalars are released; containers, objects, and lambdas remain aliased.
+var calls = 0;
+let returnText = fn(value) => { calls = calls + 1; return "text-" + value; };
+let returnInt = fn(value) => { return value + 10; };
+let returnBool = fn() => { return true; };
+let returnFloat = fn() => { return 1.25; };
+let returnDecimal = fn() => { return 2.50m; };
+let returnNull = fn() => { return null; };
+let returnEmpty = fn() => { return ""; };
+let noReturn = fn() => { let unused = 1; };
+
+println(returnText("direct"));
+println(returnInt(2));
+println(returnBool());
+println(returnFloat());
+println(returnDecimal());
+// Keep existing NULL comparison output pinned; this regression does not redefine it.
+println(returnNull() == null);
+println(returnEmpty().length);
+println(noReturn() == null);
+
+let nested = fn(value) => { return returnText("nested-" + value); };
+println(nested("call"));
+var recur = fn(n) => {
+    if (n <= 0) { return "r"; }
+    return "r" + recur(n - 1);
+};
+println(recur(4));
+
+let fail = fn() => { throw "caught"; return "unreachable"; };
+try { let ignored = fail(); } catch (e) { println("catch:" + e); }
+println(returnText("after-catch"));
+
+var values = [1];
+let returnList = fn() => { return values; };
+var listAlias = returnList();
+listAlias.push(2);
+println(values.length);
+
+var mapping = { "a": 1 };
+let returnMap = fn() => { return mapping; };
+var mapAlias = returnMap();
+mapAlias["b"] = 2;
+println(mapping["b"]);
+
+class Box { value : int; __constructor() { this.value = 3; } }
+var box = new Box();
+let returnObject = fn() => { return box; };
+var objectAlias = returnObject();
+objectAlias.value = 9;
+println(box.value);
+
+let increment = fn(value) => { return value + 1; };
+let returnLambda = fn() => { return increment; };
+let lambdaAlias = returnLambda();
+println(lambdaAlias(4));
+println(calls);
+
+var xs = [1, 2, 3];
+let makeLazy = fn() => { return xs.lazy(); };
+var freshLazy = makeLazy();
+println(freshLazy.count());
+println(xs.length);
+var existingLazy = xs.lazy().where(fn(value) => value > 1);
+let returnExistingLazy = fn() => { return existingLazy; };
+var lazyAlias = returnExistingLazy();
+println(lazyAlias.count());
+println(xs.length);

@@ -4,6 +4,14 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
+## 0.1.12-dev
+
+### Corregido
+- Fuga de memoria al retornar escalares desde una función lambda: se libera el
+  nodo AST temporal después de copiarlo a `__ret__`. Los retornos de listas, mapas,
+  objetos y lambdas conservan sus alias. Regresiones: `tests/lang/18_functions_classes/fn06_scalar_return_cleanup.te`
+  y `tests/regress/run_scalar_return_memory.py` (walker y bytecode).
+
 ## 0.1.10 — 2026-09-28
 
 ### Cambios de comportamiento

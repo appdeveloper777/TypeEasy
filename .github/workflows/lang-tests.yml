@@ -172,6 +172,13 @@ jobs:
           apt-get install -y -qq flex bison libssl-dev default-libmysqlclient-dev \
             libcurl4-openssl-dev libpq-dev freetds-dev libsqlite3-dev zlib1g-dev python3 curl
 
+      - name: Scalar function return RSS regression (native Linux)
+        run: |
+          make -C src clean
+          make -C src typeeasy
+          python3 tests/regress/run_scalar_return_memory.py --bin src/typeeasy
+          TYPEEASY_NO_BC=1 python3 tests/regress/run_scalar_return_memory.py --bin src/typeeasy
+
       - name: Build with ASan and run lang suite
         run: bash scripts/run_asan_tests.sh
 

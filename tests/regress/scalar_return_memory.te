@@ -1,0 +1,20 @@
+// Synthetic fixture for run_scalar_return_memory.py. The runner replaces the
+// token with a 128 KiB synthetic string; no database or external service is used.
+let Scalar_Return_Base = "__SCALAR_RETURN_FILL__";
+let Scalar_Return_Control = fn() => { return 1; };
+let Scalar_Return_Large = fn() => { return Scalar_Return_Base + Scalar_Return_Base; };
+
+endpoint {
+    [HttpGet("/control")]
+    async Control() {
+        let small = Scalar_Return_Control();
+        return json("{\"ok\":" + small + "}");
+    }
+
+    [HttpGet("/scalar")]
+    async Scalar() {
+        let first = Scalar_Return_Large();
+        let second = Scalar_Return_Large();
+        return json("{\"first\":" + first.length + ",\"second\":" + second.length + "}");
+    }
+}
