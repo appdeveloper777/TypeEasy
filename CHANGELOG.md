@@ -4,6 +4,23 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
+## 0.1.16 (2026-11-22)
+
+### Corregido
+- `Map.has` / `Map.remove` con un argumento que es una **llamada a método inline** (p. ej.
+  `m.has(nombre.lower())`) ahora evalúan la expresión antes de buscar la clave. `te_map.c` solo
+  resolvía un string literal o un identificador; un argumento `METHOD_CALL` no se evaluaba, la
+  clave quedaba vacía y `.has` devolvía `false` en silencio (HTTP 200 en `--api`) aunque la clave
+  existía — asignar la misma llamada a un local primero sí funcionaba. El fix evalúa cualquier
+  otra expresión con el camino general del intérprete (`te_eval_value`). Regresión:
+  `tests/api/map_has_inline_method_api.api.json` (issue #15).
+
+### Cambios de comportamiento
+- `Map.has` / `Map.remove` con un argumento method-call inline ahora devuelven el resultado
+  correcto (antes `.has` daba `false` y `.remove` no borraba). Los scripts que usaban el
+  workaround de asignar la llamada a un local antes de `.has` siguen funcionando igual.
+  Test: `tests/api/map_has_inline_method_api.api.json`.
+
 ## 0.1.15 (2026-11-13)
 
 ### Corregido
