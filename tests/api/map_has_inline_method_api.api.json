@@ -1,0 +1,1 @@
+{"entry":"map_has_inline_method_api.te","health":"/health","cases":[{"name":"Map.has evaluates an inline method-call argument (issue #15)","method":"GET","path":"/api/map-has-lower","expect":{"status":200,"json":{"inline":"yes","local":"yes"}}}]}

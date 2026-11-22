@@ -1,0 +1,21 @@
+// Regression (TE issue #15): Map.has with an inline method-call argument.
+//
+// The map has the lowercase key "doc.pdf". Passing `nombre.lower()` directly to
+// `.has()` must succeed, the same as assigning it to a local first. Before the
+// fix, te_map.c only handled a string-literal or identifier argument and skipped
+// a METHOD_CALL node, so the inline lookup returned false (a silent wrong result
+// at HTTP 200): {"inline":"no","local":"yes"}. Expected: both "yes".
+let MapHasLower = fn() => {
+    let m = {"doc.pdf": 1};
+    let nombre = "DOC.PDF";
+    var inStr = "no"; if (m.has(nombre.lower())) { inStr = "yes"; }
+    let k = nombre.lower();
+    var loStr = "no"; if (m.has(k)) { loStr = "yes"; }
+    return { inline: inStr, local: loStr };
+};
+endpoint {
+    [HttpGet("/health")]
+    async Health(){return json({ok:true});}
+    [HttpGet("/api/map-has-lower")]
+    async MapHas(){return json(MapHasLower());}
+}
