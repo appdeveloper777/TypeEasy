@@ -4,6 +4,24 @@ Formato: por release, tres bloques. **Cambios de comportamiento** lista todo lo 
 un script existente puede observar distinto (salida, errores, tipos), con el test
 que fija la conducta nueva. Política: `docs/VERSIONING.md`.
 
+## 0.1.17 (2026-11-25)
+
+### Corregido
+- `--api`: un endpoint que hace `return xml(...)` ahora responde con
+  `Content-Type: application/xml` (antes `application/json`). El body XML ya era
+  correcto; solo el header estaba mal, y `response_header("Content-Type", ...)` no
+  lo sobreescribía. Causa: `detect_response_type_embedded()` (`src/typeeasy_api.c`,
+  el server embebido de `--api`) solo matcheaba el tipo de nodo `RETURN_XML`, que el
+  parser nunca emite — la gramática baja `return xml(...)` a `RETURN -> CALL_FUNC("xml")`.
+  Se porta la detección que ya hacía `detect_response_type()` en `typeeasy_main.c`.
+  Regresión: `tests/api/xml_content_type_api.api.json` (issue #18).
+
+### Cambios de comportamiento
+- `--api`: las respuestas de `xml()` cambian su `Content-Type` de `application/json`
+  a `application/xml`. Un cliente que (incorrectamente) dependía del header anterior
+  verá el valor correcto ahora. Las respuestas de `json()` no cambian.
+  Test: `tests/api/xml_content_type_api.api.json`.
+
 ## 0.1.16 (2026-11-22)
 
 ### Corregido
