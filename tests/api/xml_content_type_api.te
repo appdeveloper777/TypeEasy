@@ -1,0 +1,15 @@
+// Regression (TE issue #18): the `--api` server served `return xml(...)` with
+// Content-Type: application/json instead of application/xml. The body was correct
+// XML, only the header was wrong, and `response_header("Content-Type", ...)` did
+// not override it. Cause: detect_response_type_embedded() in src/typeeasy_api.c
+// only matched the RETURN_XML node type, which the parser never emits — the
+// grammar lowers `return xml(...)` to RETURN -> CALL_FUNC("xml"). json() endpoints
+// must stay application/json.
+endpoint {
+    [HttpGet("/health")]
+    async Health(){return json({ok:true});}
+    [HttpGet("/api/xml")]
+    Xml(){return xml({ mensaje: "hola" });}
+    [HttpGet("/api/json")]
+    Json(){return json({ mensaje: "hola" });}
+}

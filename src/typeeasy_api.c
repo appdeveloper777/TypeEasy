@@ -247,8 +247,22 @@ const char* detect_response_type_embedded(ASTNode *body) {
     if (body->type) {
         if (strcmp(body->type, TE_T_RETURN_XML) == 0) return "xml";
         if (strcmp(body->type, TE_T_RETURN_JSON) == 0) return "json";
+
+        /* The grammar lowers `return xml(...)` / `return json(...)` to a RETURN
+         * node wrapping a CALL_FUNC node whose id is "xml"/"json" (parser.y:
+         * `RETURN XML/JSON LPAREN ... RPAREN` -> create_return_node(create_call_node(...))).
+         * The RETURN_XML / RETURN_JSON node types are never produced by the
+         * parser, so the checks above never match for the `--api` server. Mirror
+         * the detection already done by detect_response_type() in typeeasy_main.c
+         * so that `return xml(...)` is served as application/xml. */
+        if (strcmp(body->type, TE_T_RETURN) == 0 && body->left) {
+            if (body->left->type && strcmp(body->left->type, TE_T_CALL_FUNC) == 0 && body->left->id) {
+                if (strcmp(body->left->id, "xml") == 0) return "xml";
+                if (strcmp(body->left->id, "json") == 0) return "json";
+            }
+        }
     }
-    
+
     if (body->left) {
         const char *left_type = detect_response_type_embedded(body->left);
         if (strcmp(left_type, "xml") == 0) return "xml";
