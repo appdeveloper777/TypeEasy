@@ -483,7 +483,7 @@ PAGES.home = `
 <p><strong>¿Por qué descargaste TypeEasy?</strong> Cuéntanos qué quieres construir o qué te falta para empezar. Participar es voluntario.
   <a href="https://docs.google.com/forms/d/e/1FAIpQLSdFFyCvQQZpjo2ZPeyqrDLGDLCmuGvCQDrZv9tu5fv3rzR_Ew/viewform?usp=publish-editor" target="_blank" rel="noopener noreferrer">Responder la encuesta de TypeEasy (Google Forms)</a>.
 </p>
-<p class="lead">Este tutorial cubre el lenguaje de principio a fin: variables, tipos, funciones, clases, y cómo construir una API REST completa con JSON, JWT, cookies y base de datos.</p>
+<p class="lead">Este tutorial cubre el lenguaje de principio a fin: variables, tipos, funciones, clases, y cómo construir una API REST completa con JSON, XML, JWT, cookies y base de datos.</p>
 
 <h2>¿Por qué TypeEasy?</h2>
 <div class="cards">
@@ -504,6 +504,19 @@ ${te(`endpoint {
 ${sh(`typeeasy --api hola.te --port 9000
 curl http://localhost:9000/api/hola/Ana`)}
 ${out('{"mensaje":"Hola Ana"}')}
+
+<h2>El mismo endpoint, pero en XML</h2>
+<p>Devolvé <code class="inline">xml(...)</code> en lugar de <code class="inline">json(...)</code>: el cuerpo sale como XML y el <code class="inline">Content-Type</code> de la respuesta es <code class="inline">application/xml</code>.</p>
+${te(`endpoint {
+    [HttpGet("/api/hola-xml/{nombre}")]
+    saludar() {
+        let nombre = request_param("nombre");
+        return xml({ mensaje: "Hola " + nombre });
+    }
+}`)}
+${sh(`typeeasy --api hola.te --port 9000
+curl -i http://localhost:9000/api/hola-xml/Ana`)}
+${out('Content-Type: application/xml\\n\\n<root><mensaje>Hola Ana</mensaje></root>')}
 
 <h2>TypeEasy vs FastAPI</h2>
 <p>Comparación honesta. TypeEasy gana en velocidad de arranque y simplicidad de despliegue; FastAPI gana en ecosistema y madurez. Elegí según tu prioridad.</p>
@@ -3483,7 +3496,7 @@ PAGES.home = `
 <p><strong>Why did you download TypeEasy?</strong> Tell us what you want to build or what you need to get started. Participation is optional.
   <a href="https://docs.google.com/forms/d/e/1FAIpQLSdFFyCvQQZpjo2ZPeyqrDLGDLCmuGvCQDrZv9tu5fv3rzR_Ew/viewform?usp=publish-editor" target="_blank" rel="noopener noreferrer">Take the TypeEasy survey (Google Forms)</a>.
 </p>
-<p class="lead">This tutorial covers the language end to end: variables, types, functions, classes, and how to build a complete REST API with JSON, JWT, cookies and a database.</p>
+<p class="lead">This tutorial covers the language end to end: variables, types, functions, classes, and how to build a complete REST API with JSON, XML, JWT, cookies and a database.</p>
 
 <h2>Why TypeEasy?</h2>
 <div class="cards">
@@ -3504,6 +3517,19 @@ ${te(`endpoint {
 ${sh(`typeeasy --api hello.te --port 9000
 curl http://localhost:9000/api/hello/Ann`)}
 ${out('{"message":"Hello Ann"}')}
+
+<h2>The same endpoint, but in XML</h2>
+<p>Return <code class="inline">xml(...)</code> instead of <code class="inline">json(...)</code>: the body comes out as XML and the response <code class="inline">Content-Type</code> is <code class="inline">application/xml</code>.</p>
+${te(`endpoint {
+    [HttpGet("/api/hello-xml/{name}")]
+    greet() {
+        let name = request_param("name");
+        return xml({ message: "Hello " + name });
+    }
+}`)}
+${sh(`typeeasy --api hello.te --port 9000
+curl -i http://localhost:9000/api/hello-xml/Ann`)}
+${out('Content-Type: application/xml\\n\\n<root><message>Hello Ann</message></root>')}
 
 <h2>TypeEasy vs FastAPI</h2>
 <p>An honest comparison. TypeEasy wins on startup speed and deployment simplicity; FastAPI wins on ecosystem and maturity. Pick based on your priority.</p>
