@@ -49,10 +49,10 @@ endpoint {
 }
 ```
 
-**3️⃣ Ejecuta y abre** **http://localhost:8080/api/hola**
+**3️⃣ Ejecuta y abre** **http://localhost:8081/api/hola**
 
 ```bash
-typeeasy --api hola.te
+typeeasy --api hola.te --port 8081
 ```
 
 > ## 📝 ¿Ya lo descargaste? Ayúdanos a mejorar, cuéntanos para qué
