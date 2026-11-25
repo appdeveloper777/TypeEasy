@@ -12,7 +12,7 @@
 
 **APIs con sintaxis familiar y motor nativo: sin instalar Python ni Node.js para ejecutar tus endpoints.**
 
-Escribís un endpoint con sintaxis tipo C# / TypeScript y lo servís con el motor
+Escribís un endpoint JSON/XML con sintaxis tipo C# / TypeScript y lo servís con el motor
 de TypeEasy, que integra el intérprete y el servidor HTTP. Docker es opcional;
 las bibliotecas nativas y los plugins necesarios dependen del paquete y de tu aplicación.
 
@@ -46,6 +46,9 @@ las bibliotecas nativas y los plugins necesarios dependen del paquete y de tu ap
 endpoint {
     [HttpGet("/api/hola")]
     Hola() { return json({ mensaje: "¡Hola desde TypeEasy!" }); }
+
+    [HttpGet("/api/hola-xml")]
+    Hola() { return xml({ mensaje: "¡Hola desde TypeEasy!" }); }
 }
 ```
 
