@@ -203,7 +203,7 @@
   <header class="topbar">
     <button class="hamburger" id="hamburger" aria-label="Menú">☰</button>
     <a class="brand" href="#/home"><span class="logo">Te</span> TypeEasy</a>
-    <span class="ver" id="verBadge">v0.1.10</span>
+    <span class="ver" id="verBadge">v0.1.17</span>
     <span class="spacer"></span>
     <nav class="tnav">
       <a href="#/home" data-i18n="nav_home">Inicio</a>
@@ -591,28 +591,28 @@ PAGES.quickstart = `
 <p class="lead">De cero a una API corriendo en menos de 5 minutos.</p>
 
 <h2>1. Instalar</h2>
-<p>Descarga el binario para tu sistema desde la página de releases (versión actual: <strong>v0.1.10</strong>). En la sección <strong>Assets</strong> de la release encontrarás:</p>
+<p>Descarga el binario para tu sistema desde la página de releases (versión actual: <strong>v0.1.17</strong>). En la sección <strong>Assets</strong> de la release encontrarás:</p>
 <ul>
-  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.1.10.exe</code> (instalador) o <code class="inline">TypeEasy-0.1.10-win64.zip</code> (portable).</li>
-  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.1.10_amd64.deb</code> (Debian/Ubuntu/Mint) o <code class="inline">TypeEasy-0.1.10-linux-amd64.tar.gz</code> (portable).</li>
-  <li><strong>Linux ARM64</strong> (Raspberry Pi, servidores ARM): <code class="inline">typeeasy_0.1.10_arm64.deb</code> o <code class="inline">TypeEasy-0.1.10-linux-arm64.tar.gz</code>.</li>
-  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.1.10-android-arm64.tar.gz</code>.</li>
-  <li><code class="inline">SHA256SUMS-0.1.10.txt</code> para verificar la descarga.</li>
+  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.1.17.exe</code> (instalador) o <code class="inline">TypeEasy-0.1.17-win64.zip</code> (portable).</li>
+  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.1.17_amd64.deb</code> (Debian/Ubuntu/Mint) o <code class="inline">TypeEasy-0.1.17-linux-amd64.tar.gz</code> (portable).</li>
+  <li><strong>Linux ARM64</strong> (Raspberry Pi, servidores ARM): <code class="inline">typeeasy_0.1.17_arm64.deb</code> o <code class="inline">TypeEasy-0.1.17-linux-arm64.tar.gz</code>.</li>
+  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.1.17-android-arm64.tar.gz</code>.</li>
+  <li><code class="inline">SHA256SUMS-0.1.17.txt</code> para verificar la descarga.</li>
 </ul>
-<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.1.10" target="_blank" rel="noopener">Release v0.1.10 en GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">Todas las releases &rarr;</a></p>
+<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.1.17" target="_blank" rel="noopener">Release v0.1.17 en GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">Todas las releases &rarr;</a></p>
 ${sh(`# Linux (Debian/Ubuntu)
-sudo apt install ./typeeasy_0.1.10_amd64.deb
+sudo apt install ./typeeasy_0.1.17_amd64.deb
 
 # Linux/Android portable: descomprime y usa el binario que trae
-tar -xzf TypeEasy-0.1.10-linux-amd64.tar.gz
+tar -xzf TypeEasy-0.1.17-linux-amd64.tar.gz
 
 # Verificar la instalación (Windows, Linux o Android)
-typeeasy --version        # TypeEasy 0.1.10`)}
+typeeasy --version        # TypeEasy 0.1.17`)}
 <div class="note"><strong>Dónde queda el binario.</strong> El instalador de Windows lo deja en <code class="inline">%LOCALAPPDATA%\\Programs\\TypeEasy\\bin\\typeeasy-bin.exe</code> (y agrega <code class="inline">typeeasy</code>/<code class="inline">te</code> al PATH). El <code class="inline">.deb</code> instala <code class="inline">/usr/bin/typeeasy-bin</code> (el motor) y <code class="inline">/usr/bin/typeeasy</code> (CLI con <code class="inline">new</code>, <code class="inline">gen</code>, <code class="inline">serve</code>…). Si un subcomando del CLI no reconoce un flag del motor (p. ej. <code class="inline">--syntax-check</code>), llama directo a <code class="inline">typeeasy-bin</code>.</div>
 
 <h2>1b. O clona y compila (para estudiar o extender el motor)</h2>
 <p>Si quieres leer el código del intérprete, agregar una función nativa o <a href="#/extend">ampliar la sintaxis</a>, clona el repositorio en la versión que quieras y compílalo. Necesitas <code class="inline">gcc</code>, <code class="inline">flex</code>, <code class="inline">bison</code>, <code class="inline">make</code> y las cabeceras de MariaDB/PostgreSQL/OpenSSL (en Windows, MSYS2/MinGW-w64).</p>
-${sh(`git clone --branch v0.1.10 https://github.com/appdeveloper777/TypeEasy.git
+${sh(`git clone --branch v0.1.17 https://github.com/appdeveloper777/TypeEasy.git
 cd TypeEasy
 
 # Linux (Ubuntu/Debian): deps una sola vez
@@ -3604,28 +3604,28 @@ PAGES.quickstart = `
 <p class="lead">From zero to a running API in under 5 minutes.</p>
 
 <h2>1. Install</h2>
-<p>Download the binary for your system from the releases page (current version: <strong>v0.1.10</strong>). Under the release's <strong>Assets</strong> you will find:</p>
+<p>Download the binary for your system from the releases page (current version: <strong>v0.1.17</strong>). Under the release's <strong>Assets</strong> you will find:</p>
 <ul>
-  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.1.10.exe</code> (installer) or <code class="inline">TypeEasy-0.1.10-win64.zip</code> (portable).</li>
-  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.1.10_amd64.deb</code> (Debian/Ubuntu/Mint) or <code class="inline">TypeEasy-0.1.10-linux-amd64.tar.gz</code> (portable).</li>
-  <li><strong>Linux ARM64</strong> (Raspberry Pi, ARM servers): <code class="inline">typeeasy_0.1.10_arm64.deb</code> or <code class="inline">TypeEasy-0.1.10-linux-arm64.tar.gz</code>.</li>
-  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.1.10-android-arm64.tar.gz</code>.</li>
-  <li><code class="inline">SHA256SUMS-0.1.10.txt</code> to verify the download.</li>
+  <li><strong>Windows</strong>: <code class="inline">TypeEasy-Setup-v0.1.17.exe</code> (installer) or <code class="inline">TypeEasy-0.1.17-win64.zip</code> (portable).</li>
+  <li><strong>Linux x86-64</strong>: <code class="inline">typeeasy_0.1.17_amd64.deb</code> (Debian/Ubuntu/Mint) or <code class="inline">TypeEasy-0.1.17-linux-amd64.tar.gz</code> (portable).</li>
+  <li><strong>Linux ARM64</strong> (Raspberry Pi, ARM servers): <code class="inline">typeeasy_0.1.17_arm64.deb</code> or <code class="inline">TypeEasy-0.1.17-linux-arm64.tar.gz</code>.</li>
+  <li><strong>Android ARM64</strong> (Termux): <code class="inline">typeeasy-0.1.17-android-arm64.tar.gz</code>.</li>
+  <li><code class="inline">SHA256SUMS-0.1.17.txt</code> to verify the download.</li>
 </ul>
-<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.1.10" target="_blank" rel="noopener">Release v0.1.10 on GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">All releases &rarr;</a></p>
+<p><a href="https://github.com/appdeveloper777/TypeEasy/releases/tag/v0.1.17" target="_blank" rel="noopener">Release v0.1.17 on GitHub &rarr;</a> · <a href="https://github.com/appdeveloper777/TypeEasy/releases" target="_blank" rel="noopener">All releases &rarr;</a></p>
 ${sh(`# Linux (Debian/Ubuntu)
-sudo apt install ./typeeasy_0.1.10_amd64.deb
+sudo apt install ./typeeasy_0.1.17_amd64.deb
 
 # Linux/Android portable: extract and use the bundled binary
-tar -xzf TypeEasy-0.1.10-linux-amd64.tar.gz
+tar -xzf TypeEasy-0.1.17-linux-amd64.tar.gz
 
 # Verify the install (Windows, Linux or Android)
-typeeasy --version        # TypeEasy 0.1.10`)}
+typeeasy --version        # TypeEasy 0.1.17`)}
 <div class="note"><strong>Where the binary lives.</strong> The Windows installer puts it at <code class="inline">%LOCALAPPDATA%\\Programs\\TypeEasy\\bin\\typeeasy-bin.exe</code> (and adds <code class="inline">typeeasy</code>/<code class="inline">te</code> to PATH). The <code class="inline">.deb</code> installs <code class="inline">/usr/bin/typeeasy-bin</code> (the engine) and <code class="inline">/usr/bin/typeeasy</code> (CLI with <code class="inline">new</code>, <code class="inline">gen</code>, <code class="inline">serve</code>…). If a CLI subcommand does not recognise an engine flag (e.g. <code class="inline">--syntax-check</code>), call <code class="inline">typeeasy-bin</code> directly.</div>
 
 <h2>1b. Or clone and build (to study or extend the engine)</h2>
 <p>If you want to read the interpreter source, add a native function or <a href="#/extend">extend the syntax</a>, clone the repository at the version you want and build it. You need <code class="inline">gcc</code>, <code class="inline">flex</code>, <code class="inline">bison</code>, <code class="inline">make</code> and the MariaDB/PostgreSQL/OpenSSL headers (on Windows, MSYS2/MinGW-w64).</p>
-${sh(`git clone --branch v0.1.10 https://github.com/appdeveloper777/TypeEasy.git
+${sh(`git clone --branch v0.1.17 https://github.com/appdeveloper777/TypeEasy.git
 cd TypeEasy
 
 # Linux (Ubuntu/Debian): deps, once
