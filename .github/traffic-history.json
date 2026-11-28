@@ -2044,5 +2044,27 @@
       "count": 25,
       "uniques": 3
     }
+  },
+  {
+    "timestamp": "2026-11-26T00:00:00Z",
+    "clones": {
+      "count": 35,
+      "uniques": 11
+    },
+    "views": {
+      "count": 15,
+      "uniques": 3
+    }
+  },
+  {
+    "timestamp": "2026-11-27T00:00:00Z",
+    "clones": {
+      "count": 33,
+      "uniques": 15
+    },
+    "views": {
+      "count": 2,
+      "uniques": 2
+    }
   }
 ]
